@@ -30,7 +30,8 @@ struct AssignCharacterRequest final : ClientMessage
     bool operator==(const AssignCharacterRequest& acRhs) const noexcept
     {
         return GetOpcode() == acRhs.GetOpcode() && Cookie == acRhs.Cookie && ReferenceId == acRhs.ReferenceId && FormId == acRhs.FormId && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && Position == acRhs.Position && Rotation == acRhs.Rotation && ChangeFlags == acRhs.ChangeFlags &&
-               AppearanceBuffer == acRhs.AppearanceBuffer && FactionsContent == acRhs.FactionsContent && LatestAction == acRhs.LatestAction && FaceTints == acRhs.FaceTints && QuestContent == acRhs.QuestContent && IsDragon == acRhs.IsDragon && IsMount == acRhs.IsMount && IsPlayerSummon == acRhs.IsPlayerSummon;
+               AppearanceBuffer == acRhs.AppearanceBuffer && FactionsContent == acRhs.FactionsContent && LatestAction == acRhs.LatestAction && FaceTints == acRhs.FaceTints && QuestContent == acRhs.QuestContent && HasQuestContent == acRhs.HasQuestContent && HasFaceTints == acRhs.HasFaceTints &&
+               IsDragon == acRhs.IsDragon && IsMount == acRhs.IsMount && IsPlayerSummon == acRhs.IsPlayerSummon;
     }
 
     uint32_t Cookie{};
@@ -46,6 +47,8 @@ struct AssignCharacterRequest final : ClientMessage
     ActionEvent LatestAction{};
     QuestLog QuestContent{};
     Tints FaceTints{};
+    bool HasQuestContent{};
+    bool HasFaceTints{};
     bool IsDragon{};
     bool IsMount{};
     bool IsPlayerSummon{};

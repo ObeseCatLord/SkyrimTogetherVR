@@ -3,14 +3,19 @@
 #include <NetImmerse/NiNode.h>
 #include <TiltedOnlinePCH.h>
 
-NiCamera* TESCamera::GetNiCamera()
+NiCamera* TESCamera::GetNiCamera() noexcept
 {
     POINTER_SKYRIMSE(NiRTTI, NiCameraRTTI, 410506);
+    auto* pCameraRoot = GetCameraRoot();
+    if (!pCameraRoot)
+        return nullptr;
+
     // usually the first child should be the camera
-    for (auto* child : cameraNode->children)
+    for (const auto& child : pCameraRoot->GetChildrenData())
     {
-        if (child && child->GetRTTI() == NiCameraRTTI.Get())
-            return reinterpret_cast<NiCamera*>(child);
+        auto* pChild = child.object;
+        if (pChild && pChild->GetRTTI() == NiCameraRTTI.Get())
+            return reinterpret_cast<NiCamera*>(pChild);
     }
 
     return nullptr;

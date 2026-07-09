@@ -1,0 +1,7 @@
+target("SkyrimTogetherVRVrikBridge")
+    set_kind("shared")
+    set_group("Client")
+    set_basename("SkyrimTogetherVRVrikBridge")
+    add_includedirs("..")
+    add_files("*.cpp")
+    add_syslinks("kernel32")

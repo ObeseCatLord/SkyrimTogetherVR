@@ -19,39 +19,49 @@ void TP_MAKE_THISCALL(HookSpellCast, ActorMagicCaster, bool abSuccess, int32_t a
     spdlog::debug("HookSpellCast, abSuccess: {}, auiTargetCount: {}, apSpell: {:X}", abSuccess, auiTargetCount, (uint64_t)apSpell);
 
     // Note: these if guards is how the game does it too
-    if (!apThis->pCasterActor)
+    Actor* pCasterActor = apThis->GetCasterActorData();
+    if (!pCasterActor)
         return;
     if (!abSuccess)
         return;
-    if (!apSpell && !apThis->pCurrentSpell)
+    if (!apSpell && !apThis->GetCurrentSpellData())
         return;
 
-    if (apThis->pCasterActor->GetExtension()->IsRemote())
+    ActorExtension* pCasterExtension = pCasterActor->GetExtension();
+    if (pCasterExtension && pCasterExtension->IsRemote())
         return;
 
     uint32_t targetFormId = 0;
 
-    if (apThis->hDesiredTarget)
+    const auto desiredTarget = apThis->GetDesiredTargetData();
+    if (desiredTarget)
     {
-        TESObjectREFR* pDesiredTarget = TESObjectREFR::GetByHandle(apThis->hDesiredTarget.handle.iBits);
+        TESObjectREFR* pDesiredTarget = TESObjectREFR::GetByHandle(desiredTarget.handle.iBits);
         if (pDesiredTarget)
         {
-            targetFormId = pDesiredTarget->formID;
+            targetFormId = pDesiredTarget->GetFormIdData();
         }
     }
 
     if (apSpell)
-        World::Get().GetRunner().Trigger(SpellCastEvent(apThis, apSpell->formID, targetFormId));
+        World::Get().GetRunner().Trigger(SpellCastEvent(apThis, apSpell->GetFormIdData(), targetFormId));
 
     TiltedPhoques::ThisCall(RealSpellCast, apThis, abSuccess, auiTargetCount, apSpell);
 }
 
 void TP_MAKE_THISCALL(HookInterruptCast, ActorMagicCaster, bool abRefund)
 {
-    ActorExtension* pExtended = apThis->pCasterActor->GetExtension();
+    Actor* pCasterActor = apThis->GetCasterActorData();
+    if (!pCasterActor)
+    {
+        TiltedPhoques::ThisCall(RealInterruptCast, apThis, abRefund);
+        return;
+    }
 
-    if (pExtended->IsLocal())
-        World::Get().GetRunner().Trigger(InterruptCastEvent(apThis->pCasterActor->formID, apThis->eCastingSource));
+    ActorExtension* pExtended = pCasterActor->GetExtension();
+
+    if (pExtended && pExtended->IsLocal())
+        World::Get().GetRunner().Trigger(InterruptCastEvent(pCasterActor->GetFormIdData(), apThis->GetCastingSourceData()));
 
     TiltedPhoques::ThisCall(RealInterruptCast, apThis, abRefund);
 }

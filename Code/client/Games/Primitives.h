@@ -153,9 +153,31 @@ template <class T> struct GameList
         Entry* m_pEntry;
     };
 
+    struct ConstIterator
+    {
+        ConstIterator(const Entry* apEntry)
+            : m_pEntry(apEntry)
+        {
+        }
+        ConstIterator operator++()
+        {
+            m_pEntry = m_pEntry->next;
+            return *this;
+        }
+        bool operator!=(const ConstIterator& acRhs) const { return m_pEntry != acRhs.m_pEntry; }
+        const T* operator*() const { return m_pEntry->data; }
+
+    private:
+        const Entry* m_pEntry;
+    };
+
     Iterator begin() { return Iterator(&entry); }
 
     Iterator end() { return Iterator(nullptr); }
+
+    ConstIterator begin() const { return ConstIterator(&entry); }
+
+    ConstIterator end() const { return ConstIterator(nullptr); }
 };
 
 // NOTE: `GameValueList` is a corrected version of `GameList` that matches the game's actual memory layout.

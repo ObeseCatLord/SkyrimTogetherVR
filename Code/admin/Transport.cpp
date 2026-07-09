@@ -21,7 +21,14 @@ void AdminApp::OnConsume(const void* apData, uint32_t aSize)
         return;
     }
 
-    m_messageHandlers[pMessage->GetOpcode()](pMessage);
+    const auto opcode = pMessage->GetOpcode();
+    auto& handler = m_messageHandlers[opcode];
+    if (!handler)
+    {
+        return;
+    }
+
+    handler(pMessage);
 }
 
 void AdminApp::OnConnected()

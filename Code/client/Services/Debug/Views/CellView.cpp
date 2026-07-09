@@ -19,7 +19,7 @@ void DebugService::DrawCellView()
     {
         if (ImGui::CollapsingHeader("World space", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const uint32_t worldFormId = pWorldSpace->formID;
+            const uint32_t worldFormId = pWorldSpace->GetFormIdData();
             ImGui::InputScalar("Id", ImGuiDataType_U32, (void*)&worldFormId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
 
             char* pName = (char*)pWorldSpace->GetName();
@@ -32,11 +32,11 @@ void DebugService::DrawCellView()
         }
     }
 
-    if (auto* pCell = pPlayer->parentCell)
+    if (auto* pCell = pPlayer->GetParentCellData())
     {
         if (ImGui::CollapsingHeader("Parent cell", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const uint32_t cellId = pCell->formID;
+            const uint32_t cellId = pCell->GetFormIdData();
             ImGui::InputScalar("Id", ImGuiDataType_U32, (void*)&cellId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
 
             char* pName = (char*)pCell->GetName();

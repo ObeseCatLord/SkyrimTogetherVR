@@ -51,7 +51,7 @@ TESWeather* Sky::GetWeather() const noexcept
 void TP_MAKE_THISCALL(HookSetWeather, Sky, TESWeather* apWeather, bool abOverride, bool abAccelerate)
 {
 #if 0
-    spdlog::debug("Set weather form id: {:X}, override: {}, accelerate: {}", apWeather ? apWeather->formID : 0, abOverride, abAccelerate);
+    spdlog::debug("Set weather form id: {:X}, override: {}, accelerate: {}", apWeather ? apWeather->GetFormIdData() : 0, abOverride, abAccelerate);
 
     if (!Sky::s_shouldUpdateWeather)
         return;
@@ -63,7 +63,7 @@ void TP_MAKE_THISCALL(HookSetWeather, Sky, TESWeather* apWeather, bool abOverrid
 void TP_MAKE_THISCALL(HookForceWeather, Sky, TESWeather* apWeather, bool abOverride)
 {
 #if 0
-    spdlog::debug("Force weather form id: {:X}, override: {}", apWeather ? apWeather->formID : 0, abOverride);
+    spdlog::debug("Force weather form id: {:X}, override: {}", apWeather ? apWeather->GetFormIdData() : 0, abOverride);
 
     if (!Sky::s_shouldUpdateWeather)
         return;

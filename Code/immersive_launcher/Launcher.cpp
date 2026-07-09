@@ -18,6 +18,7 @@
 #include "utils/Registry.h"
 
 #include <BranchInfo.h>
+#include <Shellapi.h>
 
 // These symbols are defined within the client code skyrimtogetherclient
 extern void InstallStartHook();
@@ -32,6 +33,52 @@ HICON g_SharedWindowIcon = nullptr;
 namespace launcher
 {
 static LaunchContext* g_context = nullptr;
+
+#if TP_SKYRIM_VR
+static bool g_launchCompanionPanel = false;
+static bool g_companionPanelOnly = false;
+static bool g_disableCompanionPanel = false;
+
+bool EnvRequestsCompanionPanel()
+{
+    wchar_t value[16]{};
+    const auto length = GetEnvironmentVariableW(L"STVR_LAUNCH_COMPANION", value, _countof(value));
+    if (length == 0 || length >= _countof(value))
+        return false;
+
+    return value[0] != L'\0' && value[0] != L'0' && value[0] != L'f' && value[0] != L'F' && value[0] != L'n' &&
+           value[0] != L'N' && value[0] != L'o' && value[0] != L'O';
+}
+
+bool LaunchCompanionPanel(const LaunchContext& acContext)
+{
+    const std::filesystem::path candidates[]{
+        TiltedPhoques::GetPath() / L"LaunchSkyrimTogetherVRCompanion.bat",
+        acContext.gamePath / L"LaunchSkyrimTogetherVRCompanion.bat",
+    };
+
+    std::error_code ec;
+    for (const auto& candidate : candidates)
+    {
+        if (!std::filesystem::exists(candidate, ec))
+            continue;
+
+        const auto parameters = L"--game-path \"" + acContext.gamePath.wstring() + L"\"";
+        const auto result = ShellExecuteW(
+            nullptr,
+            L"open",
+            candidate.c_str(),
+            parameters.c_str(),
+            candidate.parent_path().c_str(),
+            SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(result) > 32)
+            return true;
+    }
+
+    OutputDebugStringW(L"SkyrimTogetherVR companion panel launcher was not found or could not be started.\n");
+    return false;
+}
+#endif
 
 LaunchContext* GetLaunchContext()
 {
@@ -105,6 +152,22 @@ int StartUp(int argc, char** argv)
     if (!oobe::SelectInstall(askSelect))
         DIE_NOW(L"Failed to select game install.");
 
+#if TP_SKYRIM_VR
+    const bool shouldLaunchCompanion =
+        !g_disableCompanionPanel && (g_launchCompanionPanel || EnvRequestsCompanionPanel());
+    if (shouldLaunchCompanion)
+    {
+        if (!LaunchCompanionPanel(*LC) && g_companionPanelOnly)
+        {
+            Die(L"Failed to launch the SkyrimTogetherVR companion panel.");
+            return 4;
+        }
+
+        if (g_companionPanelOnly)
+            return 0;
+    }
+#endif
+
     // Bind path environment.
     loader::InstallPathRouting(LC->gamePath);
     steam::Load(LC->gamePath);
@@ -153,6 +216,17 @@ bool HandleArguments(int aArgc, char** aArgv, bool& aAskSelect)
     {
         if (std::strcmp(aArgv[i], "-r") == 0)
             aAskSelect = true;
+#if TP_SKYRIM_VR
+        else if (std::strcmp(aArgv[i], "--companion") == 0 || std::strcmp(aArgv[i], "--vr-companion") == 0)
+            g_launchCompanionPanel = true;
+        else if (std::strcmp(aArgv[i], "--companion-only") == 0)
+        {
+            g_launchCompanionPanel = true;
+            g_companionPanelOnly = true;
+        }
+        else if (std::strcmp(aArgv[i], "--no-companion") == 0)
+            g_disableCompanionPanel = true;
+#endif
         else if (std::strcmp(aArgv[i], "--exePath") == 0)
         {
             if (i + 1 >= aArgc)

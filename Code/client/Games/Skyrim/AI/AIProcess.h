@@ -1,14 +1,32 @@
 #pragma once
 
+#include <RuntimeLayout.h>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
 struct TESForm;
 struct MiddleProcess;
 struct TESAmmo;
 
 struct AIProcess
 {
+    using CommonLibAIProcessOffsets = Skyrim::RuntimeLayout::AIProcessCommonLibNgOffsets;
+    using LocalAIProcessOffsets = Skyrim::RuntimeLayout::AIProcessLocalShimOffsets;
+
     bool SetCurrentAmmo(TESAmmo* apAmmo) noexcept;
 
     void KnockExplosion(Actor* apActor, const NiPoint3* aSourceLocation, float afMagnitude);
+
+    [[nodiscard]] MiddleProcess* GetMiddleProcessData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<MiddleProcess*>(this, CommonLibAIProcessOffsets::MiddleProcess);
+#else
+        return middleProcess;
+#endif
+    }
 
     void* unk0;
     MiddleProcess* middleProcess;
@@ -34,3 +52,4 @@ struct HighProcessData
 };
 
 static_assert(offsetof(AIProcess, movementType) == 0x137);
+static_assert(offsetof(AIProcess, middleProcess) == AIProcess::LocalAIProcessOffsets::MiddleProcess);

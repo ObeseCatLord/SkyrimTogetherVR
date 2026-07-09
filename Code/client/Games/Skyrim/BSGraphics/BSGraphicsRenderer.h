@@ -1,6 +1,14 @@
 #pragma once
 
+#include <RuntimeLayout.h>
+
+#include <cstddef>
+#include <cstdint>
 #include <d3d11.h>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 namespace BSGraphics
 {
@@ -57,6 +65,74 @@ struct CubeMapRenderTarget
 
 struct RendererData
 {
+    using CommonLibRendererDataOffsets = Skyrim::RuntimeLayout::BSGraphicsRendererDataCommonLibNgOffsets;
+    using LocalRendererDataOffsets = Skyrim::RuntimeLayout::BSGraphicsRendererDataLocalShimOffsets;
+
+    [[nodiscard]] ID3D11Device* GetForwarderData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<ID3D11Device*>(this, CommonLibRendererDataOffsets::Forwarder);
+#else
+        return pForwarder;
+#endif
+    }
+
+    [[nodiscard]] ID3D11DeviceContext* GetContextData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<ID3D11DeviceContext*>(this, CommonLibRendererDataOffsets::Context);
+#else
+        return pContext;
+#endif
+    }
+
+    [[nodiscard]] RendererWindow* GetRenderWindowData(std::uint32_t aIndex = 0) noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<RendererWindow>(this, CommonLibRendererDataOffsets::RenderWindows) + aIndex;
+#else
+        return &RenderWindowA[aIndex];
+#endif
+    }
+
+    [[nodiscard]] const RendererWindow* GetRenderWindowData(std::uint32_t aIndex = 0) const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<RendererWindow>(this, CommonLibRendererDataOffsets::RenderWindows) + aIndex;
+#else
+        return &RenderWindowA[aIndex];
+#endif
+    }
+
+    [[nodiscard]] RenderTarget* GetRenderTargetsData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<RenderTarget>(this, CommonLibRendererDataOffsets::RenderTargets);
+#else
+        return pRenderTargetsA;
+#endif
+    }
+
+    [[nodiscard]] DepthStencilTarget* GetDepthStencilTargetsData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<DepthStencilTarget>(
+            this, CommonLibRendererDataOffsets::DepthStencilTargets);
+#else
+        return pDepthStencilTargetsA;
+#endif
+    }
+
+    [[nodiscard]] CubeMapRenderTarget* GetCubeMapRenderTargetsData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<CubeMapRenderTarget>(
+            this, CommonLibRendererDataOffsets::CubeMapRenderTargets);
+#else
+        return pCubeMapRenderTargetsA;
+#endif
+    }
+
     uint32_t uiAdapter;            // 0x0000
     uint64_t DesiredRefreshRate;   // 0x0004
     uint64_t ActualRefreshRate;    // 0x000C
@@ -80,18 +156,41 @@ struct RendererData
     BSGraphics::CubeMapRenderTarget pCubeMapRenderTargetsA[1];
 };
 
-static_assert(offsetof(RendererData, pForwarder) == 0x38);
-static_assert(offsetof(RendererData, RenderWindowA) == 0x48);
-static_assert(offsetof(RendererData, pRenderTargetsA) == 0xA48);
-static_assert(offsetof(RendererData, pDepthStencilTargetsA) == 0x1FA8);
-static_assert(offsetof(RendererData, pCubeMapRenderTargetsA) == 0x26C8);
+static_assert(offsetof(RendererData, pForwarder) == RendererData::LocalRendererDataOffsets::Forwarder);
+static_assert(offsetof(RendererData, pContext) == RendererData::LocalRendererDataOffsets::Context);
+static_assert(offsetof(RendererData, RenderWindowA) == RendererData::LocalRendererDataOffsets::RenderWindows);
+static_assert(offsetof(RendererData, pRenderTargetsA) == RendererData::LocalRendererDataOffsets::RenderTargets);
+static_assert(offsetof(RendererData, pDepthStencilTargetsA) == RendererData::LocalRendererDataOffsets::DepthStencilTargets);
+static_assert(offsetof(RendererData, pCubeMapRenderTargetsA) == RendererData::LocalRendererDataOffsets::CubeMapRenderTargets);
 
 struct Renderer
 {
+    using CommonLibRendererOffsets = Skyrim::RuntimeLayout::BSGraphicsRendererCommonLibNgOffsets;
+    using LocalRendererOffsets = Skyrim::RuntimeLayout::BSGraphicsRendererLocalShimOffsets;
+
+    [[nodiscard]] RendererData& GetRendererData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<RendererData>(this, CommonLibRendererOffsets::Data);
+#else
+        return Data;
+#endif
+    }
+
+    [[nodiscard]] const RendererData& GetRendererData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<RendererData>(this, CommonLibRendererOffsets::Data);
+#else
+        return Data;
+#endif
+    }
+
     bool bSkipNextPresent;
     void (*ResetRenderTargets)();
     BSGraphics::RendererData Data;
 };
+static_assert(offsetof(Renderer, Data) == Renderer::LocalRendererOffsets::Data);
 
 struct RendererInitReturn
 {

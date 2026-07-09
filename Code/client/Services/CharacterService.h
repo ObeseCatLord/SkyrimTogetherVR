@@ -102,7 +102,8 @@ private:
     ActorData BuildActorData(Actor* apActor) const noexcept;
 
     void RunLocalUpdates() const noexcept;
-    void RunRemoteUpdates() noexcept;
+    void RunRemoteUpdates(const UpdateEvent& acUpdateEvent) noexcept;
+    void UpdateRemoteVRPoseComponents(const UpdateEvent& acUpdateEvent) noexcept;
     void RunFactionsUpdates() const noexcept;
     void RunSpawnUpdates() const noexcept;
     void RunExperienceUpdates() noexcept;

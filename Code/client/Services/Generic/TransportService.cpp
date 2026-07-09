@@ -27,6 +27,14 @@
 
 // #include <imgui_internal.h>
 
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+#define TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY 0
+#endif
+
 static constexpr wchar_t kMO2DllName[] = L"usvfs_x64.dll";
 
 using TiltedPhoques::Packet;
@@ -106,7 +114,15 @@ void TransportService::OnConsume(const void* apData, uint32_t aSize)
         return;
     }
 
-    m_messageHandlers[pMessage->GetOpcode()](pMessage);
+    const auto opcode = pMessage->GetOpcode();
+    auto& handler = m_messageHandlers[opcode];
+    if (!handler)
+    {
+        spdlog::error("No handler registered for server opcode {}", static_cast<uint32_t>(opcode));
+        return;
+    }
+
+    handler(pMessage);
 }
 
 void TransportService::OnConnected()
@@ -119,48 +135,60 @@ void TransportService::OnConnected()
     request.Token = m_serverPassword;
     m_serverPassword = "";
 
-    PlayerCharacter* pPlayer = PlayerCharacter::Get();
-
     // null if discord is not active
     // TODO: think about user opt out
     request.DiscordId = m_world.ctx().at<DiscordService>().GetUser().id;
-    auto* pNpc = Cast<TESNPC>(pPlayer->baseForm);
-    if (pNpc)
+
+    PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    if (!pPlayer || !pPlayer->GetBaseFormData() || !pPlayer->GetParentCellData())
+        spdlog::warn("Building authentication request before the local player is fully loaded");
+
+    if (pPlayer && pPlayer->GetBaseFormData())
     {
-        request.Username = pNpc->fullName.value.AsAscii();
+        auto* pNpc = Cast<TESNPC>(pPlayer->GetBaseFormData());
+        if (pNpc)
+        {
+            request.Username = pNpc->GetFullNameData().GetFullNameStringData();
+        }
     }
-    else
-    {
-        request.Username = "Some dragon boi";
-    }
+
+    if (request.Username.empty())
+        request.Username = "Skyrim VR Player";
 
     auto* const cpModManager = ModManager::Get();
 
-    for (auto* pMod : cpModManager->mods)
+    if (cpModManager)
     {
-        if (!pMod->IsLoaded())
-            continue;
+        for (auto* pMod : cpModManager->mods)
+        {
+            if (!pMod->IsLoaded())
+                continue;
 
-        auto& entry = request.UserMods.ModList.emplace_back();
-        entry.Id = pMod->GetId();
-        entry.IsLite = pMod->IsLite();
-        entry.Filename = pMod->filename;
+            auto& entry = request.UserMods.ModList.emplace_back();
+            entry.Id = pMod->GetId();
+            entry.IsLite = pMod->IsLite();
+            entry.Filename = pMod->filename;
+        }
     }
 
     auto& modSystem = m_world.GetModSystem();
-    if (pPlayer->GetWorldSpace())
-        modSystem.GetServerModId(pPlayer->GetWorldSpace()->formID, request.WorldSpaceId);
+    if (pPlayer && pPlayer->GetWorldSpace())
+        modSystem.GetServerModId(pPlayer->GetWorldSpace()->GetFormIdData(), request.WorldSpaceId);
 
-    modSystem.GetServerModId(pPlayer->parentCell->formID, request.CellId);
+    if (pPlayer && pPlayer->GetParentCellData())
+        modSystem.GetServerModId(pPlayer->GetParentCellData()->GetFormIdData(), request.CellId);
 
-    request.Level = pPlayer->GetLevel();
+    request.Level = pPlayer ? pPlayer->GetLevel() : 1;
 
     auto* pGameTime = TimeData::Get();
-    request.PlayerTime.TimeScale = pGameTime->TimeScale->f;
-    request.PlayerTime.Time = pGameTime->GameHour->f;
-    request.PlayerTime.Year = pGameTime->GameYear->f;
-    request.PlayerTime.Month = pGameTime->GameMonth->f;
-    request.PlayerTime.Day = pGameTime->GameDay->f;
+    if (pGameTime)
+    {
+        request.PlayerTime.TimeScale = pGameTime->GetTimeScaleData()->GetValueData();
+        request.PlayerTime.Time = pGameTime->GetGameHourData()->GetValueData();
+        request.PlayerTime.Year = pGameTime->GetGameYearData()->GetValueData();
+        request.PlayerTime.Month = pGameTime->GetGameMonthData()->GetValueData();
+        request.PlayerTime.Day = pGameTime->GetGameDayData()->GetValueData();
+    }
 
     Send(request);
 }

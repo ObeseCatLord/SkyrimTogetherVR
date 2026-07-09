@@ -116,8 +116,8 @@ float CalculateTargetScore(CombatTargetSelector* apThis, CombatTarget* apCombatT
 {
     float score = 0.f;
 
-    CombatController* pCombatController = apThis->pCombatController;
-    Actor* pCachedAttacker = pCombatController->pCachedAttacker.object;
+    CombatController* pCombatController = apThis->GetCombatControllerData();
+    Actor* pCachedAttacker = pCombatController->GetCachedAttackerData();
 
     BGSWorldLocation pAttackerWorldLocation{};
     RefrGetWorldLocation(apAttacker, &pAttackerWorldLocation);
@@ -154,10 +154,11 @@ float CalculateTargetScore(CombatTargetSelector* apThis, CombatTarget* apCombatT
 
     score += (float)((float)(1.0 - (float)(fminf(distanceFactor, 2048.f) * 0.00048828125f)) * 1000.f);
 
-    if (apCombatTarget->attackerCount > (pCachedAttacker == apTarget))
+    if (apCombatTarget->GetAttackerCountData() > (pCachedAttacker == apTarget))
         score += GetDword_142FE5B78();
 
-    if (pCombatController->pInventory->maximumRange < 1024.f || !isSameWorldLocation)
+    auto* pCombatInventory = pCombatController->GetInventoryData();
+    if (!pCombatInventory || pCombatInventory->GetMaximumRangeData() < 1024.f || !isSameWorldLocation)
     {
         if (!CheckMovement(pCombatController, &pTargetWorldLocation))
             score -= 2000.f;
@@ -185,13 +186,15 @@ void DebugService::DrawCombatView()
     ImGui::InputScalar("Form ID", ImGuiDataType_U32, (void*)&m_formId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
 
     Actor* pActor = Cast<Actor>(TESForm::GetById(m_formId));
+    CombatController* pCombatController = pActor ? pActor->GetCombatControllerData() : nullptr;
 
-    if (pActor && pActor->pCombatController && pActor->pCombatController->pCombatGroup && pActor->pCombatController->pActiveTargetSelector)
+    if (pActor && pCombatController && pCombatController->GetCombatGroupData() &&
+        pCombatController->GetActiveTargetSelectorData())
     {
-        Actor* pTarget = Cast<Actor>(TESObjectREFR::GetByHandle(pActor->pCombatController->targetHandle));
+        Actor* pTarget = Cast<Actor>(TESObjectREFR::GetByHandle(pCombatController->GetTargetHandleData()));
         if (pTarget)
         {
-            uint32_t targetFormID = pTarget->formID;
+            uint32_t targetFormID = pTarget->GetFormIdData();
             ImGui::InputScalar("Current target ID", ImGuiDataType_U32, (void*)&targetFormID, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
         }
 
@@ -199,18 +202,18 @@ void DebugService::DrawCombatView()
 
         ImGui::BeginChild("Potential targets", ImVec2(0, 200), true);
 
-        auto& targets = pActor->pCombatController->pCombatGroup->targets;
+        auto& targets = pCombatController->GetCombatGroupData()->GetTargetsData();
         for (int i = 0; i < targets.length; i++)
         {
             auto& target = targets[i];
-            Actor* pTarget = Cast<Actor>(TESObjectREFR::GetByHandle(target.targetHandle));
+            Actor* pTarget = Cast<Actor>(TESObjectREFR::GetByHandle(target.GetTargetHandleData()));
             if (pTarget)
             {
-                const uint32_t formID = pTarget->formID;
-                ImGui::InputScalar("Form ID", ImGuiDataType_U32, (void*)&formID, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
+                const uint32_t formId = pTarget->GetFormIdData();
+                ImGui::InputScalar("Form ID", ImGuiDataType_U32, (void*)&formId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
 
                 float score =
-                    CalculateTargetScore(pActor->pCombatController->pActiveTargetSelector, &target, pActor, pTarget, pZone);
+                    CalculateTargetScore(pCombatController->GetActiveTargetSelectorData(), &target, pActor, pTarget, pZone);
 
                 ImGui::InputFloat("Score", &score, 0.f, 0.f, "%.3f", ImGuiInputTextFlags_ReadOnly);
             }

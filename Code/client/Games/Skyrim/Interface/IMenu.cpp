@@ -3,10 +3,10 @@
 
 void IMenu::SetFlag(uint32_t auiFlag)
 {
-    uiMenuFlags |= auiFlag;
+    SetMenuFlagsData(GetMenuFlagsData() | auiFlag);
 }
 
 void IMenu::ClearFlag(uint32_t auiFlag)
 {
-    uiMenuFlags &= ~auiFlag;
+    SetMenuFlagsData(GetMenuFlagsData() & ~auiFlag);
 }

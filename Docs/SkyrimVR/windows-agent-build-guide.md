@@ -1,0 +1,360 @@
+# Windows Agent Build Guide for SkyrimTogetherVR
+
+This document is for an agent taking over the SkyrimTogetherVR port on a Windows build machine. It explains the intended build path, what must be installed, which scripts to run, what artifacts to expect, and what to do before any in-game Skyrim VR test.
+
+The build scripts do not launch Skyrim VR. Install commands only copy files when `--install` is explicitly passed.
+
+## What You Are Building
+
+This repository is the Skyrim VR fork of Skyrim Together Reborn / Tilted Online. It is VR-only:
+
+- No Skyrim SE runtime support is intended in this fork.
+- The main VR client is launcher-linked as an executable, not as `SkyrimTogetherVR.dll`.
+- SKSEVR bridge DLLs are separate plugin DLLs under `Data\SKSE\Plugins`.
+- VRIK IK synchronization is mandatory for acceptance.
+- HIGGS and PLANCK are present as compatibility/telemetry bridges and should remain observation-only until reviewed and runtime-validated.
+
+The important package flavors are:
+
+- `default`: `SkyrimTogetherVR.exe`, connection-first bring-up package.
+- `avatar-sync`: `SkyrimTogetherVRAvatarSync.exe`, two-client VRIK/HIGGS remote-avatar validation package.
+- `gameplay`: `SkyrimTogetherVRGameplay.exe`, opt-in staged gameplay package.
+- `dll-only`: `SkyrimTogetherVRVrikBridge.dll`, `SkyrimTogetherVRHiggsBridge.dll`, `SkyrimTogetherVRPlanckBridge.dll`, and `EarlyLoad.dll` only.
+
+## Required Windows Tools
+
+Install or verify:
+
+- Visual Studio 2022 or Visual Studio Build Tools with `Desktop development with C++`.
+- Windows SDK available to MSVC.
+- PowerShell 5.1 or newer.
+- xmake available in `PATH`, or note the path for `-Xmake`.
+- Python 3 available as `py -3`, `python`, or `python3`.
+- Git is useful for status/review, but the build scripts do not require a commit.
+- Caprica only if regenerating Papyrus PEX files.
+
+Use an x64 Native Tools Command Prompt for Visual Studio when possible. The wrappers also try to locate Visual Studio through `vswhere.exe` and load `VsDevCmd.bat -arch=x64 -host_arch=x64` if `cl.exe` is not already visible.
+
+Quick tool check:
+
+```bat
+where cl
+where xmake
+where powershell
+py -3 --version
+```
+
+## Required Skyrim VR Install State
+
+The final prerequisite-aware checks expect a real Skyrim VR folder with:
+
+- `SkyrimVR.exe`
+- SKSEVR installed
+- VR Address Library installed, including `Data\SKSE\Plugins\version-1-4-15-0.csv`
+- VRIK installed
+- HIGGS installed
+- PLANCK installed
+
+Set the path once in the shell to reduce mistakes:
+
+```bat
+set SKYRIMVR_PATH=C:\SteamLibrary\steamapps\common\SkyrimVR
+```
+
+You may also use `STVR_SKYRIM_VR`; the scripts accept either environment variable. Direct `--skyrim-vr` arguments override the environment.
+
+## Source Tree Location
+
+If using the review handoff zip, the source root is:
+
+```text
+SkyrimTogetherVR-review-handoff-...\source\SkyrimTogetherVR
+```
+
+Open a command prompt in that directory before running the commands below.
+
+Do not build from the `references` directory. Those folders are for review and comparison only.
+
+## First Command: No-Build Preflight
+
+Run this before any compile:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+```
+
+Expected result:
+
+- Windows x64 xmake target graph configures.
+- VR targets are visible.
+- `GameFiles\SkyrimVR` staged package files are present.
+- Packaged Python helper imports resolve.
+- SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK prerequisites are visible.
+- No binaries are built.
+- No files are installed.
+- Skyrim VR is not launched.
+
+If xmake is not in `PATH`, pass it through to the underlying PowerShell script after `--`:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -Xmake "C:\Tools\xmake\xmake.exe"
+```
+
+If regenerating Papyrus scripts during final packaging, also preflight Caprica:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --compile-papyrus --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+```
+
+## Main Build Handoff
+
+For the full handoff build, run:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+```
+
+For a final package where Papyrus bytecode should be regenerated:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --compile-papyrus --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+```
+
+`--all` builds, audits, collects build evidence, and audits evidence for:
+
+- default package
+- avatar-sync package
+- gameplay package
+- DLL-only package
+
+The command writes current package output under:
+
+```text
+artifacts\SkyrimTogetherVR\releasedbg
+```
+
+It also writes stable package snapshots under:
+
+```text
+artifacts\SkyrimTogetherVR\packages\default
+artifacts\SkyrimTogetherVR\packages\avatar-sync
+artifacts\SkyrimTogetherVR\packages\gameplay
+artifacts\SkyrimTogetherVR\packages\dll-only
+```
+
+Build evidence zips are written under:
+
+```text
+artifacts\SkyrimTogetherVR\build-evidence
+```
+
+## Build One Flavor Only
+
+Use these only when isolating a failure:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --default-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --avatar-sync-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --gameplay-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --dll-only --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites
+```
+
+Lower-level wrappers also exist:
+
+```bat
+BuildSkyrimTogetherVR-Windows.bat
+BuildSkyrimTogetherVR-AvatarSync-Windows.bat
+BuildSkyrimTogetherVR-Gameplay-Windows.bat
+BuildSkyrimTogetherVR-DLL-Windows.bat
+BuildAndAuditSkyrimTogetherVR-Windows.bat --avatar-sync
+BuildAndAuditSkyrimTogetherVR-Windows.bat --gameplay
+BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat
+```
+
+Prefer `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat` for handoff work because it produces package snapshots and evidence.
+
+## Important Argument Rules
+
+Use `--` before PowerShell build options forwarded to `BuildSkyrimTogetherVR-Windows.ps1`.
+
+Examples:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -Mode release
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -Xmake "C:\Program Files\xmake\xmake.exe"
+```
+
+Useful forwarded options:
+
+- `-Mode debug`
+- `-Mode releasedbg`
+- `-Mode release`
+- `-Xmake C:\Path\To\xmake.exe`
+- `-Toolchain msvc`
+- `-PapyrusCompiler C:\Path\To\Caprica.exe`
+
+## Expected Runtime Artifacts
+
+Default package should contain:
+
+- `SkyrimTogetherVR.exe`
+- `EarlyLoad.dll`
+- `TPProcess.exe`
+- `SkyrimTogetherVR_BuildManifest.json`
+- `Data\SkyrimTogether.esp`
+- VR Papyrus scripts under `Data\scripts`
+- `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
+- companion/runtime/evidence helper scripts and wrappers
+
+Avatar-sync package should use `SkyrimTogetherVRAvatarSync.exe`.
+
+Gameplay package should use `SkyrimTogetherVRGameplay.exe`.
+
+DLL-only package should not contain launcher executables or `TPProcess.exe`; it is only for checking native bridge DLL output.
+
+The package should not contain a main `SkyrimTogetherVR.dll`.
+
+## Verify Built Packages
+
+After `--all` succeeds, run:
+
+```bat
+VerifySkyrimTogetherVRWindowsPackages-Windows.bat --include-fus --planck-archive "C:\Downloads\PLANCK.zip" --skyrim-vr "%SKYRIMVR_PATH%"
+```
+
+If the PLANCK archive is not available, omit `--planck-archive`, but keep the real installed PLANCK prerequisite check when possible:
+
+```bat
+VerifySkyrimTogetherVRWindowsPackages-Windows.bat --include-fus --skyrim-vr "%SKYRIMVR_PATH%"
+```
+
+This command does not build, install, or launch Skyrim. It verifies:
+
+- default readiness with `--require-built-package`
+- avatar-sync readiness with `--require-built-package`
+- gameplay readiness with `--require-built-package`
+- DLL-only package audit
+- install dry-runs for default, avatar-sync, and gameplay packages
+- FUS DLL compatibility when `--include-fus` is passed
+- PLANCK archive/package compatibility when `--planck-archive` is passed
+
+## Install Dry Run, Then Install
+
+Install only after build and verification pass.
+
+Default package dry-runs:
+
+```bat
+InstallSkyrimTogetherVR-Windows.bat --package "artifacts\SkyrimTogetherVR\packages\default" --package-only --skyrim-vr "%SKYRIMVR_PATH%"
+InstallSkyrimTogetherVR-Windows.bat --package "artifacts\SkyrimTogetherVR\packages\default" --skyrim-vr "%SKYRIMVR_PATH%"
+```
+
+Default install:
+
+```bat
+InstallSkyrimTogetherVR-Windows.bat --package "artifacts\SkyrimTogetherVR\packages\default" --skyrim-vr "%SKYRIMVR_PATH%" --install
+```
+
+Avatar-sync install:
+
+```bat
+InstallSkyrimTogetherVR-Windows.bat --avatar-sync --package "artifacts\SkyrimTogetherVR\packages\avatar-sync" --skyrim-vr "%SKYRIMVR_PATH%"
+InstallSkyrimTogetherVR-Windows.bat --avatar-sync --package "artifacts\SkyrimTogetherVR\packages\avatar-sync" --skyrim-vr "%SKYRIMVR_PATH%" --install
+```
+
+Gameplay install:
+
+```bat
+InstallSkyrimTogetherVR-Windows.bat --gameplay --package "artifacts\SkyrimTogetherVR\packages\gameplay" --skyrim-vr "%SKYRIMVR_PATH%"
+InstallSkyrimTogetherVR-Windows.bat --gameplay --package "artifacts\SkyrimTogetherVR\packages\gameplay" --skyrim-vr "%SKYRIMVR_PATH%" --install
+```
+
+If stale root-level files from older bad package layouts are reported, use cleanup only after reviewing the paths:
+
+```bat
+InstallSkyrimTogetherVR-Windows.bat --package "artifacts\SkyrimTogetherVR\packages\default" --skyrim-vr "%SKYRIMVR_PATH%" --install --cleanup-stale-root-files
+```
+
+## If the Build Fails
+
+Do not immediately switch scripts. Preserve the failure evidence.
+
+Collect build evidence for the failed mode:
+
+```bat
+CollectSkyrimTogetherVRBuildEvidence-Windows.bat --skyrim-vr "%SKYRIMVR_PATH%"
+CollectSkyrimTogetherVRBuildEvidence-Windows.bat --avatar-sync --skyrim-vr "%SKYRIMVR_PATH%"
+CollectSkyrimTogetherVRBuildEvidence-Windows.bat --gameplay --skyrim-vr "%SKYRIMVR_PATH%"
+CollectSkyrimTogetherVRBuildEvidence-Windows.bat --dll-only --skyrim-vr "%SKYRIMVR_PATH%"
+```
+
+Evidence zips go to:
+
+```text
+artifacts\SkyrimTogetherVR\build-evidence
+```
+
+Common failure causes:
+
+- MSVC not visible to xmake.
+- xmake missing or not in `PATH`.
+- Running from the wrong directory.
+- Missing staged files under `GameFiles\SkyrimVR`.
+- Missing Python 3.
+- Missing Caprica when `--compile-papyrus` is used.
+- Missing installed SKSEVR, VR Address Library, VRIK, HIGGS, or PLANCK when `--require-prerequisites` is used.
+- Stale package outputs from a previous flavor; use the stable `packages\...` snapshots and package audits to catch this.
+
+## Do Not Do These
+
+- Do not build old Skyrim SE targets.
+- Do not use the old generic `xmake install -o distrib` Skyrim Together path.
+- Do not expect a main `SkyrimTogetherVR.dll`; the main client is launcher-linked as an exe.
+- Do not install before the package audit and install dry-runs pass.
+- Do not enable broad gameplay hooks or inline patches because the package compiles.
+- Do not run Skyrim VR as part of the build step.
+
+## First In-Game Test Order
+
+After Windows build, verification, and install dry-runs pass, runtime testing should proceed in this order:
+
+1. Install and run the default package.
+2. Validate startup logging, connection, local pose, VRIK/HIGGS/PLANCK installed-state readouts, and file handoff.
+3. Install and run the avatar-sync package with two clients.
+4. Validate remote player proxy, VRIK IK state, HMD/hand pose, weapon/magic/projectile pose context, and HIGGS-aware avatar readiness.
+5. Install and run the gameplay package only after the first two pass.
+6. Validate staged gameplay lanes deliberately: movement, equipment, activation, magic, combat, projectile, grab, HIGGS, PLANCK, and save/load.
+
+Runtime evidence wrappers are installed with the package:
+
+```bat
+AuditSkyrimTogetherVRRuntime-Windows.bat --require-connected --require-vrik --require-higgs
+CollectSkyrimTogetherVREvidence-Windows.bat --require-vrik --require-higgs
+AuditSkyrimTogetherVRAvatarSyncRuntime-Windows.bat --require-vr-pose-context
+CollectSkyrimTogetherVRAvatarSyncEvidence-Windows.bat --require-vr-pose-context
+AuditSkyrimTogetherVRGameplayRuntime-Windows.bat
+CollectSkyrimTogetherVRGameplayEvidence-Windows.bat
+```
+
+These wrappers inspect logs and handoff files after the user has run Skyrim VR. They do not launch the game.
+
+## Acceptance Before Handing Back
+
+Before telling the user the package is ready to test in VR, provide:
+
+- The exact command used for preflight.
+- The exact command used for build/evidence.
+- The exact command used for package verification.
+- The package flavor installed or prepared for install.
+- The build evidence zip path.
+- Any skipped prerequisite, especially Papyrus compile, FUS scan, PLANCK archive check, VRIK, HIGGS, or PLANCK.
+- Any warnings from install dry-runs.
+
+The strongest pre-runtime handoff is:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --compile-papyrus --skyrim-vr "%SKYRIMVR_PATH%" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+VerifySkyrimTogetherVRWindowsPackages-Windows.bat --include-fus --planck-archive "C:\Downloads\PLANCK.zip" --skyrim-vr "%SKYRIMVR_PATH%"
+```

@@ -49,10 +49,89 @@ PlayerCharacter* PlayerCharacter::Get() noexcept
 
 const GameArray<TintMask*>& PlayerCharacter::GetTints() const noexcept
 {
+#if TP_SKYRIM_VR
+    static TintMask* emptyTintEntry = nullptr;
+    static const GameArray<TintMask*> emptyTints = []
+    {
+        GameArray<TintMask*> result;
+        result.data = &emptyTintEntry;
+        return result;
+    }();
+    return emptyTints;
+#else
     if (overlayTints)
         return *overlayTints;
 
     return baseTints;
+#endif
+}
+
+bool PlayerCharacter::CanReadTintData() const noexcept
+{
+#if TP_SKYRIM_VR
+    return false;
+#else
+    return true;
+#endif
+}
+
+bool PlayerCharacter::CanReadObjectiveData() const noexcept
+{
+#if TP_SKYRIM_VR
+    return false;
+#else
+    return true;
+#endif
+}
+
+const GameArray<PlayerCharacter::ObjectiveInstance>& PlayerCharacter::GetObjectives() const noexcept
+{
+#if TP_SKYRIM_VR
+    static ObjectiveInstance emptyObjectiveEntry{};
+    static const GameArray<ObjectiveInstance> emptyObjectives = []
+    {
+        GameArray<ObjectiveInstance> result;
+        result.data = &emptyObjectiveEntry;
+        return result;
+    }();
+    return emptyObjectives;
+#else
+    return objectives;
+#endif
+}
+
+Skills* PlayerCharacter::GetSkillsData() const noexcept
+{
+#if TP_SKYRIM_VR
+    auto* const pPlayerSkills = Skyrim::RuntimeLayout::Value<PlayerSkillsRuntimeData*>(
+        this, VrCommonLibOffsets::InfoRuntimeData + VrInfoRuntimeOffsets::Skills);
+    if (!pPlayerSkills)
+        return nullptr;
+
+    return pPlayerSkills->data;
+#else
+    return pSkills ? *pSkills : nullptr;
+#endif
+}
+
+int32_t* PlayerCharacter::GetDifficultyData() noexcept
+{
+#if TP_SKYRIM_VR
+    return Skyrim::RuntimeLayout::Ptr<int32_t>(
+        this, VrCommonLibOffsets::GameStateData + VrGameStateOffsets::Difficulty);
+#else
+    return &difficulty;
+#endif
+}
+
+const int32_t* PlayerCharacter::GetDifficultyData() const noexcept
+{
+#if TP_SKYRIM_VR
+    return Skyrim::RuntimeLayout::Ptr<int32_t>(
+        this, VrCommonLibOffsets::GameStateData + VrGameStateOffsets::Difficulty);
+#else
+    return &difficulty;
+#endif
 }
 
 void PlayerCharacter::SetGodMode(bool aSet) noexcept
@@ -67,7 +146,19 @@ void PlayerCharacter::SetDifficulty(const int32_t aDifficulty, bool aForceUpdate
         return;
 
     int32_t* difficultySetting = Settings::GetDifficulty();
-    *difficultySetting = difficulty = aDifficulty;
+    *difficultySetting = aDifficulty;
+
+    if (auto* pDifficulty = GetDifficultyData())
+        *pDifficulty = aDifficulty;
+}
+
+float PlayerCharacter::GetSkillExperience(Skills::Skill aSkill) const noexcept
+{
+    const auto* pSkillData = GetSkillsData();
+    if (!pSkillData || aSkill >= Skills::kTotal)
+        return 0.f;
+
+    return pSkillData->GetSkillData(aSkill).xp;
 }
 
 void PlayerCharacter::AddSkillExperience(int32_t aSkill, float aExperience) noexcept
@@ -102,7 +193,7 @@ NiPoint3 PlayerCharacter::RespawnPlayer() noexcept
     {
         // TP to Whiterun temple when killed in world space
         TES* pTes = TES::Get();
-        pCell = ModManager::Get()->GetCellFromCoordinates(pTes->centerGridX, pTes->centerGridY, GetWorldSpace(), false);
+        pCell = ModManager::Get()->GetCellFromCoordinates(pTes->GetCenterGridXData(), pTes->GetCenterGridYData(), GetWorldSpace(), false);
     }
     else
     {
@@ -154,8 +245,12 @@ char TP_MAKE_THISCALL(HookPickUpObject, PlayerCharacter, TESObjectREFR* apObject
 {
     auto& modSystem = World::Get().GetModSystem();
 
+    const auto* pBaseForm = apObject->GetBaseFormData();
+    if (!pBaseForm)
+        return TiltedPhoques::ThisCall(RealPickUpObject, apThis, apObject, aCount, aUnk1, aUnk2);
+
     Inventory::Entry item{};
-    modSystem.GetServerModId(apObject->baseForm->formID, item.BaseId);
+    modSystem.GetServerModId(pBaseForm->GetFormIdData(), item.BaseId);
     item.Count = aCount;
 
     if (apObject->GetExtraDataList() && !ScopedExtraDataOverride::IsOverriden())
@@ -168,7 +263,7 @@ char TP_MAKE_THISCALL(HookPickUpObject, PlayerCharacter, TESObjectREFR* apObject
     // The inventory change event should always be sent to the server, otherwise the server inventory won't be updated.
     bool shouldUpdateClients = apObject->IsTemporary() && !ScopedActivateOverride::IsOverriden();
 
-    World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item), false, shouldUpdateClients));
+    World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item), false, shouldUpdateClients));
 
     ScopedInventoryOverride _;
 
@@ -189,7 +284,9 @@ void TP_MAKE_THISCALL(HookSetBeastForm, void, void* apUnk1, void* apUnk2, bool a
 void TP_MAKE_THISCALL(HookAddSkillExperience, PlayerCharacter, int32_t aSkill, float aExperience)
 {
     // TODO: armor skills? sneak?
-    static const Set<int32_t> combatSkills{ActorValueInfo::kAlteration, ActorValueInfo::kConjuration, ActorValueInfo::kDestruction, ActorValueInfo::kIllusion, ActorValueInfo::kRestoration, ActorValueInfo::kOneHanded, ActorValueInfo::kTwoHanded, ActorValueInfo::kMarksman, ActorValueInfo::kBlock};
+    static const Set<int32_t> combatSkills{ActorValueInfo::kAlteration, ActorValueInfo::kConjuration, ActorValueInfo::kDestruction,
+                                           ActorValueInfo::kIllusion,   ActorValueInfo::kRestoration, ActorValueInfo::kOneHanded,
+                                           ActorValueInfo::kTwoHanded,  ActorValueInfo::kMarksman,    ActorValueInfo::kBlock};
 
     Skills::Skill skill = Skills::GetSkillFromActorValue(aSkill);
     float oldExperience = apThis->GetSkillExperience(skill);
@@ -230,7 +327,7 @@ void TP_MAKE_THISCALL(HookSetWaypoint, PlayerCharacter, NiPoint3* apPosition, TE
     position.y = apPosition->y;
     position.z = apPosition->z;
 
-    World::Get().GetRunner().Trigger(SetWaypointEvent(position, apWorldSpace ? apWorldSpace->formID : 0));
+    World::Get().GetRunner().Trigger(SetWaypointEvent(position, apWorldSpace ? apWorldSpace->GetFormIdData() : 0));
 
     return TiltedPhoques::ThisCall(RealSetWaypoint, apThis, apPosition, apWorldSpace);
 }

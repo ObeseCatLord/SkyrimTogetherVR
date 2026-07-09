@@ -21,14 +21,16 @@ void DebugService::DrawPlayerDebugView()
     auto pLeftWeapon = pPlayer->GetEquippedWeapon(0);
     auto pRightWeapon = pPlayer->GetEquippedWeapon(1);
 
-    uint32_t leftId = pLeftWeapon ? pLeftWeapon->formID : 0;
-    uint32_t rightId = pRightWeapon ? pRightWeapon->formID : 0;
+    uint32_t leftId = pLeftWeapon ? pLeftWeapon->GetFormIdData() : 0;
+    uint32_t rightId = pRightWeapon ? pRightWeapon->GetFormIdData() : 0;
 
     ImGui::InputScalar("Left Item", ImGuiDataType_U32, (void*)&leftId, nullptr, nullptr, nullptr, ImGuiInputTextFlags_ReadOnly);
     ImGui::InputScalar("Right Item", ImGuiDataType_U32, (void*)&rightId, nullptr, nullptr, nullptr, ImGuiInputTextFlags_ReadOnly);
 
-    leftId = pPlayer->magicItems[0] ? pPlayer->magicItems[0]->formID : 0;
-    rightId = pPlayer->magicItems[1] ? pPlayer->magicItems[1]->formID : 0;
+    const auto* pLeftSpell = pPlayer->GetSelectedSpellData(0);
+    const auto* pRightSpell = pPlayer->GetSelectedSpellData(1);
+    leftId = pLeftSpell ? pLeftSpell->GetFormIdData() : 0;
+    rightId = pRightSpell ? pRightSpell->GetFormIdData() : 0;
 
     ImGui::InputScalar("Right Magic", ImGuiDataType_U32, (void*)&rightId, nullptr, nullptr, nullptr, ImGuiInputTextFlags_ReadOnly);
     ImGui::InputScalar("Left Magic", ImGuiDataType_U32, (void*)&leftId, nullptr, nullptr, nullptr, ImGuiInputTextFlags_ReadOnly);
@@ -43,33 +45,42 @@ void DebugService::DrawPlayerDebugView()
     ImGui::InputScalar("otherHandCaster", ImGuiDataType_U64, (void*)&otherHandCaster, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
     ImGui::InputScalar("instantHandCaster", ImGuiDataType_U64, (void*)&instantHandCaster, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
 
-    ImGui::InputScalar("leftHandCasterSpell", ImGuiDataType_U64, (void*)&(leftHandCaster->pCurrentSpell), 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
-    ImGui::InputScalar("rightHandCasterSpell", ImGuiDataType_U64, (void*)&(rightHandCaster->pCurrentSpell), 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
-    ImGui::InputScalar("otherHandCasterSpell", ImGuiDataType_U64, (void*)&(otherHandCaster->pCurrentSpell), 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
-    ImGui::InputScalar("instantHandCasterSpell", ImGuiDataType_U64, (void*)&(instantHandCaster->pCurrentSpell), 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+    uint64_t leftHandCasterSpell = reinterpret_cast<uint64_t>(leftHandCaster ? leftHandCaster->GetCurrentSpellData() : nullptr);
+    uint64_t rightHandCasterSpell = reinterpret_cast<uint64_t>(rightHandCaster ? rightHandCaster->GetCurrentSpellData() : nullptr);
+    uint64_t otherHandCasterSpell = reinterpret_cast<uint64_t>(otherHandCaster ? otherHandCaster->GetCurrentSpellData() : nullptr);
+    uint64_t instantHandCasterSpell = reinterpret_cast<uint64_t>(instantHandCaster ? instantHandCaster->GetCurrentSpellData() : nullptr);
 
-    uint32_t shoutId = pPlayer->equippedShout ? pPlayer->equippedShout->formID : 0;
+    ImGui::InputScalar("leftHandCasterSpell", ImGuiDataType_U64, (void*)&leftHandCasterSpell, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputScalar("rightHandCasterSpell", ImGuiDataType_U64, (void*)&rightHandCasterSpell, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputScalar("otherHandCasterSpell", ImGuiDataType_U64, (void*)&otherHandCasterSpell, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputScalar("instantHandCasterSpell", ImGuiDataType_U64, (void*)&instantHandCasterSpell, 0, 0, "%" PRIx64, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+
+    const auto* pSelectedPower = pPlayer->GetSelectedPowerOrShoutData();
+    uint32_t shoutId = pSelectedPower ? pSelectedPower->GetFormIdData() : 0;
 
     ImGui::InputScalar("Shout", ImGuiDataType_U32, (void*)&shoutId, nullptr, nullptr, nullptr, ImGuiInputTextFlags_ReadOnly);
 
     if (auto pWorldSpace = pPlayer->GetWorldSpace())
     {
-        auto worldFormId = pWorldSpace->formID;
+        auto worldFormId = pWorldSpace->GetFormIdData();
         ImGui::InputScalar("Worldspace", ImGuiDataType_U32, (void*)&worldFormId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
     }
     if (auto pCell = pPlayer->GetParentCell())
     {
-        auto cellFormId = pCell->formID;
+        auto cellFormId = pCell->GetFormIdData();
         ImGui::InputScalar("Cell Id", ImGuiDataType_U32, (void*)&cellFormId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
     }
-    if (const auto playerParentCell = pPlayer->parentCell)
+    if (const auto playerParentCell = pPlayer->GetParentCellData())
     {
-        ImGui::InputScalar("Player parent cell", ImGuiDataType_U32, (void*)&playerParentCell->formID, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
+        auto playerParentCellId = playerParentCell->GetFormIdData();
+        ImGui::InputScalar(
+            "Player parent cell", ImGuiDataType_U32, (void*)&playerParentCellId, nullptr, nullptr, "%" PRIx32,
+            ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
     }
     if (auto* pTES = TES::Get())
     {
-        int32_t playerGrid[2] = {pTES->currentGridX, pTES->currentGridY};
-        int32_t centerGrid[2] = {pTES->centerGridX, pTES->centerGridY};
+        int32_t playerGrid[2] = {pTES->GetCurrentGridXData(), pTES->GetCurrentGridYData()};
+        int32_t centerGrid[2] = {pTES->GetCenterGridXData(), pTES->GetCenterGridYData()};
 
         ImGui::InputInt2("Player grid", playerGrid, ImGuiInputTextFlags_ReadOnly);
         ImGui::InputInt2("Center grid", centerGrid, ImGuiInputTextFlags_ReadOnly);

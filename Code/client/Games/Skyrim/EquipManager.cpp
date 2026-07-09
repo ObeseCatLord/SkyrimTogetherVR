@@ -12,6 +12,7 @@
 #include <AI/AIProcess.h>
 #include <Games/Skyrim/Misc/MiddleProcess.h>
 #include <DefaultObjectManager.h>
+#include <RuntimeLayout.h>
 
 struct BGSEquipSlot : TESForm
 {
@@ -19,6 +20,80 @@ struct BGSEquipSlot : TESForm
 
 struct EquipData
 {
+    using LocalEquipDataOffsets = Skyrim::RuntimeLayout::EquipDataLocalShimOffsets;
+
+    [[nodiscard]] ExtraDataList* GetExtraDataListData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<ExtraDataList*>(this, LocalEquipDataOffsets::ExtraDataList);
+#else
+        return pExtraDataList;
+#endif
+    }
+
+    [[nodiscard]] int32_t GetCountData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<int32_t>(this, LocalEquipDataOffsets::Count);
+#else
+        return count;
+#endif
+    }
+
+    [[nodiscard]] BGSEquipSlot* GetSlotData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<BGSEquipSlot*>(this, LocalEquipDataOffsets::Slot);
+#else
+        return pSlot;
+#endif
+    }
+
+    [[nodiscard]] BGSEquipSlot* GetSlotToReplaceData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<BGSEquipSlot*>(this, LocalEquipDataOffsets::SlotToReplace);
+#else
+        return pSlotToReplace;
+#endif
+    }
+
+    [[nodiscard]] bool IsQueueEquipData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalEquipDataOffsets::QueueEquip);
+#else
+        return bQueueEquip;
+#endif
+    }
+
+    [[nodiscard]] bool IsForceEquipData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalEquipDataOffsets::ForceEquip);
+#else
+        return bForceEquip;
+#endif
+    }
+
+    [[nodiscard]] bool PlaysSoundData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalEquipDataOffsets::PlaySound);
+#else
+        return bPlaySound;
+#endif
+    }
+
+    [[nodiscard]] bool AppliesNowData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalEquipDataOffsets::ApplyNow);
+#else
+        return bApplyNow;
+#endif
+    }
+
     ExtraDataList* pExtraDataList; // 0
     int32_t count;                 // 8
     BGSEquipSlot* pSlot;           // 10
@@ -29,22 +104,94 @@ struct EquipData
     bool bApplyNow;
     bool bUnk1;
 };
-static_assert(sizeof(EquipData) == 0x28);
+static_assert(EquipData::LocalEquipDataOffsets::Count == 0x8);
+static_assert(EquipData::LocalEquipDataOffsets::Slot == 0x10);
+static_assert(EquipData::LocalEquipDataOffsets::QueueEquip == 0x20);
+static_assert(EquipData::LocalEquipDataOffsets::Size == 0x28);
+static_assert(offsetof(EquipData, pExtraDataList) == EquipData::LocalEquipDataOffsets::ExtraDataList);
+static_assert(offsetof(EquipData, count) == EquipData::LocalEquipDataOffsets::Count);
+static_assert(offsetof(EquipData, pSlot) == EquipData::LocalEquipDataOffsets::Slot);
+static_assert(offsetof(EquipData, pSlotToReplace) == EquipData::LocalEquipDataOffsets::SlotToReplace);
+static_assert(offsetof(EquipData, bQueueEquip) == EquipData::LocalEquipDataOffsets::QueueEquip);
+static_assert(offsetof(EquipData, bForceEquip) == EquipData::LocalEquipDataOffsets::ForceEquip);
+static_assert(offsetof(EquipData, bPlaySound) == EquipData::LocalEquipDataOffsets::PlaySound);
+static_assert(offsetof(EquipData, bApplyNow) == EquipData::LocalEquipDataOffsets::ApplyNow);
+static_assert(sizeof(EquipData) == EquipData::LocalEquipDataOffsets::Size);
 
 struct MagicEquipData
 {
+    using LocalMagicEquipDataOffsets = Skyrim::RuntimeLayout::MagicEquipDataLocalShimOffsets;
+
+    [[nodiscard]] BGSEquipSlot* GetEquipSlotData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<BGSEquipSlot*>(this, LocalMagicEquipDataOffsets::EquipSlot);
+#else
+        return pEquipSlot;
+#endif
+    }
+
+    [[nodiscard]] bool IsQueueEquipData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalMagicEquipDataOffsets::QueueEquip);
+#else
+        return bQueueEquip;
+#endif
+    }
+
+    [[nodiscard]] bool IsForceEquipData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalMagicEquipDataOffsets::ForceEquip);
+#else
+        return bForceEquip;
+#endif
+    }
+
     BGSEquipSlot* pEquipSlot;
     bool bQueueEquip;
     bool bForceEquip;
 };
-static_assert(sizeof(MagicEquipData) == 0x10);
+static_assert(MagicEquipData::LocalMagicEquipDataOffsets::EquipSlot == 0x0);
+static_assert(MagicEquipData::LocalMagicEquipDataOffsets::QueueEquip == 0x8);
+static_assert(MagicEquipData::LocalMagicEquipDataOffsets::Size == 0x10);
+static_assert(offsetof(MagicEquipData, pEquipSlot) == MagicEquipData::LocalMagicEquipDataOffsets::EquipSlot);
+static_assert(offsetof(MagicEquipData, bQueueEquip) == MagicEquipData::LocalMagicEquipDataOffsets::QueueEquip);
+static_assert(offsetof(MagicEquipData, bForceEquip) == MagicEquipData::LocalMagicEquipDataOffsets::ForceEquip);
+static_assert(sizeof(MagicEquipData) == MagicEquipData::LocalMagicEquipDataOffsets::Size);
 
 struct ShoutEquipData
 {
+    using LocalShoutEquipDataOffsets = Skyrim::RuntimeLayout::ShoutEquipDataLocalShimOffsets;
+
+    [[nodiscard]] void* GetUnk1Data() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<void*>(this, LocalShoutEquipDataOffsets::Unk1);
+#else
+        return pUnk1;
+#endif
+    }
+
+    [[nodiscard]] bool GetUnk2Data() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<bool>(this, LocalShoutEquipDataOffsets::Unk2);
+#else
+        return bUnk2;
+#endif
+    }
+
     void* pUnk1;
     bool bUnk2;
 };
-static_assert(sizeof(MagicEquipData) == 0x10);
+static_assert(ShoutEquipData::LocalShoutEquipDataOffsets::Unk1 == 0x0);
+static_assert(ShoutEquipData::LocalShoutEquipDataOffsets::Unk2 == 0x8);
+static_assert(ShoutEquipData::LocalShoutEquipDataOffsets::Size == 0x10);
+static_assert(offsetof(ShoutEquipData, pUnk1) == ShoutEquipData::LocalShoutEquipDataOffsets::Unk1);
+static_assert(offsetof(ShoutEquipData, bUnk2) == ShoutEquipData::LocalShoutEquipDataOffsets::Unk2);
+static_assert(sizeof(ShoutEquipData) == ShoutEquipData::LocalShoutEquipDataOffsets::Size);
 
 TP_THIS_FUNCTION(TEquip, void*, EquipManager, Actor* apActor, TESForm* apItem, EquipData* apData);
 TP_THIS_FUNCTION(TUnEquip, void*, EquipManager, Actor* apActor, TESForm* apItem, EquipData* apData);
@@ -74,7 +221,7 @@ void* EquipManager::Equip(Actor* apActor, TESForm* apItem, ExtraDataList* apExtr
 
     ScopedEquipOverride equipOverride;
 
-    spdlog::debug("Call Actor[{:X}]::Equip(), item id: {:X}, extra data? {}, count: {}", apActor->formID, apItem->formID, (bool)apExtraDataList, aCount);
+    spdlog::debug("Call Actor[{:X}]::Equip(), item id: {:X}, extra data? {}, count: {}", apActor->GetFormIdData(), apItem->GetFormIdData(), (bool)apExtraDataList, aCount);
 
     return TiltedPhoques::ThisCall(s_equipFunc, this, apActor, apItem, apExtraDataList, aCount, apSlot, abQueueEquip, abForceEquip, abPlaySound, abApplyNow);
 }
@@ -86,7 +233,7 @@ void* EquipManager::UnEquip(Actor* apActor, TESForm* apItem, ExtraDataList* apEx
 
     ScopedEquipOverride equipOverride;
 
-    spdlog::debug("Call Actor[{:X}]::UnEquip(), item id: {:X}, extra data? {}, count: {}", apActor->formID, apItem->formID, (bool)apExtraDataList, aCount);
+    spdlog::debug("Call Actor[{:X}]::UnEquip(), item id: {:X}, extra data? {}, count: {}", apActor->GetFormIdData(), apItem->GetFormIdData(), (bool)apExtraDataList, aCount);
 
     return TiltedPhoques::ThisCall(s_unequipFunc, this, apActor, apItem, apExtraDataList, aCount, apSlot, abQueueEquip, abForceEquip, abPlaySound, abApplyNow, apSlotToReplace);
 }
@@ -147,9 +294,11 @@ void* TP_MAKE_THISCALL(EquipHook, EquipManager, Actor* apActor, TESForm* apItem,
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apItem->GetFormIdData();
     if (pExtension->IsRemote())
     {
-        spdlog::debug("Actor[{:X}]::Equip(), item form id: {:X}", apActor->formID, apItem->formID);
+        spdlog::debug("Actor[{:X}]::Equip(), item form id: {:X}", actorId, itemId);
         if (!ScopedEquipOverride::IsOverriden())
             return nullptr;
     }
@@ -157,14 +306,15 @@ void* TP_MAKE_THISCALL(EquipHook, EquipManager, Actor* apActor, TESForm* apItem,
     // Consumables are "equipped" as well. We don't want this to sync, for several reasons.
     // The right hand item on the server would be overridden by the consumable.
     // Furthermore, the equip action on the other clients would doubly subtract the consumables.
-    if (pExtension->IsLocal() && !apItem->IsConsumable() && !apData->bQueueEquip)
+    if (pExtension->IsLocal() && !apItem->IsConsumable() && !apData->IsQueueEquipData())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.Count = apData->count;
-        evt.ItemId = apItem->formID;
-        evt.EquipSlotId = apData->pSlot ? apData->pSlot->formID : 0;
-        evt.IsAmmo = apItem->formType == FormType::Ammo;
+        evt.ActorId = actorId;
+        evt.Count = apData->GetCountData();
+        evt.ItemId = itemId;
+        auto* pSlot = apData->GetSlotData();
+        evt.EquipSlotId = pSlot ? pSlot->GetFormIdData() : 0;
+        evt.IsAmmo = apItem->GetFormTypeData() == FormType::Ammo;
 
         World::Get().GetRunner().Trigger(evt);
     }
@@ -180,29 +330,32 @@ void* TP_MAKE_THISCALL(UnEquipHook, EquipManager, Actor* apActor, TESForm* apIte
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apItem->GetFormIdData();
     if (pExtension->IsRemote())
     {
-        spdlog::debug("Actor[{:X}]::Unequip(), item form id: {:X}, IsOverridden, equip: {}, inventory: {}", apActor->formID, apItem->formID, ScopedEquipOverride::IsOverriden(), ScopedInventoryOverride::IsOverriden());
+        spdlog::debug("Actor[{:X}]::Unequip(), item form id: {:X}, IsOverridden, equip: {}, inventory: {}", actorId, itemId, ScopedEquipOverride::IsOverriden(), ScopedInventoryOverride::IsOverriden());
         // The ScopedInventoryOverride check is here to allow the item to be unequipped if it is removed
         // Without this check, the game will not accept null as a return, and it'll keep trying to unequip infinitely
         if (!ScopedEquipOverride::IsOverriden() && !ScopedInventoryOverride::IsOverriden())
             return nullptr;
     }
 
-    if (pExtension->IsLocal() && !ScopedUnequipOverride::IsOverriden() && !apData->bQueueEquip)
+    if (pExtension->IsLocal() && !ScopedUnequipOverride::IsOverriden() && !apData->IsQueueEquipData())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.Count = apData->count;
-        evt.ItemId = apItem->formID;
-        evt.EquipSlotId = apData->pSlot ? apData->pSlot->formID : 0;
+        evt.ActorId = actorId;
+        evt.Count = apData->GetCountData();
+        evt.ItemId = itemId;
+        auto* pSlot = apData->GetSlotData();
+        evt.EquipSlotId = pSlot ? pSlot->GetFormIdData() : 0;
         evt.Unequip = true;
-        evt.IsAmmo = apItem->formType == FormType::Ammo;
+        evt.IsAmmo = apItem->GetFormTypeData() == FormType::Ammo;
 
         World::Get().GetRunner().Trigger(evt);
     }
 
-    spdlog::debug("UnEquipHook, actor: {:X}", apActor->formID);
+    spdlog::debug("UnEquipHook, actor: {:X}", actorId);
 
     return TiltedPhoques::ThisCall(RealUnEquip, apThis, apActor, apItem, apData);
 }
@@ -213,15 +366,18 @@ void* TP_MAKE_THISCALL(EquipSpellHook, EquipManager, Actor* apActor, TESForm* ap
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apSpell->GetFormIdData();
     if (pExtension->IsRemote() && !ScopedEquipOverride::IsOverriden())
         return nullptr;
 
-    if (pExtension->IsLocal() && !apData->bQueueEquip)
+    if (pExtension->IsLocal() && !apData->IsQueueEquipData())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.ItemId = apSpell->formID;
-        evt.EquipSlotId = apData->pEquipSlot->formID;
+        evt.ActorId = actorId;
+        evt.ItemId = itemId;
+        auto* pEquipSlot = apData->GetEquipSlotData();
+        evt.EquipSlotId = pEquipSlot ? pEquipSlot->GetFormIdData() : 0;
         evt.IsSpell = true;
 
         World::Get().GetRunner().Trigger(evt);
@@ -238,15 +394,18 @@ void* TP_MAKE_THISCALL(UnEquipSpellHook, EquipManager, Actor* apActor, TESForm* 
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apSpell->GetFormIdData();
     if (pExtension->IsRemote() && !ScopedEquipOverride::IsOverriden())
         return nullptr;
 
-    if (pExtension->IsLocal() && !ScopedUnequipOverride::IsOverriden() && !apData->bQueueEquip)
+    if (pExtension->IsLocal() && !ScopedUnequipOverride::IsOverriden() && !apData->IsQueueEquipData())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.ItemId = apSpell->formID;
-        evt.EquipSlotId = apData->pEquipSlot->formID;
+        evt.ActorId = actorId;
+        evt.ItemId = itemId;
+        auto* pEquipSlot = apData->GetEquipSlotData();
+        evt.EquipSlotId = pEquipSlot ? pEquipSlot->GetFormIdData() : 0;
         evt.Unequip = true;
         evt.IsSpell = true;
 
@@ -262,6 +421,8 @@ void* TP_MAKE_THISCALL(EquipShoutHook, EquipManager, Actor* apActor, TESForm* ap
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apShout->GetFormIdData();
     if (pExtension->IsRemote() && !ScopedEquipOverride::IsOverriden())
         return nullptr;
 
@@ -269,8 +430,8 @@ void* TP_MAKE_THISCALL(EquipShoutHook, EquipManager, Actor* apActor, TESForm* ap
     if (pExtension->IsLocal())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.ItemId = apShout->formID;
+        evt.ActorId = actorId;
+        evt.ItemId = itemId;
         evt.IsShout = true;
 
         World::Get().GetRunner().Trigger(evt);
@@ -287,6 +448,8 @@ void* TP_MAKE_THISCALL(UnEquipShoutHook, EquipManager, Actor* apActor, TESForm* 
         return nullptr;
 
     const auto pExtension = apActor->GetExtension();
+    const auto actorId = apActor->GetFormIdData();
+    const auto itemId = apShout->GetFormIdData();
     if (pExtension->IsRemote() && !ScopedEquipOverride::IsOverriden())
         return nullptr;
 
@@ -294,8 +457,8 @@ void* TP_MAKE_THISCALL(UnEquipShoutHook, EquipManager, Actor* apActor, TESForm* 
     if (pExtension->IsLocal() && !ScopedUnequipOverride::IsOverriden())
     {
         EquipmentChangeEvent evt{};
-        evt.ActorId = apActor->formID;
-        evt.ItemId = apShout->formID;
+        evt.ActorId = actorId;
+        evt.ItemId = itemId;
         evt.Unequip = true;
         evt.IsShout = true;
 

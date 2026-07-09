@@ -1,5 +1,6 @@
 
 #include <base/threading/ThreadUtils.h>
+#include <Games/Skyrim/VR/VRHookPolicy.h>
 
 namespace
 {
@@ -29,8 +30,10 @@ static void Hook_Construct_TaskletManager(BSTaskletManager* apSelf)
 static TiltedPhoques::Initializer s_BSThreadInit(
     []()
     {
+#if TP_SKYRIM_ALLOW_SOURCE_BLOCKED_VR_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_TASKLET_MANAGER_CTOR, TP_SKYRIM_VR_INLINE_PATCH_TASKLET_MANAGER_CTOR_VR_RESOLVED)
         const VersionDbPtr<uint8_t> getTaskletManagerInstance(69554);
 
         // tasklet naming
         TiltedPhoques::SwapCall(getTaskletManagerInstance.Get() + 0x63, Construct_TaskletManager, &Hook_Construct_TaskletManager);
+#endif
     });

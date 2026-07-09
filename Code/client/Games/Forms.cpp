@@ -24,15 +24,15 @@ void TESNPC::Serialize(String* apSaveBuffer) const noexcept
     char buffer[1 << 15];
 
     BGSSaveFormBuffer saveBuffer;
-    saveBuffer.buffer = buffer;
-    saveBuffer.capacity = 1 << 15;
-    saveBuffer.changeFlags = GetChangeFlags();
+    saveBuffer.SetBufferData(buffer);
+    saveBuffer.SetCapacityData(1 << 15);
+    saveBuffer.SetChangeFlagsData(GetChangeFlags());
 
     Save(&saveBuffer);
 
-    apSaveBuffer->assign(saveBuffer.buffer, saveBuffer.position);
+    apSaveBuffer->assign(saveBuffer.GetBufferData(), saveBuffer.GetPositionData());
 
-    saveBuffer.buffer = nullptr;
+    saveBuffer.SetBufferData(nullptr);
 }
 
 void TESNPC::Deserialize(const String& acBuffer, uint32_t aChangeFlags) noexcept
@@ -41,37 +41,39 @@ void TESNPC::Deserialize(const String& acBuffer, uint32_t aChangeFlags) noexcept
 
     BGSLoadFormBuffer loadBuffer(aChangeFlags);
     loadBuffer.SetSize(acBuffer.size() & 0xFFFFFFFF);
-    loadBuffer.buffer = acBuffer.data();
-    loadBuffer.formId = formID;
-    loadBuffer.form = this;
+    loadBuffer.SetBufferData(acBuffer.data());
+    loadBuffer.SetFormIdData(GetFormIdData());
+    loadBuffer.SetFormData(this);
 
     Load(&loadBuffer);
 
-    loadBuffer.buffer = nullptr;
+    loadBuffer.SetBufferData(nullptr);
 }
 
 void TESNPC::Initialize() noexcept
 {
-    auto pPlayerBaseForm = Cast<TESNPC>(PlayerCharacter::Get()->baseForm);
+    auto pPlayerBaseForm = Cast<TESNPC>(PlayerCharacter::Get()->GetBaseFormData());
 
     // These values are all defaulted, if the other actor did not modify them they won't be loaded, therefore we need to force them before load
     attackDataForm.attackDataMap = pPlayerBaseForm->attackDataForm.attackDataMap;
-    npcClass = pPlayerBaseForm->npcClass;
-    combatStyle = pPlayerBaseForm->combatStyle;
-    raceForm.race = pPlayerBaseForm->raceForm.race;
-    outfits[0] = pPlayerBaseForm->outfits[0];
+    SetNpcClassData(pPlayerBaseForm->GetNpcClassData());
+    SetCombatStyleData(pPlayerBaseForm->GetCombatStyleData());
+    GetRaceFormData().SetRaceData(pPlayerBaseForm->GetRaceFormData().GetRaceData());
+    SetDefaultOutfitData(pPlayerBaseForm->GetDefaultOutfitData());
     spellList.Initialize();
     // End defaults
 
-    flags |= 0x200000;
+    SetFormFlagsData(GetFormFlagsData() | 0x200000);
 }
 
 void TESForm::Save_Reversed(const uint32_t aChangeFlags, Buffer::Writer& aWriter)
 {
     if (aChangeFlags & 1)
     {
-        aWriter.WriteBytes(reinterpret_cast<uint8_t*>(&flags), 4);
-        aWriter.WriteBytes(reinterpret_cast<uint8_t*>(&unk10), 2);
+        auto formFlags = GetFormFlagsData();
+        auto inGameFormFlags = GetInGameFormFlagsData();
+        aWriter.WriteBytes(reinterpret_cast<uint8_t*>(&formFlags), 4);
+        aWriter.WriteBytes(reinterpret_cast<uint8_t*>(&inGameFormFlags), 2);
     }
 }
 
@@ -79,7 +81,7 @@ void TESForm::SetSkipSaveFlag(bool aSet) noexcept
 {
     if (aSet)
     {
-        unk10 = 0xFFFF;
+        SetInGameFormFlagsData(0xFFFF);
     }
     /*const uint32_t flag = 1 << 14;
 
@@ -106,7 +108,7 @@ uint32_t TESForm::GetChangeFlags() const noexcept
     const auto pUnk = *(s_singleton.Get());
 
     ChangeFlags changeFlags;
-    const auto cResult = TiltedPhoques::ThisCall(internalGetChangeFlags, pUnk->unk330, formID, changeFlags);
+    const auto cResult = TiltedPhoques::ThisCall(internalGetChangeFlags, pUnk->unk330, GetFormIdData(), changeFlags);
     if (!cResult)
         return 0;
 
@@ -121,19 +123,21 @@ TESNPC* TESNPC::Create(const String& acBuffer, const uint32_t aChangeFlags) noex
     pNpc->Deserialize(acBuffer, aChangeFlags);
 
     // This forces facegen for some reason
-    pNpc->overlayRace = nullptr;
+    pNpc->SetOriginalRaceData(nullptr);
 
     return pNpc;
 }
 
 BGSHeadPart* TESNPC::GetHeadPart(uint32_t aType)
 {
-    if (headparts)
+    auto* pHeadParts = GetHeadPartsData();
+    if (pHeadParts)
     {
-        for (auto i = 0; i < headpartsCount; ++i)
+        const auto headPartsCount = GetHeadPartsCountData();
+        for (auto i = 0; i < headPartsCount; ++i)
         {
-            if (headparts[i] && headparts[i]->type == aType)
-                return headparts[i];
+            if (pHeadParts[i] && pHeadParts[i]->type == aType)
+                return pHeadParts[i];
         }
     }
 

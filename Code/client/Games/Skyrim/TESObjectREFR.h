@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #include <Games/Primitives.h>
 #include <Forms/TESForm.h>
 #include <NetImmerse/BSFaceGenNiNode.h>
@@ -10,11 +13,17 @@
 #include <Games/Magic/MagicSystem.h>
 #include <Magic/MagicCaster.h>
 #include <Magic/MagicTarget.h>
+#include <RuntimeLayout.h>
 #include <Structs/Inventory.h>
 #include <ExtraData/ExtraDataList.h>
 
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
 struct AnimationVariables;
 struct TESWorldSpace;
+struct TESObjectCELL;
 struct TESBoundObject;
 struct TESContainer;
 
@@ -30,6 +39,9 @@ enum class ITEM_REMOVE_REASON
 
 struct TESObjectREFR : TESForm
 {
+    using CommonLibRefrOffsets = Skyrim::RuntimeLayout::TESObjectREFRCommonLibNgOffsets;
+    using LocalRefrOffsets = Skyrim::RuntimeLayout::TESObjectREFRLocalShimOffsets;
+
     enum ChangeFlags : uint32_t
     {
         CHANGE_REFR_MOVE = 1 << 1,
@@ -59,6 +71,69 @@ struct TESObjectREFR : TESForm
 
     static TESObjectREFR* GetByHandle(uint32_t aHandle) noexcept;
     static uint32_t* GetNullHandle() noexcept;
+
+    [[nodiscard]] TESForm* GetBaseFormData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESForm*>(this, CommonLibRefrOffsets::ObjectReference);
+#else
+        return baseForm;
+#endif
+    }
+
+    [[nodiscard]] const NiPoint3& GetRotationData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<NiPoint3>(this, CommonLibRefrOffsets::Rotation);
+#else
+        return rotation;
+#endif
+    }
+
+    void SetRotationData(const NiPoint3& acRotation) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store(this, CommonLibRefrOffsets::Rotation, acRotation);
+#else
+        rotation = acRotation;
+#endif
+    }
+
+    [[nodiscard]] const NiPoint3& GetPositionData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<NiPoint3>(this, CommonLibRefrOffsets::Position);
+#else
+        return position;
+#endif
+    }
+
+    [[nodiscard]] TESObjectCELL* GetParentCellData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESObjectCELL*>(this, CommonLibRefrOffsets::ParentCell);
+#else
+        return parentCell;
+#endif
+    }
+
+    [[nodiscard]] ExtraDataList* GetExtraDataListData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<ExtraDataList>(this, CommonLibRefrOffsets::ExtraDataList);
+#else
+        return &extraData;
+#endif
+    }
+
+    [[nodiscard]] const ExtraDataList* GetExtraDataListData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ptr<ExtraDataList>(this, CommonLibRefrOffsets::ExtraDataList);
+#else
+        return &extraData;
+#endif
+    }
 
     static void GetItemFromExtraData(Inventory::Entry& arEntry, ExtraDataList* apExtraDataList) noexcept;
     static ExtraDataList* GetExtraDataFromItem(const Inventory::Entry& arEntry) noexcept;
@@ -226,4 +301,9 @@ struct TESObjectREFR : TESForm
 };
 
 static_assert(sizeof(TESObjectREFR) == 0xA0);
-static_assert(offsetof(TESObjectREFR, loadedState) == 0x68);
+static_assert(offsetof(TESObjectREFR, baseForm) == TESObjectREFR::LocalRefrOffsets::ObjectReference);
+static_assert(offsetof(TESObjectREFR, rotation) == TESObjectREFR::LocalRefrOffsets::Rotation);
+static_assert(offsetof(TESObjectREFR, position) == TESObjectREFR::LocalRefrOffsets::Position);
+static_assert(offsetof(TESObjectREFR, parentCell) == TESObjectREFR::LocalRefrOffsets::ParentCell);
+static_assert(offsetof(TESObjectREFR, loadedState) == TESObjectREFR::LocalRefrOffsets::LoadedData);
+static_assert(offsetof(TESObjectREFR, extraData) == TESObjectREFR::LocalRefrOffsets::ExtraDataList);

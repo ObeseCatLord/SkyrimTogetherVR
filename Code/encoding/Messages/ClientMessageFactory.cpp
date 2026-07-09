@@ -38,5 +38,9 @@ UniquePtr<ClientMessage> ClientMessageFactory::Extract(TiltedPhoques::Buffer::Re
         return {nullptr};
 
     const auto opcode = static_cast<ClientOpcode>(data);
-    return s_clientMessageExtractor[opcode](aReader);
+    auto& extractor = s_clientMessageExtractor[opcode];
+    if (!extractor) [[unlikely]]
+        return {nullptr};
+
+    return extractor(aReader);
 }

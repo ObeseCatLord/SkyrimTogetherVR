@@ -4,6 +4,12 @@
 #include <Misc/BSString.h>
 #include <Components/TESFullName.h>
 #include <Forms/BGSStoryManagerTree.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 struct BGSScene : TESForm
 {
@@ -13,6 +19,9 @@ struct BGSScene : TESForm
 
 struct TESQuest : BGSStoryManagerTreeForm
 {
+    using CommonLibQuestOffsets = Skyrim::RuntimeLayout::TESQuestCommonLibNgOffsets;
+    using LocalQuestOffsets = Skyrim::RuntimeLayout::TESQuestLocalShimOffsets;
+
     enum class State : uint8_t
     {
         WaitingPromotion,
@@ -79,6 +88,69 @@ struct TESQuest : BGSStoryManagerTreeForm
         inline bool IsDone() { return flags & 1; }
     };
 
+    [[nodiscard]] TESFullName& GetFullNameData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<TESFullName>(this, CommonLibQuestOffsets::FullName);
+#else
+        return fullName;
+#endif
+    }
+
+    [[nodiscard]] const TESFullName& GetFullNameData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<TESFullName>(this, CommonLibQuestOffsets::FullName);
+#else
+        return fullName;
+#endif
+    }
+
+    [[nodiscard]] uint16_t GetQuestFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint16_t>(this, CommonLibQuestOffsets::Flags);
+#else
+        return flags;
+#endif
+    }
+
+    void SetQuestFlagsData(uint16_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint16_t>(this, CommonLibQuestOffsets::Flags, aFlags);
+#else
+        flags = aFlags;
+#endif
+    }
+
+    [[nodiscard]] uint8_t GetPriorityData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint8_t>(this, CommonLibQuestOffsets::Priority);
+#else
+        return priority;
+#endif
+    }
+
+    [[nodiscard]] Type GetQuestTypeData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<Type>(this, CommonLibQuestOffsets::Type);
+#else
+        return type;
+#endif
+    }
+
+    [[nodiscard]] uint16_t GetCurrentStageData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint16_t>(this, CommonLibQuestOffsets::CurrentStage);
+#else
+        return currentStage;
+#endif
+    }
+
     TESFullName fullName;
     GameArray<void*> instanceData;
     uint32_t currentInstanceID;
@@ -115,11 +187,11 @@ struct TESQuest : BGSStoryManagerTreeForm
     void CompleteAllObjectives(); // completes all objectives + stages
     void SetActive(bool toggle);  // < is the quest selected in journal and followed?
 
-    inline void Disable() { flags &= ~Flags::Enabled; };
+    inline void Disable() { SetQuestFlagsData(GetQuestFlagsData() & ~Flags::Enabled); };
 
-    inline bool IsEnabled() const { return flags & Flags::Enabled; }
-    inline bool IsActive() const { return flags & Flags::Active; }
-    inline bool IsStopped() const { return (flags & (Flags::Enabled | Flags::StageWait)) == 0; } // & 0x81
+    inline bool IsEnabled() const { return GetQuestFlagsData() & Flags::Enabled; }
+    inline bool IsActive() const { return GetQuestFlagsData() & Flags::Active; }
+    inline bool IsStopped() const { return (GetQuestFlagsData() & (Flags::Enabled | Flags::StageWait)) == 0; } // & 0x81
 
     bool Kill();
     State getState();
@@ -131,10 +203,18 @@ struct TESQuest : BGSStoryManagerTreeForm
     void SetStopped();
 };
 
-static_assert(sizeof(TESQuest) == 0x268);
-static_assert(offsetof(TESQuest, fullName) == 0x28);
-static_assert(offsetof(TESQuest, flags) == 0xDC);
+static_assert(TESQuest::CommonLibQuestOffsets::FullName == 0x28);
+static_assert(TESQuest::CommonLibQuestOffsets::Flags == 0xDC);
+static_assert(TESQuest::CommonLibQuestOffsets::Priority == 0xDE);
+static_assert(TESQuest::CommonLibQuestOffsets::Type == 0xDF);
+static_assert(TESQuest::CommonLibQuestOffsets::CurrentStage == 0x228);
+static_assert(TESQuest::CommonLibQuestOffsets::Size == 0x268);
+static_assert(sizeof(TESQuest) == TESQuest::LocalQuestOffsets::Size);
+static_assert(offsetof(TESQuest, fullName) == TESQuest::LocalQuestOffsets::FullName);
+static_assert(offsetof(TESQuest, flags) == TESQuest::LocalQuestOffsets::Flags);
+static_assert(offsetof(TESQuest, priority) == TESQuest::LocalQuestOffsets::Priority);
+static_assert(offsetof(TESQuest, type) == TESQuest::LocalQuestOffsets::Type);
 static_assert(offsetof(TESQuest, stages) == 0xE8);
 static_assert(offsetof(TESQuest, objectives) == 0xF8);
-static_assert(offsetof(TESQuest, currentStage) == 0x228);
+static_assert(offsetof(TESQuest, currentStage) == TESQuest::LocalQuestOffsets::CurrentStage);
 static_assert(offsetof(TESQuest, unkFlags) == 0x248);

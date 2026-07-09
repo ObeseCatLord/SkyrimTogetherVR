@@ -1,6 +1,14 @@
 #pragma once
 
+#include <NetImmerse/NiPointer.h>
+#include <RuntimeLayout.h>
 #include <TESObjectREFR.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 template <class T> struct BSTEventSink;
 
@@ -27,14 +35,24 @@ struct UnknownEvent
 {
 };
 
+static_assert(sizeof(EventDispatcher<UnknownEvent>) == Skyrim::RuntimeLayout::BSTEventSourceLocalShimOffsets::Size);
+
 struct BGSEventProcessedEvent
 {
 };
 
 struct TESActivateEvent
 {
-    TESObjectREFR* object;
+    [[nodiscard]] TESObjectREFR* GetObjectActivatedData() const noexcept { return objectActivated.object; }
+    [[nodiscard]] TESObjectREFR* GetActionRefData() const noexcept { return actionRef.object; }
+
+    NiPointer<TESObjectREFR> objectActivated;
+    NiPointer<TESObjectREFR> actionRef;
 };
+
+static_assert(offsetof(TESActivateEvent, objectActivated) == 0x0);
+static_assert(offsetof(TESActivateEvent, actionRef) == 0x8);
+static_assert(sizeof(TESActivateEvent) == 0x10);
 
 struct TESActiveEffectApplyRemove
 {
@@ -100,17 +118,56 @@ struct TESFurnitureEvent
 
 struct TESGrabReleaseEvent
 {
+    [[nodiscard]] TESObjectREFR* GetReferenceData() const noexcept { return ref.object; }
+    [[nodiscard]] bool GetGrabbedData() const noexcept { return grabbed; }
+
+    NiPointer<TESObjectREFR> ref;
+    bool grabbed;
+    uint8_t pad09;
+    uint16_t pad0A;
+    uint32_t pad0C;
 };
+
+static_assert(offsetof(TESGrabReleaseEvent, ref) == 0x0);
+static_assert(offsetof(TESGrabReleaseEvent, grabbed) == 0x8);
+static_assert(sizeof(TESGrabReleaseEvent) == 0x10);
 
 struct TESHitEvent
 {
-    TESObjectREFR* hit;
-    TESObjectREFR* hitter;
+    [[nodiscard]] TESObjectREFR* GetTargetData() const noexcept { return target.object; }
+    [[nodiscard]] TESObjectREFR* GetCauseData() const noexcept { return cause.object; }
+    [[nodiscard]] uint32_t GetSourceData() const noexcept { return source; }
+    [[nodiscard]] uint32_t GetProjectileData() const noexcept { return projectile; }
+    [[nodiscard]] uint8_t GetFlagsData() const noexcept { return flags; }
+    [[nodiscard]] uint32_t GetRawFlagsData() const noexcept
+    {
+        return static_cast<uint32_t>(flags) |
+               (static_cast<uint32_t>(pad19) << 8) |
+               (static_cast<uint32_t>(pad1A) << 16);
+    }
+
+    NiPointer<TESObjectREFR> target;
+    NiPointer<TESObjectREFR> cause;
+    uint32_t source;
+    uint32_t projectile;
+    uint8_t flags;
+    uint8_t pad19;
+    uint16_t pad1A;
+    uint32_t pad1C;
 };
+
+static_assert(offsetof(TESHitEvent, target) == 0x0);
+static_assert(offsetof(TESHitEvent, cause) == 0x8);
+static_assert(offsetof(TESHitEvent, source) == 0x10);
+static_assert(offsetof(TESHitEvent, projectile) == 0x14);
+static_assert(offsetof(TESHitEvent, flags) == 0x18);
+static_assert(sizeof(TESHitEvent) == 0x20);
 
 struct TESLoadGameEvent
 {
 };
+
+static_assert(sizeof(TESLoadGameEvent) == 0x1);
 
 struct TESLockChangedEvent
 {
@@ -118,10 +175,20 @@ struct TESLockChangedEvent
 
 struct TESMagicEffectApplyEvent
 {
-    TESObjectREFR* hTarget;
-    TESObjectREFR* hCaster;
-    uint32_t uiMagicEffectFormID;
+    [[nodiscard]] TESObjectREFR* GetTargetData() const noexcept { return target.object; }
+    [[nodiscard]] TESObjectREFR* GetCasterData() const noexcept { return caster.object; }
+    [[nodiscard]] uint32_t GetMagicEffectData() const noexcept { return magicEffect; }
+
+    NiPointer<TESObjectREFR> target;
+    NiPointer<TESObjectREFR> caster;
+    uint32_t magicEffect;
+    uint32_t pad14;
 };
+
+static_assert(offsetof(TESMagicEffectApplyEvent, target) == 0x0);
+static_assert(offsetof(TESMagicEffectApplyEvent, caster) == 0x8);
+static_assert(offsetof(TESMagicEffectApplyEvent, magicEffect) == 0x10);
+static_assert(sizeof(TESMagicEffectApplyEvent) == 0x18);
 
 struct TESMagicWardHitEvent
 {
@@ -214,11 +281,35 @@ struct TESSleepStopEvent
 
 struct TESSpellCastEvent
 {
+    [[nodiscard]] TESObjectREFR* GetObjectData() const noexcept { return object.object; }
+    [[nodiscard]] uint32_t GetSpellData() const noexcept { return spell; }
+
+    NiPointer<TESObjectREFR> object;
+    uint32_t spell;
 };
+
+static_assert(offsetof(TESSpellCastEvent, object) == 0x0);
+static_assert(offsetof(TESSpellCastEvent, spell) == 0x8);
+static_assert(sizeof(TESSpellCastEvent) == 0x10);
 
 struct TESPlayerBowShotEvent
 {
+    [[nodiscard]] uint32_t GetWeaponData() const noexcept { return weapon; }
+    [[nodiscard]] uint32_t GetAmmoData() const noexcept { return ammo; }
+    [[nodiscard]] float GetShotPowerData() const noexcept { return shotPower; }
+    [[nodiscard]] bool IsSunGazingData() const noexcept { return isSunGazing; }
+
+    uint32_t weapon;
+    uint32_t ammo;
+    float shotPower;
+    bool isSunGazing;
 };
+
+static_assert(offsetof(TESPlayerBowShotEvent, weapon) == 0x0);
+static_assert(offsetof(TESPlayerBowShotEvent, ammo) == 0x4);
+static_assert(offsetof(TESPlayerBowShotEvent, shotPower) == 0x8);
+static_assert(offsetof(TESPlayerBowShotEvent, isSunGazing) == 0xC);
+static_assert(sizeof(TESPlayerBowShotEvent) == 0x10);
 
 struct TESTopicInfoEvent
 {
@@ -269,7 +360,73 @@ struct TESFastTravelEndEvent
 
 struct EventDispatcherManager
 {
+    using CommonLibEventSourceOffsets = Skyrim::RuntimeLayout::ScriptEventSourceHolderCommonLibNgOffsets;
+    using LocalEventSourceOffsets = Skyrim::RuntimeLayout::EventDispatcherManagerLocalShimOffsets;
+
     static EventDispatcherManager* Get() noexcept;
+
+    [[nodiscard]] EventDispatcher<TESActivateEvent>& GetActivateEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESActivateEvent>>(this, CommonLibEventSourceOffsets::Activate);
+#else
+        return activateEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESHitEvent>& GetHitEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESHitEvent>>(this, CommonLibEventSourceOffsets::Hit);
+#else
+        return hitEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESGrabReleaseEvent>& GetGrabReleaseEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESGrabReleaseEvent>>(this, CommonLibEventSourceOffsets::GrabRelease);
+#else
+        return grabReleaseEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESLoadGameEvent>& GetLoadGameEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESLoadGameEvent>>(this, CommonLibEventSourceOffsets::LoadGame);
+#else
+        return loadGameEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESMagicEffectApplyEvent>& GetMagicEffectApplyEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESMagicEffectApplyEvent>>(this, CommonLibEventSourceOffsets::MagicEffectApply);
+#else
+        return magicEffectApplyEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESSpellCastEvent>& GetSpellCastEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESSpellCastEvent>>(this, CommonLibEventSourceOffsets::SpellCast);
+#else
+        return spellCastEvent;
+#endif
+    }
+
+    [[nodiscard]] EventDispatcher<TESPlayerBowShotEvent>& GetPlayerBowShotEventData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<EventDispatcher<TESPlayerBowShotEvent>>(this, CommonLibEventSourceOffsets::PlayerBowShot);
+#else
+        return playerBowShotEvent;
+#endif
+    }
 
     EventDispatcher<BGSEventProcessedEvent> eventProcessedEvent;
     EventDispatcher<TESActivateEvent> activateEvent;
@@ -313,7 +470,7 @@ struct EventDispatcherManager
     EventDispatcher<TESSleepStartEvent> unknownDispatcher39;
     EventDispatcher<TESSleepStopEvent> sleepStopEvent;
     EventDispatcher<TESSpellCastEvent> spellCastEvent;
-    EventDispatcher<TESPlayerBowShotEvent> unknownDispatcher42;
+    EventDispatcher<TESPlayerBowShotEvent> playerBowShotEvent;
     EventDispatcher<TESTopicInfoEvent> topicInfoEvent;
     EventDispatcher<TESTrackedStatsEvent> trackedStatsEvent;
     EventDispatcher<TESTrapHitEvent> trapHitEvent;
@@ -324,21 +481,27 @@ struct EventDispatcherManager
     EventDispatcher<UnknownEvent> unknownDispatcher50; // waitevent
     EventDispatcher<UnknownEvent> unknownDispatcher51; // TESWaitStopEvent
     EventDispatcher<TESSwitchRaceCompleteEvent> switchRaceCompleteEvent;
+#if !TP_SKYRIM_VR
     EventDispatcher<TESFastTravelEndEvent> fastTravelEndEvent;
+#endif
 };
 
 // constexpr auto x = offsetof(EventDispatcherManager, unkx);
 
-static_assert(sizeof(EventDispatcherManager) == 4752);
-static_assert(offsetof(EventDispatcherManager, activateEvent) == 88);
-static_assert(offsetof(EventDispatcherManager, deathEvent) == 880);
-static_assert(offsetof(EventDispatcherManager, lockChangedEvent) == 1760);
-static_assert(offsetof(EventDispatcherManager, furnitureEvent) == 1320);
-static_assert(offsetof(EventDispatcherManager, resetEvent) == 2904);
-static_assert(offsetof(EventDispatcherManager, trackedStatsEvent) == 3872);
-static_assert(offsetof(EventDispatcherManager, triggerEvent) == 4048);
-static_assert(offsetof(EventDispatcherManager, switchRaceCompleteEvent) == 4576);
-static_assert(offsetof(EventDispatcherManager, fastTravelEndEvent) == 4664);
-static_assert(offsetof(EventDispatcherManager, questInitEvent) == 0x9F8);
-static_assert(offsetof(EventDispatcherManager, questStageEvent) == 0xA50);
-static_assert(offsetof(EventDispatcherManager, questStartStopEvent) == 0xB00);
+static_assert(offsetof(EventDispatcherManager, activateEvent) == EventDispatcherManager::LocalEventSourceOffsets::Activate);
+static_assert(offsetof(EventDispatcherManager, grabReleaseEvent) == EventDispatcherManager::LocalEventSourceOffsets::GrabRelease);
+static_assert(offsetof(EventDispatcherManager, hitEvent) == EventDispatcherManager::LocalEventSourceOffsets::Hit);
+static_assert(offsetof(EventDispatcherManager, loadGameEvent) == EventDispatcherManager::LocalEventSourceOffsets::LoadGame);
+static_assert(offsetof(EventDispatcherManager, magicEffectApplyEvent) == EventDispatcherManager::LocalEventSourceOffsets::MagicEffectApply);
+static_assert(offsetof(EventDispatcherManager, spellCastEvent) == EventDispatcherManager::LocalEventSourceOffsets::SpellCast);
+static_assert(offsetof(EventDispatcherManager, playerBowShotEvent) == EventDispatcherManager::LocalEventSourceOffsets::PlayerBowShot);
+static_assert(offsetof(EventDispatcherManager, questInitEvent) == EventDispatcherManager::LocalEventSourceOffsets::QuestInit);
+static_assert(offsetof(EventDispatcherManager, questStageEvent) == EventDispatcherManager::LocalEventSourceOffsets::QuestStage);
+static_assert(offsetof(EventDispatcherManager, questStartStopEvent) == EventDispatcherManager::LocalEventSourceOffsets::QuestStartStop);
+static_assert(offsetof(EventDispatcherManager, switchRaceCompleteEvent) == EventDispatcherManager::LocalEventSourceOffsets::SwitchRaceComplete);
+#if TP_SKYRIM_VR
+static_assert(sizeof(EventDispatcherManager) == EventDispatcherManager::LocalEventSourceOffsets::VrSize);
+#else
+static_assert(offsetof(EventDispatcherManager, fastTravelEndEvent) == EventDispatcherManager::LocalEventSourceOffsets::SeFastTravelEnd);
+static_assert(sizeof(EventDispatcherManager) == EventDispatcherManager::LocalEventSourceOffsets::SeSize);
+#endif

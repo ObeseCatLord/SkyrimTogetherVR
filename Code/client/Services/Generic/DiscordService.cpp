@@ -55,8 +55,7 @@ void DiscordService::OnLocationChangeEvent() noexcept
     // in case the user requests a custom discord presence
     if (!m_bCustomPresence && pPlayer)
     {
-        // auto *pLocation = pPlayer->GetCurrentLocation();
-        auto* pLocation = pPlayer->locationForm;
+        auto* pLocation = pPlayer->GetCurrentLocation();
         auto* pWorldspace = pPlayer->GetWorldSpace();
         bool updateTimestamp = false;
 
@@ -65,13 +64,15 @@ void DiscordService::OnLocationChangeEvent() noexcept
 
         if (pWorldspace)
         {
-            if (pWorldspace->fullName.value.data)
-                strncpy_s(m_ActivityState.state, pWorldspace->fullName.value.AsAscii(), sizeof(DiscordActivity::state));
+            const auto& worldspaceName = pWorldspace->GetFullNameData();
+            if (worldspaceName.GetFullNameData().data)
+                strncpy_s(m_ActivityState.state, worldspaceName.GetFullNameStringData(), sizeof(DiscordActivity::state));
 
-            if (m_lastWorldspaceId != pWorldspace->formID)
+            const uint32_t worldspaceId = pWorldspace->GetFormIdData();
+            if (m_lastWorldspaceId != worldspaceId)
             {
                 updateTimestamp = true;
-                m_lastWorldspaceId = pWorldspace->formID;
+                m_lastWorldspaceId = worldspaceId;
             }
         }
 

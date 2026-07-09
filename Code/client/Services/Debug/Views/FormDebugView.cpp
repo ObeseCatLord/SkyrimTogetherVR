@@ -39,36 +39,50 @@ void DebugService::DrawFormDebugView()
     {
         if (auto* pParentCell = pRefr->GetParentCell())
         {
-            const uint32_t cellId = pParentCell->formID;
+            const uint32_t cellId = pParentCell->GetFormIdData();
             ImGui::InputScalar("GetParentCell", ImGuiDataType_U32, (void*)&cellId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
         }
 
-        if (auto* pParentCell = pRefr->parentCell)
+        if (auto* pParentCell = pRefr->GetParentCellData())
         {
-            const uint32_t cellId = pParentCell->formID;
-            ImGui::InputScalar("parentCell", ImGuiDataType_U32, (void*)&cellId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
+            const uint32_t cellId = pParentCell->GetFormIdData();
+            ImGui::InputScalar("GetParentCellData", ImGuiDataType_U32, (void*)&cellId, nullptr, nullptr, "%" PRIx32, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
         }
 
         /*
         char name[256];
-        sprintf_s(name, std::size(name), "%s (%x)", pRefr->baseForm->GetName(), pRefr->formID);
+        sprintf_s(name, std::size(name), "%s (%x)", pRefr->GetBaseFormData()->GetName(), pRefr->GetFormIdData());
         ImGui::InputText("Name", name, std::size(name), ImGuiInputTextFlags_ReadOnly);
 
-        for (ActiveEffect* pEffect : *pRefr->currentProcess->middleProcess->ActiveEffects)
+        auto* pCurrentProcess = pRefr->GetCurrentProcessData();
+        auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+        auto* pActiveEffects = pMiddleProcess ? pMiddleProcess->GetActiveEffectsData() : nullptr;
+        if (!pActiveEffects)
+            return;
+
+        for (ActiveEffect* pEffect : *pActiveEffects)
         {
             if (!pEffect)
                 continue;
 
-            if (!ImGui::CollapsingHeader(pEffect->pSpell->fullName.value, ImGuiTreeNodeFlags_DefaultOpen))
+            auto* pSpell = pEffect->GetSpellData();
+            if (!pSpell)
                 continue;
 
-            ImGui::InputFloat("Elapsed seconds", &pEffect->fElapsedSeconds, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
-            ImGui::InputFloat("Duration", &pEffect->fDuration, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
-            ImGui::InputFloat("Magnitude", &pEffect->fMagnitude, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
-            ImGui::InputInt("Flags", (int*)&pEffect->uiFlags, 0, 0, ImGuiInputTextFlags_ReadOnly);
+            if (!ImGui::CollapsingHeader(pSpell->GetFullNameData().GetFullNameStringData(), ImGuiTreeNodeFlags_DefaultOpen))
+                continue;
+
+            float elapsedSeconds = pEffect->GetElapsedSecondsData();
+            float duration = pEffect->GetDurationData();
+            float magnitude = pEffect->GetMagnitudeData();
+            int flags = static_cast<int>(pEffect->GetFlagsData());
+            ImGui::InputFloat("Elapsed seconds", &elapsedSeconds, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
+            ImGui::InputFloat("Duration", &duration, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
+            ImGui::InputFloat("Magnitude", &magnitude, 0, 0, "%.1f", ImGuiInputTextFlags_ReadOnly);
+            ImGui::InputInt("Flags", &flags, 0, 0, ImGuiInputTextFlags_ReadOnly);
 
             if (ImGui::Button("Elapse time"))
-                m_world.GetRunner().Queue([pEffect]() { pEffect->fElapsedSeconds = pEffect->fDuration - 3.f; });
+                m_world.GetRunner().Queue([pEffect]() { pEffect->SetElapsedSecondsData(pEffect->GetDurationData() - 3.f); });
         }
         */
     }

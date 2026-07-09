@@ -129,7 +129,7 @@ void DebugService::DrawAnimDebugView()
 
         if (s_cachedKeys.find(hash) != std::end(s_cachedKeys))
             spdlog::warn("Key was detected before! Form ID of last detected actor: {:X}", s_cachedKeys[hash]);
-        s_cachedKeys[hash] = pActor->formID;
+        s_cachedKeys[hash] = pActor->GetFormIdData();
     }
 
     if (ImGui::Button("Revert animation graph"))

@@ -26,9 +26,9 @@ Console::Setting fGoldLossFactor{"Gameplay:fGoldLossFactor", "Factor of the amou
 
 PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
-    , m_interiorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterInteriorCellRequest>>().connect<&PlayerService::HandleInteriorCellEnter>(this))
     , m_gridCellShiftConnection(aDispatcher.sink<PacketEvent<ShiftGridCellRequest>>().connect<&PlayerService::HandleGridCellShift>(this))
     , m_exteriorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterExteriorCellRequest>>().connect<&PlayerService::HandleExteriorCellEnter>(this))
+    , m_interiorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterInteriorCellRequest>>().connect<&PlayerService::HandleInteriorCellEnter>(this))
     , m_playerRespawnConnection(aDispatcher.sink<PacketEvent<PlayerRespawnRequest>>().connect<&PlayerService::OnPlayerRespawnRequest>(this))
     , m_playerLevelConnection(aDispatcher.sink<PacketEvent<PlayerLevelRequest>>().connect<&PlayerService::OnPlayerLevelRequest>(this))
 {
@@ -86,22 +86,20 @@ void PlayerService::HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellR
 {
     auto& message = acMessage.Packet;
     auto* pPlayer = acMessage.pPlayer;
+    auto cell = CellIdComponent{message.CellId, message.WorldSpaceId, message.CurrentCoords};
 
     if (pPlayer->GetCharacter())
     {
         auto entity = *pPlayer->GetCharacter();
 
-        auto cell = CellIdComponent{message.CellId, message.WorldSpaceId, message.CurrentCoords};
-
         if (pPlayer->GetCellComponent())
         {
             m_world.GetDispatcher().trigger(CharacterExteriorCellChangeEvent{pPlayer, entity, message.WorldSpaceId, message.CurrentCoords});
         }
-
-        pPlayer->SetCellComponent(cell);
-
-        SendPlayerCellChanged(pPlayer);
     }
+
+    pPlayer->SetCellComponent(cell);
+    SendPlayerCellChanged(pPlayer);
 }
 
 void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellRequest>& acMessage) const noexcept

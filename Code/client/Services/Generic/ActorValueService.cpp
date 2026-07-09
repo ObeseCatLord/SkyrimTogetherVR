@@ -61,7 +61,7 @@ void ActorValueService::OnLocalComponentAdded(entt::registry& aRegistry, const e
     {
         auto& localComponent = aRegistry.get<LocalComponent>(aEntity);
         localComponent.IsDead = pActor->IsDead();
-        localComponent.IsWeaponDrawn = pActor->actorState.IsWeaponDrawn();
+        localComponent.IsWeaponDrawn = pActor->GetActorStateData().IsWeaponDrawn();
         CreateActorValuesComponent(aEntity, pActor);
     }
 }
@@ -304,7 +304,7 @@ void ActorValueService::OnHealthChangeBroadcast(const NotifyHealthChangeBroadcas
     // TODO(cosideci): find fix for player health sync so this can be used again
     /*
     if (pActor->GetExtension()->IsRemotePlayer())
-        World::Get().GetOverlayService().SetPlayerHealthPercentage(pActor->formID);
+        World::Get().GetOverlayService().SetPlayerHealthPercentage(pActor->GetFormIdData());
     */
 }
 

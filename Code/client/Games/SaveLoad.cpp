@@ -21,7 +21,7 @@ BGSSaveFormBuffer::BGSSaveFormBuffer()
 
     TiltedPhoques::ThisCall(ctor, this);
 
-    position = 0;
+    SetPositionData(0);
 }
 
 void BGSSaveFormBuffer::WriteId(uint32_t aId) noexcept
@@ -31,15 +31,16 @@ void BGSSaveFormBuffer::WriteId(uint32_t aId) noexcept
 
     World::Get().GetModSystem().GetServerModId(aId, modId, baseId);
 
-    auto pWriteLocation = reinterpret_cast<uint8_t*>(buffer + position);
+    const auto position = GetPositionData();
+    auto pWriteLocation = reinterpret_cast<uint8_t*>(GetBufferData() + position);
 
-    ViewBuffer view(pWriteLocation, capacity - position);
+    ViewBuffer view(pWriteLocation, GetCapacityData() - position);
     Buffer::Writer writer(&view);
 
     Serialization::WriteVarInt(writer, modId);
     Serialization::WriteVarInt(writer, baseId);
 
-    position += writer.Size() & 0xFFFFFFFF;
+    AdvancePositionData(writer.Size() & 0xFFFFFFFF);
 }
 
 BGSLoadFormBuffer::BGSLoadFormBuffer(const uint32_t aChangeFlags)
@@ -50,12 +51,11 @@ BGSLoadFormBuffer::BGSLoadFormBuffer(const uint32_t aChangeFlags)
 
     TiltedPhoques::ThisCall(ctor, this);
 
-    changeFlags = aChangeFlags;
-    loadFlag = 0x40;
-    position = 0;
-    maybeMoreFlags = 0;
-
-    unk1C = -1;
+    SetChangeFlagsData(aChangeFlags);
+    SetLoadVersionData(0x40);
+    SetPositionData(0);
+    SetOldChangeFlagsData(0);
+    SetUnk1CData(-1);
 }
 
 TP_THIS_FUNCTION(TBGSLoadFormBuffer_ReadFormId, bool, BGSLoadFormBuffer, uint32_t&);
@@ -74,7 +74,7 @@ void TP_MAKE_THISCALL(BGSSaveFormBuffer_WriteFormId, BGSSaveFormBuffer, TESForm*
         return;
     }
 
-    apThis->WriteId(apForm ? apForm->formID : 0);
+    apThis->WriteId(apForm ? apForm->GetFormIdData() : 0);
 }
 
 void TP_MAKE_THISCALL(BGSSaveFormBuffer_WriteId, BGSSaveFormBuffer, uint64_t aId)
@@ -95,9 +95,10 @@ bool TP_MAKE_THISCALL(BGSLoadFormBuffer_LoadFormId, BGSLoadFormBuffer, uint32_t&
         return TiltedPhoques::ThisCall(RealBGSLoadFormBuffer_ReadFormId, apThis, aFormId);
     }
 
-    uint8_t* pReadLocation = (uint8_t*)(apThis->buffer + apThis->position);
+    const auto position = apThis->GetPositionData();
+    uint8_t* pReadLocation = (uint8_t*)(apThis->GetBufferData() + position);
 
-    ViewBuffer buffer(pReadLocation, apThis->capacity - apThis->position);
+    ViewBuffer buffer(pReadLocation, apThis->GetCapacityData() - position);
     ViewBuffer::Reader reader(&buffer);
 
     const uint32_t modId = Serialization::ReadVarInt(reader) & 0xFFFFFFFF;
@@ -108,7 +109,7 @@ bool TP_MAKE_THISCALL(BGSLoadFormBuffer_LoadFormId, BGSLoadFormBuffer, uint32_t&
     if (modId != 0 || baseId != 0)
         aFormId = World::Get().GetModSystem().GetGameId(modId, baseId);
 
-    apThis->position += reader.Size() & 0xFFFFFFFF;
+    apThis->AdvancePositionData(reader.Size() & 0xFFFFFFFF);
 
     return true;
 }

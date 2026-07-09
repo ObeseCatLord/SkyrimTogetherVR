@@ -62,7 +62,8 @@ void MagicService::OnSpellCastEvent(const SpellCastEvent& acEvent) const noexcep
     if (!m_transport.IsConnected())
         return;
 
-    if (!acEvent.pCaster->pCasterActor || !acEvent.pCaster->pCasterActor->GetNiNode())
+    Actor* pCasterActor = acEvent.pCaster ? acEvent.pCaster->GetCasterActorData() : nullptr;
+    if (!pCasterActor || !pCasterActor->GetNiNode())
     {
         spdlog::warn("Spell cast event has no actor or actor is not loaded");
         return;
@@ -71,14 +72,14 @@ void MagicService::OnSpellCastEvent(const SpellCastEvent& acEvent) const noexcep
     // only sync concentration spells through spell cast sync, the rest through projectile sync for accuracy
     if (SpellItem* pSpell = Cast<SpellItem>(TESForm::GetById(acEvent.SpellId)))
     {
-        if ((pSpell->eCastingType != MagicSystem::CastingType::CONCENTRATION || pSpell->IsHealingSpell()) && !pSpell->IsWardSpell() && !pSpell->IsInvisibilitySpell())
+        if ((pSpell->GetCastingTypeData() != MagicSystem::CastingType::CONCENTRATION || pSpell->IsHealingSpell()) && !pSpell->IsWardSpell() && !pSpell->IsInvisibilitySpell())
         {
             spdlog::debug("Canceled magic spell");
             return;
         }
     }
 
-    uint32_t formId = acEvent.pCaster->pCasterActor->formID;
+    const uint32_t formId = pCasterActor->GetFormIdData();
 
     auto view = m_world.view<FormIdComponent, LocalComponent>();
     const auto casterEntityIt = std::find_if(std::begin(view), std::end(view), [formId, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == formId; });
@@ -136,11 +137,17 @@ void MagicService::OnNotifySpellCast(const NotifySpellCast& acMessage) const noe
     auto formIdComponent = remoteView.get<FormIdComponent>(*remoteIt);
     TESForm* pForm = TESForm::GetById(formIdComponent.Id);
     Actor* pActor = Cast<Actor>(pForm);
+    if (!pActor)
+    {
+        spdlog::warn("Caster with remote id {:X} has no actor form.", acMessage.CasterId);
+        return;
+    }
 
     pActor->GenerateMagicCasters();
 
     // Only left hand casters need dual casting (?)
-    pActor->casters[CS::LEFT_HAND]->SetDualCasting(acMessage.IsDualCasting);
+    if (MagicCaster* pLeftHandCaster = pActor->GetMagicCaster(CS::LEFT_HAND))
+        pLeftHandCaster->SetDualCasting(acMessage.IsDualCasting);
 
     if (acMessage.CastingSource >= 4)
     {
@@ -150,7 +157,7 @@ void MagicService::OnNotifySpellCast(const NotifySpellCast& acMessage) const noe
 
     MagicItem* pSpell = nullptr;
 
-    pSpell = pActor->magicItems[acMessage.CastingSource];
+    pSpell = pActor->GetSelectedSpellData(acMessage.CastingSource);
 
     if (!pSpell)
     {
@@ -263,6 +270,11 @@ void MagicService::OnNotifyInterruptCast(const NotifyInterruptCast& acMessage) c
 
     const TESForm* pForm = TESForm::GetById(formIdComponent.Id);
     Actor* pActor = Cast<Actor>(pForm);
+    if (!pActor)
+    {
+        spdlog::warn("Caster with remote id {:X} has no actor form.", acMessage.CasterId);
+        return;
+    }
 
     pActor->GenerateMagicCasters();
 
@@ -286,7 +298,7 @@ void MagicService::OnAddTargetEvent(const AddTargetEvent& acEvent) noexcept
     // These effects are applied through spell cast sync
     if (SpellItem* pSpellItem = Cast<SpellItem>(TESForm::GetById(acEvent.SpellID)))
     {
-        if ((pSpellItem->eCastingType == MagicSystem::CastingType::CONCENTRATION && !pSpellItem->IsHealingSpell()) || pSpellItem->IsWardSpell() || pSpellItem->IsInvisibilitySpell() || pSpellItem->IsBoundWeaponSpell())
+        if ((pSpellItem->GetCastingTypeData() == MagicSystem::CastingType::CONCENTRATION && !pSpellItem->IsHealingSpell()) || pSpellItem->IsWardSpell() || pSpellItem->IsInvisibilitySpell() || pSpellItem->IsBoundWeaponSpell())
         {
             return;
         }
@@ -409,13 +421,13 @@ void MagicService::OnNotifyAddTarget(const NotifyAddTarget& acMessage) noexcept
     }
 
     MagicTarget::AddTargetData data{};
-    data.pCaster = pCaster;
-    data.pSpell = pSpell;
-    data.pEffectItem = pEffect;
-    data.fMagnitude = acMessage.Magnitude;
-    data.fUnkFloat1 = 1.0f;
-    data.eCastingSource = MagicSystem::CastingSource::CASTING_SOURCE_COUNT;
-    data.bDualCast = acMessage.IsDualCasting;
+    data.SetCasterData(pCaster);
+    data.SetSpellData(pSpell);
+    data.SetEffectItemData(pEffect);
+    data.SetMagnitudeData(acMessage.Magnitude);
+    data.SetUnk40Data(1.0f);
+    data.SetCastingSourceData(MagicSystem::CastingSource::CASTING_SOURCE_COUNT);
+    data.SetDualCastData(acMessage.IsDualCasting);
 
     if (pEffect->IsWerewolfEffect())
         pActor->GetExtension()->GraphDescriptorHash = AnimationGraphDescriptor_WerewolfBehavior::m_key;
@@ -427,7 +439,7 @@ void MagicService::OnNotifyAddTarget(const NotifyAddTarget& acMessage) noexcept
     if (pEffect->IsSlowEffect())
         pActor = PlayerCharacter::Get();
 
-    pActor->magicTarget.AddTarget(data, acMessage.ApplyHealPerkBonus, acMessage.ApplyStaminaPerkBonus);
+    pActor->GetMagicTargetData().AddTarget(data, acMessage.ApplyHealPerkBonus, acMessage.ApplyStaminaPerkBonus);
     spdlog::debug("Applied remote magic effect");
 }
 
@@ -517,8 +529,10 @@ void MagicService::ApplyQueuedEffects() noexcept
         AddTargetEvent target = m_queuedEffects.front().Target();
         Actor* pCaster = Cast<Actor>(TESForm::GetById(target.CasterID));
         Actor* pTarget = Cast<Actor>(TESForm::GetById(target.TargetID));
-        auto pTargetName = !pTarget ? "" : pTarget->baseForm->GetName();
-        auto pCasterName = !pCaster ? "" : pCaster->baseForm->GetName();
+        const auto* pTargetBase = pTarget ? pTarget->GetBaseFormData() : nullptr;
+        const auto* pCasterBase = pCaster ? pCaster->GetBaseFormData() : nullptr;
+        auto pTargetName = pTargetBase ? pTargetBase->GetName() : "";
+        auto pCasterName = pCasterBase ? pCasterBase->GetName() : "";
 
         // Check for and skip expired (timed out) events, that Actor isn't likely to exist anymore.
         if (m_queuedEffects.front().Expired())
@@ -581,8 +595,10 @@ void MagicService::ApplyQueuedEffects() noexcept
         NotifyAddTarget target = m_queuedRemoteEffects.front().Target();
         Actor* pTarget = Utils::GetByServerId<Actor>(target.TargetId); 
         Actor* pCaster = Utils::GetByServerId<Actor>(target.CasterId); 
-        auto pTargetName = !pTarget ? "" : pTarget->baseForm->GetName();
-        auto pCasterName = !pCaster ? "" : pCaster->baseForm->GetName(); 
+        const auto* pTargetBase = pTarget ? pTarget->GetBaseFormData() : nullptr;
+        const auto* pCasterBase = pCaster ? pCaster->GetBaseFormData() : nullptr;
+        auto pTargetName = pTargetBase ? pTargetBase->GetName() : "";
+        auto pCasterName = pCasterBase ? pCasterBase->GetName() : "";
 
         if (m_queuedRemoteEffects.front().Expired())
             MagicQueue::Spdlog("{}: removing expired NotifyAddTarget event from queue: caster {}({:X}), spell {:X}, effect {:X}, target {}({:X})",
@@ -662,11 +678,11 @@ void MagicService::UpdateRevealOtherPlayersEffect(bool aForceTrigger) noexcept
         return;
 
     MagicTarget::AddTargetData data{};
-    data.pSpell = pSpell;
-    data.pEffectItem = pSpell->GetEffect((pSkyrimTogether->standardId << 24) | 0x1824);
-    data.fMagnitude = 1.f;
-    data.fUnkFloat1 = 1.f;
-    data.eCastingSource = MagicSystem::CastingSource::CASTING_SOURCE_COUNT;
+    data.SetSpellData(pSpell);
+    data.SetEffectItemData(pSpell->GetEffect((pSkyrimTogether->standardId << 24) | 0x1824));
+    data.SetMagnitudeData(1.f);
+    data.SetUnk40Data(1.f);
+    data.SetCastingSourceData(MagicSystem::CastingSource::CASTING_SOURCE_COUNT);
 
     auto view = World::Get().view<FormIdComponent, PlayerComponent>();
     for (const auto entity : view)
@@ -679,6 +695,6 @@ void MagicService::UpdateRevealOtherPlayersEffect(bool aForceTrigger) noexcept
         if (!pRemotePlayer)
             continue;
 
-        pRemotePlayer->magicTarget.AddTarget(data, false, false);
+        pRemotePlayer->GetMagicTargetData().AddTarget(data, false, false);
     }
 }

@@ -319,7 +319,7 @@ const AnimationGraphDescriptor* BehaviorVar::Patch(BSAnimationGraphManager* apMa
     std::lock_guard guard(mutex_lock);
 
     // Check if the animation descriptor has already been built.
-    uint32_t hexFormID = apActor->formID;
+    uint32_t hexFormID = apActor->GetFormIdData();
     auto pExtendedActor = apActor->GetExtension();
     auto hash = pExtendedActor->GraphDescriptorHash;
     const AnimationGraphDescriptor* pGraph = AnimationGraphDescriptorManager::Get().GetDescriptor(hash);

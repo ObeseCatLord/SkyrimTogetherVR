@@ -72,11 +72,11 @@ float CalendarService::TimeInterpolate(const TimeModel& aFrom, TimeModel& aTo) c
 void CalendarService::ToggleGameClock(bool aEnable)
 {
     auto* pGameTime = TimeData::Get();
-    m_offlineTime.m_timeModel.Day = pGameTime->GameDay->f;
-    m_offlineTime.m_timeModel.Month = pGameTime->GameMonth->f;
-    m_offlineTime.m_timeModel.Year = pGameTime->GameYear->f;
-    m_offlineTime.m_timeModel.Time = pGameTime->GameHour->f;
-    m_offlineTime.m_timeModel.TimeScale = pGameTime->TimeScale->f;
+    m_offlineTime.m_timeModel.Day = pGameTime->GetGameDayData()->GetValueData();
+    m_offlineTime.m_timeModel.Month = pGameTime->GetGameMonthData()->GetValueData();
+    m_offlineTime.m_timeModel.Year = pGameTime->GetGameYearData()->GetValueData();
+    m_offlineTime.m_timeModel.Time = pGameTime->GetGameHourData()->GetValueData();
+    m_offlineTime.m_timeModel.TimeScale = pGameTime->GetTimeScaleData()->GetValueData();
 
     s_gameClockLocked = !aEnable;
 }
@@ -101,19 +101,21 @@ void CalendarService::HandleUpdate(const UpdateEvent& aEvent) noexcept
         m_lastTick = now;
 
         m_onlineTime.Update(delta);
-        pGameTime->TimeScale->f = m_onlineTime.m_timeModel.TimeScale;
-        pGameTime->GameDay->f = m_onlineTime.m_timeModel.Day;
-        pGameTime->GameMonth->f = m_onlineTime.m_timeModel.Month;
-        pGameTime->GameYear->f = m_onlineTime.m_timeModel.Year;
-        pGameTime->GameDaysPassed->f += m_onlineTime.GetDeltaTime(delta) * (1.f / 24.f);
+        pGameTime->GetTimeScaleData()->SetValueData(m_onlineTime.m_timeModel.TimeScale);
+        pGameTime->GetGameDayData()->SetValueData(m_onlineTime.m_timeModel.Day);
+        pGameTime->GetGameMonthData()->SetValueData(m_onlineTime.m_timeModel.Month);
+        pGameTime->GetGameYearData()->SetValueData(m_onlineTime.m_timeModel.Year);
+        pGameTime->GetGameDaysPassedData()->SetValueData(
+            pGameTime->GetGameDaysPassedData()->GetValueData() + m_onlineTime.GetDeltaTime(delta) * (1.f / 24.f));
 
         // time transition in
         if (m_fadeTimer < kTransitionSpeed)
         {
-            pGameTime->GameHour->f = TimeInterpolate(m_offlineTime.m_timeModel, m_onlineTime.m_timeModel);
+            pGameTime->GetGameHourData()->SetValueData(
+                TimeInterpolate(m_offlineTime.m_timeModel, m_onlineTime.m_timeModel));
             m_fadeTimer += updateDelta;
         }
         else
-            pGameTime->GameHour->f = m_onlineTime.m_timeModel.Time;
+            pGameTime->GetGameHourData()->SetValueData(m_onlineTime.m_timeModel.Time);
     }
 }

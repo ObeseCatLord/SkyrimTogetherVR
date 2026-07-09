@@ -1,5 +1,14 @@
 #pragma once
 
+#include <RuntimeLayout.h>
+
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
 struct GRefCountImplCore
 {
     virtual ~GRefCountImplCore() = default;
@@ -105,6 +114,9 @@ struct UIMessage;
 
 struct IMenu : FxDelegateHandler
 {
+    using CommonLibIMenuOffsets = Skyrim::RuntimeLayout::IMenuCommonLibNgOffsets;
+    using LocalIMenuOffsets = Skyrim::RuntimeLayout::IMenuLocalShimOffsets;
+
     virtual ~IMenu() = default;
 
     void Accept(CallbackProcessor* apProcessor) override;
@@ -155,11 +167,29 @@ struct IMenu : FxDelegateHandler
     void SetFlag(uint32_t auiFlag);
     void ClearFlag(uint32_t auiFlag);
 
-    bool PausesGame() const { return uiMenuFlags & kPausesGame; }
+    [[nodiscard]] uint32_t GetMenuFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibIMenuOffsets::MenuFlags);
+#else
+        return uiMenuFlags;
+#endif
+    }
 
-    bool FreezesBackground() const { return uiMenuFlags & kFreezeFrameBackground; }
+    void SetMenuFlagsData(uint32_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibIMenuOffsets::MenuFlags, aFlags);
+#else
+        uiMenuFlags = aFlags;
+#endif
+    }
 
-    bool FreezesFramePause() const { return uiMenuFlags & kFreezeFramePause; }
+    bool PausesGame() const { return GetMenuFlagsData() & kPausesGame; }
+
+    bool FreezesBackground() const { return GetMenuFlagsData() & kFreezeFrameBackground; }
+
+    bool FreezesFramePause() const { return GetMenuFlagsData() & kFreezeFramePause; }
 
     void* uiMovie{nullptr};
     int8_t depthPriority{3};
@@ -169,8 +199,22 @@ struct IMenu : FxDelegateHandler
     uint32_t eInputContext;
     std::uint32_t pad24{0};
     void* fxDelegate{nullptr};
+
+#if TP_SKYRIM_VR
+    int32_t unk30{-1};
+    int32_t unk34{1};
+    uint64_t unk38{0};
+#endif
 };
 
-constexpr auto x = offsetof(IMenu, IMenu::uiMenuFlags);
-
-static_assert(offsetof(IMenu, IMenu::uiMenuFlags) == 0x1C);
+static_assert(offsetof(IMenu, IMenu::uiMenuFlags) == IMenu::LocalIMenuOffsets::MenuFlags);
+static_assert(offsetof(IMenu, IMenu::eInputContext) == IMenu::LocalIMenuOffsets::InputContext);
+static_assert(offsetof(IMenu, IMenu::fxDelegate) == IMenu::LocalIMenuOffsets::FxDelegate);
+#if TP_SKYRIM_VR
+static_assert(offsetof(IMenu, IMenu::unk30) == IMenu::LocalIMenuOffsets::VrUnk30);
+static_assert(offsetof(IMenu, IMenu::unk34) == IMenu::LocalIMenuOffsets::VrUnk34);
+static_assert(offsetof(IMenu, IMenu::unk38) == IMenu::LocalIMenuOffsets::VrUnk38);
+static_assert(sizeof(IMenu) == IMenu::LocalIMenuOffsets::VrSize);
+#else
+static_assert(sizeof(IMenu) == IMenu::LocalIMenuOffsets::SeSize);
+#endif

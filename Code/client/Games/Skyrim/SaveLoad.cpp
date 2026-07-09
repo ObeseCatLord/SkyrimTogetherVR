@@ -4,9 +4,14 @@
 
 void BGSSaveLoadManager::Save(SaveData* apData)
 {
-    apData->flags |= 4;
+    if (!apData)
+        return;
+
+    apData->SetFlagsData(apData->GetFlagsData() | 4);
 
     const char* cSaveName = "";
-    if (apData->saveName)
-        cSaveName = apData->saveName;
+    if (const auto* pSaveName = apData->GetSaveNameData())
+        cSaveName = pSaveName;
+
+    (void)cSaveName;
 }

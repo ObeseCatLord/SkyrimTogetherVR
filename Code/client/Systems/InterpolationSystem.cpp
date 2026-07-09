@@ -49,9 +49,11 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
     apActor->ForcePosition(position);
     apActor->LoadAnimationVariables(second.Variables);
 
-    if (apActor->currentProcess && apActor->currentProcess->middleProcess)
+    auto* pCurrentProcess = apActor->GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    if (pMiddleProcess)
     {
-        apActor->currentProcess->middleProcess->direction = second.Direction;
+        pMiddleProcess->SetDirectionData(second.Direction);
     }
 
     auto rotA = first.Rotation;

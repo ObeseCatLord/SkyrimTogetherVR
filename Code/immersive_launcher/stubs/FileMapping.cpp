@@ -87,7 +87,7 @@ bool IsLocalModulePath(HMODULE aHmod)
     return buf.find(s_OverridePath) != std::wstring::npos;
 }
 
-// some mods do GetModuleHandle("SkyrimSE.exe") for some reason instead of GetModuleHandle(nullptr)
+// Some mods do GetModuleHandle("SkyrimVR.exe") for some reason instead of GetModuleHandle(nullptr).
 HMODULE WINAPI TP_GetModuleHandleW(LPCWSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME L".exe";
@@ -98,7 +98,7 @@ HMODULE WINAPI TP_GetModuleHandleW(LPCWSTR lpModuleName)
     return RealGetModuleHandleW(lpModuleName);
 }
 
-// some mods do GetModuleHandle("SkyrimSE.exe") for some reason instead of GetModuleHandle(nullptr)
+// Some mods do GetModuleHandle("SkyrimVR.exe") for some reason instead of GetModuleHandle(nullptr).
 HMODULE WINAPI TP_GetModuleHandleA(LPCSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME_A ".exe";
@@ -109,7 +109,7 @@ HMODULE WINAPI TP_GetModuleHandleA(LPCSTR lpModuleName)
     return RealGetModuleHandleA(lpModuleName);
 }
 
-// some mods do GetModuleHandle("SkyrimSE.exe") for some reason instead of GetModuleHandle(nullptr)
+// Some mods do GetModuleHandle("SkyrimVR.exe") for some reason instead of GetModuleHandle(nullptr).
 NTSTATUS WINAPI TP_LdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUNICODE_STRING DllName, PVOID* DllHandle)
 {
     // no need to check for nullptr here, this is handeled by the higher level GetModuleHandle function.
@@ -226,12 +226,18 @@ NTSTATUS WINAPI TP_LdrLoadDll(const wchar_t* apPath, uint32_t* apFlags, UNICODE_
     TP_EMPTY_HOOK_PLACEHOLDER;
 
     std::wstring_view fileName(apFileName->Buffer, apFileName->Length / sizeof(wchar_t));
-    size_t pos = fileName.find_last_of(L'\\');
-    if (pos != std::wstring_view::npos && (pos + 1) != fileName.length())
+    const size_t pos = fileName.find_last_of(L"\\/");
+    const std::wstring_view name = pos != std::wstring_view::npos ? fileName.substr(pos + 1) : fileName;
+    if (!name.empty())
     {
-        const wchar_t *name = &fileName[pos + 1];
         if (stubs::IsSoulsRE(name))
             stubs::g_IsSoulsREActive = true;
+
+        if (stubs::IsHiggs(name))
+            stubs::g_IsHiggsActive = true;
+
+        if (stubs::IsPlanck(name))
+            stubs::g_IsPlanckActive = true;
         
         if (stubs::IsDllBlocked(name))
         {
@@ -273,7 +279,7 @@ void CoreStubsInit()
     }
 
     // SKSE calls
-    // https://github.com/ianpatt/skse64/blob/d79e8f081194f538c24d493e1b57331d837a25c0/skse64_common/Utilities.cpp#L11
+    // SKSEVR's runtime lookup can ask for the executable module by name.
 
     // VALIDATE(MH_CreateHookApi(L"ntdll.dll", "LdrGetDllHandle", &TP_LdrGetDllHandle, (void**)&RealLdrGetDllHandle));
     VALIDATE(MH_CreateHookApi(L"ntdll.dll", "LdrGetDllHandleEx", &TP_LdrGetDllHandleEx, (void**)&RealLdrGetDllHandleEx));

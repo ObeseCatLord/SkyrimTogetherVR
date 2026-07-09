@@ -7,7 +7,8 @@ void (*BSInputDeviceManager_PollInputDevices)(BSInputDeviceManager*, float) = nu
 
 void Hook_BSInputDeviceManager_PollInputDevices(BSInputDeviceManager* inputDeviceMgr, float afDelta)
 {
-    if (!BSGraphics::GetMainWindow()->IsForeground())
+    auto* pMainWindow = BSGraphics::GetMainWindow();
+    if (!pMainWindow || !pMainWindow->IsForeground())
         return;
 
     BSInputDeviceManager_PollInputDevices(inputDeviceMgr, afDelta);

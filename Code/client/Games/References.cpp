@@ -57,7 +57,11 @@ float CalculateRealDamage(Actor* apHittee, float aDamage, bool aKillMove) noexce
 
     bool isPlayer = apHittee == PlayerCharacter::Get();
 
-    float multiplier = s_getDifficultyMultiplier(PlayerCharacter::Get()->difficulty, ActorValueInfo::kHealth, isPlayer);
+    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pDifficulty = pPlayer ? pPlayer->GetDifficultyData() : nullptr;
+    if (!pDifficulty)
+        pDifficulty = Settings::GetDifficulty();
+    float multiplier = s_getDifficultyMultiplier(*pDifficulty, ActorValueInfo::kHealth, isPlayer);
 
     float realDamage = aDamage;
 
@@ -108,7 +112,7 @@ void TP_MAKE_THISCALL(HookInitFromPackage, void, TESPackage* apPackage, TESObjec
         return;
 
     if (arActor && apPackage)
-        World::Get().GetRunner().Trigger(InitPackageEvent(arActor->formID, apPackage->formID));
+        World::Get().GetRunner().Trigger(InitPackageEvent(arActor->GetFormIdData(), apPackage->GetFormIdData()));
 
 #endif
     return TiltedPhoques::ThisCall(RealInitFromPackage, apThis, apPackage, apTarget, arActor);
@@ -123,7 +127,7 @@ void TP_MAKE_THISCALL(HookSetCurrentPickREFR, Console, BSPointerHandle<TESObject
 
     TESObjectREFR* pObject = TESObjectREFR::GetByHandle(apRefr->handle.iBits);
     if (pObject)
-        formId = pObject->formID;
+        formId = pObject->GetFormIdData();
 
     World::Get().GetDebugService().SetDebugId(formId);
 

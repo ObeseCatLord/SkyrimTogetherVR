@@ -602,7 +602,8 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     characterComponent.ChangeFlags = message.ChangeFlags;
     characterComponent.SaveBuffer = std::move(message.AppearanceBuffer);
     characterComponent.BaseId = FormIdComponent(message.FormId);
-    characterComponent.FaceTints = message.FaceTints;
+    if (message.HasFaceTints)
+        characterComponent.FaceTints = message.FaceTints;
     characterComponent.FactionsContent = message.FactionsContent;
     characterComponent.SetDead(message.CurrentActorData.IsDead);
     characterComponent.SetPlayer(isPlayer);
@@ -633,7 +634,8 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
         const auto pPlayer = acMessage.pPlayer;
 
         pPlayer->SetCharacter(cEntity);
-        pPlayer->GetQuestLogComponent().QuestContent = message.QuestContent;
+        if (message.HasQuestContent)
+            pPlayer->GetQuestLogComponent().QuestContent = message.QuestContent;
         characterComponent.PlayerId = pPlayer->GetId();
 
         auto& dispatcher = m_world.GetDispatcher();

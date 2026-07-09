@@ -42,7 +42,7 @@ uint32_t ModManager::Spawn(NiPoint3& aPosition, NiPoint3& aRotation, TESObjectCE
 {
     uint32_t refrHandle = 0;
 
-    TiltedPhoques::ThisCall(RealSpawnNewREFR, this, refrHandle, apCharacter->baseForm, &aPosition, &aRotation, apParentCell, apWorldSpace, apCharacter, 0, 0, static_cast<char>(0), static_cast<char>(1));
+    TiltedPhoques::ThisCall(RealSpawnNewREFR, this, refrHandle, apCharacter->GetBaseFormData(), &aPosition, &aRotation, apParentCell, apWorldSpace, apCharacter, 0, 0, static_cast<char>(0), static_cast<char>(1));
 
     return refrHandle;
 }

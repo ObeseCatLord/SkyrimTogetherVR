@@ -5,15 +5,18 @@
 
 namespace
 {
-constexpr wchar_t kScriptExtenderName[] = L"skse64";
+#if !defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1
+#error "SkyrimTogetherVR client must be built with TP_SKYRIM_VR=1"
+#endif
+
+constexpr wchar_t kScriptExtenderName[] = L"sksevr";
+// SKSEVR 2.0.12 is the runtime 1.4.15 release used by Skyrim VR.
+constexpr int kSKSEMinBuild = 2001200;
+constexpr const char* kUnsupportedScriptExtenderMessage = "SKSEVR 2.0.12 or newer is required";
 
 constexpr char kScriptExtenderEntrypoint[] = "StartSKSE";
 
 constexpr size_t kScriptExtenderNameLength = sizeof(kScriptExtenderName) / sizeof(wchar_t) - 1;
-
-// AE+ only
-// Use this to raise the SKSE baseline
-constexpr int kSKSEMinBuild = 20100;
 
 HMODULE g_SKSEModuleHandle{nullptr};
 
@@ -54,16 +57,14 @@ int GetFileVersion(const std::filesystem::path& acFilePath, FileVersion& aVersio
 
 std::string GetSKSEStyleExeVersion()
 {
-    // make sure newer than anniversary!
     auto exeBuild = VersionDb::Get().GetLoadedVersionString();
-    std::replace(exeBuild.begin(), exeBuild.end(), '.', '_');
 
-    // chop off empty patch numbers for instance "1.6.323.0 becomes "1_6_323"
-    auto patchPos = exeBuild.find_last_of("_0");
-    if (patchPos != std::string::npos)
+    if (exeBuild.ends_with(".0"))
     {
-        exeBuild.erase(exeBuild.begin() + (patchPos - 1), exeBuild.end());
+        exeBuild.erase(exeBuild.size() - 2);
     }
+
+    std::replace(exeBuild.begin(), exeBuild.end(), '.', '_');
 
     return exeBuild;
 }
@@ -76,7 +77,7 @@ bool IsScriptExtenderLoaded()
 
 void LoadScriptExender()
 {
-    const auto exeVerson{GetSKSEStyleExeVersion()};
+    const auto exeVersion{GetSKSEStyleExeVersion()};
 
     // Get the path of the game, where the Script Extender dll resides
     const auto gameDir = std::filesystem::current_path();
@@ -103,9 +104,15 @@ void LoadScriptExender()
     for (auto& match : dllMatches)
     {
         auto fname = match.filename().string();
-        auto ptr = &fname[kScriptExtenderNameLength + 1];
+        if (fname.length() <= kScriptExtenderNameLength)
+            continue;
+
+        auto ptr = &fname[kScriptExtenderNameLength];
+        if (*ptr == '_')
+            ++ptr;
+
         // make extra sure!
-        if (std::strncmp(ptr, exeVerson.c_str(), exeVerson.length()) == 0)
+        if (std::strncmp(ptr, exeVersion.c_str(), exeVersion.length()) == 0)
         {
             needle = &match;
             break;
@@ -115,20 +122,20 @@ void LoadScriptExender()
     if (!needle)
         return;
 
-    FileVersion fileVersion;
-    if (GetFileVersion(*needle, fileVersion) != 0)
+    FileVersion fileVersion{};
+    const bool versionVerified = GetFileVersion(*needle, fileVersion) == 0;
+    if (!versionVerified)
     {
-        spdlog::error("Unable to verify Script Extender version");
-        return;
+        spdlog::warn("Unable to verify SKSEVR version resource for {}; continuing after filename/runtime match", needle->string());
     }
 
-    auto skseVersion = fmt::format("v{}.{}.{}.{}", fileVersion.versions[0], fileVersion.versions[1], fileVersion.versions[2], fileVersion.versions[3]);
+    auto skseVersion = versionVerified ? fmt::format("v{}.{}.{}.{}", fileVersion.versions[0], fileVersion.versions[1], fileVersion.versions[2], fileVersion.versions[3]) : needle->filename().string();
 
     // nice try.
     int SkseVCum = fileVersion.versions[0] * 1000000 + fileVersion.versions[1] * 10000 + fileVersion.versions[2] * 100 + fileVersion.versions[3];
-    if (SkseVCum < kSKSEMinBuild)
+    if (versionVerified && SkseVCum < kSKSEMinBuild)
     {
-        spdlog::error("Pre anniversary Script Extender is unsupported");
+        spdlog::error(kUnsupportedScriptExtenderMessage);
         return;
     }
 
@@ -145,7 +152,9 @@ void LoadScriptExender()
             spdlog::info("SKSE is active");
         }
         else
-            spdlog::warn("SKSE dll doesn't expose StartSKSE(), it may be outdated.");
+        {
+            spdlog::info("SKSEVR is active; StartSKSE export is not expected for this runtime");
+        }
     }
     else
     {

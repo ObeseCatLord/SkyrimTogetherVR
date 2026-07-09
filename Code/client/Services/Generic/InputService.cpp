@@ -104,7 +104,8 @@ void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
 
     // Ensures the game is actually loaded, in case the initial event was sent too early
     aOverlay.SetVersion(BUILD_COMMIT);
-    aOverlay.GetOverlayApp()->ExecuteAsync("enterGame");
+    if (auto* pApp = aOverlay.GetOverlayApp())
+        pApp->ExecuteAsync("enterGame");
 
     apRenderer->SetCursorVisible(aActive);
 
@@ -115,6 +116,9 @@ void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
 
 void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aType, bool aE0, bool aE1)
 {
+    if (!s_pOverlay)
+        return;
+
     if (aType != KEYEVENT_CHAR)
     {
         if (!aKey || aKey == 255)
@@ -210,6 +214,9 @@ void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aTy
 
 void ProcessMouseMove(uint16_t aX, uint16_t aY)
 {
+    if (!s_pOverlay)
+        return;
+
     auto& overlay = *s_pOverlay;
 
     const auto pApp = overlay.GetOverlayApp();
@@ -234,6 +241,9 @@ void ProcessMouseMove(uint16_t aX, uint16_t aY)
 
 void ProcessMouseButton(uint16_t aX, uint16_t aY, cef_mouse_button_type_t aButton, bool aDown)
 {
+    if (!s_pOverlay)
+        return;
+
     auto& overlay = *s_pOverlay;
 
     const auto pApp = overlay.GetOverlayApp();
@@ -258,6 +268,9 @@ void ProcessMouseButton(uint16_t aX, uint16_t aY, cef_mouse_button_type_t aButto
 
 void ProcessMouseWheel(uint16_t aX, uint16_t aY, int16_t aZ)
 {
+    if (!s_pOverlay)
+        return;
+
     auto& overlay = *s_pOverlay;
 
     const auto pApp = overlay.GetOverlayApp();
@@ -300,6 +313,9 @@ UINT GetRealACP()
 
 LRESULT CALLBACK InputService::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if (!s_pOverlay)
+        return 0;
+
     const auto pApp = s_pOverlay->GetOverlayApp();
     if (!pApp)
         return 0;

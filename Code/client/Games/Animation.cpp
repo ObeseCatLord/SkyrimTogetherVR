@@ -28,13 +28,14 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
     if (!pExtension->IsRemote() || g_forceAnimation)
     {
         ActionEvent action;
-        action.State1 = pActor->actorState.flags1;
-        action.State2 = pActor->actorState.flags2;
+        const auto& actorStateData = pActor->GetActorStateData();
+        action.State1 = actorStateData.GetFlags1Data();
+        action.State2 = actorStateData.GetFlags2Data();
         action.Type = apAction->unkInput | (apAction->someFlag ? 0x4 : 0);
         action.Tick = World::Get().GetTick();
-        action.ActorId = pActor->formID;
-        action.ActionId = apAction->action->formID;
-        action.TargetId = apAction->target ? apAction->target->formID : 0;
+        action.ActorId = pActor->GetFormIdData();
+        action.ActionId = apAction->action->GetFormIdData();
+        action.TargetId = apAction->target ? apAction->target->GetFormIdData() : 0;
 
         pActor->SaveAnimationVariables(action.Variables);
 
@@ -48,7 +49,7 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         action.EventName = apAction->eventName.AsAscii();
         action.TargetEventName = apAction->targetEventName.AsAscii();
-        action.IdleId = apAction->idleForm ? apAction->idleForm->formID : 0;
+        action.IdleId = apAction->idleForm ? apAction->idleForm->GetFormIdData() : 0;
 
         // Save for later
         if (res)
@@ -73,7 +74,7 @@ ActorMediator* ActorMediator::Get() noexcept
 
 bool ActorMediator::PerformAction(TESActionData* apAction) noexcept
 {
-    if (apAction->actor->formID == 0x13482)
+    if (apAction->actor->GetFormIdData() == 0x13482)
     {
         /*static Set<uint32_t> s_ids;
 
@@ -88,13 +89,13 @@ bool ActorMediator::PerformAction(TESActionData* apAction) noexcept
                 spdlog::info("Var {} changed from {} to {}", i, oldVars[i], newVars[i]);
             }
         }*/
-        // spdlog::info("Play animation name: {} with idle {:X} and target {:X} and unk {:X}", apAction->action->keyword.AsAscii(), (apAction->idleForm ? apAction->idleForm->formID : 0), (apAction->target ? apAction->target->formID : 0), apAction->unkInput);
+        // spdlog::info("Play animation name: {} with idle {:X} and target {:X} and unk {:X}", apAction->action->keyword.AsAscii(), (apAction->idleForm ? apAction->idleForm->GetFormIdData() : 0), (apAction->target ? apAction->target->GetFormIdData() : 0), apAction->unkInput);
     }
 
     const auto res = TiltedPhoques::ThisCall(RealPerformAction, this, apAction);
     // const auto res = RePerformAction(apAction, aValue);
 
-    if (res && apAction->actor->formID == 0x13482)
+    if (res && apAction->actor->GetFormIdData() == 0x13482)
     {
         //    spdlog::info("Passed !");
     }

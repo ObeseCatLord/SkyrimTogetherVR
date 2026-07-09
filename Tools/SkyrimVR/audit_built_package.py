@@ -1,0 +1,928 @@
+#!/usr/bin/env python3
+import argparse
+import ast
+import json
+import pathlib
+import sys
+import tempfile
+
+import audit_gamefiles
+import vr_paths
+
+BRIDGE_RUNTIME_FILES = (
+    "EarlyLoad.dll",
+    "TPProcess.exe",
+    "Data/SKSE/Plugins/SkyrimTogetherVRVrikBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
+)
+
+DLL_ONLY_REQUIRED_RUNTIME_FILES = (
+    "EarlyLoad.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRVrikBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
+)
+
+DEFAULT_REQUIRED_RUNTIME_FILES = (
+    "SkyrimTogetherVR.exe",
+    *BRIDGE_RUNTIME_FILES,
+)
+
+AVATAR_SYNC_REQUIRED_RUNTIME_FILES = (
+    "SkyrimTogetherVRAvatarSync.exe",
+    *BRIDGE_RUNTIME_FILES,
+)
+
+GAMEPLAY_REQUIRED_RUNTIME_FILES = (
+    "SkyrimTogetherVRGameplay.exe",
+    *BRIDGE_RUNTIME_FILES,
+)
+
+REQUIRED_STAGED_FILES = (
+    "SkyrimTogetherVR_BuildManifest.json",
+    "Data/SkyrimTogether.esp",
+    "Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
+    "Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
+    "Data/scripts/SkyrimTogetherUtils.pex",
+    "Data/scripts/SkyrimTogetherVerifyLaunchScript.pex",
+    "Data/scripts/SkyrimTogetherPlayerAliasScript.pex",
+    "Data/scripts/SkyrimTogetherVRConnectionMenu.pex",
+    "Data/scripts/SkyrimTogetherVRConnectionSpellEffect.pex",
+    "LaunchSkyrimTogetherVRCompanion.bat",
+    "AuditSkyrimTogetherVRRuntime-Windows.bat",
+    "AuditSkyrimTogetherVRAvatarSyncRuntime-Windows.bat",
+    "AuditSkyrimTogetherVRGameplayRuntime-Windows.bat",
+    "CollectSkyrimTogetherVREvidence-Windows.bat",
+    "CollectSkyrimTogetherVRAvatarSyncEvidence-Windows.bat",
+    "CollectSkyrimTogetherVRGameplayEvidence-Windows.bat",
+    "AuditSkyrimTogetherVREvidence-Windows.bat",
+    "AuditSkyrimTogetherVRAvatarSyncEvidence-Windows.bat",
+    "AuditSkyrimTogetherVRGameplayEvidence-Windows.bat",
+    "Tools/SkyrimVR/vr_handoff.py",
+    "Tools/SkyrimVR/vr_paths.py",
+    "Tools/SkyrimVR/audit_runtime_handoff.py",
+    "Tools/SkyrimVR/collect_runtime_evidence.py",
+    "Tools/SkyrimVR/audit_runtime_evidence_zip.py",
+)
+
+PACKAGED_PYTHON_HELPERS = (
+    "vr_handoff.py",
+    "vr_paths.py",
+    "audit_runtime_handoff.py",
+    "collect_runtime_evidence.py",
+    "audit_runtime_evidence_zip.py",
+)
+
+FORBIDDEN_PACKAGE_FILES = (
+    "SkyrimTogether.esp",
+    "scripts",
+    "meshes",
+    "SkyrimTogetherRebornBehaviors",
+    "SkyrimTogetherVR.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVR.dll",
+    "SkyrimTogetherVRVrikBridge.dll",
+    "SkyrimTogetherVRHiggsBridge.dll",
+    "SkyrimTogetherVRPlanckBridge.dll",
+)
+
+DEFAULT_FORBIDDEN_RUNTIME_FILES = (
+    "SkyrimTogetherVRAvatarSync.exe",
+    "SkyrimTogetherVRGameplay.exe",
+)
+
+AVATAR_SYNC_FORBIDDEN_RUNTIME_FILES = (
+    "SkyrimTogetherVR.exe",
+    "SkyrimTogetherVRGameplay.exe",
+)
+
+GAMEPLAY_FORBIDDEN_RUNTIME_FILES = (
+    "SkyrimTogetherVR.exe",
+    "SkyrimTogetherVRAvatarSync.exe",
+)
+
+DLL_ONLY_FORBIDDEN_RUNTIME_FILES = (
+    "SkyrimTogetherVR.exe",
+    "SkyrimTogetherVRAvatarSync.exe",
+    "SkyrimTogetherVRGameplay.exe",
+    "TPProcess.exe",
+)
+
+VR_PREREQUISITE_FILES = {
+    "vrik": (
+        "Data/SKSE/Plugins/VRIK.dll",
+        "Data/SKSE/Plugins/vrik.ini",
+        "Data/SKSE/Plugins/vrikslots.ini",
+        "Data/Scripts/VRIK.pex",
+        "Data/Scripts/_vrik_qust_system.pex",
+        "Data/meshes/vrik/torchoff.nif",
+        "Data/vrik.esp",
+    ),
+    "higgs": (
+        "Data/SKSE/Plugins/higgs_vr.dll",
+        "Data/SKSE/Plugins/higgs_vr.ini",
+        "Data/Scripts/HiggsVR.pex",
+        "Data/higgs_vr.esp",
+    ),
+    "planck": (
+        "Data/SKSE/Plugins/activeragdoll.dll",
+        "Data/SKSE/Plugins/activeragdoll.ini",
+        "Data/Scripts/planck.pex",
+    ),
+}
+
+X64_MACHINE = 0x8664
+MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v1"
+DEFAULT_EXPECTED_MANIFEST_TARGETS = (
+    "SkyrimTogetherVRClient",
+    "SkyrimTogetherVRVrikBridge",
+    "SkyrimTogetherVRHiggsBridge",
+    "SkyrimTogetherVRPlanckBridge",
+    "SkyrimVRImmersiveLauncher",
+    "ImmersiveElf",
+    "TPProcess",
+)
+DLL_ONLY_EXPECTED_MANIFEST_TARGETS = (
+    "SkyrimTogetherVRVrikBridge",
+    "SkyrimTogetherVRHiggsBridge",
+    "SkyrimTogetherVRPlanckBridge",
+    "ImmersiveElf",
+)
+AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
+    "SkyrimTogetherVRClientAvatarSync",
+    "SkyrimVRImmersiveLauncherAvatarSync",
+    "SkyrimTogetherVRVrikBridge",
+    "SkyrimTogetherVRHiggsBridge",
+    "SkyrimTogetherVRPlanckBridge",
+    "ImmersiveElf",
+    "TPProcess",
+)
+GAMEPLAY_EXPECTED_MANIFEST_TARGETS = (
+    "SkyrimTogetherVRGameplayClient",
+    "SkyrimVRImmersiveLauncherGameplay",
+    "SkyrimTogetherVRVrikBridge",
+    "SkyrimTogetherVRHiggsBridge",
+    "SkyrimTogetherVRPlanckBridge",
+    "ImmersiveElf",
+    "TPProcess",
+)
+
+
+def repo_root():
+    return pathlib.Path(__file__).resolve().parents[2]
+
+
+def count_csv_rows(path):
+    if not path.exists():
+        return 0
+
+    with path.open(encoding="utf-8-sig", errors="replace") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def pe_machine(path):
+    try:
+        with path.open("rb") as handle:
+            mz = handle.read(0x40)
+            if len(mz) < 0x40 or mz[:2] != b"MZ":
+                return None
+
+            pe_offset = int.from_bytes(mz[0x3C:0x40], "little")
+            if pe_offset <= 0:
+                return None
+
+            handle.seek(pe_offset)
+            header = handle.read(6)
+            if len(header) < 6 or header[:4] != b"PE\0\0":
+                return None
+
+            return int.from_bytes(header[4:6], "little")
+    except OSError:
+        return None
+
+
+def exists_case_insensitive(directory, names):
+    if not directory.exists():
+        return False
+
+    wanted = {name.lower() for name in names}
+    return any(child.name.lower() in wanted for child in directory.iterdir())
+
+
+def exists_relative_case_insensitive(root, relative_path):
+    current = root
+    for part in pathlib.PurePath(relative_path).parts:
+        if not current.exists() or not current.is_dir():
+            return False
+        wanted = part.lower()
+        match = next((child for child in current.iterdir() if child.name.lower() == wanted), None)
+        if match is None:
+            return False
+        current = match
+    return current.exists()
+
+
+def missing_relative_files_case_insensitive(root, relative_paths):
+    return [
+        relative_path
+        for relative_path in relative_paths
+        if not exists_relative_case_insensitive(root, relative_path)
+    ]
+
+
+def local_import_modules(path):
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    except SyntaxError as exc:
+        return set(), [f"{path}: Python syntax error while auditing imports: {exc}"]
+    except OSError as exc:
+        return set(), [f"{path}: could not read Python helper while auditing imports: {exc}"]
+
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module.split(".", 1)[0])
+
+    return modules, []
+
+
+def packaged_python_import_closure(package):
+    tool_dir = package / "Tools" / "SkyrimVR"
+    failures = []
+    required = set(PACKAGED_PYTHON_HELPERS)
+    queue = list(PACKAGED_PYTHON_HELPERS)
+    visited = set()
+
+    while queue:
+        helper = queue.pop(0)
+        if helper in visited:
+            continue
+        visited.add(helper)
+        path = tool_dir / helper
+        if not path.exists():
+            failures.append(f"missing package Python helper: Tools/SkyrimVR/{helper}")
+            continue
+
+        modules, import_failures = local_import_modules(path)
+        failures.extend(import_failures)
+        for module in sorted(modules):
+            candidate = f"{module}.py"
+            if not (tool_dir / candidate).exists():
+                continue
+            if candidate not in required:
+                required.add(candidate)
+                queue.append(candidate)
+
+    return tuple(sorted(required)), failures
+
+
+def pex_tokens_for_package_file(relative_path):
+    name = pathlib.PurePath(relative_path).name.lower()
+    if name == "skyrimtogetherutils.pex":
+        return audit_gamefiles.REQUIRED_UTILS_NATIVE_TOKENS
+    if name == "skyrimtogethervrconnectionmenu.pex":
+        return audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS
+    if name == "skyrimtogetherplayeraliasscript.pex":
+        return audit_gamefiles.REQUIRED_PLAYER_ALIAS_PEX_TOKENS
+    if name == "skyrimtogethervrconnectionspelleffect.pex":
+        return audit_gamefiles.REQUIRED_VR_EFFECT_PEX_TOKENS
+    return ()
+
+
+def audit_packaged_papyrus(package, failures):
+    scripts_dir = package / "Data" / "scripts"
+    if not scripts_dir.exists() or not scripts_dir.is_dir():
+        failures.append("missing package Papyrus directory: Data/scripts")
+        return
+
+    for pex_path in sorted(scripts_dir.glob("*.pex")):
+        data = pex_path.read_bytes()
+        relative_path = pex_path.relative_to(package).as_posix()
+        stale_hits = [
+            token.decode("ascii")
+            for token in audit_gamefiles.STALE_PEX_TOKENS
+            if token in data
+        ]
+        if stale_hits:
+            failures.append(
+                f"packaged Papyrus bytecode has stale SE token(s): {relative_path}: "
+                + ", ".join(stale_hits)
+            )
+
+    for relative_path in REQUIRED_STAGED_FILES:
+        if not relative_path.lower().endswith(".pex"):
+            continue
+        tokens = pex_tokens_for_package_file(relative_path)
+        if not tokens:
+            continue
+        pex_path = package / relative_path
+        if not pex_path.exists() or not pex_path.is_file():
+            continue
+        data = pex_path.read_bytes()
+        missing_tokens = [
+            token
+            for token in tokens
+            if token.encode("ascii") not in data
+        ]
+        if missing_tokens:
+            failures.append(
+                f"packaged Papyrus bytecode is missing VR token(s): {relative_path}: "
+                + ", ".join(missing_tokens)
+            )
+
+
+def check_file(package, relative_path, failures, require_pe=False):
+    path = package / relative_path
+    if not path.exists():
+        failures.append(f"missing package file: {relative_path}")
+        return
+
+    if not path.is_file():
+        failures.append(f"package path is not a file: {relative_path}")
+        return
+
+    size = path.stat().st_size
+    if size == 0:
+        failures.append(f"package file is empty: {relative_path}")
+
+    if require_pe:
+        machine = pe_machine(path)
+        if machine is None:
+            failures.append(f"package runtime is not a PE image: {relative_path}")
+        elif machine != X64_MACHINE:
+            failures.append(
+                f"package runtime is not x64 PE: {relative_path} machine=0x{machine:04x}"
+            )
+
+
+def load_build_manifest(package, failures):
+    path = package / "SkyrimTogetherVR_BuildManifest.json"
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        failures.append(f"build manifest is not valid JSON: {exc}")
+    except OSError as exc:
+        failures.append(f"could not read build manifest: {exc}")
+    return {}
+
+
+def required_runtime_files(avatar_sync=False, dll_only=False, gameplay=False):
+    if dll_only:
+        return DLL_ONLY_REQUIRED_RUNTIME_FILES
+    if gameplay:
+        return GAMEPLAY_REQUIRED_RUNTIME_FILES
+    return AVATAR_SYNC_REQUIRED_RUNTIME_FILES if avatar_sync else DEFAULT_REQUIRED_RUNTIME_FILES
+
+
+def expected_manifest_targets(avatar_sync=False, dll_only=False, gameplay=False):
+    if dll_only:
+        return DLL_ONLY_EXPECTED_MANIFEST_TARGETS
+    if gameplay:
+        return GAMEPLAY_EXPECTED_MANIFEST_TARGETS
+    return AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS if avatar_sync else DEFAULT_EXPECTED_MANIFEST_TARGETS
+
+
+def package_mode_name(avatar_sync=False, dll_only=False, gameplay=False):
+    if dll_only:
+        return "dll-only"
+    if gameplay:
+        return "gameplay"
+    return "avatar-sync" if avatar_sync else "default"
+
+
+def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gameplay=False):
+    manifest = load_build_manifest(package, failures)
+    if not manifest:
+        return
+
+    schema = manifest.get("schema")
+    if schema != MANIFEST_SCHEMA:
+        failures.append(f"build manifest has unexpected schema: {schema!r}")
+
+    if manifest.get("platform") != "windows":
+        failures.append(f"build manifest platform is not windows: {manifest.get('platform')!r}")
+    if manifest.get("arch") != "x64":
+        failures.append(f"build manifest arch is not x64: {manifest.get('arch')!r}")
+    if bool(manifest.get("avatarSync")) != bool(avatar_sync):
+        failures.append(
+            "build manifest avatarSync does not match audit mode: "
+            f"{manifest.get('avatarSync')!r}"
+        )
+    if bool(manifest.get("gameplay")) != bool(gameplay):
+        failures.append(
+            "build manifest gameplay does not match audit mode: "
+            f"{manifest.get('gameplay')!r}"
+        )
+    expected_flavor = package_mode_name(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    if manifest.get("packageFlavor") != expected_flavor:
+        failures.append(
+            "build manifest packageFlavor does not match audit mode: "
+            f"{manifest.get('packageFlavor')!r}"
+        )
+    if manifest.get("stagedGameFiles") is not True:
+        failures.append("build manifest says staged game files were not packaged")
+    if manifest.get("companionPanel") is not True:
+        failures.append("build manifest says companion panel helpers were not packaged")
+
+    targets = manifest.get("targets")
+    if not isinstance(targets, list):
+        failures.append("build manifest targets field is not a list")
+        target_set = set()
+    else:
+        target_set = {str(target) for target in targets}
+    required_targets = expected_manifest_targets(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    missing_targets = [target for target in required_targets if target not in target_set]
+    if missing_targets:
+        failures.append("build manifest is missing target(s): " + ", ".join(missing_targets))
+    unexpected_targets = [target for target in sorted(target_set) if target not in required_targets]
+    if dll_only and unexpected_targets:
+        failures.append("dll-only build manifest has unexpected target(s): " + ", ".join(unexpected_targets))
+
+    copied_artifacts = manifest.get("copiedArtifacts")
+    if not isinstance(copied_artifacts, list):
+        failures.append("build manifest copiedArtifacts field is not a list")
+        copied_set = set()
+    else:
+        copied_set = {str(artifact) for artifact in copied_artifacts}
+    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    missing_runtime_artifacts = [
+        pathlib.PurePath(relative_file).name
+        for relative_file in runtime_files
+        if pathlib.PurePath(relative_file).name not in copied_set
+    ]
+    if missing_runtime_artifacts:
+        failures.append(
+            "build manifest copiedArtifacts missing runtime artifact(s): "
+            + ", ".join(missing_runtime_artifacts)
+        )
+    unexpected_runtime_artifacts = [
+        artifact
+        for artifact in sorted(copied_set)
+        if dll_only and artifact in {"SkyrimTogetherVR.exe", "SkyrimTogetherVRAvatarSync.exe", "SkyrimTogetherVRGameplay.exe", "TPProcess.exe"}
+    ]
+    if unexpected_runtime_artifacts:
+        failures.append(
+            "dll-only build manifest copiedArtifacts has unexpected runtime artifact(s): "
+            + ", ".join(unexpected_runtime_artifacts)
+        )
+
+
+def audit_package(
+    package,
+    skyrim_vr,
+    avatar_sync=False,
+    dll_only=False,
+    gameplay=False,
+    require_installed_prerequisites=False,
+    require_vrik=False,
+    require_higgs=False,
+    require_planck=False,
+):
+    failures = []
+
+    if not package.exists():
+        failures.append(f"package root does not exist: {package}")
+    elif not package.is_dir():
+        failures.append(f"package root is not a directory: {package}")
+
+    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    for relative_file in runtime_files:
+        check_file(package, relative_file, failures, require_pe=True)
+
+    for relative_file in REQUIRED_STAGED_FILES:
+        check_file(package, relative_file, failures)
+    audit_packaged_papyrus(package, failures)
+    helper_closure, helper_failures = packaged_python_import_closure(package)
+    failures.extend(helper_failures)
+    for helper in helper_closure:
+        relative = f"Tools/SkyrimVR/{helper}"
+        if relative not in REQUIRED_STAGED_FILES:
+            failures.append(f"packaged Python helper import closure is not required by package audit: {relative}")
+    audit_build_manifest(package, failures, avatar_sync, dll_only=dll_only, gameplay=gameplay)
+
+    ae_to_se_rows = count_csv_rows(package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv")
+    overrides_rows = count_csv_rows(
+        package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv"
+    )
+    if ae_to_se_rows <= 1:
+        failures.append("SkyrimTogetherVR_AE_to_SE.csv has no data rows in the built package")
+    if overrides_rows <= 1:
+        failures.append("SkyrimTogetherVR_AddressOverrides.csv has no data rows in the built package")
+
+    if dll_only:
+        mode_forbidden_files = DLL_ONLY_FORBIDDEN_RUNTIME_FILES
+    elif gameplay:
+        mode_forbidden_files = GAMEPLAY_FORBIDDEN_RUNTIME_FILES
+    else:
+        mode_forbidden_files = AVATAR_SYNC_FORBIDDEN_RUNTIME_FILES if avatar_sync else DEFAULT_FORBIDDEN_RUNTIME_FILES
+    for relative_file in (*FORBIDDEN_PACKAGE_FILES, *mode_forbidden_files):
+        if (package / relative_file).exists():
+            failures.append(f"forbidden package file present: {relative_file}")
+
+    prereq = installed_prerequisites(skyrim_vr)
+    if require_installed_prerequisites:
+        if not prereq["sksevr"]:
+            failures.append("target Skyrim VR install is missing sksevr_1_4_15.dll")
+        if not prereq["address_library"]:
+            failures.append(
+                "target Skyrim VR install is missing Data/SKSE/Plugins/version-1-4-15-0.csv"
+            )
+
+    if require_vrik and prereq["missing_vrik_files"]:
+        failures.append(
+            "target Skyrim VR install is missing VRIK file(s): "
+            + ", ".join(prereq["missing_vrik_files"])
+        )
+    if require_higgs and prereq["missing_higgs_files"]:
+        failures.append(
+            "target Skyrim VR install is missing HIGGS file(s): "
+            + ", ".join(prereq["missing_higgs_files"])
+        )
+    if require_planck and prereq["missing_planck_files"]:
+        failures.append(
+            "target Skyrim VR install is missing PLANCK file(s): "
+            + ", ".join(prereq["missing_planck_files"])
+        )
+
+    return failures, prereq, ae_to_se_rows, overrides_rows
+
+
+def installed_prerequisites(skyrim_vr):
+    plugin_dir = skyrim_vr / "Data" / "SKSE" / "Plugins"
+    missing_vrik_files = missing_relative_files_case_insensitive(skyrim_vr, VR_PREREQUISITE_FILES["vrik"])
+    missing_higgs_files = missing_relative_files_case_insensitive(skyrim_vr, VR_PREREQUISITE_FILES["higgs"])
+    missing_planck_files = missing_relative_files_case_insensitive(skyrim_vr, VR_PREREQUISITE_FILES["planck"])
+    higgs_dll_installed = exists_case_insensitive(plugin_dir, ("higgs_vr.dll", "higgs.dll"))
+    if higgs_dll_installed:
+        missing_higgs_files = [
+            path for path in missing_higgs_files
+            if pathlib.PurePath(path).name.lower() != "higgs_vr.dll"
+        ]
+    return {
+        "sksevr": (skyrim_vr / "sksevr_1_4_15.dll").exists(),
+        "address_library": (plugin_dir / "version-1-4-15-0.csv").exists(),
+        "vrik": exists_case_insensitive(plugin_dir, ("vrik.dll",)),
+        "higgs": higgs_dll_installed,
+        "planck": exists_case_insensitive(plugin_dir, ("activeragdoll.dll",)),
+        "missing_vrik_files": missing_vrik_files,
+        "missing_higgs_files": missing_higgs_files,
+        "missing_planck_files": missing_planck_files,
+    }
+
+
+def write_file(path, data=b"package-test"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def python_helper_fixture(path):
+    imports = {
+        "audit_runtime_evidence_zip.py": "import collect_runtime_evidence\n",
+        "collect_runtime_evidence.py": "import audit_runtime_handoff\nimport vr_handoff\nimport vr_paths\n",
+        "audit_runtime_handoff.py": "import vr_handoff\nimport vr_paths\n",
+        "vr_handoff.py": "import vr_paths\n",
+        "vr_paths.py": "",
+    }
+    return f"from __future__ import annotations\n{imports.get(path.name, '')}\n"
+
+
+def write_x64_pe(path):
+    data = bytearray(0x90)
+    data[0:2] = b"MZ"
+    data[0x3C:0x40] = (0x80).to_bytes(4, "little")
+    data[0x80:0x84] = b"PE\0\0"
+    data[0x84:0x86] = X64_MACHINE.to_bytes(2, "little")
+    write_file(path, bytes(data))
+
+
+def write_csv(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("id,address\n1,2\n", encoding="utf-8")
+
+
+def papyrus_pex_fixture():
+    tokens = []
+    for token_group in (
+        audit_gamefiles.REQUIRED_UTILS_NATIVE_TOKENS,
+        audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS,
+        audit_gamefiles.REQUIRED_PLAYER_ALIAS_PEX_TOKENS,
+        audit_gamefiles.REQUIRED_VR_EFFECT_PEX_TOKENS,
+    ):
+        tokens.extend(token_group)
+    return "\n".join(sorted(set(tokens))).encode("ascii")
+
+
+def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=False):
+    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    targets = expected_manifest_targets(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    manifest = {
+        "schema": MANIFEST_SCHEMA,
+        "mode": "releasedbg",
+        "platform": "windows",
+        "arch": "x64",
+        "avatarSync": avatar_sync,
+        "gameplay": gameplay,
+        "packageFlavor": package_mode_name(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay),
+        "targets": list(targets),
+        "copiedArtifacts": [pathlib.PurePath(relative_file).name for relative_file in runtime_files],
+        "expectedArtifacts": [pathlib.PurePath(relative_file).name for relative_file in runtime_files],
+        "packageRoot": str(package),
+        "packageSnapshotRoot": str(package),
+        "stagedGameFiles": True,
+        "papyrusCompiled": True,
+        "papyrusCompiler": str(package / "Caprica.exe"),
+        "companionPanel": True,
+        "generatedAtUtc": "2026-01-01T00:00:00.0000000Z",
+    }
+    path = package / "SkyrimTogetherVR_BuildManifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def populate_test_package(package, avatar_sync=False, dll_only=False, gameplay=False):
+    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    for relative_file in runtime_files:
+        write_x64_pe(package / relative_file)
+
+    for relative_file in REQUIRED_STAGED_FILES:
+        path = package / relative_file
+        if path.name == "SkyrimTogetherVR_BuildManifest.json":
+            write_build_manifest(package, avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+        elif path.suffix.lower() == ".csv":
+            write_csv(path)
+        elif path.suffix.lower() == ".pex":
+            write_file(path, papyrus_pex_fixture())
+        elif relative_file.startswith("Tools/SkyrimVR/") and path.suffix.lower() == ".py":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(python_helper_fixture(path), encoding="utf-8")
+        else:
+            write_file(path)
+
+
+def run_self_test():
+    with tempfile.TemporaryDirectory(prefix="stvr-built-package-audit-") as tmp:
+        root = pathlib.Path(tmp)
+        skyrim_vr = root / "SkyrimVR"
+
+        default_package = root / "default"
+        populate_test_package(default_package)
+        failures, *_ = audit_package(default_package, skyrim_vr)
+        if failures:
+            print("Default package self-test unexpectedly failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+
+        avatar_package = root / "avatar"
+        populate_test_package(avatar_package, avatar_sync=True)
+        failures, *_ = audit_package(avatar_package, skyrim_vr, avatar_sync=True)
+        if failures:
+            print("Avatar-sync package self-test unexpectedly failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+
+        gameplay_package = root / "gameplay"
+        populate_test_package(gameplay_package, gameplay=True)
+        failures, *_ = audit_package(gameplay_package, skyrim_vr, gameplay=True)
+        if failures:
+            print("Gameplay package self-test unexpectedly failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+
+        dll_package = root / "dll-only"
+        populate_test_package(dll_package, dll_only=True)
+        failures, *_ = audit_package(dll_package, skyrim_vr, dll_only=True)
+        if failures:
+            print("DLL-only package self-test unexpectedly failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+
+        stale_dll_package = root / "stale-dll-only"
+        populate_test_package(stale_dll_package, dll_only=True)
+        write_x64_pe(stale_dll_package / "SkyrimTogetherVR.exe")
+        write_x64_pe(stale_dll_package / "TPProcess.exe")
+        failures, *_ = audit_package(stale_dll_package, skyrim_vr, dll_only=True)
+        if "forbidden package file present: SkyrimTogetherVR.exe" not in failures:
+            print("DLL-only package self-test did not reject stale default launcher.")
+            print("\n".join(failures))
+            return 1
+        if "forbidden package file present: TPProcess.exe" not in failures:
+            print("DLL-only package self-test did not reject stale TPProcess runtime.")
+            print("\n".join(failures))
+            return 1
+
+        wrong_dll_manifest_package = root / "wrong-dll-manifest"
+        populate_test_package(wrong_dll_manifest_package, dll_only=True)
+        write_build_manifest(wrong_dll_manifest_package)
+        failures, *_ = audit_package(wrong_dll_manifest_package, skyrim_vr, dll_only=True)
+        if "dll-only build manifest has unexpected target(s): SkyrimTogetherVRClient, SkyrimVRImmersiveLauncher, TPProcess" not in failures:
+            print("DLL-only package self-test did not reject full-package manifest targets.")
+            print("\n".join(failures))
+            return 1
+        if "dll-only build manifest copiedArtifacts has unexpected runtime artifact(s): SkyrimTogetherVR.exe, TPProcess.exe" not in failures:
+            print("DLL-only package self-test did not reject full-package manifest artifacts.")
+            print("\n".join(failures))
+            return 1
+
+        stale_avatar_package = root / "stale-avatar"
+        populate_test_package(stale_avatar_package)
+        write_x64_pe(stale_avatar_package / "SkyrimTogetherVRAvatarSync.exe")
+        failures, *_ = audit_package(stale_avatar_package, skyrim_vr)
+        if "forbidden package file present: SkyrimTogetherVRAvatarSync.exe" not in failures:
+            print("Default package self-test did not reject stale avatar-sync launcher.")
+            print("\n".join(failures))
+            return 1
+
+        stale_papyrus_package = root / "stale-papyrus"
+        populate_test_package(stale_papyrus_package)
+        write_file(stale_papyrus_package / "Data" / "scripts" / "SkyrimTogetherUtils.pex", b"ConnectToSkyrimTogether")
+        failures, *_ = audit_package(stale_papyrus_package, skyrim_vr)
+        if not any(
+            failure.startswith(
+                "packaged Papyrus bytecode is missing VR token(s): Data/scripts/SkyrimTogetherUtils.pex:"
+            )
+            and "SetSkyrimTogetherConnectionConfig" in failure
+            for failure in failures
+        ):
+            print("Package self-test did not reject stale SkyrimTogetherUtils.pex bytecode.")
+            print("\n".join(failures))
+            return 1
+
+        stale_se_papyrus_package = root / "stale-se-papyrus"
+        populate_test_package(stale_se_papyrus_package)
+        write_file(
+            stale_se_papyrus_package / "Data" / "scripts" / "SkyrimTogetherVerifyLaunchScript.pex",
+            b"SkyrimTogether.exe",
+        )
+        failures, *_ = audit_package(stale_se_papyrus_package, skyrim_vr)
+        if not any(
+            failure.startswith(
+                "packaged Papyrus bytecode has stale SE token(s): Data/scripts/SkyrimTogetherVerifyLaunchScript.pex:"
+            )
+            for failure in failures
+        ):
+            print("Package self-test did not reject stale SE Papyrus bytecode.")
+            print("\n".join(failures))
+            return 1
+
+        stale_default_package = root / "stale-default"
+        populate_test_package(stale_default_package, avatar_sync=True)
+        write_x64_pe(stale_default_package / "SkyrimTogetherVR.exe")
+        failures, *_ = audit_package(stale_default_package, skyrim_vr, avatar_sync=True)
+        if "forbidden package file present: SkyrimTogetherVR.exe" not in failures:
+            print("Avatar-sync package self-test did not reject stale default launcher.")
+            print("\n".join(failures))
+            return 1
+
+        stale_gameplay_package = root / "stale-gameplay"
+        populate_test_package(stale_gameplay_package, gameplay=True)
+        write_x64_pe(stale_gameplay_package / "SkyrimTogetherVR.exe")
+        write_x64_pe(stale_gameplay_package / "SkyrimTogetherVRAvatarSync.exe")
+        failures, *_ = audit_package(stale_gameplay_package, skyrim_vr, gameplay=True)
+        if "forbidden package file present: SkyrimTogetherVR.exe" not in failures:
+            print("Gameplay package self-test did not reject stale default launcher.")
+            print("\n".join(failures))
+            return 1
+        if "forbidden package file present: SkyrimTogetherVRAvatarSync.exe" not in failures:
+            print("Gameplay package self-test did not reject stale avatar-sync launcher.")
+            print("\n".join(failures))
+            return 1
+
+        root_staged_package = root / "root-staged"
+        populate_test_package(root_staged_package)
+        write_file(root_staged_package / "SkyrimTogether.esp")
+        failures, *_ = audit_package(root_staged_package, skyrim_vr)
+        if "forbidden package file present: SkyrimTogether.esp" not in failures:
+            print("Package self-test did not reject root-level staged ESP.")
+            print("\n".join(failures))
+            return 1
+
+        missing_data_package = root / "missing-data"
+        populate_test_package(missing_data_package)
+        (missing_data_package / "Data" / "SkyrimTogether.esp").unlink()
+        failures, *_ = audit_package(missing_data_package, skyrim_vr)
+        if "missing package file: Data/SkyrimTogether.esp" not in failures:
+            print("Package self-test did not require Data/SkyrimTogether.esp.")
+            print("\n".join(failures))
+            return 1
+
+        wrong_manifest_package = root / "wrong-manifest"
+        populate_test_package(wrong_manifest_package)
+        write_build_manifest(wrong_manifest_package, avatar_sync=True)
+        failures, *_ = audit_package(wrong_manifest_package, skyrim_vr)
+        if "build manifest avatarSync does not match audit mode: True" not in failures:
+            print("Package self-test did not reject wrong manifest mode.")
+            print("\n".join(failures))
+            return 1
+
+        missing_helper_package = root / "missing-helper"
+        populate_test_package(missing_helper_package)
+        (missing_helper_package / "Tools" / "SkyrimVR" / "vr_paths.py").unlink()
+        failures, *_ = audit_package(missing_helper_package, skyrim_vr)
+        if "missing package Python helper: Tools/SkyrimVR/vr_paths.py" not in failures:
+            print("Package self-test did not reject missing imported Python helper.")
+            print("\n".join(failures))
+            return 1
+
+    print("Built package audit self-test passed")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--self-test", action="store_true", help="run temporary package-layout self-tests")
+    parser.add_argument(
+        "--package",
+        type=pathlib.Path,
+        default=pathlib.Path("artifacts/SkyrimTogetherVR/releasedbg"),
+        help="built package directory to audit",
+    )
+    parser.add_argument("--skyrim-vr", type=pathlib.Path, default=vr_paths.default_skyrim_vr_path(), help=vr_paths.skyrim_vr_help())
+    parser.add_argument(
+        "--avatar-sync",
+        action="store_true",
+        help="require the explicit remote-avatar validation executable instead of the default launcher",
+    )
+    parser.add_argument(
+        "--dll-only",
+        action="store_true",
+        help="audit the DLL-producing partial package produced by BuildSkyrimTogetherVR-DLL-Windows.bat",
+    )
+    parser.add_argument(
+        "--gameplay",
+        action="store_true",
+        help="require the full gameplay SkyrimTogetherVRGameplay.exe package",
+    )
+    parser.add_argument(
+        "--require-installed-prerequisites",
+        action="store_true",
+        help="fail if the target Skyrim VR install is missing SKSEVR or the public VR Address Library CSV",
+    )
+    parser.add_argument(
+        "--require-vrik",
+        action="store_true",
+        help="fail if the target Skyrim VR install is missing Data/SKSE/Plugins/vrik.dll",
+    )
+    parser.add_argument(
+        "--require-higgs",
+        action="store_true",
+        help="fail if the target Skyrim VR install is missing Data/SKSE/Plugins/higgs_vr.dll or higgs.dll",
+    )
+    parser.add_argument(
+        "--require-planck",
+        action="store_true",
+        help="fail if the target Skyrim VR install is missing Data/SKSE/Plugins/activeragdoll.dll",
+    )
+    args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+
+    selected_modes = sum(1 for selected in (args.avatar_sync, args.dll_only, args.gameplay) if selected)
+    if selected_modes > 1:
+        parser.error("--avatar-sync, --dll-only, and --gameplay cannot be combined")
+
+    root = repo_root()
+    package = (root / args.package).resolve() if not args.package.is_absolute() else args.package.resolve()
+    skyrim_vr = args.skyrim_vr.resolve()
+    failures, prereq, ae_to_se_rows, overrides_rows = audit_package(
+        package,
+        skyrim_vr,
+        avatar_sync=args.avatar_sync,
+        dll_only=args.dll_only,
+        gameplay=args.gameplay,
+        require_installed_prerequisites=args.require_installed_prerequisites,
+        require_vrik=args.require_vrik,
+        require_higgs=args.require_higgs,
+        require_planck=args.require_planck,
+    )
+
+    print(f"Built package root: {package}")
+    print(f"Package mode: {package_mode_name(avatar_sync=args.avatar_sync, dll_only=args.dll_only, gameplay=args.gameplay)}")
+    print(f"AE-to-SE CSV rows: {ae_to_se_rows}")
+    print(f"Address override CSV rows: {overrides_rows}")
+    print(f"Installed SKSEVR DLL present: {prereq['sksevr']}")
+    print(f"Installed VR Address Library CSV present: {prereq['address_library']}")
+    print(f"Installed VRIK DLL present: {prereq['vrik']}")
+    print(f"Installed HIGGS DLL present: {prereq['higgs']}")
+    print(f"Installed PLANCK DLL present: {prereq['planck']}")
+    print(f"Installed VRIK required files missing: {len(prereq['missing_vrik_files'])}")
+    print(f"Installed HIGGS required files missing: {len(prereq['missing_higgs_files'])}")
+    print(f"Installed PLANCK required files missing: {len(prereq['missing_planck_files'])}")
+    print(f"Built package audit failures: {len(failures)}")
+    for failure in failures:
+        print(f"- {failure}")
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

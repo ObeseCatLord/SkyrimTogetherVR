@@ -59,7 +59,9 @@ bool MagicTarget::AddTarget(AddTargetData& arData, bool aApplyHealPerkBonus, boo
 
 bool MagicTarget::AddTargetData::ShouldSync()
 {
-    return !pEffectItem->IsSummonEffect() && !pSpell->IsInvisibilitySpell() && !pSpell->IsWardSpell();
+    auto* pEffectItemData = GetEffectItemData();
+    auto* pSpellData = GetSpellData();
+    return pEffectItemData && pSpellData && !pEffectItemData->IsSummonEffect() && !pSpellData->IsInvisibilitySpell() && !pSpellData->IsWardSpell();
 }
 
 // Some effects are player specific, and do not need to be synced.
@@ -68,7 +70,8 @@ bool MagicTarget::AddTargetData::IsForbiddenEffect(Actor* apTarget)
     if (apTarget != PlayerCharacter::Get())
         return false;
 
-    return pEffectItem->IsNightVisionEffect() || pEffectItem->IsSlowEffect();
+    auto* pEffectItemData = GetEffectItemData();
+    return pEffectItemData && (pEffectItemData->IsNightVisionEffect() || pEffectItemData->IsSlowEffect());
 }
 
 Actor* MagicTarget::GetTargetAsActor()
@@ -84,41 +87,48 @@ bool TP_MAKE_THISCALL(HookAddTarget, MagicTarget, MagicTarget::AddTargetData& ar
     if (!pTargetActor || arData.IsForbiddenEffect(pTargetActor))
         return TiltedPhoques::ThisCall(RealAddTarget, apThis, arData);
 
+    Actor* pCaster = arData.GetCasterData();
+    MagicItem* pSpell = arData.GetSpellData();
+    EffectItem* pEffectItem = arData.GetEffectItemData();
+    if (!pSpell || !pEffectItem)
+        return TiltedPhoques::ThisCall(RealAddTarget, apThis, arData);
+
     ActorExtension* pTargetActorEx = pTargetActor->GetExtension();
 
-    if (arData.pEffectItem->IsWerewolfEffect())
+    if (pEffectItem->IsWerewolfEffect())
         pTargetActorEx->GraphDescriptorHash = AnimationGraphDescriptor_WerewolfBehavior::m_key;
 
-    if (arData.pEffectItem->IsVampireLordEffect())
+    if (pEffectItem->IsVampireLordEffect())
         pTargetActorEx->GraphDescriptorHash = AnimationGraphDescriptor_VampireLordBehavior::m_key;
 
     if (ScopedSpellCastOverride::IsOverriden())
         return TiltedPhoques::ThisCall(RealAddTarget, apThis, arData);
 
     AddTargetEvent addTargetEvent{};
-    addTargetEvent.TargetID = pTargetActor->formID;
-    addTargetEvent.CasterID = arData.pCaster ? arData.pCaster->formID : 0;
-    addTargetEvent.SpellID = arData.pSpell->formID;
-    addTargetEvent.EffectID = arData.pEffectItem->pEffectSetting->formID;
-    addTargetEvent.Magnitude = arData.fMagnitude;
-    addTargetEvent.IsDualCasting = arData.bDualCast;
+    addTargetEvent.TargetID = pTargetActor->GetFormIdData();
+    addTargetEvent.CasterID = pCaster ? pCaster->GetFormIdData() : 0;
+    addTargetEvent.SpellID = pSpell->GetFormIdData();
+    auto* pEffectSetting = pEffectItem->GetEffectSettingData();
+    addTargetEvent.EffectID = pEffectSetting ? pEffectSetting->GetFormIdData() : 0;
+    addTargetEvent.Magnitude = arData.GetMagnitudeData();
+    addTargetEvent.IsDualCasting = arData.IsDualCastData();
 
     if (pTargetActorEx->IsRemotePlayer())
     {
-        if (!arData.pCaster)
+        if (!pCaster)
             return false;
 
-        if (!arData.pSpell->IsHealingSpell() && !arData.pSpell->IsBuffSpell())
+        if (!pSpell->IsHealingSpell() && !pSpell->IsBuffSpell())
             return false;
 
-        ActorExtension* pCasterExtension = arData.pCaster->GetExtension();
+        ActorExtension* pCasterExtension = pCaster->GetExtension();
         if (!pCasterExtension->IsLocalPlayer())
             return false;
 
-        if (arData.pSpell->IsHealingSpell())
+        if (pSpell->IsHealingSpell())
         {
-            addTargetEvent.ApplyHealPerkBonus = arData.pCaster->HasPerk(0x581f8);
-            addTargetEvent.ApplyStaminaPerkBonus = arData.pCaster->HasPerk(0x581f9);
+            addTargetEvent.ApplyHealPerkBonus = pCaster->HasPerk(0x581f8);
+            addTargetEvent.ApplyStaminaPerkBonus = pCaster->HasPerk(0x581f9);
         }
 
         bool result = TiltedPhoques::ThisCall(RealAddTarget, apThis, arData);
@@ -129,16 +139,16 @@ bool TP_MAKE_THISCALL(HookAddTarget, MagicTarget, MagicTarget::AddTargetData& ar
 
     if (pTargetActorEx->IsLocalPlayer())
     {
-        if (arData.pCaster)
+        if (pCaster)
         {
-            ActorExtension* pCasterExtension = arData.pCaster->GetExtension();
+            ActorExtension* pCasterExtension = pCaster->GetExtension();
             if (pCasterExtension->IsRemotePlayer())
             {
                 if (!World::Get().GetServerSettings().PvpEnabled)
                     return false;
 
                 // Heal and buff spells are already synced by the caster.
-                if (arData.pSpell->IsHealingSpell() || arData.pSpell->IsBuffSpell())
+                if (pSpell->IsHealingSpell() || pSpell->IsBuffSpell())
                     return false;
             }
         }
@@ -149,9 +159,9 @@ bool TP_MAKE_THISCALL(HookAddTarget, MagicTarget, MagicTarget::AddTargetData& ar
         return result;
     }
 
-    if (arData.pCaster)
+    if (pCaster)
     {
-        ActorExtension* pCasterExtension = arData.pCaster->GetExtension();
+        ActorExtension* pCasterExtension = pCaster->GetExtension();
         if (pCasterExtension->IsLocalPlayer())
         {
             bool result = TiltedPhoques::ThisCall(RealAddTarget, apThis, arData);
@@ -162,7 +172,7 @@ bool TP_MAKE_THISCALL(HookAddTarget, MagicTarget, MagicTarget::AddTargetData& ar
         else if (pCasterExtension->IsRemotePlayer())
         {
             // Send out a HitEvent because TakeDamage is never triggered.
-            World::Get().GetRunner().Trigger(HitEvent(arData.pCaster->formID, pTargetActor->formID));
+            World::Get().GetRunner().Trigger(HitEvent(pCaster->GetFormIdData(), pTargetActor->GetFormIdData()));
             return false;
         }
     }
@@ -198,7 +208,7 @@ void TP_MAKE_THISCALL(HookAdjustForPerks, ActiveEffect, Actor* apCaster, MagicTa
     TiltedPhoques::ThisCall(RealAdjustForPerks, apThis, apCaster, apTarget);
 
     if (s_applyHealPerkBonus)
-        apThis->fMagnitude *= 1.5f;
+        apThis->SetMagnitudeData(apThis->GetMagnitudeData() * 1.5f);
 }
 
 bool TP_MAKE_THISCALL(HookHasPerk, Actor, TESForm* apPerk, void* apUnk1, double* afReturnValue)
@@ -207,7 +217,7 @@ bool TP_MAKE_THISCALL(HookHasPerk, Actor, TESForm* apPerk, void* apUnk1, double*
 
     if (pExtension && pExtension->IsRemotePlayer())
     {
-        if (apPerk && apPerk->formID == 0x581f9)
+        if (apPerk && apPerk->GetFormIdData() == 0x581f9)
         {
             if (s_applyStaminaPerkBonus)
             {

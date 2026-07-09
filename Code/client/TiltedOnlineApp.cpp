@@ -7,6 +7,7 @@
 #include <WindowsHook.hpp>
 
 #include <World.h>
+#include <VRCompatibilityStatus.h>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
@@ -20,6 +21,20 @@
 
 #include <ScriptExtender.h>
 #include <NvidiaUtil.h>
+
+#include "immersive_launcher/stubs/DllBlocklist.h"
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+#define TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY
+#define TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY 0
+#endif
 
 using TiltedPhoques::Debug;
 
@@ -55,13 +70,31 @@ bool TiltedOnlineApp::BeginMain()
 {
     World::Create();
     World::Get().ctx().at<DiscordService>().Init();
+
+#if TP_SKYRIM_VR && (TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY || !TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY)
+    spdlog::warn("SkyrimTogetherVR flat D3D overlay/render startup is disabled for this VR target");
+#else
     World::Get().ctx().emplace<RenderSystemD3D11>(World::Get().ctx().at<OverlayService>(), World::Get().ctx().at<ImguiService>());
+#endif
 
     LoadScriptExender();
 
+#if TP_SKYRIM_VR
+    WriteVRCompatibilityStatusFile(
+        TiltedPhoques::GetPath(),
+        BuildVRCompatibilityStatus(TiltedPhoques::GetPath(), stubs::g_IsHiggsActive, stubs::g_IsPlanckActive));
+
+    if (stubs::g_IsHiggsActive)
+        spdlog::info("HIGGS SKSE plugin is loaded; hand physics compatibility guard is active");
+    if (stubs::g_IsPlanckActive)
+        spdlog::info("PLANCK SKSE plugin is loaded; active-ragdoll compatibility guard is active");
+#endif
+
     // TODO: Figure out a way to un-blacklist NvCamera64.dll (see DllBlocklist.cpp). Then this hack can be removed
+#if !(TP_SKYRIM_VR && (TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY || !TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY))
     if (IsNvidiaOverlayLoaded())
         ApplyNvidiaFix();
+#endif
 
     return true;
 }
@@ -77,6 +110,11 @@ bool TiltedOnlineApp::EndMain()
 
 void TiltedOnlineApp::Update()
 {
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+    World::Get().Update();
+    return;
+#endif
+
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
     // the default) handling. Extensive testing over months by multiple parties showed that enabling 
     // the flag introduces no issues WITH PROPERLY GENERATED CHARACTERS (in-game character generation 
@@ -88,10 +126,12 @@ void TiltedOnlineApp::Update()
     // but they are unrelated and unchanged by this flag.
     // 
  
+#if !TP_SKYRIM_VR
     // Make sure the window stays active
     POINTER_SKYRIMSE(uint32_t, bAlwaysActive, 380768);
 
     *bAlwaysActive = 1;
+#endif
 
     World::Get().Update();
 }
@@ -114,8 +154,12 @@ void TiltedOnlineApp::InstallHooks2()
 {
     TiltedPhoques::Initializer::RunAll();
 
+#if TP_SKYRIM_VR && (TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY || !TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY)
+    spdlog::warn("SkyrimTogetherVR DirectInput overlay hooks are disabled for this VR target");
+#else
     TiltedPhoques::DInputHook::Install();
     TiltedPhoques::DInputHook::Get().SetToggleKeys({DIK_F2, DIK_RCONTROL});
+#endif
 }
 
 void TiltedOnlineApp::UninstallHooks()

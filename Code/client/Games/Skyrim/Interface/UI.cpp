@@ -1,5 +1,6 @@
 #include <Games/Skyrim/Interface/IMenu.h>
 #include <Games/Skyrim/Interface/UI.h>
+#include <Games/Skyrim/VR/VRHookPolicy.h>
 #include <Misc/BSFixedString.h>
 #include <TiltedOnlinePCH.h>
 #include "immersive_launcher/stubs/DllBlocklist.h"
@@ -7,6 +8,12 @@
 #include <World.h>
 
 static bool g_RequestUnpauseAll{false};
+
+#if TP_SKYRIM_VR
+static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x67B;
+#else
+static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x682;
+#endif
 
 UI* UI::Get()
 {
@@ -35,7 +42,7 @@ void UI::CloseAllMenus()
 
 BSFixedString* UI::LookupMenuNameByInstance(IMenu* apMenu)
 {
-    for (auto& it : menuMap)
+    for (auto& it : GetMenuMapData())
     {
         if (it.value.spMenu == apMenu)
             return &it.key;
@@ -45,7 +52,7 @@ BSFixedString* UI::LookupMenuNameByInstance(IMenu* apMenu)
 
 IMenu* UI::FindMenuByName(const BSFixedString& acName)
 {
-    for (const auto& it : menuMap)
+    for (const auto& it : GetMenuMapData())
     {
         if (it.key == acName)
             return it.value.spMenu;
@@ -55,9 +62,9 @@ IMenu* UI::FindMenuByName(const BSFixedString& acName)
 
 void UI::DebugLogAllMenus()
 {
-    for (auto& e : menuStack)
+    for (auto& e : GetMenuStackData())
     {
-        spdlog::info("Menu {}", e->uiMenuFlags);
+        spdlog::info("Menu {}", e->GetMenuFlagsData());
     }
 }
 
@@ -121,20 +128,27 @@ void UIMessageQueue__AddMessage(void* a1, const BSFixedString* a2, UIMessage::UI
 static TiltedPhoques::Initializer s_s(
     []()
     {
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
         // pray that this doesnt fail!
         VersionDbPtr<uint8_t> ProcessHook(82082);
-        TiltedPhoques::SwapCall(ProcessHook.Get() + 0x682, UI_AddToActiveQueue, &UI_AddToActiveQueue_Hook);
+        TiltedPhoques::SwapCall(ProcessHook.Get() + kUIActiveMenuQueueSwapCallAddend, UI_AddToActiveQueue, &UI_AddToActiveQueue_Hook);
+#endif
 
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_SKIP_STARTUP_MOVIE, TP_SKYRIM_VR_INLINE_PATCH_SKIP_STARTUP_MOVIE_VR_RESOLVED)
         // Ignore startup movie
         // TODO: Move me later.
         VersionDbPtr<uint8_t> MainInit(36548);
         TiltedPhoques::Put<uint8_t>(MainInit.Get() + 0xFE, 0xEB);
+#endif
 
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_FAVORITES_CAN_PROCESS, TP_SKYRIM_VR_INLINE_PATCH_FAVORITES_CAN_PROCESS_VR_RESOLVED)
         // Credits to Skyrim Souls RE for this fix.
         // Allows the favorites menu to be numbered during connect.
         VersionDbPtr<uint8_t> FavoritesCanProcess(51538);
         TiltedPhoques::Put<uint16_t>(FavoritesCanProcess.Get() + 0x15, 0x9090);
+#endif
 
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
         // Some experiments:
         // POINTER_SKYRIMSE(TCallback, s_start, 13631);
         // UIMessageQueue__AddMessage_Real = s_start.Get();
@@ -146,4 +160,5 @@ static TiltedPhoques::Initializer s_s(
 
         // use 8 threads by default!
         // TiltedPhoques::Put<uint8_t>(0x141E45770, 8);
+#endif
     });

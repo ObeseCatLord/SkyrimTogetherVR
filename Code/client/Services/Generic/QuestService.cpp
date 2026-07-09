@@ -44,7 +44,7 @@ void QuestService::OnConnected(const ConnectedEvent&) noexcept
     /*
     // deselect any active quests
     auto* pPlayer = PlayerCharacter::Get();
-    for (auto& objective : pPlayer->objectives)
+    for (const auto& objective : pPlayer->GetObjectives())
     {
         if (auto* pQuest = objective.instance->quest)
             pQuest->SetActive(false);
@@ -63,24 +63,29 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
     {
         if (IsNonSyncableQuest(pQuest))
             return BSTEventResult::kOk;
+
+        const auto questType = pQuest->GetQuestTypeData();
+        const auto currentStage = pQuest->GetCurrentStageData();
      
-        if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
+        if (questType == TESQuest::Type::None || questType == TESQuest::Type::Miscellaneous)
         {
             // Perhaps redundant, but necessary. We need the logging and
             // the lambda coming up is queued and runs later
+            const auto questFormId = pQuest->GetFormIdData();
             GameId Id;
             auto& modSys = m_world.GetModSystem();
-            if (modSys.GetServerModId(pQuest->formID, Id))
+            if (modSys.GetServerModId(questFormId, Id))
             {
                 spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                             Id.LogFormat(),  pQuest->currentStage, pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started,
-                             static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type), 
-                             pQuest->formID, pQuest->fullName.value.AsAscii());
+                             Id.LogFormat(), currentStage, pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started,
+                             static_cast<std::underlying_type_t<TESQuest::Type>>(questType),
+                             questFormId, pQuest->GetFullNameData().GetFullNameStringData());
             }
         }
         
+        const auto questFormId = pQuest->GetFormIdData();
         m_world.GetRunner().Queue(
-            [&, formId = pQuest->formID, stageId = pQuest->currentStage, stopped = pQuest->IsStopped(), type = pQuest->type]()
+            [&, formId = questFormId, stageId = currentStage, stopped = pQuest->IsStopped(), type = questType]()
             {
                 GameId Id;
                 auto& modSys = m_world.GetModSystem();
@@ -113,24 +118,28 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
         if (IsNonSyncableQuest(pQuest))
             return BSTEventResult::kOk;
 
-        if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
+        const auto questType = pQuest->GetQuestTypeData();
+        const auto currentStage = pQuest->GetCurrentStageData();
+
+        if (questType == TESQuest::Type::None || questType == TESQuest::Type::Miscellaneous)
         {
             // Perhaps redundant, but necessary. We need the logging and
             // the lambda coming up is queued and runs later
+            const auto questFormId = pQuest->GetFormIdData();
             GameId Id;
             auto& modSys = m_world.GetModSystem();
-            if (modSys.GetServerModId(pQuest->formID, Id))
+            if (modSys.GetServerModId(questFormId, Id))
             {
                 spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                             Id.LogFormat(), pQuest->currentStage,
+                             Id.LogFormat(), currentStage,
                              RequestQuestUpdate::StageUpdate,
-                             static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type),
-                             pQuest->formID, pQuest->fullName.value.AsAscii());
+                             static_cast<std::underlying_type_t<TESQuest::Type>>(questType),
+                             questFormId, pQuest->GetFullNameData().GetFullNameStringData());
             }
         }
 
         m_world.GetRunner().Queue(
-            [&, formId = apEvent->formId, stageId = apEvent->stageId, type = pQuest->type]()
+            [&, formId = apEvent->formId, stageId = apEvent->stageId, type = questType]()
             {
                 GameId Id;
                 auto& modSys = m_world.GetModSystem();
@@ -161,11 +170,12 @@ void QuestService::OnQuestUpdate(const NotifyQuestUpdate& aUpdate) noexcept
         return;
     }
 
-    if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
+    const auto questType = pQuest->GetQuestTypeData();
+    if (questType == TESQuest::Type::None || questType == TESQuest::Type::Miscellaneous)
     {
         spdlog::info(__FUNCTION__ ": receiving type none/misc quest update gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
                      aUpdate.Id.LogFormat(), aUpdate.Stage, aUpdate.Status,
-                     aUpdate.ClientQuestType, formId, pQuest->fullName.value.AsAscii());
+                     aUpdate.ClientQuestType, formId, pQuest->GetFullNameData().GetFullNameStringData());
     }
 
     bool bResult = false;
@@ -222,12 +232,12 @@ bool QuestService::IsNonSyncableQuest(TESQuest* apQuest)
     // be synced, including Type::None and Type::Miscellaneous, but there are a few
     // known exceptions that should be excluded that are in the table.
     return    apQuest->stages.Empty() 
-           || std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
+           || std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->GetFormIdData()) != kNonSyncableQuestIds.end();
 }
 
 void QuestService::DebugDumpQuests()
 {
     auto& quests = ModManager::Get()->quests;
     for (TESQuest* pQuest : quests)
-        spdlog::info("{:X}|{}|{}|{}", pQuest->formID, (uint8_t)pQuest->type, pQuest->priority, pQuest->idName.AsAscii());
+        spdlog::info("{:X}|{}|{}|{}", pQuest->GetFormIdData(), static_cast<uint8_t>(pQuest->GetQuestTypeData()), pQuest->GetPriorityData(), pQuest->idName.AsAscii());
 }

@@ -1,5 +1,15 @@
 #pragma once
 
+#include <RuntimeLayout.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+struct TESForm;
+
 #pragma pack(push, 1)
 
 struct BGSSaveLoadManager
@@ -8,6 +18,33 @@ struct BGSSaveLoadManager
 
     struct SaveData
     {
+        [[nodiscard]] uint32_t GetFlagsData() const noexcept
+        {
+#if TP_SKYRIM_VR
+            return 0;
+#else
+            return flags;
+#endif
+        }
+
+        void SetFlagsData(uint32_t aFlags) noexcept
+        {
+#if TP_SKYRIM_VR
+            (void)aFlags;
+#else
+            flags = aFlags;
+#endif
+        }
+
+        [[nodiscard]] const char* GetSaveNameData() const noexcept
+        {
+#if TP_SKYRIM_VR
+            return nullptr;
+#else
+            return saveName;
+#endif
+        }
+
         void* unk0;           // maybe vtable
         uint32_t someCounter; // 0x8
         uint32_t unkC;
@@ -37,10 +74,89 @@ static_assert(offsetof(BGSSaveLoadManager::SaveData, someFunction) == 0x18);
 
 struct BGSSaveFormBuffer
 {
+    using CommonLibSaveGameBufferOffsets = Skyrim::RuntimeLayout::BGSSaveGameBufferCommonLibNgOffsets;
+    using LocalSaveGameBufferOffsets = Skyrim::RuntimeLayout::BGSSaveGameBufferLocalShimOffsets;
+    using CommonLibSaveFormBufferOffsets = Skyrim::RuntimeLayout::BGSSaveFormBufferCommonLibNgOffsets;
+    using LocalSaveFormBufferOffsets = Skyrim::RuntimeLayout::BGSSaveFormBufferLocalShimOffsets;
+
     BGSSaveFormBuffer();
     virtual ~BGSSaveFormBuffer() {}
 
     void WriteId(uint32_t aId) noexcept;
+
+    [[nodiscard]] char* GetBufferData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<char*>(this, CommonLibSaveGameBufferOffsets::Buffer);
+#else
+        return buffer;
+#endif
+    }
+
+    void SetBufferData(char* apBuffer) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<char*>(this, CommonLibSaveGameBufferOffsets::Buffer, apBuffer);
+#else
+        buffer = apBuffer;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetCapacityData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibSaveGameBufferOffsets::BufferSize);
+#else
+        return capacity;
+#endif
+    }
+
+    void SetCapacityData(uint32_t aCapacity) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibSaveGameBufferOffsets::BufferSize, aCapacity);
+#else
+        capacity = aCapacity;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetPositionData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibSaveGameBufferOffsets::BufferPosition);
+#else
+        return position;
+#endif
+    }
+
+    void SetPositionData(uint32_t aPosition) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibSaveGameBufferOffsets::BufferPosition, aPosition);
+#else
+        position = aPosition;
+#endif
+    }
+
+    void AdvancePositionData(uint32_t aDelta) noexcept { SetPositionData(GetPositionData() + aDelta); }
+
+    [[nodiscard]] uint32_t GetChangeFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::UnalignedValue<uint32_t>(this, CommonLibSaveFormBufferOffsets::ChangeFlags);
+#else
+        return changeFlags;
+#endif
+    }
+
+    void SetChangeFlagsData(uint32_t aChangeFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::UnalignedStore<uint32_t>(this, CommonLibSaveFormBufferOffsets::ChangeFlags, aChangeFlags);
+#else
+        changeFlags = aChangeFlags;
+#endif
+    }
 
     char* buffer;         // 4 - 8
     uint32_t capacity;    // 8 - 10
@@ -51,8 +167,11 @@ struct BGSSaveFormBuffer
     uint8_t pad[0x100]; // Ensure we have enough space as we don't know the exact size
 };
 
-static_assert(offsetof(BGSSaveFormBuffer, formId) == 0x18);
-static_assert(offsetof(BGSSaveFormBuffer, changeFlags) == 0x1B);
+static_assert(offsetof(BGSSaveFormBuffer, buffer) == BGSSaveFormBuffer::LocalSaveGameBufferOffsets::Buffer);
+static_assert(offsetof(BGSSaveFormBuffer, capacity) == BGSSaveFormBuffer::LocalSaveGameBufferOffsets::BufferSize);
+static_assert(offsetof(BGSSaveFormBuffer, position) == BGSSaveFormBuffer::LocalSaveGameBufferOffsets::BufferPosition);
+static_assert(offsetof(BGSSaveFormBuffer, formId) == BGSSaveFormBuffer::LocalSaveFormBufferOffsets::FormIdIndex);
+static_assert(offsetof(BGSSaveFormBuffer, changeFlags) == BGSSaveFormBuffer::LocalSaveFormBufferOffsets::ChangeFlags);
 
 struct BGSSaveLoadBuffer
 {
@@ -114,10 +233,125 @@ static_assert(sizeof(BGSSaveFormBufferReal) == 0x30);
 
 struct BGSLoadFormBuffer
 {
+    using CommonLibLoadGameBufferOffsets = Skyrim::RuntimeLayout::BGSLoadGameBufferCommonLibNgOffsets;
+    using LocalLoadGameBufferOffsets = Skyrim::RuntimeLayout::BGSLoadGameBufferLocalShimOffsets;
+    using CommonLibLoadFormBufferOffsets = Skyrim::RuntimeLayout::BGSLoadFormBufferCommonLibNgOffsets;
+    using LocalLoadFormBufferOffsets = Skyrim::RuntimeLayout::BGSLoadFormBufferLocalShimOffsets;
+
     BGSLoadFormBuffer(uint32_t aChangeFlags);
     virtual ~BGSLoadFormBuffer() {}
 
-    void SetSize(const uint32_t aSize) noexcept { capacity = size1 = size2 = aSize; }
+    void SetSize(const uint32_t aSize) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<std::size_t>(this, CommonLibLoadGameBufferOffsets::BufferSize, aSize);
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadGameBufferOffsets::DataSize, aSize);
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadFormBufferOffsets::DataSize, aSize);
+#else
+        capacity = size1 = size2 = aSize;
+#endif
+    }
+
+    [[nodiscard]] const char* GetBufferData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<const char*>(this, CommonLibLoadGameBufferOffsets::Buffer);
+#else
+        return buffer;
+#endif
+    }
+
+    void SetBufferData(const char* apBuffer) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<const char*>(this, CommonLibLoadGameBufferOffsets::Buffer, apBuffer);
+#else
+        buffer = apBuffer;
+#endif
+    }
+
+    [[nodiscard]] std::size_t GetCapacityData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<std::size_t>(this, CommonLibLoadGameBufferOffsets::BufferSize);
+#else
+        return capacity;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetPositionData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibLoadGameBufferOffsets::BufferPosition);
+#else
+        return position;
+#endif
+    }
+
+    void SetPositionData(uint32_t aPosition) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadGameBufferOffsets::BufferPosition, aPosition);
+#else
+        position = aPosition;
+#endif
+    }
+
+    void AdvancePositionData(uint32_t aDelta) noexcept { SetPositionData(GetPositionData() + aDelta); }
+
+    void SetFormIdData(uint32_t aFormId) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadFormBufferOffsets::FormId, aFormId);
+#else
+        formId = aFormId;
+#endif
+    }
+
+    void SetFormData(TESForm* apForm) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<TESForm*>(this, CommonLibLoadFormBufferOffsets::Form, apForm);
+#else
+        form = apForm;
+#endif
+    }
+
+    void SetChangeFlagsData(uint32_t aChangeFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadFormBufferOffsets::ChangeFlags, aChangeFlags);
+#else
+        changeFlags = aChangeFlags;
+#endif
+    }
+
+    void SetOldChangeFlagsData(uint32_t aChangeFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibLoadFormBufferOffsets::OldChangeFlags, aChangeFlags);
+#else
+        maybeMoreFlags = aChangeFlags;
+#endif
+    }
+
+    void SetLoadVersionData(uint8_t aVersion) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint8_t>(this, CommonLibLoadFormBufferOffsets::Version, aVersion);
+#else
+        loadFlag = aVersion;
+#endif
+    }
+
+    void SetUnk1CData(int32_t aValue) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<int32_t>(this, CommonLibLoadGameBufferOffsets::Unk1C, aValue);
+#else
+        unk1C = aValue;
+#endif
+    }
 
     const char* buffer;      // 8
     size_t capacity;         // 10
@@ -138,8 +372,17 @@ struct BGSLoadFormBuffer
     uint8_t loadFlag;
 };
 
-static_assert(offsetof(BGSLoadFormBuffer, changeFlags) == 0x40);
-static_assert(offsetof(BGSLoadFormBuffer, loadFlag) == 0x4B);
+static_assert(offsetof(BGSLoadFormBuffer, buffer) == BGSLoadFormBuffer::LocalLoadGameBufferOffsets::Buffer);
+static_assert(offsetof(BGSLoadFormBuffer, capacity) == BGSLoadFormBuffer::LocalLoadGameBufferOffsets::BufferSize);
+static_assert(offsetof(BGSLoadFormBuffer, unk1C) == BGSLoadFormBuffer::LocalLoadGameBufferOffsets::Unk1C);
+static_assert(offsetof(BGSLoadFormBuffer, size1) == BGSLoadFormBuffer::LocalLoadGameBufferOffsets::DataSize);
+static_assert(offsetof(BGSLoadFormBuffer, position) == BGSLoadFormBuffer::LocalLoadGameBufferOffsets::BufferPosition);
+static_assert(offsetof(BGSLoadFormBuffer, formId) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::FormId);
+static_assert(offsetof(BGSLoadFormBuffer, size2) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::DataSize);
+static_assert(offsetof(BGSLoadFormBuffer, form) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::Form);
+static_assert(offsetof(BGSLoadFormBuffer, changeFlags) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::ChangeFlags);
+static_assert(offsetof(BGSLoadFormBuffer, maybeMoreFlags) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::OldChangeFlags);
+static_assert(offsetof(BGSLoadFormBuffer, loadFlag) == BGSLoadFormBuffer::LocalLoadFormBufferOffsets::Version);
 
 // TODO: mostly copied from fallout 4, needs to be validated
 struct __declspec(align(8)) BGSSaveLoadScrapBuffer

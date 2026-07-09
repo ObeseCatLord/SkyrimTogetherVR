@@ -1,11 +1,19 @@
 #pragma once
 
 #include <Windows.h>
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <stdio.h>
+#include <string>
 
 #pragma comment(lib, "version.lib")
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 class VersionDb
 {
@@ -35,6 +43,144 @@ private:
     static unsigned long long FromPointer(void* ptr) { return (unsigned long long)ptr; }
 
     static bool ParseVersionFromString(const char* ptr, int& major, int& minor, int& revision, int& build) { return sscanf_s(ptr, "%d.%d.%d.%d", &major, &minor, &revision, &build) == 4 && ((major != 1 && major != 0) || minor != 0 || revision != 0 || build != 0); }
+
+    static void StripBomAndLineEnding(std::string& line)
+    {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+
+        if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF && static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF)
+            line.erase(0, 3);
+    }
+
+    static std::string TrimCsvField(std::string value)
+    {
+        const auto first = value.find_first_not_of(" \t\r\n\"");
+        if (first == std::string::npos)
+            return {};
+
+        const auto last = value.find_last_not_of(" \t\r\n\"");
+        return value.substr(first, last - first + 1);
+    }
+
+    static bool SplitFirstTwoCsvFields(const std::string& line, std::string& first, std::string& second)
+    {
+        const auto firstComma = line.find(',');
+        if (firstComma == std::string::npos)
+            return false;
+
+        const auto secondComma = line.find(',', firstComma + 1);
+        first = TrimCsvField(line.substr(0, firstComma));
+        second = TrimCsvField(secondComma == std::string::npos ? line.substr(firstComma + 1) : line.substr(firstComma + 1, secondComma - firstComma - 1));
+        return !first.empty() && !second.empty();
+    }
+
+    static bool ParseUnsigned(const std::string& value, int base, unsigned long long& result)
+    {
+        if (value.empty())
+            return false;
+
+        char* end = nullptr;
+        result = std::strtoull(value.c_str(), &end, base);
+        return end != value.c_str() && end && *end == '\0';
+    }
+
+    bool LoadCsvOffsetFile(const std::filesystem::path& path)
+    {
+        std::ifstream file(path);
+        if (!file.good())
+            return false;
+
+        std::string line;
+        bool loadedAny = false;
+        while (std::getline(file, line))
+        {
+            StripBomAndLineEnding(line);
+            if (line.empty())
+                continue;
+
+            std::string idField;
+            std::string offsetField;
+            if (!SplitFirstTwoCsvFields(line, idField, offsetField))
+                continue;
+
+            unsigned long long id = 0;
+            unsigned long long offset = 0;
+            if (!ParseUnsigned(idField, 10, id) || !ParseUnsigned(offsetField, 16, offset))
+                continue;
+
+            _data[id] = offset;
+            _rdata[offset] = id;
+            loadedAny = true;
+        }
+
+        return loadedAny;
+    }
+
+#if TP_SKYRIM_VR
+    void ApplyIdAliasFile(const std::filesystem::path& path)
+    {
+        std::ifstream file(path);
+        if (!file.good())
+            return;
+
+        std::string line;
+        while (std::getline(file, line))
+        {
+            StripBomAndLineEnding(line);
+            if (line.empty())
+                continue;
+
+            std::string seIdField;
+            std::string aeIdField;
+            if (!SplitFirstTwoCsvFields(line, seIdField, aeIdField))
+                continue;
+
+            unsigned long long seId = 0;
+            unsigned long long aeId = 0;
+            if (!ParseUnsigned(seIdField, 10, seId) || !ParseUnsigned(aeIdField, 10, aeId))
+                continue;
+
+            const auto mapped = _data.find(seId);
+            if (mapped != _data.end() && _data.find(aeId) == _data.end())
+            {
+                _data[aeId] = mapped->second;
+            }
+        }
+    }
+
+    bool LoadVrCsvAddressLibrary(const std::filesystem::path& acGamePath, int major, int minor, int revision, int build)
+    {
+        char fileName[256];
+        _snprintf_s(fileName, 256, "version-%d-%d-%d-%d.csv", major, minor, revision, build);
+
+        const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
+        if (!LoadCsvOffsetFile(pluginPath / fileName))
+            return false;
+
+        for (int i = 0; i < 4; i++)
+            _ver[i] = 0;
+
+        _ver[0] = major;
+        _ver[1] = minor;
+        _ver[2] = revision;
+        _ver[3] = build;
+
+        {
+            char verName[64];
+            _snprintf_s(verName, 64, "%d.%d.%d.%d", _ver[0], _ver[1], _ver[2], _ver[3]);
+            _verStr = verName;
+        }
+
+        _moduleName = "SkyrimVR.exe";
+        _base = reinterpret_cast<unsigned long long>(GetModuleHandleA(NULL));
+
+        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv");
+        ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
+
+        return !_data.empty();
+    }
+#endif
 
 public:
     const std::string& GetModuleName() const { return _moduleName; }
@@ -149,6 +295,7 @@ public:
         _rdata.clear();
         for (int i = 0; i < 4; i++)
             _ver[i] = 0;
+        _verStr = std::string();
         _moduleName = std::string();
         _base = 0;
     }
@@ -174,7 +321,13 @@ public:
 
         std::ifstream file(acGamePath / "Data" / "SKSE" / "Plugins" / fileName, std::ios::binary);
         if (!file.good())
+        {
+#if TP_SKYRIM_VR
+            return LoadVrCsvAddressLibrary(acGamePath, major, minor, revision, build);
+#else
             return false;
+#endif
+        }
 
         int format = read<int>(file);
 

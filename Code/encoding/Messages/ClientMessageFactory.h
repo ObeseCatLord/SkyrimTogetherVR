@@ -56,6 +56,15 @@
 #include <Messages/RequestCurrentWeather.h>
 #include <Messages/RequestSetWaypoint.h>
 #include <Messages/RequestRemoveWaypoint.h>
+#include <Messages/RequestVRPoseUpdate.h>
+#include <Messages/RequestVRMovementUpdate.h>
+#include <Messages/RequestVREquipmentUpdate.h>
+#include <Messages/RequestVRActivationEvent.h>
+#include <Messages/RequestVRMagicEffectEvent.h>
+#include <Messages/RequestVRCombatHitEvent.h>
+#include <Messages/RequestVRProjectileEvent.h>
+#include <Messages/RequestVRGrabEvent.h>
+#include <Messages/RequestVRHiggsState.h>
 
 using TiltedPhoques::UniquePtr;
 
@@ -70,7 +79,8 @@ struct ClientMessageFactory
             PartyChangeLeaderRequest, PartyKickRequest, RequestActorValueChanges, RequestActorMaxValueChanges, EnterExteriorCellRequest, RequestHealthChangeBroadcast, ActivateRequest, LockChangeRequest, AssignObjectsRequest, RequestDeathStateChange, ShiftGridCellRequest,
             RequestOwnershipTransfer, RequestOwnershipClaim, RequestObjectInventoryChanges, SpellCastRequest, ProjectileLaunchRequest, InterruptCastRequest, AddTargetRequest, ScriptAnimationRequest, DrawWeaponRequest, MountRequest, NewPackageRequest, RequestRespawn, SyncExperienceRequest,
             RequestEquipmentChanges, SendChatMessageRequest, TeleportCommandRequest, PlayerRespawnRequest, DialogueRequest, SubtitleRequest, PlayerDialogueRequest, PlayerLevelRequest, TeleportRequest, RequestPlayerHealthUpdate, RequestWeatherChange, RequestCurrentWeather, RequestSetWaypoint,
-            RequestRemoveWaypoint, RemoveSpellRequest, SetTimeCommandRequest>;
+            RequestRemoveWaypoint, RemoveSpellRequest, SetTimeCommandRequest, RequestVRPoseUpdate, RequestVRMovementUpdate, RequestVREquipmentUpdate, RequestVRActivationEvent, RequestVRMagicEffectEvent, RequestVRCombatHitEvent, RequestVRProjectileEvent, RequestVRGrabEvent,
+            RequestVRHiggsState>;
 
         return s_visitor(std::forward<T>(func));
     }

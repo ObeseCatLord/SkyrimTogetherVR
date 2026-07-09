@@ -206,7 +206,7 @@ void InventoryService::OnNotifyEquipmentChanges(const NotifyEquipmentChanges& ac
     {
         // Unequip all armor first, since the game won't auto unequip armor
         Inventory wornArmor{};
-        if (pItem->formType == FormType::Armor)
+        if (pItem->GetFormTypeData() == FormType::Armor)
         {
             wornArmor = pActor->GetWornArmor();
             for (const auto& armor : wornArmor.Entries)
@@ -252,7 +252,7 @@ void InventoryService::RunWeaponStateUpdates() noexcept
         Actor* const pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
         auto& localComponent = view.get<LocalComponent>(entity);
 
-        bool isWeaponDrawn = pActor->actorState.IsWeaponDrawn();
+        bool isWeaponDrawn = pActor->GetActorStateData().IsWeaponDrawn();
         if (isWeaponDrawn != localComponent.IsWeaponDrawn)
         {
             localComponent.IsWeaponDrawn = isWeaponDrawn;

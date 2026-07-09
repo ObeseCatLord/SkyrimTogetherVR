@@ -15,7 +15,8 @@ void DebugService::DrawWeatherView()
     TESWeather* pCurrentWeather = pSky->GetWeather();
     if (pCurrentWeather)
     {
-        ImGui::InputScalar("Current weather ID", ImGuiDataType_U32, &pCurrentWeather->formID, 0, 0, "%" PRIx32, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
+        uint32_t currentWeatherId = pCurrentWeather->GetFormIdData();
+        ImGui::InputScalar("Current weather ID", ImGuiDataType_U32, &currentWeatherId, 0, 0, "%" PRIx32, ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_ReadOnly);
     }
 
     ImGui::Separator();

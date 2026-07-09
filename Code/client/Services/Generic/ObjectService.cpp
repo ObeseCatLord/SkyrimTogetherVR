@@ -38,17 +38,20 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_scriptAnimationConnection = aDispatcher.sink<ScriptAnimationEvent>().connect<&ObjectService::OnScriptAnimationEvent>(this);
     m_scriptAnimationNotifyConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&ObjectService::OnNotifyScriptAnimation>(this);
 
-    EventDispatcherManager::Get()->activateEvent.RegisterSink(this);
+    if (auto* pEventDispatcherManager = EventDispatcherManager::Get())
+        pEventDispatcherManager->GetActivateEventData().RegisterSink(this);
 }
 
 bool IsPlayerHome(const TESObjectCELL* pCell) noexcept
 {
-    if (pCell && pCell->loadedCellData && pCell->loadedCellData->encounterZone)
+    const auto* pLoadedCellData = pCell ? pCell->GetLoadedCellData() : nullptr;
+    const auto* pEncounterZone = pLoadedCellData ? pLoadedCellData->GetEncounterZoneData() : nullptr;
+    if (pEncounterZone)
     {
         // Only return true if cell has the NoResetZone encounter zone
-        if (pCell->loadedCellData->encounterZone->formID == 0xf90b1)
+        if (pEncounterZone->GetFormIdData() == 0xf90b1)
         {
-            switch (pCell->formID)
+            switch (pCell->GetFormIdData())
             {
             case 0xeec55: // one known exception: Sinderion's Field Lab
                 return false;
@@ -65,14 +68,13 @@ bool ShouldSyncObject(const TESObjectREFR* apObject) noexcept
     if (!apObject)
         return false;
 
-    switch (apObject->formID)
+    switch (apObject->GetFormIdData())
     {
     case 0x39CF1: // Don't sync the chest in the "Diplomatic Immunity" quest
         return false;
     case 0x3EF03: // ...as well as in the "No One Escapes Cidhna Mine" quest
         return false;
-    default:
-        return true;
+    default: return true;
     }
 }
 
@@ -87,7 +89,9 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
         return;
 
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
-    TESObjectCELL* pCell = pPlayer->parentCell;
+    TESObjectCELL* pCell = pPlayer ? pPlayer->GetParentCellData() : nullptr;
+    if (!pCell)
+        return;
 
     // Player homes should not be synced, so that chest contents,
     // which are often used as storage, are never accidentally wiped.
@@ -95,18 +99,18 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
         return;
 
     GameId cellId{};
-    if (!m_world.GetModSystem().GetServerModId(pCell->formID, cellId))
+    if (!m_world.GetModSystem().GetServerModId(pCell->GetFormIdData(), cellId))
     {
-        spdlog::error("Server cell id not found for cell form id {:X}", pCell->formID);
+        spdlog::error("Server cell id not found for cell form id {:X}", pCell->GetFormIdData());
         return;
     }
 
     GameId worldSpaceId{};
     if (TESWorldSpace* pWorldSpace = pPlayer->GetWorldSpace())
     {
-        if (!m_world.GetModSystem().GetServerModId(pWorldSpace->formID, worldSpaceId))
+        if (!m_world.GetModSystem().GetServerModId(pWorldSpace->GetFormIdData(), worldSpaceId))
         {
-            spdlog::error("Server world space id not found for world space form id {:X}", pWorldSpace->formID);
+            spdlog::error("Server world space id not found for world space form id {:X}", pWorldSpace->GetFormIdData());
             return;
         }
     }
@@ -121,28 +125,30 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     {
         if (!ShouldSyncObject(pObject))
         {
-            spdlog::warn("Excluding sync for {:X}", pObject->formID);
+            spdlog::warn("Excluding sync for {:X}", pObject->GetFormIdData());
             continue;
         }
 
         ObjectData objectData{};
         objectData.CellId = cellId;
         objectData.WorldSpaceId = worldSpaceId;
-        objectData.CurrentCoords = GridCellCoords::CalculateGridCellCoords(pObject->position.x, pObject->position.y);
+        const auto& position = pObject->GetPositionData();
+        objectData.CurrentCoords = GridCellCoords::CalculateGridCellCoords(position.x, position.y);
 
-        if (!m_world.GetModSystem().GetServerModId(pObject->formID, objectData.Id))
+        if (!m_world.GetModSystem().GetServerModId(pObject->GetFormIdData(), objectData.Id))
         {
-            spdlog::error("Server form id not found for object with form id {:X}", pObject->formID);
+            spdlog::error("Server form id not found for object with form id {:X}", pObject->GetFormIdData());
             continue;
         }
 
         if (Lock* pLock = pObject->GetLock())
         {
             objectData.CurrentLockData.IsLocked = pLock->IsLocked();
-            objectData.CurrentLockData.LockLevel = pLock->lockLevel;
+            objectData.CurrentLockData.LockLevel = pLock->GetLockLevelData();
         }
 
-        if (pObject->baseForm->formType == FormType::Container)
+        const auto* pBaseForm = pObject->GetBaseFormData();
+        if (pBaseForm && pBaseForm->GetFormTypeData() == FormType::Container)
             objectData.CurrentInventory = pObject->GetInventory();
 
         request.Objects.push_back(objectData);
@@ -163,7 +169,7 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
             continue;
         }
 
-        CreateObjectEntity(pObject->formID, objectData.ServerId);
+        CreateObjectEntity(pObject->GetFormIdData(), objectData.ServerId);
 
         if (objectData.IsSenderFirst)
             continue;
@@ -179,12 +185,13 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
                     continue;
             }
 
-            pLock->lockLevel = objectData.CurrentLockData.LockLevel;
+            pLock->SetLockLevelData(objectData.CurrentLockData.LockLevel);
             pLock->SetLock(objectData.CurrentLockData.IsLocked);
             pObject->LockChange();
         }
 
-        if (pObject->baseForm->formType == FormType::Container)
+        const auto* pBaseForm = pObject->GetBaseFormData();
+        if (pBaseForm && pBaseForm->GetFormTypeData() == FormType::Container)
         {
             Inventory currentInventory = pObject->GetInventory();
 
@@ -226,37 +233,38 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
     if (Lock* pLock = acEvent.pObject->GetLock())
     {
-        if (pLock->flags & 0xFF)
+        if (pLock->GetFlagsData() & 0xFF)
             return;
     }
 
     ActivateRequest request;
 
-    if (!m_world.GetModSystem().GetServerModId(acEvent.pObject->formID, request.Id))
+    if (!m_world.GetModSystem().GetServerModId(acEvent.pObject->GetFormIdData(), request.Id))
     {
-        spdlog::error("Server form id not found for object form id {:X}", acEvent.pObject->formID);
+        spdlog::error("Server form id not found for object form id {:X}", acEvent.pObject->GetFormIdData());
         return;
     }
 
     TESObjectCELL* pCell = acEvent.pObject->GetParentCellEx();
     if (!pCell)
     {
-        spdlog::error("Activated object has no parent cell: {:X}", acEvent.pObject->formID);
+        spdlog::error("Activated object has no parent cell: {:X}", acEvent.pObject->GetFormIdData());
         return;
     }
 
-    if (!m_world.GetModSystem().GetServerModId(pCell->formID, request.CellId))
+    if (!m_world.GetModSystem().GetServerModId(pCell->GetFormIdData(), request.CellId))
     {
-        spdlog::error("Server cell id not found for cell form id {:X}", acEvent.pObject->parentCell->formID);
+        spdlog::error("Server cell id not found for cell form id {:X}", pCell->GetFormIdData());
         return;
     }
 
     auto view = m_world.view<FormIdComponent>();
-    const auto pEntity = std::find_if(std::begin(view), std::end(view), [id = acEvent.pActivator->formID, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
+    const auto pEntity =
+        std::find_if(std::begin(view), std::end(view), [id = acEvent.pActivator->GetFormIdData(), view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
 
     if (pEntity == std::end(view))
     {
-        // spdlog::error("Activator entity not found for form id {:X}", acEvent.pActivator->formID);
+        // spdlog::error("Activator entity not found for form id {:X}", acEvent.pActivator->GetFormIdData());
         return;
     }
 
@@ -287,7 +295,8 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
         return;
     }
 
-    if (pObject->baseForm->formType == FormType::Door)
+    const auto* pBaseForm = pObject->GetBaseFormData();
+    if (pBaseForm && pBaseForm->GetFormTypeData() == FormType::Door)
     {
         auto remotePreActivationState = static_cast<TESObjectREFR::OpenState>(acMessage.PreActivationOpenState);
         TESObjectREFR::OpenState localState = pObject->GetOpenState();
@@ -323,13 +332,13 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
     TESObjectCELL* pCell = pObject->GetParentCellEx();
     if (!pCell)
     {
-        spdlog::error("Activated object has no parent cell: {:X}", pObject->formID);
+        spdlog::error("Activated object has no parent cell: {:X}", pObject->GetFormIdData());
         return;
     }
 
-    if (!m_world.GetModSystem().GetServerModId(pCell->formID, request.CellId))
+    if (!m_world.GetModSystem().GetServerModId(pCell->GetFormIdData(), request.CellId))
     {
-        spdlog::error("Server cell id for cell not found, cell form id: {:X}", pObject->parentCell->formID);
+        spdlog::error("Server cell id for cell not found, cell form id: {:X}", pCell->GetFormIdData());
         return;
     }
 
@@ -357,7 +366,7 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
 
     auto* pLock = pObject->GetLock();
 
-    if(!acMessage.IsLocked)
+    if (!acMessage.IsLocked)
     {
         if (!pLock || !pLock->IsLocked())
             return;
@@ -368,12 +377,12 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
         pLock = pObject->CreateLock();
         if (!pLock)
         {
-            spdlog::error("Failed to create lock for object form id {:X}", pObject->formID);
+            spdlog::error("Failed to create lock for object form id {:X}", pObject->GetFormIdData());
             return;
         }
     }
 
-    pLock->lockLevel = acMessage.LockLevel;
+    pLock->SetLockLevelData(acMessage.LockLevel);
     pLock->SetLock(acMessage.IsLocked);
     pObject->LockChange();
 }
@@ -418,12 +427,16 @@ BSTEventResult ObjectService::OnEvent(const TESActivateEvent* acEvent, const Eve
 {
 #if ENVIRONMENT_DEBUG
     auto view = m_world.view<ObjectComponent>();
+    auto* pActivatedObject = acEvent ? acEvent->GetObjectActivatedData() : nullptr;
+    if (!pActivatedObject)
+        return BSTEventResult::kOk;
 
-    const auto itor = std::find_if(std::begin(view), std::end(view), [id = acEvent->object->formID, view](entt::entity entity) { return view.get<ObjectComponent>(entity).Id == id; });
+    const auto itor =
+        std::find_if(std::begin(view), std::end(view), [id = pActivatedObject->GetFormIdData(), view](entt::entity entity) { return view.get<ObjectComponent>(entity).Id == id; });
 
     if (itor == std::end(view))
     {
-        AddObjectComponent(acEvent->object);
+        AddObjectComponent(pActivatedObject);
     }
 #endif
 

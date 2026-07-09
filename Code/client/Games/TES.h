@@ -1,5 +1,15 @@
 #pragma once
 
+#include <Games/Primitives.h>
+#include <NetImmerse/NiPointer.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
 struct NEW_REFR_DATA;
 struct TESObjectCELL;
 struct TESWorldSpace;
@@ -31,7 +41,100 @@ static_assert(offsetof(GridCellArray, arr) == 0x18);
 
 struct TES
 {
+    using CommonLibTESOffsets = Skyrim::RuntimeLayout::TESCommonLibNgOffsets;
+    using LocalTESOffsets = Skyrim::RuntimeLayout::TESLocalShimOffsets;
+
     static TES* Get() noexcept;
+
+    [[nodiscard]] GridCellArray* GetGridCellsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<GridCellArray*>(this, CommonLibTESOffsets::GridCells);
+#else
+        return cells;
+#endif
+    }
+
+    [[nodiscard]] int32_t GetCenterGridXData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<int32_t>(this, CommonLibTESOffsets::CenterGridX);
+#else
+        return centerGridX;
+#endif
+    }
+
+    [[nodiscard]] int32_t GetCenterGridYData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<int32_t>(this, CommonLibTESOffsets::CenterGridY);
+#else
+        return centerGridY;
+#endif
+    }
+
+    [[nodiscard]] int32_t GetCurrentGridXData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<int32_t>(this, CommonLibTESOffsets::CurrentGridX);
+#else
+        return currentGridX;
+#endif
+    }
+
+    [[nodiscard]] int32_t GetCurrentGridYData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<int32_t>(this, CommonLibTESOffsets::CurrentGridY);
+#else
+        return currentGridY;
+#endif
+    }
+
+    [[nodiscard]] TESObjectCELL* GetInteriorCellData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESObjectCELL*>(this, CommonLibTESOffsets::InteriorCell);
+#else
+        return interiorCell;
+#endif
+    }
+
+    [[nodiscard]] TESObjectCELL** GetInteriorBufferData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESObjectCELL**>(this, CommonLibTESOffsets::InteriorBuffer);
+#else
+        return interiorBuffer;
+#endif
+    }
+
+    [[nodiscard]] TESObjectCELL** GetExteriorBufferData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESObjectCELL**>(this, CommonLibTESOffsets::ExteriorBuffer);
+#else
+        return exteriorBuffer;
+#endif
+    }
+
+    [[nodiscard]] GameValueList<NiPointer<ImageSpaceModifierInstance>>& GetActiveImageSpaceModifiersData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameValueList<NiPointer<ImageSpaceModifierInstance>>>(this, CommonLibTESOffsets::ActiveImageSpaceModifiers);
+#else
+        return activeImageSpaceModifiers;
+#endif
+    }
+
+    [[nodiscard]] const GameValueList<NiPointer<ImageSpaceModifierInstance>>& GetActiveImageSpaceModifiersData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameValueList<NiPointer<ImageSpaceModifierInstance>>>(this, CommonLibTESOffsets::ActiveImageSpaceModifiers);
+#else
+        return activeImageSpaceModifiers;
+#endif
+    }
 
     uint8_t pad[0x78];
     GridCellArray* cells;
@@ -48,10 +151,15 @@ struct TES
     GameValueList<NiPointer<ImageSpaceModifierInstance>> activeImageSpaceModifiers;
 };
 
-static_assert(offsetof(TES, cells) == 0x78);
-static_assert(offsetof(TES, interiorCell) == 0xC0);
-static_assert(offsetof(TES, exteriorBuffer) == 0xD0);
-static_assert(offsetof(TES, activeImageSpaceModifiers) == 0x108);
+static_assert(offsetof(TES, cells) == TES::LocalTESOffsets::GridCells);
+static_assert(offsetof(TES, centerGridX) == TES::LocalTESOffsets::CenterGridX);
+static_assert(offsetof(TES, centerGridY) == TES::LocalTESOffsets::CenterGridY);
+static_assert(offsetof(TES, currentGridX) == TES::LocalTESOffsets::CurrentGridX);
+static_assert(offsetof(TES, currentGridY) == TES::LocalTESOffsets::CurrentGridY);
+static_assert(offsetof(TES, interiorCell) == TES::LocalTESOffsets::InteriorCell);
+static_assert(offsetof(TES, interiorBuffer) == TES::LocalTESOffsets::InteriorBuffer);
+static_assert(offsetof(TES, exteriorBuffer) == TES::LocalTESOffsets::ExteriorBuffer);
+static_assert(offsetof(TES, activeImageSpaceModifiers) == TES::LocalTESOffsets::ActiveImageSpaceModifiers);
 
 struct ProcessLists
 {

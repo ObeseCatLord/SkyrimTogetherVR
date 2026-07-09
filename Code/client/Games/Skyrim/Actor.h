@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstdint>
+
 #include <Games/Events.h>
 #include <TESObjectREFR.h>
+#include <RuntimeLayout.h>
 
 #include <Magic/MagicTarget.h>
 #include <Forms/TESActorBase.h>
@@ -25,6 +28,9 @@ struct TESIdleForm;
 
 struct Actor : TESObjectREFR
 {
+    using CommonLibActorOffsets = Skyrim::RuntimeLayout::ActorCommonLibNgOffsets;
+    using LocalActorOffsets = Skyrim::RuntimeLayout::ActorLocalShimOffsets;
+
     static constexpr FormType Type = FormType::Character;
 
     // Allocs and calls constructor
@@ -188,6 +194,171 @@ struct Actor : TESObjectREFR
     float GetSpeed() noexcept;
     TESForm* GetEquippedWeapon(uint32_t aSlotId) const noexcept;
     TESForm* GetEquippedAmmo() const noexcept;
+    [[nodiscard]] const MagicTarget& GetMagicTargetData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<MagicTarget>(this, CommonLibActorOffsets::MagicTarget);
+#else
+        return magicTarget;
+#endif
+    }
+
+    [[nodiscard]] MagicTarget& GetMagicTargetData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<MagicTarget>(this, CommonLibActorOffsets::MagicTarget);
+#else
+        return magicTarget;
+#endif
+    }
+
+    [[nodiscard]] const ActorValueOwner& GetActorValueOwnerData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueOwner>(this, CommonLibActorOffsets::ActorValueOwner);
+#else
+        return actorValueOwner;
+#endif
+    }
+
+    [[nodiscard]] ActorValueOwner& GetActorValueOwnerData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueOwner>(this, CommonLibActorOffsets::ActorValueOwner);
+#else
+        return actorValueOwner;
+#endif
+    }
+
+    [[nodiscard]] const ActorState& GetActorStateData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorState>(this, CommonLibActorOffsets::ActorState);
+#else
+        return actorState;
+#endif
+    }
+
+    [[nodiscard]] ActorState& GetActorStateData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorState>(this, CommonLibActorOffsets::ActorState);
+#else
+        return actorState;
+#endif
+    }
+
+    [[nodiscard]] AIProcess* GetCurrentProcessData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<AIProcess*>(this, CommonLibActorOffsets::CurrentProcess);
+#else
+        return currentProcess;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetBoolBitsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibActorOffsets::BoolBits);
+#else
+        return flags1;
+#endif
+    }
+
+    [[nodiscard]] CombatController* GetCombatControllerData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<CombatController*>(this, CommonLibActorOffsets::CombatController);
+#else
+        return pCombatController;
+#endif
+    }
+
+    [[nodiscard]] ActorMagicCaster* GetCachedMagicCasterData(uint32_t aSlotId) const noexcept
+    {
+        if (aSlotId >= 4)
+            return nullptr;
+
+#if TP_SKYRIM_VR
+        const auto* pMagicCasters = Skyrim::RuntimeLayout::Ptr<ActorMagicCaster*>(this, CommonLibActorOffsets::MagicCasters);
+        return pMagicCasters[aSlotId];
+#else
+        return casters[aSlotId];
+#endif
+    }
+
+    void SetCachedMagicCasterData(uint32_t aSlotId, ActorMagicCaster* apCaster) noexcept
+    {
+        if (aSlotId >= 4)
+            return;
+
+#if TP_SKYRIM_VR
+        auto* pMagicCasters = Skyrim::RuntimeLayout::Ptr<ActorMagicCaster*>(this, CommonLibActorOffsets::MagicCasters);
+        pMagicCasters[aSlotId] = apCaster;
+#else
+        casters[aSlotId] = apCaster;
+#endif
+    }
+
+    [[nodiscard]] MagicItem* GetSelectedSpellData(uint32_t aSlotId) const noexcept
+    {
+        if (aSlotId >= 4)
+            return nullptr;
+
+#if TP_SKYRIM_VR
+        const auto* pSelectedSpells = Skyrim::RuntimeLayout::Ptr<MagicItem*>(this, CommonLibActorOffsets::SelectedSpells);
+        return pSelectedSpells[aSlotId];
+#else
+        return magicItems[aSlotId];
+#endif
+    }
+
+    [[nodiscard]] TESForm* GetSelectedPowerOrShoutData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESForm*>(this, CommonLibActorOffsets::SelectedPower);
+#else
+        return equippedShout;
+#endif
+    }
+
+    void SetSelectedPowerOrShoutData(TESForm* apPowerOrShout) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<TESForm*>(this, CommonLibActorOffsets::SelectedPower, apPowerOrShout);
+#else
+        equippedShout = apPowerOrShout;
+#endif
+    }
+
+    [[nodiscard]] TESRace* GetRaceData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<TESRace*>(this, CommonLibActorOffsets::Race);
+#else
+        return race;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetBoolFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibActorOffsets::BoolFlags);
+#else
+        return flags2;
+#endif
+    }
+
+    void SetBoolFlagsData(uint32_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibActorOffsets::BoolFlags, aFlags);
+#else
+        flags2 = aFlags;
+#endif
+    }
+
     Actor* GetCommandingActor() const noexcept;
     // in reality this is a BGSLocation
     TESForm* GetCurrentLocation();
@@ -259,18 +430,21 @@ struct Actor : TESObjectREFR
         IS_ESSENTIAL = 1 << 18,
     };
 
-    bool IsMount() const noexcept { return flags2 & ActorFlags::IS_A_MOUNT; }
+    bool IsMount() const noexcept { return GetBoolFlagsData() & ActorFlags::IS_A_MOUNT; }
 
-    bool IsEssential() const noexcept { return flags2 & ActorFlags::IS_ESSENTIAL; }
+    bool IsEssential() const noexcept { return GetBoolFlagsData() & ActorFlags::IS_ESSENTIAL; }
     void SetEssential(bool aSetEssential) noexcept
     {
+        auto flags = GetBoolFlagsData();
         if (aSetEssential)
-            flags2 |= ActorFlags::IS_ESSENTIAL;
+            flags |= ActorFlags::IS_ESSENTIAL;
         else
-            flags2 &= ~ActorFlags::IS_ESSENTIAL;
+            flags &= ~ActorFlags::IS_ESSENTIAL;
+
+        SetBoolFlagsData(flags);
     }
 
-    bool IsCommandedActor() const noexcept { return flags2 & ActorFlags::IS_COMMANDED_ACTOR; }
+    bool IsCommandedActor() const noexcept { return GetBoolFlagsData() & ActorFlags::IS_COMMANDED_ACTOR; }
 
 public:
     enum ChangeFlags : uint32_t
@@ -293,6 +467,47 @@ public:
         float temporaryModifier;
         float damageModifier;
     };
+
+    [[nodiscard]] const ActorValueModifiers& GetHealthModifiersData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueModifiers>(this, CommonLibActorOffsets::HealthModifiers);
+#else
+        return healthModifiers;
+#endif
+    }
+
+    [[nodiscard]] const ActorValueModifiers& GetMagickaModifiersData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueModifiers>(this, CommonLibActorOffsets::MagickaModifiers);
+#else
+        return magickaModifiers;
+#endif
+    }
+
+    [[nodiscard]] const ActorValueModifiers& GetStaminaModifiersData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueModifiers>(this, CommonLibActorOffsets::StaminaModifiers);
+#else
+        return staminaModifiers;
+#endif
+    }
+
+    [[nodiscard]] const ActorValueModifiers& GetVoiceModifiersData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<ActorValueModifiers>(this, CommonLibActorOffsets::VoiceModifiers);
+#else
+        return voiceModifiers;
+#endif
+    }
+
+    [[nodiscard]] float GetTemporaryHealthModifierData() const noexcept
+    {
+        return GetHealthModifiersData().temporaryModifier;
+    }
 
     struct SpellItemEntry
     {
@@ -365,18 +580,26 @@ public:
     // void Save_Reversed(uint32_t aChangeFlags, Buffer::Writer& aWriter);
 };
 
-static_assert(offsetof(Actor, currentProcess) == 0xF8);
-static_assert(offsetof(Actor, flags1) == 0xE8);
-static_assert(offsetof(Actor, actorValueOwner) == 0xB8);
-static_assert(offsetof(Actor, actorState) == 0xC0);
-static_assert(offsetof(Actor, flags2) == 0x204);
+static_assert(offsetof(Actor, magicTarget) == Actor::LocalActorOffsets::MagicTarget);
+static_assert(offsetof(Actor, actorValueOwner) == Actor::LocalActorOffsets::ActorValueOwner);
+static_assert(offsetof(Actor, actorState) == Actor::LocalActorOffsets::ActorState);
+static_assert(offsetof(Actor, flags1) == Actor::LocalActorOffsets::BoolBits);
+static_assert(offsetof(Actor, currentProcess) == Actor::LocalActorOffsets::CurrentProcess);
+static_assert(offsetof(Actor, flags2) == Actor::LocalActorOffsets::BoolFlags);
 static_assert(offsetof(Actor, unk194) == 0x278);
 static_assert(offsetof(Actor, fVoiceTimer) == 0x110);
 static_assert(offsetof(Actor, unk84) == 0xF0);
 static_assert(offsetof(Actor, unk17C) == 0x184);
-static_assert(offsetof(Actor, pCombatController) == 0x160);
-static_assert(offsetof(Actor, magicItems) == 0x1C8);
-static_assert(offsetof(Actor, equippedShout) == 0x1E8);
+static_assert(offsetof(Actor, pCombatController) == Actor::LocalActorOffsets::CombatController);
+static_assert(offsetof(Actor, casters) == Actor::LocalActorOffsets::MagicCasters);
+static_assert(offsetof(Actor, magicItems) == Actor::LocalActorOffsets::SelectedSpells);
+static_assert(offsetof(Actor, equippedShout) == Actor::LocalActorOffsets::SelectedPower);
+static_assert(offsetof(Actor, race) == Actor::LocalActorOffsets::Race);
+static_assert(offsetof(Actor, healthModifiers) == Actor::LocalActorOffsets::HealthModifiers);
+static_assert(offsetof(Actor, staminaModifiers) == Actor::LocalActorOffsets::StaminaModifiers);
+static_assert(offsetof(Actor, magickaModifiers) == Actor::LocalActorOffsets::MagickaModifiers);
+static_assert(offsetof(Actor, voiceModifiers) == Actor::LocalActorOffsets::VoiceModifiers);
 static_assert(offsetof(Actor, actorLock) == 0x284);
 static_assert(sizeof(Actor) == 0x2B8);
 static_assert(sizeof(Actor::SpellItemEntry) == 0x18);
+static_assert(sizeof(Actor::ActorValueModifiers) == 0xC);

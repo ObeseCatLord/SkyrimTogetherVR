@@ -10,6 +10,10 @@
 #include <Games/ActorExtension.h>
 #include <Games/PapyrusFunctions.h>
 
+#include <spdlog/spdlog.h>
+
+#include <mutex>
+
 TP_THIS_FUNCTION(TRegisterPapyrusFunction, void, BSScript::IVirtualMachine, NativeFunction*);
 TP_THIS_FUNCTION(TBindEverythingToScript, void, BSScript::IVirtualMachine*);
 TP_THIS_FUNCTION(TSignaturesMatch, bool, BSScript::NativeFunction, BSScript::NativeFunction*);
@@ -19,6 +23,27 @@ TRegisterPapyrusFunction* RealRegisterPapyrusFunction = nullptr;
 TBindEverythingToScript* RealBindEverythingToScript = nullptr;
 TSignaturesMatch* RealSignaturesMatch = nullptr;
 TCompareVariables* RealCompareVariables = nullptr;
+static std::once_flag s_papyrusNativeHookOnce;
+
+namespace
+{
+bool BindSkyrimTogetherNative(BSScript::IVirtualMachine* apVm, BSScript::IFunction* apFunction)
+{
+    if (!apVm || !apFunction)
+        return false;
+
+    auto* pFunctionName = apFunction->GetName().AsAscii();
+    auto* pClassName = apFunction->GetObjectTypeName().AsAscii();
+    const bool bound = apVm->BindNativeMethod(apFunction);
+
+    if (!bound)
+    {
+        spdlog::warn("SkyrimTogetherVR Papyrus native bind failed: {}::{}", pClassName ? pClassName : "<unknown>", pFunctionName ? pFunctionName : "<unknown>");
+    }
+
+    return bound;
+}
+} // namespace
 
 void TP_MAKE_THISCALL(HookRegisterPapyrusFunction, BSScript::IVirtualMachine, NativeFunction* apFunction)
 {
@@ -33,9 +58,46 @@ void TP_MAKE_THISCALL(HookRegisterPapyrusFunction, BSScript::IVirtualMachine, Na
 
 void TP_MAKE_THISCALL(HookBindEverythingToScript, BSScript::IVirtualMachine*)
 {
-    (*apThis)->BindNativeMethod(new BSScript::IsRemotePlayerFunc("IsRemotePlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsRemotePlayer, BSScript::Variable::kBoolean));
-    (*apThis)->BindNativeMethod(new BSScript::IsPlayerFunc("IsPlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsPlayer, BSScript::Variable::kBoolean));
-    (*apThis)->BindNativeMethod(new BSScript::DidLaunchSkyrimTogetherFunc("DidLaunchSkyrimTogether", "SkyrimTogetherVerifyLaunchScript", PapyrusFunctions::DidLaunchSkyrimTogether, BSScript::Variable::kBoolean));
+    auto* pVm = apThis ? *apThis : nullptr;
+    if (!pVm)
+    {
+        spdlog::warn("SkyrimTogetherVR Papyrus native bind hook received a null VM");
+        TiltedPhoques::ThisCall(RealBindEverythingToScript, apThis);
+        return;
+    }
+
+    BindSkyrimTogetherNative(pVm, new BSScript::IsRemotePlayerFunc("IsRemotePlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsRemotePlayer, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(pVm, new BSScript::IsPlayerFunc("IsPlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsPlayer, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::ConnectToSkyrimTogetherFunc("ConnectToSkyrimTogether", "SkyrimTogetherUtils", PapyrusFunctions::ConnectToSkyrimTogether, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::DisconnectFromSkyrimTogetherFunc(
+                 "DisconnectFromSkyrimTogether", "SkyrimTogetherUtils", PapyrusFunctions::DisconnectFromSkyrimTogether, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(
+        pVm,
+        new BSScript::IsSkyrimTogetherConnectedFunc("IsSkyrimTogetherConnected", "SkyrimTogetherUtils", PapyrusFunctions::IsSkyrimTogetherConnected, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(
+        pVm,
+        new BSScript::ConnectToSkyrimTogetherFunc(
+            "SetSkyrimTogetherConnectionConfig", "SkyrimTogetherUtils", PapyrusFunctions::SetSkyrimTogetherConnectionConfig, BSScript::Variable::kBoolean));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::GetSkyrimTogetherConnectionStateFunc(
+                 "GetSkyrimTogetherConnectionState", "SkyrimTogetherUtils", PapyrusFunctions::GetSkyrimTogetherConnectionState, BSScript::Variable::kString));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::GetSkyrimTogetherConnectionStateFunc(
+                 "GetSkyrimTogetherConfiguredEndpoint", "SkyrimTogetherUtils", PapyrusFunctions::GetSkyrimTogetherConfiguredEndpoint, BSScript::Variable::kString));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::GetSkyrimTogetherConnectionStateFunc(
+                 "GetSkyrimTogetherConfiguredPassword", "SkyrimTogetherUtils", PapyrusFunctions::GetSkyrimTogetherConfiguredPassword, BSScript::Variable::kString));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::GetSkyrimTogetherConnectionStateFunc(
+                 "GetSkyrimTogetherStatusSummary", "SkyrimTogetherUtils", PapyrusFunctions::GetSkyrimTogetherStatusSummary, BSScript::Variable::kString));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::GetSkyrimTogetherConnectionStateFunc(
+                 "GetSkyrimTogetherTelemetryReadout", "SkyrimTogetherUtils", PapyrusFunctions::GetSkyrimTogetherTelemetryReadout, BSScript::Variable::kString));
+    BindSkyrimTogetherNative(
+        pVm, new BSScript::DidLaunchSkyrimTogetherFunc(
+                 "DidLaunchSkyrimTogether", "SkyrimTogetherVerifyLaunchScript", PapyrusFunctions::DidLaunchSkyrimTogether, BSScript::Variable::kBoolean));
 
     TiltedPhoques::ThisCall(RealBindEverythingToScript, apThis);
 }
@@ -65,7 +127,8 @@ int64_t TP_MAKE_THISCALL(HookCompareVariables, void, BSScript::Variable* apVar1,
 
     auto* pPolicy = GameVM::Get()->virtualMachine->GetObjectHandlePolicy();
 
-    if (!pPolicy || !handle1 || !handle2 || !pPolicy->HandleIsType((uint32_t)Actor::Type, handle1) || !pPolicy->HandleIsType((uint32_t)Actor::Type, handle2) || !pPolicy->IsHandleObjectAvailable(handle1) || !pPolicy->IsHandleObjectAvailable(handle2))
+    if (!pPolicy || !handle1 || !handle2 || !pPolicy->HandleIsType((uint32_t)Actor::Type, handle1) || !pPolicy->HandleIsType((uint32_t)Actor::Type, handle2) ||
+        !pPolicy->IsHandleObjectAvailable(handle1) || !pPolicy->IsHandleObjectAvailable(handle2))
     {
         return TiltedPhoques::ThisCall(RealCompareVariables, apThis, apVar1, apVar2);
     }
@@ -92,22 +155,34 @@ int64_t TP_MAKE_THISCALL(HookCompareVariables, void, BSScript::Variable* apVar1,
     return TiltedPhoques::ThisCall(RealCompareVariables, apThis, apVar1, apVar2);
 }
 
+void InstallSkyrimTogetherPapyrusNativeHooks()
+{
+    std::call_once(
+        s_papyrusNativeHookOnce,
+        []()
+        {
+            POINTER_SKYRIMSE(TBindEverythingToScript, s_bindEverythingToScript, 55739);
+
+            RealBindEverythingToScript = s_bindEverythingToScript.Get();
+
+            TP_HOOK(&RealBindEverythingToScript, HookBindEverythingToScript);
+        });
+}
+
 static TiltedPhoques::Initializer s_vmHooks(
     []()
     {
         POINTER_SKYRIMSE(TRegisterPapyrusFunction, s_registerPapyrusFunction, 104788);
-        POINTER_SKYRIMSE(TBindEverythingToScript, s_bindEverythingToScript, 55739);
         POINTER_SKYRIMSE(TSignaturesMatch, s_signaturesMatch, 104359);
 
         // POINTER_SKYRIMSE(TCompareVariables, s_compareVariables, 105220);
 
         RealRegisterPapyrusFunction = s_registerPapyrusFunction.Get();
-        RealBindEverythingToScript = s_bindEverythingToScript.Get();
         RealSignaturesMatch = s_signaturesMatch.Get();
         // RealCompareVariables = s_compareVariables.Get();
 
+        InstallSkyrimTogetherPapyrusNativeHooks();
         TP_HOOK(&RealRegisterPapyrusFunction, HookRegisterPapyrusFunction);
-        TP_HOOK(&RealBindEverythingToScript, HookBindEverythingToScript);
         TP_HOOK(&RealSignaturesMatch, HookSignaturesMatch);
         // TP_HOOK(&RealCompareVariables, HookCompareVariables);
     });

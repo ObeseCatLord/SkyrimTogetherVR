@@ -75,6 +75,9 @@ constexpr char kBuildTag[] = "Build: " BUILD_COMMIT " " BUILD_BRANCH " EVO\nBuil
 static void DrawBuildTag()
 {
     auto* pWindow = BSGraphics::GetMainWindow();
+    if (!pWindow)
+        return;
+
     const ImVec2 coord{50.f, static_cast<float>((pWindow->uiWindowHeight + 25) - 100)};
     ImGui::GetBackgroundDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), coord, ImColor::ImColor(255.f, 0.f, 0.f), kBuildTag);
 }
@@ -84,7 +87,10 @@ void __declspec(noinline) DebugService::PlaceActorInWorld() noexcept
     if (m_actors.size())
         return;
 
-    const auto pPlayerBaseForm = static_cast<TESNPC*>(PlayerCharacter::Get()->baseForm);
+    auto* pPlayer = PlayerCharacter::Get();
+    const auto pPlayerBaseForm = pPlayer ? Cast<TESNPC>(pPlayer->GetBaseFormData()) : nullptr;
+    if (!pPlayerBaseForm)
+        return;
 
     auto pActor = Actor::Create(pPlayerBaseForm);
 
@@ -152,7 +158,8 @@ extern thread_local bool g_forceAnimation;
 
 void DebugService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
 {
-    if (!BSGraphics::GetMainWindow()->IsForeground())
+    auto* pMainWindow = BSGraphics::GetMainWindow();
+    if (!pMainWindow || !pMainWindow->IsForeground())
         return;
 
     if (moveData.pActor)
@@ -208,7 +215,7 @@ void DebugService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
         {
             s_f8Pressed = true;
 
-            //PlaceActorInWorld();
+            // PlaceActorInWorld();
         }
     }
     else
@@ -273,7 +280,8 @@ void DebugService::OnDraw() noexcept
         if (ImGui::Button("Unstuck player"))
         {
             auto* pPlayer = PlayerCharacter::Get();
-            pPlayer->currentProcess->KnockExplosion(pPlayer, &pPlayer->position, 0.f);
+            if (pPlayer && pPlayer->GetCurrentProcessData())
+                pPlayer->GetCurrentProcessData()->KnockExplosion(pPlayer, &pPlayer->GetPositionData(), 0.f);
         }
 
         if (ImGui::Button("Stop all combat"))
@@ -295,7 +303,7 @@ void DebugService::OnDraw() noexcept
 
         if (ImGui::Button("Clear stuck screen effects"))
         {
-            for (const auto& modifier : TES::Get()->activeImageSpaceModifiers)
+            for (const auto& modifier : TES::Get()->GetActiveImageSpaceModifiersData())
             {
                 ImageSpaceModifierInstance::Stop(modifier.object);
             }
@@ -315,7 +323,7 @@ void DebugService::OnDraw() noexcept
         if (ImGui::Button("Log all open windows"))
         {
             UI* pUI = UI::Get();
-            for (const auto& it : pUI->menuMap)
+            for (const auto& it : pUI->GetMenuMapData())
             {
                 if (pUI->GetMenuOpen(it.key))
                     spdlog::info("{}", it.key.AsAscii());

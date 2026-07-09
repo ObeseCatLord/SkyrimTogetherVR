@@ -2,6 +2,13 @@
 
 #include <Components/BaseFormComponent.h>
 #include <Misc/BSFixedString.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 enum class FormType : uint8_t
 {
@@ -26,6 +33,9 @@ struct BGSLoadFormBuffer;
 
 struct TESForm : BaseFormComponent
 {
+    using CommonLibFormOffsets = Skyrim::RuntimeLayout::TESFormCommonLibNgOffsets;
+    using LocalFormOffsets = Skyrim::RuntimeLayout::TESFormLocalShimOffsets;
+
     struct ChangeFlags
     {
         uint32_t flags{};
@@ -103,18 +113,74 @@ struct TESForm : BaseFormComponent
     void SetSkipSaveFlag(bool aSet) noexcept;
     uint32_t GetChangeFlags() const noexcept;
 
-    bool GetIgnoreFriendlyHit() const noexcept { return (flags & IGNORE_FRIENDLY_HITS) != 0; }
-    void SetIgnoreFriendlyHit(bool aSet) noexcept
+    [[nodiscard]] uint32_t GetFormFlagsData() const noexcept
     {
-        if (aSet)
-            flags |= IGNORE_FRIENDLY_HITS;
-        else
-            flags &= ~IGNORE_FRIENDLY_HITS;
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibFormOffsets::Flags);
+#else
+        return flags;
+#endif
     }
 
-    bool IsDisabled() const noexcept { return (flags & DISABLED) != 0; }
-    bool IsTemporary() const noexcept { return formID >= 0xFF000000; }
-    bool IsConsumable() const noexcept { return formType == FormType::Ingredient || formType == FormType::Alchemy; }
+    void SetFormFlagsData(uint32_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibFormOffsets::Flags, aFlags);
+#else
+        flags = aFlags;
+#endif
+    }
+
+    [[nodiscard]] uint32_t GetFormIdData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibFormOffsets::FormID);
+#else
+        return formID;
+#endif
+    }
+
+    [[nodiscard]] uint16_t GetInGameFormFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint16_t>(this, CommonLibFormOffsets::InGameFormFlags);
+#else
+        return unk10;
+#endif
+    }
+
+    void SetInGameFormFlagsData(uint16_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint16_t>(this, CommonLibFormOffsets::InGameFormFlags, aFlags);
+#else
+        unk10 = aFlags;
+#endif
+    }
+
+    [[nodiscard]] FormType GetFormTypeData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<FormType>(this, CommonLibFormOffsets::FormType);
+#else
+        return formType;
+#endif
+    }
+
+    bool GetIgnoreFriendlyHit() const noexcept { return (GetFormFlagsData() & IGNORE_FRIENDLY_HITS) != 0; }
+    void SetIgnoreFriendlyHit(bool aSet) noexcept
+    {
+        auto formFlags = GetFormFlagsData();
+        if (aSet)
+            formFlags |= IGNORE_FRIENDLY_HITS;
+        else
+            formFlags &= ~IGNORE_FRIENDLY_HITS;
+        SetFormFlagsData(formFlags);
+    }
+
+    bool IsDisabled() const noexcept { return (GetFormFlagsData() & DISABLED) != 0; }
+    bool IsTemporary() const noexcept { return GetFormIdData() >= 0xFF000000; }
+    bool IsConsumable() const noexcept { return GetFormTypeData() == FormType::Ingredient || GetFormTypeData() == FormType::Alchemy; }
 
     uintptr_t unk4;
     uint32_t flags;
@@ -124,4 +190,9 @@ struct TESForm : BaseFormComponent
     uint8_t padForm;
 };
 
-static_assert(sizeof(TESForm) == 0x20);
+static_assert(offsetof(TESForm, unk4) == TESForm::LocalFormOffsets::SourceFiles);
+static_assert(offsetof(TESForm, flags) == TESForm::LocalFormOffsets::Flags);
+static_assert(offsetof(TESForm, formID) == TESForm::LocalFormOffsets::FormID);
+static_assert(offsetof(TESForm, unk10) == TESForm::LocalFormOffsets::InGameFormFlags);
+static_assert(offsetof(TESForm, formType) == TESForm::LocalFormOffsets::FormType);
+static_assert(sizeof(TESForm) == TESForm::LocalFormOffsets::Size);

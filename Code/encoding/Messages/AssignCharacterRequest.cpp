@@ -15,6 +15,8 @@ void AssignCharacterRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     LatestAction.GenerateDifferential(ActionEvent{}, aWriter);
     QuestContent.Serialize(aWriter);
     FaceTints.Serialize(aWriter);
+    Serialization::WriteBool(aWriter, HasQuestContent);
+    Serialization::WriteBool(aWriter, HasFaceTints);
     Serialization::WriteBool(aWriter, IsDragon);
     Serialization::WriteBool(aWriter, IsMount);
     Serialization::WriteBool(aWriter, IsPlayerSummon);
@@ -48,6 +50,8 @@ void AssignCharacterRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     QuestContent.Deserialize(aReader);
     FaceTints.Deserialize(aReader);
 
+    HasQuestContent = Serialization::ReadBool(aReader);
+    HasFaceTints = Serialization::ReadBool(aReader);
     IsDragon = Serialization::ReadBool(aReader);
     IsMount = Serialization::ReadBool(aReader);
     IsPlayerSummon = Serialization::ReadBool(aReader);

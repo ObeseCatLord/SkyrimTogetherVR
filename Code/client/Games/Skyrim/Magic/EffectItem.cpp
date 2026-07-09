@@ -5,39 +5,41 @@
 
 bool EffectItem::IsHealingEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kValueModifier && data.fMagnitude > 0.0f;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kValueModifier && GetEffectItemData().fMagnitude > 0.0f;
 }
 
 bool EffectItem::IsSummonEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kSummonCreature;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kSummonCreature;
 }
 
 bool EffectItem::IsSlowEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kSlowTime;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kSlowTime;
 }
 
 bool EffectItem::IsInivisibilityEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kInvisibility;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kInvisibility;
 }
 
 bool EffectItem::IsWerewolfEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kWerewolf;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kWerewolf;
 }
 
 bool EffectItem::IsVampireLordEffect() const noexcept
 {
-    return pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kVampireLord;
+    return GetEffectSettingData()->GetArchetypeData() == EffectArchetypes::ArchetypeID::kVampireLord;
 }
 
 bool EffectItem::IsNightVisionEffect() const noexcept
 {
     BGSKeyword* pMagicNightEye = Cast<BGSKeyword>(TESForm::GetById(0xad7c6));
-    if (pEffectSetting->keywordForm.count == 0)
-        spdlog::debug(__FUNCTION__ ": correcting BGSKeywordForm::Contains() bug for zero-keyword {:x}, {}", pEffectSetting->formID, pEffectSetting->fullName.value.AsAscii());
-    return pEffectSetting->keywordForm.count > 0 && pEffectSetting->keywordForm.Contains(pMagicNightEye);
+    auto* pEffectSettingData = GetEffectSettingData();
+    const auto& keywordForm = pEffectSettingData->GetKeywordFormData();
+    if (keywordForm.GetKeywordCountData() == 0)
+        spdlog::debug(__FUNCTION__ ": correcting BGSKeywordForm::Contains() bug for zero-keyword {:x}, {}", pEffectSettingData->GetFormIdData(),
+                      pEffectSettingData->GetFullNameData().GetFullNameStringData());
+    return keywordForm.ContainsKeywordData(pMagicNightEye);
 }
-

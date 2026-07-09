@@ -2,6 +2,14 @@
 
 #include "ExtraData.h"
 
+#include <RuntimeLayout.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
 enum class SOUL_LEVEL
 {
     SOUL_NONE = 0x0,
@@ -15,9 +23,22 @@ enum class SOUL_LEVEL
 
 struct ExtraSoul : BSExtraData
 {
+    using CommonLibSoulOffsets = Skyrim::RuntimeLayout::ExtraSoulCommonLibNgOffsets;
+    using LocalSoulOffsets = Skyrim::RuntimeLayout::ExtraSoulLocalShimOffsets;
+
     inline static constexpr auto eExtraData = ExtraDataType::Soul;
+
+    [[nodiscard]] SOUL_LEVEL GetSoulData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return static_cast<SOUL_LEVEL>(Skyrim::RuntimeLayout::Value<uint8_t>(this, CommonLibSoulOffsets::Soul));
+#else
+        return cSoul;
+#endif
+    }
 
     SOUL_LEVEL cSoul{};
 };
 
-static_assert(sizeof(ExtraSoul) == 0x18);
+static_assert(offsetof(ExtraSoul, cSoul) == ExtraSoul::LocalSoulOffsets::Soul);
+static_assert(sizeof(ExtraSoul) == ExtraSoul::LocalSoulOffsets::Size);

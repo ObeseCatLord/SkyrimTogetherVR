@@ -64,12 +64,11 @@ void DebugService::DisplayEntities() noexcept
         if (!pActor)
             continue;
 
+        const auto* pBaseForm = pActor->GetBaseFormData();
+        const char* pName = pBaseForm ? pBaseForm->GetName() : "UNNAMED";
+
         char name[256];
-
-        if (!pActor->baseForm)
-            strncpy_s(name, "UNNAMED", sizeof(name));
-
-        sprintf_s(name, std::size(name), "%s (%x)", pActor->baseForm->GetName(), formComponent.Id);
+        sprintf_s(name, std::size(name), "%s (%x)", pName, formComponent.Id);
 
         if (ImGui::Selectable(name, m_formId == formComponent.Id))
             m_formId = formComponent.Id;
@@ -107,11 +106,15 @@ void DebugService::DisplayObjects() noexcept
         auto& formComponent = view.get<FormIdComponent>(it);
         const auto pRefr = Cast<TESObjectREFR>(TESForm::GetById(formComponent.Id));
 
-        if (!pRefr || !pRefr->baseForm)
+        if (!pRefr)
+            continue;
+
+        const auto* pBaseForm = pRefr->GetBaseFormData();
+        if (!pBaseForm)
             continue;
 
         char name[256];
-        sprintf_s(name, std::size(name), "%s (%x)", pRefr->baseForm->GetName(), formComponent.Id);
+        sprintf_s(name, std::size(name), "%s (%x)", pBaseForm->GetName(), formComponent.Id);
 
         if (ImGui::Selectable(name, m_formId == formComponent.Id))
             m_formId = formComponent.Id;
@@ -165,8 +168,10 @@ void DebugService::DisplayFormComponent(FormIdComponent& aFormComponent) const n
     */
 
     ImGui::InputInt("Game Id", (int*)&aFormComponent.Id, 0, 0, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::InputFloat3("Position", pActor->position.AsArray(), "%.3f", ImGuiInputTextFlags_ReadOnly);
-    ImGui::InputFloat3("Rotation", pActor->rotation.AsArray(), "%.3f", ImGuiInputTextFlags_ReadOnly);
+    auto position = pActor->GetPositionData();
+    auto rotation = pActor->GetRotationData();
+    ImGui::InputFloat3("Position", position.AsArray(), "%.3f", ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputFloat3("Rotation", rotation.AsArray(), "%.3f", ImGuiInputTextFlags_ReadOnly);
     int isDead = int(pActor->IsDead());
     ImGui::InputScalar("Is dead?", ImGuiDataType_U8, &isDead, 0, 0, "%" PRIx8, ImGuiInputTextFlags_ReadOnly);
     int isRemote = int(pActor->GetExtension()->IsRemote());
@@ -174,7 +179,7 @@ void DebugService::DisplayFormComponent(FormIdComponent& aFormComponent) const n
     auto handle = pActor->GetHandle();
     ImGui::InputInt("Handle", (int*)&handle.handle.iBits, 0, 0, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
     auto owner = pActor->GetCommandingActor();
-    int commandingActorId = int(owner ? owner->formID : 0x0);
+    int commandingActorId = int(owner ? owner->GetFormIdData() : 0x0);
     ImGui::InputScalar("Commanding Actor", ImGuiDataType_U8, &commandingActorId, 0, 0, "%" PRIx8, ImGuiInputTextFlags_ReadOnly);
     float attributes[3]{pActor->GetActorValue(24), pActor->GetActorValue(25), pActor->GetActorValue(26)};
     ImGui::InputFloat3("Attributes (H/M/S)", attributes, "%.3f", ImGuiInputTextFlags_ReadOnly);
@@ -188,7 +193,8 @@ void DebugService::DisplayLocalComponent(LocalComponent& aLocalComponent, const 
     if (ImGui::Button("Teleport to me"))
     {
         auto* pPlayer = PlayerCharacter::Get();
-        m_world.GetRunner().Trigger(MoveActorEvent(acFormId, pPlayer->parentCell->formID, pPlayer->position));
+        if (pPlayer && pPlayer->GetParentCellData())
+            m_world.GetRunner().Trigger(MoveActorEvent(acFormId, pPlayer->GetParentCellData()->GetFormIdData(), pPlayer->GetPositionData()));
     }
 
     auto& action = aLocalComponent.CurrentAction;

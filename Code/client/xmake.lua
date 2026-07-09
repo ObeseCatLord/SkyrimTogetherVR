@@ -1,10 +1,44 @@
 
-local function build_client(name)
+local function vr_define_value(value)
+    return value and "1" or "0"
+end
+
+local function build_vr_client(name, options)
+    options = options or {}
+    local connection_only = options.connection_only
+    if connection_only == nil then
+        connection_only = true
+    end
+    local remote_avatar_sync = options.remote_avatar_sync or false
+    local remote_avatar_actor_targets = options.remote_avatar_actor_targets or false
+    local unvalidated_hooks = options.unvalidated_hooks or false
+    local flat_overlay = options.flat_overlay or false
+
 target(name)
     set_kind("static")
     set_group("Client")
-    add_includedirs(".","../../Libraries/")
+    add_includedirs(".", "../", "../../Libraries/")
     set_pcxxheader("TiltedOnlinePCH.h")
+    add_defines("TP_SKYRIM_VR=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=" .. vr_define_value(unvalidated_hooks))
+    add_defines("TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=" .. vr_define_value(flat_overlay))
+    add_defines("TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=" .. vr_define_value(connection_only))
+    add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=" .. vr_define_value(remote_avatar_sync))
+    add_defines("TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=1")
+    add_defines("TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES=0")
+    add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=" .. vr_define_value(remote_avatar_actor_targets))
 
     -- exclude game specifc stuff
     add_headerfiles("**.h|Games/Skyrim/**|Services/Vivox/**")
@@ -74,4 +108,13 @@ end
 
 add_requires("tiltedcore")
 
-build_client("SkyrimTogetherClient")
+build_vr_client("SkyrimTogetherVRClient")
+build_vr_client("SkyrimTogetherVRClientAvatarSync", {
+    remote_avatar_sync = true,
+    remote_avatar_actor_targets = true,
+})
+build_vr_client("SkyrimTogetherVRGameplayClient", {
+    connection_only = false,
+    remote_avatar_sync = true,
+    remote_avatar_actor_targets = true,
+})

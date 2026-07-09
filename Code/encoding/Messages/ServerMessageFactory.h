@@ -60,6 +60,15 @@
 #include <Messages/NotifySetWaypoint.h>
 #include <Messages/NotifyRemoveWaypoint.h>
 #include <Messages/NotifySetTimeResult.h>
+#include <Messages/NotifyVRPoseUpdate.h>
+#include <Messages/NotifyVRMovementUpdate.h>
+#include <Messages/NotifyVREquipmentUpdate.h>
+#include <Messages/NotifyVRActivationEvent.h>
+#include <Messages/NotifyVRMagicEffectEvent.h>
+#include <Messages/NotifyVRCombatHitEvent.h>
+#include <Messages/NotifyVRProjectileEvent.h>
+#include <Messages/NotifyVRGrabEvent.h>
+#include <Messages/NotifyVRHiggsState.h>
 
 using TiltedPhoques::UniquePtr;
 
@@ -73,8 +82,9 @@ struct ServerMessageFactory
             AuthenticationResponse, AssignCharacterResponse, ServerReferencesMoveRequest, ServerTimeSettings, CharacterSpawnRequest, NotifyInventoryChanges, StringCacheUpdate, NotifyFactionsChanges, NotifyRemoveCharacter, NotifyQuestUpdate, NotifyPlayerList, NotifyPartyInfo, NotifyPartyInvite,
             NotifyActorValueChanges, NotifyPartyJoined, NotifyPartyLeft, NotifyActorMaxValueChanges, NotifyHealthChangeBroadcast, NotifySpawnData, NotifyActivate, NotifyLockChange, AssignObjectsResponse, NotifyDeathStateChange, NotifyOwnershipTransfer, NotifyObjectInventoryChanges, NotifySpellCast,
             NotifyProjectileLaunch, NotifyInterruptCast, NotifyAddTarget, NotifyScriptAnimation, NotifyDrawWeapon, NotifyMount, NotifyNewPackage, NotifyRespawn, NotifySyncExperience, NotifyEquipmentChanges, NotifyChatMessageBroadcast, TeleportCommandResponse, NotifyPlayerRespawn, NotifyDialogue,
-            NotifySubtitle, NotifyPlayerDialogue, NotifyActorTeleport, NotifyRelinquishControl, NotifyPlayerLeft, NotifyPlayerJoined, NotifyDialogue, NotifySubtitle, NotifyPlayerDialogue, NotifyPlayerLevel, NotifyPlayerCellChanged, NotifyTeleport, NotifyPlayerHealthUpdate, NotifySettingsChange,
-            NotifyWeatherChange, NotifySetWaypoint, NotifyRemoveWaypoint, NotifySetTimeResult, NotifyRemoveSpell>;
+            NotifySubtitle, NotifyPlayerDialogue, NotifyActorTeleport, NotifyRelinquishControl, NotifyPlayerLeft, NotifyPlayerJoined, NotifyPlayerLevel, NotifyPlayerCellChanged, NotifyTeleport, NotifyPlayerHealthUpdate, NotifySettingsChange,
+            NotifyWeatherChange, NotifySetWaypoint, NotifyRemoveWaypoint, NotifySetTimeResult, NotifyRemoveSpell, NotifyVRPoseUpdate, NotifyVRMovementUpdate, NotifyVREquipmentUpdate, NotifyVRActivationEvent, NotifyVRMagicEffectEvent, NotifyVRCombatHitEvent, NotifyVRProjectileEvent, NotifyVRGrabEvent,
+            NotifyVRHiggsState>;
 
         return s_visitor(std::forward<T>(func));
     }

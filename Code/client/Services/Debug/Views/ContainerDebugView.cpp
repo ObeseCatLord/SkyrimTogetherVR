@@ -49,7 +49,7 @@ void DebugService::DrawContainerDebugView()
             if (ImGui::Button("Equip"))
             {
                 World::Get().GetRunner().Queue(
-                    [entry, actorId = pActor->formID]()
+                    [entry, actorId = pActor->GetFormIdData()]()
                     {
                         auto& modSystem = World::Get().GetModSystem();
                         uint32_t itemId = modSystem.GetGameId(entry.BaseId);
@@ -61,7 +61,7 @@ void DebugService::DrawContainerDebugView()
             if (ImGui::Button("Unequip"))
             {
                 World::Get().GetRunner().Queue(
-                    [entry, actorId = pActor->formID]()
+                    [entry, actorId = pActor->GetFormIdData()]()
                     {
                         auto& modSystem = World::Get().GetModSystem();
                         uint32_t itemId = modSystem.GetGameId(entry.BaseId);

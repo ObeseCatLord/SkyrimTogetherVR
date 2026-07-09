@@ -2,6 +2,7 @@
 
 #include <Games/ActorExtension.h>
 #include <Forms/ActorValueInfo.h>
+#include <Magic/MagicTarget.h>
 
 TP_THIS_FUNCTION(TFinish, void, InvisibilityEffect);
 static TFinish* RealFinish = nullptr;
@@ -9,9 +10,10 @@ static TFinish* RealFinish = nullptr;
 // This needs to be done because the actor value does not update in time
 void TP_MAKE_THISCALL(HookFinish, InvisibilityEffect)
 {
-    if (apThis && apThis->pTarget)
+    auto* pTarget = apThis ? apThis->GetTargetData() : nullptr;
+    if (pTarget)
     {
-        if (Actor* pActor = apThis->pTarget->GetTargetAsActor())
+        if (Actor* pActor = pTarget->GetTargetAsActor())
         {
             if (pActor->GetExtension()->IsRemote())
                 pActor->SetActorValue(ActorValueInfo::kInvisibility, 0.f);

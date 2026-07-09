@@ -36,13 +36,15 @@ float CalculateFloatingQuestMarkerAlpha()
 static __declspec(noinline) bool DrawInWorldSpace(TESObjectREFR* apRefr, ImVec2& outViewPos)
 {
     // Attach at the head ish.
-    auto pos = apRefr->position;
+    auto pos = apRefr->GetPositionData();
     pos.z += apRefr->GetHeight();
 
     NiPoint3 screenPoint{};
     HUDMenuUtils::WorldPtToScreenPt3(pos, screenPoint);
     // Calculate window collision bounds.
     auto* pViewport = BSGraphics::GetMainWindow();
+    if (!pViewport)
+        return false;
 
     // Translate to screen
     const ImVec2 screenPos = ImVec2{

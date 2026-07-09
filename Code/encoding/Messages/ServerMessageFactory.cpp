@@ -38,5 +38,9 @@ UniquePtr<ServerMessage> ServerMessageFactory::Extract(TiltedPhoques::Buffer::Re
         return {nullptr};
 
     const auto opcode = static_cast<ServerOpcode>(data);
-    return s_serverMessageExtractor[opcode](aReader);
+    auto& extractor = s_serverMessageExtractor[opcode];
+    if (!extractor) [[unlikely]]
+        return {nullptr};
+
+    return extractor(aReader);
 }

@@ -21,12 +21,10 @@ EnchantmentItem* EnchantmentItem::Create(const Inventory::EnchantmentData& aData
         Inventory::EffectItem effect = aData.Effects[i];
 
         EffectItem effectItem{};
-        effectItem.data.fMagnitude = effect.Magnitude;
-        effectItem.data.iArea = effect.Area;
-        effectItem.data.iDuration = effect.Duration;
-        effectItem.fRawCost = effect.RawCost;
-        effectItem.pEffectSetting = Cast<EffectSetting>(TESForm::GetById(modSystem.GetGameId(effect.EffectId)));
-        if (!effectItem.pEffectSetting)
+        effectItem.SetEffectItemData({effect.Magnitude, effect.Area, effect.Duration});
+        effectItem.SetRawCostData(effect.RawCost);
+        effectItem.SetEffectSettingData(Cast<EffectSetting>(TESForm::GetById(modSystem.GetGameId(effect.EffectId))));
+        if (!effectItem.GetEffectSettingData())
             spdlog::error("Effect setting not found: {:X}:{:X}", effect.EffectId.ModId, effect.EffectId.BaseId);
 
         // TODO: TESCondition?

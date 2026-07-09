@@ -1,12 +1,23 @@
 #pragma once
 
 #include <Components/BaseFormComponent.h>
+#include <Games/Primitives.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+#include <cstdint>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 struct BGSVoiceType;
 struct TESFaction;
 
 struct TESActorBaseData : BaseFormComponent
 {
+    using CommonLibActorBaseDataOffsets = Skyrim::RuntimeLayout::TESActorBaseDataCommonLibNgOffsets;
+    using LocalActorBaseDataOffsets = Skyrim::RuntimeLayout::TESActorBaseDataLocalShimOffsets;
+
     enum BaseFlags
     {
         IS_ESSENTIAL = 1 << 1,
@@ -34,17 +45,64 @@ struct TESActorBaseData : BaseFormComponent
         int8_t rank;
     };
 
-    bool IsEssential() const noexcept { return flags & BaseFlags::IS_ESSENTIAL; }
+    [[nodiscard]] uint32_t GetFlagsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<uint32_t>(this, CommonLibActorBaseDataOffsets::Flags);
+#else
+        return flags;
+#endif
+    }
+
+    void SetFlagsData(uint32_t aFlags) noexcept
+    {
+#if TP_SKYRIM_VR
+        Skyrim::RuntimeLayout::Store<uint32_t>(this, CommonLibActorBaseDataOffsets::Flags, aFlags);
+#else
+        flags = aFlags;
+#endif
+    }
+
+    [[nodiscard]] GameArray<FactionInfo>& GetFactionsData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameArray<FactionInfo>>(this, CommonLibActorBaseDataOffsets::Factions);
+#else
+        return factions;
+#endif
+    }
+
+    [[nodiscard]] const GameArray<FactionInfo>& GetFactionsData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameArray<FactionInfo>>(this, CommonLibActorBaseDataOffsets::Factions);
+#else
+        return factions;
+#endif
+    }
+
+    bool IsEssential() const noexcept { return (GetFlagsData() & BaseFlags::IS_ESSENTIAL) != 0; }
     void SetEssential(bool aSet) noexcept
     {
+        auto baseFlags = GetFlagsData();
         if (aSet)
-            flags |= BaseFlags::IS_ESSENTIAL;
+            baseFlags |= BaseFlags::IS_ESSENTIAL;
         else
-            flags &= ~BaseFlags::IS_ESSENTIAL;
+            baseFlags &= ~BaseFlags::IS_ESSENTIAL;
+
+        SetFlagsData(baseFlags);
     }
 
     GameArray<FactionInfo> factions;
 };
 
-static_assert(offsetof(TESActorBaseData, owner) == 0x30);
-static_assert(offsetof(TESActorBaseData, factions) == 0x40);
+static_assert(TESActorBaseData::CommonLibActorBaseDataOffsets::Flags == 0x8);
+static_assert(TESActorBaseData::CommonLibActorBaseDataOffsets::Level == 0x10);
+static_assert(TESActorBaseData::CommonLibActorBaseDataOffsets::BaseTemplateForm == 0x30);
+static_assert(TESActorBaseData::CommonLibActorBaseDataOffsets::Factions == 0x40);
+static_assert(TESActorBaseData::CommonLibActorBaseDataOffsets::Size == 0x58);
+static_assert(offsetof(TESActorBaseData, flags) == TESActorBaseData::LocalActorBaseDataOffsets::Flags);
+static_assert(offsetof(TESActorBaseData, level) == TESActorBaseData::LocalActorBaseDataOffsets::Level);
+static_assert(offsetof(TESActorBaseData, owner) == TESActorBaseData::LocalActorBaseDataOffsets::Owner);
+static_assert(offsetof(TESActorBaseData, factions) == TESActorBaseData::LocalActorBaseDataOffsets::Factions);
+static_assert(sizeof(TESActorBaseData) == TESActorBaseData::LocalActorBaseDataOffsets::Size);

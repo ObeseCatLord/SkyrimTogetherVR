@@ -54,6 +54,15 @@ enum ClientOpcode : unsigned char
     kRequestSetWaypoint,
     kRequestRemoveWaypoint,
     kSetTimeCommandRequest,
+    kRequestVRPoseUpdate,
+    kRequestVRMovementUpdate,
+    kRequestVREquipmentUpdate,
+    kRequestVRActivationEvent,
+    kRequestVRMagicEffectEvent,
+    kRequestVRCombatHitEvent,
+    kRequestVRProjectileEvent,
+    kRequestVRGrabEvent,
+    kRequestVRHiggsState,
     kClientOpcodeMax
 };
 
@@ -115,5 +124,14 @@ enum ServerOpcode : unsigned char
     kNotifySetWaypoint,
     kNotifyRemoveWaypoint,
     kNotifySetTimeResult,
+    kNotifyVRPoseUpdate,
+    kNotifyVRMovementUpdate,
+    kNotifyVREquipmentUpdate,
+    kNotifyVRActivationEvent,
+    kNotifyVRMagicEffectEvent,
+    kNotifyVRCombatHitEvent,
+    kNotifyVRProjectileEvent,
+    kNotifyVRGrabEvent,
+    kNotifyVRHiggsState,
     kServerOpcodeMax
 };

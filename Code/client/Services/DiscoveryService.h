@@ -3,6 +3,8 @@
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
 
+#include <filesystem>
+
 #include <Structs/GridCellCoords.h>
 
 struct World;
@@ -65,6 +67,7 @@ protected:
     BSTEventResult OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*) override;
 
 private:
+    void WriteVrDiscoveryStatusFile() noexcept;
     /**
      * Resets cached exterior cell data.
      * TODO(cosideci): confirm the usage of this function
@@ -85,6 +88,7 @@ private:
 
     World& m_world;
     entt::dispatcher& m_dispatcher;
+    std::filesystem::path m_vrDiscoveryStatusPath;
 
     //! @brief Cached actor forms detected in the previous frame.
     Set<uint32_t> m_forms;
@@ -104,4 +108,6 @@ private:
 
     entt::scoped_connection m_preUpdateConnection;
     entt::scoped_connection m_connectedConnection;
+    double m_vrDiscoveryStatusTimer{0.0};
+    bool m_vrDiscoveryStatusDirty{true};
 };

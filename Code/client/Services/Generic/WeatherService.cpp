@@ -68,18 +68,19 @@ void WeatherService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcep
 
         // Potentially sets cached weather to map weather.
         // When the player closes the map, it'll send out the proper weather on the next update.
-        m_cachedWeatherId = pWeather->formID;
+        const auto weatherFormId = pWeather->GetFormIdData();
+        m_cachedWeatherId = weatherFormId;
 
         // This is the map weather, should not be synced.
-        if (pWeather->formID == 0xA6858)
+        if (weatherFormId == 0xA6858)
             return;
 
         RequestWeatherChange request{};
 
         auto& modSystem = m_world.GetModSystem();
-        if (!modSystem.GetServerModId(pWeather->formID, request.Id))
+        if (!modSystem.GetServerModId(weatherFormId, request.Id))
         {
-            spdlog::error(__FUNCTION__ ": weather server ID not found, form id: {:X}", pWeather->formID);
+            spdlog::error(__FUNCTION__ ": weather server ID not found, form id: {:X}", weatherFormId);
             return;
         }
 
@@ -153,24 +154,26 @@ void WeatherService::RunWeatherUpdates(const double acDelta) noexcept
         return;
     }
 
+    const auto weatherFormId = pWeather->GetFormIdData();
+
     // This is the map weather, should not be synced.
-    if (pWeather->formID == 0xA6858)
+    if (weatherFormId == 0xA6858)
         return;
 
     // Have to manually check each frame because there's no singular SetWeather being used in-game.
-    if (pWeather->formID == m_cachedWeatherId)
+    if (weatherFormId == m_cachedWeatherId)
         return;
 
     if (m_world.GetPartyService().IsLeader())
     {
-        m_cachedWeatherId = pWeather->formID;
+        m_cachedWeatherId = weatherFormId;
 
         RequestWeatherChange request{};
 
         auto& modSystem = m_world.GetModSystem();
-        if (!modSystem.GetServerModId(pWeather->formID, request.Id))
+        if (!modSystem.GetServerModId(weatherFormId, request.Id))
         {
-            spdlog::error(__FUNCTION__ ": weather server ID not found, form id: {:X}", pWeather->formID);
+            spdlog::error(__FUNCTION__ ": weather server ID not found, form id: {:X}", weatherFormId);
             return;
         }
 

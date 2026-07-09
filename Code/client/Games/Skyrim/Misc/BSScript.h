@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Misc/BSFixedString.h>
+#include <RuntimeLayout.h>
+#include <cstdint>
 #include <tuple>
 
 struct BSScript
@@ -159,6 +161,9 @@ struct BSScript
 
     struct IVirtualMachine
     {
+        using CommonLibVirtualMachineSlots = Skyrim::RuntimeLayout::BSScriptIVirtualMachineCommonLibNgSlots;
+        using LocalVirtualMachineSlots = Skyrim::RuntimeLayout::BSScriptIVirtualMachineLocalShimSlots;
+
         virtual ~IVirtualMachine() = 0;
 
         virtual void sub_01();
@@ -184,7 +189,7 @@ struct BSScript
         virtual void sub_15();
         virtual void sub_16();
         virtual void sub_17();
-        virtual void BindNativeMethod(IFunction* apFunction);
+        virtual bool BindNativeMethod(IFunction* apFunction);
         virtual void sub_19();
         virtual void sub_1A();
         virtual void sub_1B();
@@ -206,7 +211,16 @@ struct BSScript
         virtual void sub_2B();
         virtual void sub_2C();
         virtual IObjectHandlePolicy* GetObjectHandlePolicy();
+
+        uint32_t refCount;
+        uint32_t pad0C;
     };
+
+    static_assert(IVirtualMachine::CommonLibVirtualMachineSlots::GetScriptObjectType1 == 0x9);
+    static_assert(IVirtualMachine::CommonLibVirtualMachineSlots::BindNativeMethod == 0x18);
+    static_assert(IVirtualMachine::CommonLibVirtualMachineSlots::SendEvent == 0x24);
+    static_assert(IVirtualMachine::CommonLibVirtualMachineSlots::GetObjectHandlePolicy == 0x2D);
+    static_assert(sizeof(IVirtualMachine) == IVirtualMachine::LocalVirtualMachineSlots::Size);
 
     struct NativeFunctionBase : IFunction
     {
@@ -313,6 +327,42 @@ struct BSScript
         using FunctionType = bool();
 
         DidLaunchSkyrimTogetherFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+
+        bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
+    };
+
+    struct ConnectToSkyrimTogetherFunc : NativeFunction
+    {
+        using FunctionType = bool(const char* apEndpoint, const char* apPassword);
+
+        ConnectToSkyrimTogetherFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+
+        bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
+    };
+
+    struct DisconnectFromSkyrimTogetherFunc : NativeFunction
+    {
+        using FunctionType = bool();
+
+        DisconnectFromSkyrimTogetherFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+
+        bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
+    };
+
+    struct IsSkyrimTogetherConnectedFunc : NativeFunction
+    {
+        using FunctionType = bool();
+
+        IsSkyrimTogetherConnectedFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+
+        bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
+    };
+
+    struct GetSkyrimTogetherConnectionStateFunc : NativeFunction
+    {
+        using FunctionType = const char*();
+
+        GetSkyrimTogetherConnectionStateFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
 
         bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
     };

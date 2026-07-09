@@ -48,8 +48,7 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
         const auto pAction = Cast<BGSAction>(TESForm::GetById(actionId));
         const auto pTarget = Cast<TESObjectREFR>(TESForm::GetById(targetId));
 
-        apActor->actorState.flags1 = first.State1;
-        apActor->actorState.flags2 = first.State2;
+        apActor->GetActorStateData().SetFlagsData(first.State1, first.State2);
 
         apActor->LoadAnimationVariables(first.Variables);
 
@@ -115,22 +114,26 @@ void AnimationSystem::Serialize(World& aWorld, ClientReferencesMoveRequest& aMov
     auto& update = aMovementSnapshot.Updates[localComponent.Id];
     auto& movement = update.UpdatedMovement;
 
-    if (const auto pCell = pActor->parentCell)
-        World::Get().GetModSystem().GetServerModId(pCell->formID, movement.CellId.ModId, movement.CellId.BaseId);
+    if (const auto pCell = pActor->GetParentCellData())
+        World::Get().GetModSystem().GetServerModId(pCell->GetFormIdData(), movement.CellId.ModId, movement.CellId.BaseId);
 
     if (const auto pWorldSpace = pActor->GetWorldSpace())
-        World::Get().GetModSystem().GetServerModId(pWorldSpace->formID, movement.WorldSpaceId.ModId, movement.WorldSpaceId.BaseId);
+        World::Get().GetModSystem().GetServerModId(pWorldSpace->GetFormIdData(), movement.WorldSpaceId.ModId, movement.WorldSpaceId.BaseId);
 
-    movement.Position = pActor->position;
+    const auto& position = pActor->GetPositionData();
+    movement.Position = position;
 
-    movement.Rotation.x = pActor->rotation.x;
-    movement.Rotation.y = pActor->rotation.z;
+    const auto& rotation = pActor->GetRotationData();
+    movement.Rotation.x = rotation.x;
+    movement.Rotation.y = rotation.z;
 
     pActor->SaveAnimationVariables(movement.Variables);
 
-    if (pActor->currentProcess && pActor->currentProcess->middleProcess)
+    auto* pCurrentProcess = pActor->GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    if (pMiddleProcess)
     {
-        movement.Direction = pActor->currentProcess->middleProcess->direction;
+        movement.Direction = pMiddleProcess->GetDirectionData();
     }
 
     for (auto& entry : animationComponent.Actions)

@@ -1,6 +1,17 @@
 #include <Misc/BSScript.h>
 #include <Misc/GameVM.h>
 
+namespace
+{
+const char* ReadStringArgument(BSScript::Variable* apArgument) noexcept
+{
+    if (!apArgument || apArgument->type != BSScript::Variable::kString || !apArgument->data.s)
+        return "";
+
+    return apArgument->data.s;
+}
+}
+
 uint64_t BSScript::Object::GetHandle()
 {
     TP_THIS_FUNCTION(TGetHandle, uint64_t, BSScript::Object);
@@ -300,5 +311,71 @@ BSScript::DidLaunchSkyrimTogetherFunc::DidLaunchSkyrimTogetherFunc(const char* a
 bool BSScript::DidLaunchSkyrimTogetherFunc::MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame)
 {
     apResult->Set<bool>(true);
+    return true;
+}
+
+BSScript::ConnectToSkyrimTogetherFunc::ConnectToSkyrimTogetherFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+    : NativeFunction(apFunctionName, apClassName, true, 2)
+{
+    pFunction = reinterpret_cast<void*>(aFunction);
+    returnType = aType;
+    parameters.data[0].type = Variable::Type::kString;
+    parameters.data[1].type = Variable::Type::kString;
+}
+
+bool BSScript::ConnectToSkyrimTogetherFunc::MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame)
+{
+    const auto page = apStackFrame->GetPageForFrame();
+    const auto* pEndpoint = ReadStringArgument(apStackFrame->GetStackFrameVariable(0, page));
+    const auto* pPassword = ReadStringArgument(apStackFrame->GetStackFrameVariable(1, page));
+
+    const bool result = ((FunctionType*)pFunction)(pEndpoint, pPassword);
+    apResult->Set<bool>(result);
+
+    return true;
+}
+
+BSScript::DisconnectFromSkyrimTogetherFunc::DisconnectFromSkyrimTogetherFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+    : NativeFunction(apFunctionName, apClassName, true, 0)
+{
+    pFunction = reinterpret_cast<void*>(aFunction);
+    returnType = aType;
+}
+
+bool BSScript::DisconnectFromSkyrimTogetherFunc::MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame)
+{
+    const bool result = ((FunctionType*)pFunction)();
+    apResult->Set<bool>(result);
+
+    return true;
+}
+
+BSScript::IsSkyrimTogetherConnectedFunc::IsSkyrimTogetherConnectedFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+    : NativeFunction(apFunctionName, apClassName, true, 0)
+{
+    pFunction = reinterpret_cast<void*>(aFunction);
+    returnType = aType;
+}
+
+bool BSScript::IsSkyrimTogetherConnectedFunc::MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame)
+{
+    const bool result = ((FunctionType*)pFunction)();
+    apResult->Set<bool>(result);
+
+    return true;
+}
+
+BSScript::GetSkyrimTogetherConnectionStateFunc::GetSkyrimTogetherConnectionStateFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+    : NativeFunction(apFunctionName, apClassName, true, 0)
+{
+    pFunction = reinterpret_cast<void*>(aFunction);
+    returnType = aType;
+}
+
+bool BSScript::GetSkyrimTogetherConnectionStateFunc::MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame)
+{
+    const char* pResult = ((FunctionType*)pFunction)();
+    apResult->Set<const char*>(pResult ? pResult : "");
+
     return true;
 }

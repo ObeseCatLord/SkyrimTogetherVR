@@ -6,6 +6,10 @@
 #include <limits>
 #include <BuildInfo.h>
 
+#if !defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1
+#error "SkyrimTogetherVR launcher must be built with TP_SKYRIM_VR=1"
+#endif
+
 #define CLIENT_DLL 0
 
 struct TargetConfig
@@ -21,12 +25,12 @@ struct TargetConfig
 // clang-format off
 
 static constexpr TargetConfig CurrentTarget{
-    L"SkyrimTogether.dll", 
-    L"Skyrim Special Edition", 
-    489830, 0x40000000, 35410264};
-#define TARGET_NAME L"SkyrimSE"
-#define TARGET_NAME_A "SkyrimSE"
-#define PRODUCT_NAME L"Skyrim Together"
-#define SHORT_NAME L"Skyrim Special Edition"
+    nullptr,
+    L"Skyrim VR",
+    611670, 0x40000000, 35530960};
+#define TARGET_NAME L"SkyrimVR"
+#define TARGET_NAME_A "SkyrimVR"
+#define PRODUCT_NAME L"Skyrim Together VR"
+#define SHORT_NAME L"Skyrim VR"
 
 // clang-format on

@@ -5,21 +5,21 @@
 ExtraDataList* ExtraDataList::New() noexcept
 {
     ExtraDataList* pExtraDataList = Memory::Allocate<ExtraDataList>();
-    pExtraDataList->data = nullptr;
-    pExtraDataList->lock.m_counter = pExtraDataList->lock.m_tid = 0;
-    pExtraDataList->bitfield = Memory::Allocate<ExtraDataList::Bitfield>();
-    memset(pExtraDataList->bitfield, 0, 0x18);
+    pExtraDataList->GetDataData() = nullptr;
+    pExtraDataList->GetLockData().m_counter = pExtraDataList->GetLockData().m_tid = 0;
+    pExtraDataList->GetBitfieldData() = Memory::Allocate<ExtraDataList::Bitfield>();
+    memset(pExtraDataList->GetBitfieldData(), 0, ExtraDataList::LocalExtraDataListOffsets::BitfieldSize);
     return pExtraDataList;
 }
 
 bool ExtraDataList::Contains(ExtraDataType aType) const
 {
-    if (bitfield)
+    if (const auto* pBitfield = GetBitfieldData())
     {
         const auto value = static_cast<uint32_t>(aType);
         const auto index = value >> 3;
 
-        const auto element = bitfield->data[index];
+        const auto element = pBitfield->data[index];
 
         return (element >> (value % 8)) & 1;
     }
@@ -29,24 +29,26 @@ bool ExtraDataList::Contains(ExtraDataType aType) const
 
 BSExtraData* ExtraDataList::GetByType(ExtraDataType aType) const
 {
+    auto& extraLock = GetLockData();
+
     if (!ScopedExtraDataOverride::IsOverriden())
-        lock.Lock();
+        extraLock.Lock();
 
     if (!Contains(aType))
     {
         if (!ScopedExtraDataOverride::IsOverriden())
-            lock.Unlock();
+            extraLock.Unlock();
         return nullptr;
     }
 
-    auto pEntry = data;
+    auto pEntry = GetDataData();
     while (pEntry != nullptr && pEntry->GetType() != aType)
     {
         pEntry = pEntry->next;
     }
 
     if (!ScopedExtraDataOverride::IsOverriden())
-        lock.Unlock();
+        extraLock.Unlock();
 
     return pEntry;
 }
@@ -56,10 +58,11 @@ bool ExtraDataList::Add(ExtraDataType aType, BSExtraData* apNewData)
     if (Contains(aType))
         return false;
 
-    BSScopedLock<BSRecursiveLock> _(lock);
+    BSScopedLock<BSRecursiveLock> _(GetLockData());
 
-    BSExtraData* pNext = data;
-    data = apNewData;
+    BSExtraData*& pData = GetDataData();
+    BSExtraData* pNext = pData;
+    pData = apNewData;
     apNewData->next = pNext;
     SetType(aType, false);
 
@@ -70,7 +73,7 @@ uint32_t ExtraDataList::GetCount() const
 {
     uint32_t count = 0;
 
-    BSExtraData* pNext = data;
+    BSExtraData* pNext = GetDataData();
     while (pNext)
     {
         count++;
@@ -84,7 +87,7 @@ void ExtraDataList::SetType(ExtraDataType aType, bool aClear)
 {
     uint32_t index = static_cast<uint8_t>(aType) >> 3;
     uint8_t bitmask = 1 << (static_cast<uint8_t>(aType) % 8);
-    uint8_t& flag = bitfield->data[index];
+    uint8_t& flag = GetBitfieldData()->data[index];
     if (aClear)
         flag &= ~bitmask;
     else

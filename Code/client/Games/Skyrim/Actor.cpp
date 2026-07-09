@@ -42,6 +42,7 @@
 #include <ExtraData/ExtraTextDisplayData.h>
 #include <Forms/EnchantmentItem.h>
 #include <Forms/AlchemyItem.h>
+#include <Forms/TESAmmo.h>
 #include <Forms/TESObjectCELL.h>
 
 #include <Structs/Skyrim/AnimationGraphDescriptor_BHR_Master.h>
@@ -55,6 +56,8 @@
 
 #include <ModCompat/BehaviorVar.h>
 
+#include <cstddef>
+
 #ifdef SAVE_STUFF
 
 #include <Games/Skyrim/SaveLoad.h>
@@ -66,11 +69,12 @@ void Actor::Save_Reversed(const uint32_t aChangeFlags, Buffer::Writer& aWriter)
 
     Save(&buffer);
 
-    AIProcess* pProcess = currentProcess;
+    AIProcess* pProcess = GetCurrentProcessData();
     const int32_t handlerId = pProcess != nullptr ? pProcess->handlerId : -1;
 
     aWriter.WriteBytes((uint8_t*)&handlerId, 4); // TODO: is this needed ?
-    aWriter.WriteBytes((uint8_t*)&flags1, 4);
+    auto boolBits = GetBoolBitsData();
+    aWriter.WriteBytes(reinterpret_cast<uint8_t*>(&boolBits), 4);
 
     //     if (!handlerId
     //         && (uint8_t)AIProcess::GetBoolInSubStructure(pProcess))
@@ -113,6 +117,7 @@ TP_THIS_FUNCTION(TPickUpObject, void*, Actor, TESObjectREFR* apObject, int32_t a
 TP_THIS_FUNCTION(TDropObject, void*, Actor, void* apResult, TESBoundObject* apObject, ExtraDataList* apExtraData, int32_t aCount, NiPoint3* apLocation, NiPoint3* apRotation);
 TP_THIS_FUNCTION(TSetPosition, char, Actor, NiPoint3& acPosition);
 TP_THIS_FUNCTION(TActorProcess, char, Actor, float aValue);
+TP_THIS_FUNCTION(TGetCurrentAmmo, TESAmmo*, const Actor);
 
 using TGetLocation = TESForm*(TESForm*);
 static TGetLocation* FUNC_GetActorLocation;
@@ -127,6 +132,25 @@ static TPickUpObject* RealPickUpObject = nullptr;
 static TDropObject* RealDropObject = nullptr;
 static TSetPosition* RealSetPosition = nullptr;
 static TActorProcess* RealActorProcess = nullptr;
+
+TESAmmo* GetCurrentAmmoFromVtable(const Actor* apActor) noexcept
+{
+    if (!apActor)
+        return nullptr;
+
+#if TP_SKYRIM_VR
+    constexpr std::size_t kGetCurrentAmmoSlot = 0x9F;
+#else
+    constexpr std::size_t kGetCurrentAmmoSlot = 0x9E;
+#endif
+
+    auto const pVtable = *reinterpret_cast<TGetCurrentAmmo* const* const*>(apActor);
+    if (!pVtable)
+        return nullptr;
+
+    auto* const pGetCurrentAmmo = pVtable[kGetCurrentAmmoSlot];
+    return pGetCurrentAmmo ? TiltedPhoques::ThisCall(pGetCurrentAmmo, apActor) : nullptr;
+}
 
 float Actor::GetSpeed() noexcept
 {
@@ -180,7 +204,7 @@ GamePtr<Actor> Actor::Create(TESNPC* apBaseForm) noexcept
     pActor->GetExtension()->SetRemote(true);
 
     const auto pPlayer = static_cast<Actor*>(GetById(0x14));
-    auto pCell = pPlayer->parentCell;
+    auto pCell = pPlayer->GetParentCellData();
     const auto pWorldSpace = pPlayer->GetWorldSpace();
 
     pActor->SetLevelMod(4);
@@ -188,10 +212,10 @@ GamePtr<Actor> Actor::Create(TESNPC* apBaseForm) noexcept
     pActor->SetParentCell(pCell);
     pActor->SetBaseForm(apBaseForm);
 
-    auto position = pPlayer->position;
-    auto rotation = pPlayer->rotation;
+    auto position = pPlayer->GetPositionData();
+    auto rotation = pPlayer->GetRotationData();
 
-    if (pCell && !(pCell->cellFlags[0] & 1))
+    if (pCell && !pCell->IsInteriorCellData())
         pCell = nullptr;
 
     ModManager::Get()->Spawn(position, rotation, pCell, pWorldSpace, pActor);
@@ -202,7 +226,7 @@ GamePtr<Actor> Actor::Create(TESNPC* apBaseForm) noexcept
     pActor->GetMagicCaster(MagicSystem::CastingSource::RIGHT_HAND);
     pActor->GetMagicCaster(MagicSystem::CastingSource::OTHER);
 
-    pActor->flags &= 0xFFDFFFFF;
+    pActor->SetFormFlagsData(pActor->GetFormFlagsData() & 0xFFDFFFFF);
 
     return pActor;
 }
@@ -218,7 +242,9 @@ void Actor::SetLevelMod(uint32_t aLevel) noexcept
     TP_THIS_FUNCTION(TActorSetLevelMod, void, ExtraDataList, uint32_t);
     POINTER_SKYRIMSE(TActorSetLevelMod, realSetLevelMod, 11806);
 
-    const auto pExtraDataList = &extraData;
+    const auto pExtraDataList = GetExtraDataListData();
+    if (!pExtraDataList)
+        return;
 
     TiltedPhoques::ThisCall(realSetLevelMod, pExtraDataList, aLevel);
 }
@@ -240,7 +266,7 @@ ActorExtension* Actor::GetExtension() noexcept
 
 ExActor* Actor::AsExActor() noexcept
 {
-    if (formType == Type && this != PlayerCharacter::Get())
+    if (GetFormTypeData() == Type && this != PlayerCharacter::Get())
         return static_cast<ExActor*>(this);
 
     return nullptr;
@@ -258,13 +284,14 @@ extern thread_local bool g_forceAnimation;
 
 void Actor::SetWeaponDrawnEx(bool aDraw) noexcept
 {
-    spdlog::debug("Setting weapon drawn: {:X}:{}, current state: {}", formID, aDraw, actorState.IsWeaponDrawn());
+    auto& actorStateData = GetActorStateData();
+    spdlog::debug("Setting weapon drawn: {:X}:{}, current state: {}", GetFormIdData(), aDraw, actorStateData.IsWeaponDrawn());
 
-    if (actorState.IsWeaponDrawn() == aDraw)
+    if (actorStateData.IsWeaponDrawn() == aDraw)
     {
-        actorState.SetWeaponDrawn(!aDraw);
+        actorStateData.SetWeaponDrawn(!aDraw);
 
-        spdlog::debug("Setting weapon drawn after update: {:X}:{}, current state: {}", formID, aDraw, actorState.IsWeaponDrawn());
+        spdlog::debug("Setting weapon drawn after update: {:X}:{}, current state: {}", GetFormIdData(), aDraw, actorStateData.IsWeaponDrawn());
     }
 
     g_forceAnimation = true;
@@ -287,7 +314,7 @@ void Actor::SetPlayerRespawnMode(bool aSet) noexcept
     // Makes the player go in an unrecoverable bleedout state
     SetNoBleedoutRecovery(aSet);
 
-    if (formID != 0x14)
+    if (GetFormIdData() != 0x14)
     {
         auto pPlayerFaction = Cast<TESFaction>(TESForm::GetById(0xDB1));
         SetFactionRank(pPlayerFaction, 1);
@@ -297,9 +324,9 @@ void Actor::SetPlayerRespawnMode(bool aSet) noexcept
 void Actor::SetEssentialEx(bool aSet) noexcept
 {
     SetEssential(aSet);
-    TESNPC* pBase = Cast<TESNPC>(baseForm);
+    TESNPC* pBase = Cast<TESNPC>(GetBaseFormData());
     if (pBase)
-        pBase->actorData.SetEssential(aSet);
+        pBase->GetActorBaseData().SetEssential(aSet);
 }
 
 void Actor::SetNoBleedoutRecovery(bool aSet) noexcept
@@ -311,7 +338,7 @@ void Actor::SetNoBleedoutRecovery(bool aSet) noexcept
 
 void Actor::DispelAllSpells(bool aNow) noexcept
 {
-    magicTarget.DispelAllSpells(aNow);
+    GetMagicTargetData().DispelAllSpells(aNow);
 }
 
 bool Actor::IsInCombat() const noexcept
@@ -339,8 +366,8 @@ void Actor::StartCombatEx(Actor* apTarget) noexcept
 
 void Actor::SetCombatTargetEx(Actor* apTarget) noexcept
 {
-    if (pCombatController)
-        pCombatController->SetTarget(apTarget);
+    if (auto* pCombatControllerData = GetCombatControllerData())
+        pCombatControllerData->SetTarget(apTarget);
 }
 
 void Actor::StartCombat(Actor* apTarget) noexcept
@@ -362,7 +389,7 @@ bool Actor::RemoveSpell(MagicItem* apSpell) noexcept
         spdlog::error(__FUNCTION__ ": apSpell is null");
         return false;
     }
-    // spdlog::info(__FUNCTION__ ": removing: {} from actor: {}", apSpell->formID, formID);
+    // spdlog::info(__FUNCTION__ ": removing spell from actor");
     return TiltedPhoques::ThisCall(RealRemoveSpell, this, apSpell);
 }
 
@@ -388,11 +415,11 @@ bool TP_MAKE_THISCALL(HookRemoveSpell, Actor, MagicItem* apSpell)
     bool result = TiltedPhoques::ThisCall(RealRemoveSpell, apThis, apSpell);
     if (apThis->GetExtension()->IsLocalPlayer() && result)
     {
-        //spdlog::info(__FUNCTION__ ": spell: {}, ID: {} from local player", apSpell->GetName() , apSpell->formID);
+        //spdlog::info(__FUNCTION__ ": spell removed from local player: {}", apSpell->GetName());
        RemoveSpellEvent removalEvent;
 
-        removalEvent.TargetId = apThis->formID;
-        removalEvent.SpellId = apSpell->formID;
+        removalEvent.TargetId = apThis->GetFormIdData();
+        removalEvent.SpellId = apSpell->GetFormIdData();
         World::Get().GetRunner().Trigger(removalEvent);
     }
 
@@ -453,15 +480,23 @@ void Actor::InterruptCast(bool abRefund) noexcept
 
 TESForm* Actor::GetEquippedWeapon(uint32_t aSlotId) const noexcept
 {
-    if (currentProcess && currentProcess->middleProcess)
+    auto* pCurrentProcess = GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    if (pMiddleProcess)
     {
-        auto pMiddleProcess = currentProcess->middleProcess;
+        if (aSlotId == 0)
+        {
+            auto* pLeftEquippedObject = pMiddleProcess->GetLeftEquippedObjectData();
+            if (pLeftEquippedObject)
+                return pLeftEquippedObject->GetObjectData();
+        }
 
-        if (aSlotId == 0 && pMiddleProcess->leftEquippedObject)
-            return pMiddleProcess->leftEquippedObject->pObject;
-
-        else if (aSlotId == 1 && pMiddleProcess->rightEquippedObject)
-            return pMiddleProcess->rightEquippedObject->pObject;
+        if (aSlotId == 1)
+        {
+            auto* pRightEquippedObject = pMiddleProcess->GetRightEquippedObjectData();
+            if (pRightEquippedObject)
+                return pRightEquippedObject->GetObjectData();
+        }
     }
 
     return nullptr;
@@ -469,10 +504,17 @@ TESForm* Actor::GetEquippedWeapon(uint32_t aSlotId) const noexcept
 
 TESForm* Actor::GetEquippedAmmo() const noexcept
 {
-    if (currentProcess && currentProcess->middleProcess && currentProcess->middleProcess->ammoEquippedObject)
+    if (auto* pCurrentAmmo = GetCurrentAmmoFromVtable(this))
+        return pCurrentAmmo;
+
+    auto* pCurrentProcess = GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    auto* pBothHandsObject = pMiddleProcess ? pMiddleProcess->GetBothHandsEquippedObjectData() : nullptr;
+    if (pBothHandsObject)
     {
-        // TODO: rtti cast to check if is ammo object? or actually, just call AIProcess::GetCurrentAmmo()
-        return currentProcess->middleProcess->ammoEquippedObject->pObject;
+        auto* pObject = pBothHandsObject->GetObjectData();
+        if (pObject && pObject->GetFormTypeData() == FormType::Ammo)
+            return pObject;
     }
 
     return nullptr;
@@ -485,27 +527,30 @@ bool Actor::IsWearingBodyPiece() const noexcept
 
 bool Actor::ShouldWearBodyPiece() const noexcept
 {
-    TESNPC* pBase = Cast<TESNPC>(baseForm);
+    TESNPC* pBase = Cast<TESNPC>(GetBaseFormData());
     if (!pBase)
         return false;
 
-    BGSOutfit* pDefaultOutfit = pBase->outfits[0];
+    BGSOutfit* pDefaultOutfit = pBase->GetDefaultOutfitData();
     if (!pDefaultOutfit)
         return false;
 
-    for (auto* pItem : pDefaultOutfit->outfitItems)
+    for (auto* pItem : pDefaultOutfit->GetOutfitItemsData())
     {
         TESObjectARMO* pArmor = nullptr;
 
-        if (pItem->formType == FormType::Armor)
+        if (pItem->GetFormTypeData() == FormType::Armor)
             pArmor = Cast<TESObjectARMO>(pItem);
-        else if (pItem->formType == FormType::LeveledItem)
+        else if (pItem->GetFormTypeData() == FormType::LeveledItem)
         {
-            TESLevItem* pLevItem = Cast<TESLevItem>(pItem);
-            if (!pLevItem || !pLevItem->pLeveledListA || !pLevItem->pLeveledListA->pForm)
+            // TESLevItem RTTI is not resolved in the current VR address sources; the form type check above proves this narrow path.
+            TESLevItem* pLevItem = static_cast<TESLevItem*>(pItem);
+            auto* pLeveledEntries = pLevItem ? pLevItem->GetEntriesData() : nullptr;
+            auto* pLeveledForm = pLeveledEntries ? pLeveledEntries->GetFormData() : nullptr;
+            if (!pLeveledForm || pLevItem->GetEntryCountData() == 0)
                 continue;
 
-            pArmor = Cast<TESObjectARMO>(pLevItem->pLeveledListA->pForm);
+            pArmor = Cast<TESObjectARMO>(pLeveledForm);
         }
         else
             continue;
@@ -523,10 +568,12 @@ bool Actor::ShouldWearBodyPiece() const noexcept
 // Get owner of a summon or raised corpse
 Actor* Actor::GetCommandingActor() const noexcept
 {
-    if (currentProcess && currentProcess->middleProcess && currentProcess->middleProcess->commandingActor)
+    auto* pCurrentProcess = GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    auto handle = pMiddleProcess ? pMiddleProcess->GetCommandingActorData() : BSPointerHandle<TESObjectREFR>{};
+    if (handle)
     {
-        auto handle = currentProcess->middleProcess->commandingActor.handle;
-        auto* pOwner = Cast<Actor>(TESObjectREFR::GetByHandle(handle.iBits));
+        auto* pOwner = Cast<Actor>(TESObjectREFR::GetByHandle(handle.handle.iBits));
         return pOwner;
     }
 
@@ -536,17 +583,19 @@ Actor* Actor::GetCommandingActor() const noexcept
 // Get owner of a summon or raised corpse
 void Actor::SetCommandingActor(BSPointerHandle<TESObjectREFR> aCommandingActor) noexcept
 {
-    if (currentProcess && currentProcess->middleProcess)
+    auto* pCurrentProcess = GetCurrentProcessData();
+    auto* pMiddleProcess = pCurrentProcess ? pCurrentProcess->GetMiddleProcessData() : nullptr;
+    if (pMiddleProcess)
     {
-        currentProcess->middleProcess->commandingActor = aCommandingActor;
-        flags2 |= ActorFlags::IS_COMMANDED_ACTOR;
+        pMiddleProcess->SetCommandingActorData(aCommandingActor);
+        SetBoolFlagsData(GetBoolFlagsData() | ActorFlags::IS_COMMANDED_ACTOR);
     }
 }
 
 bool Actor::IsPlayerSummon() const noexcept
 {
     const Actor* pCommandingActor = GetCommandingActor();
-    return pCommandingActor && pCommandingActor->formID == 0x14;
+    return pCommandingActor && pCommandingActor->GetFormIdData() == 0x14;
 }
 
 TESForm* Actor::GetCurrentLocation()
@@ -562,31 +611,33 @@ Factions Actor::GetFactions() const noexcept
 
     auto& modSystem = World::Get().GetModSystem();
 
-    auto* pNpc = Cast<TESNPC>(baseForm);
+    auto* pNpc = Cast<TESNPC>(GetBaseFormData());
     if (pNpc)
     {
-        auto& factions = pNpc->actorData.factions;
+        auto& factions = pNpc->GetActorBaseData().GetFactionsData();
 
         for (auto i = 0u; i < factions.length; ++i)
         {
             Faction faction;
 
-            modSystem.GetServerModId(factions[i].faction->formID, faction.Id);
+            modSystem.GetServerModId(factions[i].faction->GetFormIdData(), faction.Id);
             faction.Rank = factions[i].rank;
 
             result.NpcFactions.push_back(faction);
         }
     }
 
-    auto* pChanges = Cast<ExtraFactionChanges>(extraData.GetByType(ExtraDataType::Faction));
+    const auto* pExtraDataList = GetExtraDataListData();
+    auto* pChanges = pExtraDataList ? Cast<ExtraFactionChanges>(pExtraDataList->GetByType(ExtraDataType::Faction)) : nullptr;
     if (pChanges)
     {
-        for (auto i = 0u; i < pChanges->entries.length; ++i)
+        const auto& factionChanges = pChanges->GetEntriesData();
+        for (auto i = 0u; i < factionChanges.length; ++i)
         {
             Faction faction;
 
-            modSystem.GetServerModId(pChanges->entries[i].faction->formID, faction.Id);
-            faction.Rank = pChanges->entries[i].rank;
+            modSystem.GetServerModId(factionChanges[i].faction->GetFormIdData(), faction.Id);
+            faction.Rank = factionChanges[i].rank;
 
             result.ExtraFactions.push_back(faction);
         }
@@ -599,12 +650,13 @@ ActorValues Actor::GetEssentialActorValues() const noexcept
 {
     ActorValues actorValues;
 
+    const auto& actorValueOwnerData = GetActorValueOwnerData();
     int essentialValues[] = {ActorValueInfo::kHealth, ActorValueInfo::kStamina, ActorValueInfo::kMagicka};
     for (auto i : essentialValues)
     {
-        float value = actorValueOwner.GetValue(i);
+        float value = actorValueOwnerData.GetValue(i);
         actorValues.ActorValuesList.insert({i, value});
-        float maxValue = actorValueOwner.GetPermanentValue(i);
+        float maxValue = actorValueOwnerData.GetPermanentValue(i);
         actorValues.ActorMaxValuesList.insert({i, maxValue});
     }
 
@@ -613,17 +665,17 @@ ActorValues Actor::GetEssentialActorValues() const noexcept
 
 float Actor::GetActorValue(uint32_t aId) const noexcept
 {
-    return actorValueOwner.GetValue(aId);
+    return GetActorValueOwnerData().GetValue(aId);
 }
 
 float Actor::GetActorPermanentValue(uint32_t aId) const noexcept
 {
-    return actorValueOwner.GetPermanentValue(aId);
+    return GetActorValueOwnerData().GetPermanentValue(aId);
 }
 
 void Actor::SetActorValue(uint32_t aId, float aValue) noexcept
 {
-    actorValueOwner.SetValue(aId, aValue);
+    GetActorValueOwnerData().SetValue(aId, aValue);
 }
 
 void Actor::ForceActorValue(ActorValueOwner::ForceMode aMode, uint32_t aId, float aValue) noexcept
@@ -635,7 +687,7 @@ void Actor::ForceActorValue(ActorValueOwner::ForceMode aMode, uint32_t aId, floa
     if (aValue == initialValue)
         return;
 
-    actorValueOwner.ForceCurrent(aMode, aId, aValue - initialValue);
+    GetActorValueOwnerData().ForceCurrent(aMode, aId, aValue - initialValue);
 }
 
 Inventory Actor::GetActorInventory() const noexcept
@@ -653,13 +705,16 @@ MagicEquipment Actor::GetMagicEquipment() const noexcept
 
     auto& modSystem = World::Get().GetModSystem();
 
-    uint32_t mainId = magicItems[0] ? magicItems[0]->formID : 0;
+    const auto* pLeftSpell = GetSelectedSpellData(0);
+    uint32_t mainId = pLeftSpell ? pLeftSpell->GetFormIdData() : 0;
     modSystem.GetServerModId(mainId, equipment.LeftHandSpell);
 
-    uint32_t secondaryId = magicItems[1] ? magicItems[1]->formID : 0;
+    const auto* pRightSpell = GetSelectedSpellData(1);
+    uint32_t secondaryId = pRightSpell ? pRightSpell->GetFormIdData() : 0;
     modSystem.GetServerModId(secondaryId, equipment.RightHandSpell);
 
-    uint32_t shoutId = equippedShout ? equippedShout->formID : 0;
+    const auto* pPowerOrShout = GetSelectedPowerOrShoutData();
+    uint32_t shoutId = pPowerOrShout ? pPowerOrShout->GetFormIdData() : 0;
     modSystem.GetServerModId(shoutId, equipment.Shout);
 
     return equipment;
@@ -682,7 +737,7 @@ int32_t Actor::GetGoldAmount() const noexcept
 
 void Actor::SetActorInventory(const Inventory& acInventory) noexcept
 {
-    spdlog::info("Setting inventory for actor {:X}", formID);
+    spdlog::info("Setting inventory for actor {:X}", GetFormIdData());
 
     // The UnEquipAll() that used to be here is redundant,
     // as RemoveAllItems() unequips every item if needed.
@@ -782,10 +837,11 @@ void Actor::UnEquipAll() noexcept
     EquipManager::Get()->UnequipAll(this);
 
     // Taken from skyrim's code shouts can be two form types apparently
-    if (equippedShout && ((int)equippedShout->formType - 41) <= 1)
+    auto* pPowerOrShout = GetSelectedPowerOrShoutData();
+    if (pPowerOrShout && (static_cast<int>(pPowerOrShout->GetFormTypeData()) - 41) <= 1)
     {
-        EquipManager::Get()->UnEquipShout(this, equippedShout);
-        equippedShout = nullptr;
+        EquipManager::Get()->UnEquipShout(this, pPowerOrShout);
+        SetSelectedPowerOrShoutData(nullptr);
     }
 }
 
@@ -810,8 +866,8 @@ void Actor::GenerateMagicCasters() noexcept
 
     for (int i = 0; i < 4; i++)
     {
-        if (casters[i] == nullptr)
-            casters[i] = Cast<ActorMagicCaster>(GetMagicCaster(static_cast<CS>(i)));
+        if (GetCachedMagicCasterData(i) == nullptr)
+            SetCachedMagicCasterData(i, Cast<ActorMagicCaster>(GetMagicCaster(static_cast<CS>(i))));
     }
 }
 
@@ -868,7 +924,8 @@ void Actor::Respawn() noexcept
 
 bool Actor::IsVampireLord() const noexcept
 {
-    return race && race->formID == 0x200283A;
+    const auto* pRace = GetRaceData();
+    return pRace && pRace->GetFormIdData() == 0x200283A;
 }
 
 extern thread_local bool g_forceAnimation;
@@ -915,7 +972,7 @@ char TP_MAKE_THISCALL(HookSetPosition, Actor, NiPoint3& aPosition)
         return 1;
 
     // Don't interfere with non actor references, or the player, or if we are calling our self
-    if (apThis->formType != Actor::Type || apThis == PlayerCharacter::Get() || ScopedReferencesOverride::IsOverriden())
+    if (apThis->GetFormTypeData() != Actor::Type || apThis == PlayerCharacter::Get() || ScopedReferencesOverride::IsOverriden())
         return TiltedPhoques::ThisCall(RealSetPosition, apThis, aPosition);
 
     ScopedReferencesOverride recursionGuard;
@@ -931,10 +988,10 @@ static TForceState* RealForceState = nullptr;
 
 void TP_MAKE_THISCALL(HookForceState, Actor, const NiPoint3& acPosition, float aX, float aZ, TESObjectCELL* apCell, TESWorldSpace* apWorldSpace, bool aUnkBool)
 {
-    /*const auto pNpc = Cast<TESNPC>(apThis->baseForm);
+    /*const auto pNpc = Cast<TESNPC>(apThis->GetBaseFormData());
     if (pNpc)
     {
-        spdlog::info("For TESNPC: {}, spawn at {} {} {}", pNpc->fullName.value, apPosition->m_x, apPosition->m_y,
+        spdlog::info("For TESNPC: {}, spawn at {} {} {}", pNpc->GetFullNameData().GetFullNameStringData(), apPosition->m_x, apPosition->m_y,
                      apPosition->m_z);
     }*/
 
@@ -950,10 +1007,10 @@ static TSpawnActorInWorld* RealSpawnActorInWorld = nullptr;
 // TODO: this isn't SpawnActorInWorld, this is TESObjectREFR::UpdateReference3D()
 bool TP_MAKE_THISCALL(HookSpawnActorInWorld, Actor)
 {
-    const auto* pNpc = Cast<TESNPC>(apThis->baseForm);
+    const auto* pNpc = Cast<TESNPC>(apThis->GetBaseFormData());
     if (pNpc)
     {
-        spdlog::info("Spawn Actor: {:X}, and NPC {}", apThis->formID, pNpc->fullName.value);
+        spdlog::info("Spawn Actor: {:X}, and NPC {}", apThis->GetFormIdData(), pNpc->GetFullNameData().GetFullNameStringData());
     }
 
     return TiltedPhoques::ThisCall(RealSpawnActorInWorld, apThis);
@@ -966,7 +1023,7 @@ static TDamageActor* RealDamageActor = nullptr;
 bool TP_MAKE_THISCALL(HookDamageActor, Actor, float aDamage, Actor* apHitter, bool aKillMove)
 {
     if (apHitter)
-        World::Get().GetRunner().Trigger(HitEvent(apHitter->formID, apThis->formID));
+        World::Get().GetRunner().Trigger(HitEvent(apHitter->GetFormIdData(), apThis->GetFormIdData()));
 
     float realDamage = GameplayFormulas::CalculateRealDamage(apThis, aDamage, aKillMove);
 
@@ -982,7 +1039,7 @@ bool TP_MAKE_THISCALL(HookDamageActor, Actor, float aDamage, Actor* apHitter, bo
                 return false;
         }
 
-        World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->formID, -realDamage));
+        World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->GetFormIdData(), -realDamage));
         return TiltedPhoques::ThisCall(RealDamageActor, apThis, aDamage, apHitter, aKillMove);
     }
     else if (pExHittee->IsRemotePlayer())
@@ -995,7 +1052,7 @@ bool TP_MAKE_THISCALL(HookDamageActor, Actor, float aDamage, Actor* apHitter, bo
         const auto* pExHitter = apHitter->GetExtension();
         if (pExHitter->IsLocalPlayer())
         {
-            World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->formID, -realDamage));
+            World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->GetFormIdData(), -realDamage));
             return TiltedPhoques::ThisCall(RealDamageActor, apThis, aDamage, apHitter, aKillMove);
         }
         if (pExHitter->IsRemotePlayer())
@@ -1006,7 +1063,7 @@ bool TP_MAKE_THISCALL(HookDamageActor, Actor, float aDamage, Actor* apHitter, bo
 
     if (pExHittee->IsLocal())
     {
-        World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->formID, -realDamage));
+        World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->GetFormIdData(), -realDamage));
         return TiltedPhoques::ThisCall(RealDamageActor, apThis, aDamage, apHitter, aKillMove);
     }
     else
@@ -1024,14 +1081,14 @@ void TP_MAKE_THISCALL(HookApplyActorEffect, ActiveEffect, Actor* apTarget, float
 
     if (pValueModEffect)
     {
-        if (pValueModEffect->actorValueIndex == ActorValueInfo::kHealth && aEffectValue > 0.0f)
+        if (pValueModEffect->GetActorValueIndexData() == ActorValueInfo::kHealth && aEffectValue > 0.0f)
         {
             if (apTarget && apTarget->GetExtension())
             {
                 const auto pExTarget = apTarget->GetExtension();
                 if (pExTarget->IsLocal())
                 {
-                    World::Get().GetRunner().Trigger(HealthChangeEvent(apTarget->formID, aEffectValue));
+                    World::Get().GetRunner().Trigger(HealthChangeEvent(apTarget->GetFormIdData(), aEffectValue));
                     return TiltedPhoques::ThisCall(RealApplyActorEffect, apThis, apTarget, aEffectValue, unk1);
                 }
                 return;
@@ -1058,7 +1115,7 @@ void* TP_MAKE_THISCALL(HookRegenAttributes, Actor, int aId, float aRegenValue)
         return 0;
     }
 
-    World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->formID, aRegenValue));
+    World::Get().GetRunner().Trigger(HealthChangeEvent(apThis->GetFormIdData(), aRegenValue));
     return TiltedPhoques::ThisCall(RealRegenAttributes, apThis, aId, aRegenValue);
 }
 
@@ -1069,13 +1126,13 @@ void TP_MAKE_THISCALL(HookAddInventoryItem, Actor, TESBoundObject* apItem, Extra
         auto& modSystem = World::Get().GetModSystem();
 
         Inventory::Entry item{};
-        modSystem.GetServerModId(apItem->formID, item.BaseId);
+        modSystem.GetServerModId(apItem->GetFormIdData(), item.BaseId);
         item.Count = aCount;
 
         if (apExtraData)
             apThis->GetItemFromExtraData(item, apExtraData);
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item)));
+        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item)));
     }
 
     TiltedPhoques::ThisCall(RealAddInventoryItem, apThis, apItem, apExtraData, aCount, apOldOwner);
@@ -1087,8 +1144,12 @@ void* TP_MAKE_THISCALL(HookPickUpObject, Actor, TESObjectREFR* apObject, int32_t
     {
         auto& modSystem = World::Get().GetModSystem();
 
+        const auto* pBaseForm = apObject->GetBaseFormData();
+        if (!pBaseForm)
+            return TiltedPhoques::ThisCall(RealPickUpObject, apThis, apObject, aCount, aUnk1, aUnk2);
+
         Inventory::Entry item{};
-        modSystem.GetServerModId(apObject->baseForm->formID, item.BaseId);
+        modSystem.GetServerModId(pBaseForm->GetFormIdData(), item.BaseId);
         item.Count = aCount;
 
         if (apObject->GetExtraDataList())
@@ -1098,7 +1159,7 @@ void* TP_MAKE_THISCALL(HookPickUpObject, Actor, TESObjectREFR* apObject, int32_t
         // The inventory change event should always be sent to the server, otherwise the server inventory won't be updated.
         bool shouldUpdateClients = apObject->IsTemporary() && !ScopedActivateOverride::IsOverriden();
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item), false, shouldUpdateClients));
+        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item), false, shouldUpdateClients));
     }
 
     return TiltedPhoques::ThisCall(RealPickUpObject, apThis, apObject, aCount, aUnk1, aUnk2);
@@ -1114,13 +1175,13 @@ void* TP_MAKE_THISCALL(HookDropObject, Actor, void* apResult, TESBoundObject* ap
     auto& modSystem = World::Get().GetModSystem();
 
     Inventory::Entry item{};
-    modSystem.GetServerModId(apObject->formID, item.BaseId);
+    modSystem.GetServerModId(apObject->GetFormIdData(), item.BaseId);
     item.Count = -aCount;
 
     if (apExtraData)
         apThis->GetItemFromExtraData(item, apExtraData);
 
-    World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item), true));
+    World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item), true));
 
     ScopedInventoryOverride _;
 
@@ -1148,7 +1209,7 @@ void Actor::DropOrPickUpObject(const Inventory::Entry& arEntry, NiPoint3* apLoca
 
 void Actor::DropObject(TESBoundObject* apObject, ExtraDataList* apExtraData, int32_t aCount, NiPoint3* apLocation, NiPoint3* apRotation) noexcept
 {
-    spdlog::debug("Dropping object, form id: {:X}, count: {}, actor: {:X}", apObject->formID, aCount, formID);
+    spdlog::debug("Dropping object, form id: {:X}, count: {}, actor: {:X}", apObject->GetFormIdData(), aCount, GetFormIdData());
     BSPointerHandle<TESObjectREFR> result{};
     TiltedPhoques::ThisCall(RealDropObject, this, &result, apObject, apExtraData, aCount, apLocation, apRotation);
 }
@@ -1169,7 +1230,7 @@ void TP_MAKE_THISCALL(HookUpdateDetectionState, ActorKnowledge, void* apState)
         {
             if (pOwnerActor->GetExtension()->IsRemotePlayer() && pTargetActor->GetExtension()->IsLocalPlayer())
             {
-                spdlog::debug("Cancelling detection from remote player to local player, owner: {:X}, target: {:X}", pOwner->formID, pTarget->formID);
+                spdlog::debug("Cancelling detection from remote player to local player, owner: {:X}, target: {:X}", pOwner->GetFormIdData(), pTarget->GetFormIdData());
                 return;
             }
         }
@@ -1197,7 +1258,7 @@ uint64_t TP_MAKE_THISCALL(HookProcessResponse, void, DialogueItem* apVoice, Acto
 bool TP_MAKE_THISCALL(HookInitiateMountPackage, Actor, Actor* apMount)
 {
     if (apMount && apThis->GetExtension()->IsLocal())
-        World::Get().GetRunner().Trigger(MountEvent(apThis->formID, apMount->formID));
+        World::Get().GetRunner().Trigger(MountEvent(apThis->GetFormIdData(), apMount->GetFormIdData()));
 
     return TiltedPhoques::ThisCall(RealInitiateMountPackage, apThis, apMount);
 }
@@ -1218,7 +1279,7 @@ bool TP_MAKE_THISCALL(HookSpeakSoundFunction, Actor, const char* apName, uint32_
     spdlog::debug("a3: {:X}, a4: {}, a5: {}, a6: {}, a7: {}, a8: {:X}, a9: {:X}, a10: {}, a11: {:X}, a12: {}, a13: {}, a14: {}", (uint64_t)a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14);
 
     if (apThis->GetExtension()->IsLocal())
-        World::Get().GetRunner().Trigger(DialogueEvent(apThis->formID, apName));
+        World::Get().GetRunner().Trigger(DialogueEvent(apThis->GetFormIdData(), apName));
 
     return TiltedPhoques::ThisCall(RealSpeakSoundFunction, apThis, apName, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14);
 }

@@ -1,5 +1,6 @@
 
 #include <Games/Skyrim/BSSystem/BSThread.h>
+#include <Games/Skyrim/VR/VRHookPolicy.h>
 #include <base/threading/ThreadUtils.h>
 
 namespace
@@ -80,8 +81,10 @@ static TiltedPhoques::Initializer s_BSThreadInit(
         // need to detour this for now :/
         TP_HOOK_IMMEDIATE(&BSThread_Initialize, &Hook_BSThread_Initialize);
 
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_SET_THREAD_NAME, TP_SKYRIM_VR_INLINE_PATCH_SET_THREAD_NAME_VR_RESOLVED)
         const VersionDbPtr<uint8_t> setThreadName(69066);
         TiltedPhoques::Jump(setThreadName.Get(), &Hook_SetThreadName);
+#endif
 
 #if 0
     const VersionDbPtr<uint8_t> createHavokThread(57704);

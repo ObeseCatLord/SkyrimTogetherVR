@@ -29,7 +29,7 @@ void DebugService::DrawQuestDebugView()
     {
         Set<uint32_t> foundQuests{};
 
-        for (auto& objective : pPlayer->objectives)
+        for (const auto& objective : pPlayer->GetObjectives())
         {
             TESQuest* pQuest = objective.instance->quest;
             if (!pQuest)
@@ -38,16 +38,17 @@ void DebugService::DrawQuestDebugView()
             if (QuestService::IsNonSyncableQuest(pQuest))
                 continue;
 
-            if (foundQuests.contains(pQuest->formID))
+            const uint32_t questFormId = pQuest->GetFormIdData();
+            if (foundQuests.contains(questFormId))
                 continue;
 
-            foundQuests.insert(pQuest->formID);
+            foundQuests.insert(questFormId);
 
             if (!pQuest->IsActive())
                 continue;
 
             char questName[256];
-            sprintf_s(questName, std::size(questName), "%s (%s)", pQuest->fullName.value.AsAscii(), pQuest->idName.AsAscii());
+            sprintf_s(questName, std::size(questName), "%s (%s)", pQuest->GetFullNameData().GetFullNameStringData(), pQuest->idName.AsAscii());
             if (!ImGui::CollapsingHeader(questName))
                 continue;
 
@@ -77,20 +78,25 @@ void DebugService::DrawQuestDebugView()
                         if (!pActor)
                             continue;
 
-                        if (foundActors.contains(pActor->formID))
+                        const uint32_t actorFormId = pActor->GetFormIdData();
+                        if (foundActors.contains(actorFormId))
                             continue;
 
-                        foundActors.insert(pActor->formID);
+                        foundActors.insert(actorFormId);
+
+                        const auto* pBaseForm = pActor->GetBaseFormData();
+                        const char* pName = pBaseForm ? pBaseForm->GetName() : "UNNAMED";
 
                         char name[256];
-                        sprintf_s(name, std::size(name), "%s (%x)", pActor->baseForm->GetName(), pActor->formID);
+                        sprintf_s(name, std::size(name), "%s (%x)", pName, actorFormId);
                         ImGui::BulletText(name);
 
-                        ImGui::PushID(pActor->formID);
+                        ImGui::PushID(actorFormId);
                         if (ImGui::Button("Teleport to me"))
                         {
                             auto* pPlayer = PlayerCharacter::Get();
-                            m_world.GetRunner().Trigger(MoveActorEvent(pActor->formID, pPlayer->parentCell->formID, pPlayer->position));
+                            if (pPlayer && pPlayer->GetParentCellData())
+                                m_world.GetRunner().Trigger(MoveActorEvent(actorFormId, pPlayer->GetParentCellData()->GetFormIdData(), pPlayer->GetPositionData()));
                         }
                         ImGui::PopID();
                     }

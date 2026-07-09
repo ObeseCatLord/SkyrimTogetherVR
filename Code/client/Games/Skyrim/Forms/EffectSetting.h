@@ -5,9 +5,63 @@
 #include <Components/BGSKeywordForm.h>
 #include <Components/BGSMenuDisplayObject.h>
 #include <Games/Magic/MagicSystem.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 struct EffectSetting : TESForm
 {
+    using CommonLibEffectSettingOffsets = Skyrim::RuntimeLayout::EffectSettingCommonLibNgOffsets;
+    using LocalEffectSettingOffsets = Skyrim::RuntimeLayout::EffectSettingLocalShimOffsets;
+
+    [[nodiscard]] TESFullName& GetFullNameData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<TESFullName>(this, CommonLibEffectSettingOffsets::FullName);
+#else
+        return fullName;
+#endif
+    }
+
+    [[nodiscard]] const TESFullName& GetFullNameData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<TESFullName>(this, CommonLibEffectSettingOffsets::FullName);
+#else
+        return fullName;
+#endif
+    }
+
+    [[nodiscard]] BGSKeywordForm& GetKeywordFormData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<BGSKeywordForm>(this, CommonLibEffectSettingOffsets::KeywordForm);
+#else
+        return keywordForm;
+#endif
+    }
+
+    [[nodiscard]] const BGSKeywordForm& GetKeywordFormData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<BGSKeywordForm>(this, CommonLibEffectSettingOffsets::KeywordForm);
+#else
+        return keywordForm;
+#endif
+    }
+
+    [[nodiscard]] EffectArchetypes::ArchetypeID GetArchetypeData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<EffectArchetypes::ArchetypeID>(this, CommonLibEffectSettingOffsets::Archetype);
+#else
+        return eArchetype;
+#endif
+    }
+
     TESFullName fullName;
     BGSMenuDisplayObject menuDisplayObject;
     BGSKeywordForm keywordForm;
@@ -32,4 +86,9 @@ struct EffectSetting : TESForm
     // more stuff
 };
 
-static_assert(offsetof(EffectSetting, eArchetype) == 0xC0);
+static_assert(EffectSetting::CommonLibEffectSettingOffsets::FullName == 0x20);
+static_assert(EffectSetting::CommonLibEffectSettingOffsets::KeywordForm == 0x40);
+static_assert(EffectSetting::CommonLibEffectSettingOffsets::Archetype == 0xC0);
+static_assert(offsetof(EffectSetting, fullName) == EffectSetting::LocalEffectSettingOffsets::FullName);
+static_assert(offsetof(EffectSetting, keywordForm) == EffectSetting::LocalEffectSettingOffsets::KeywordForm);
+static_assert(offsetof(EffectSetting, eArchetype) == EffectSetting::LocalEffectSettingOffsets::Archetype);

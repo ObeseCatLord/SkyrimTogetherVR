@@ -15,6 +15,7 @@ void InstallPathRouting(const std::filesystem::path& gamePath)
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS);
     AddDllDirectory(appPath.c_str());
     AddDllDirectory(gamePath.c_str());
+    SetEnvironmentVariableW(L"STVR_GAME_PATH", gamePath.c_str());
     SetCurrentDirectoryW(gamePath.c_str());
 
     std::wstring pathBuf;

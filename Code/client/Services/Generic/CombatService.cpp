@@ -104,56 +104,56 @@ void CombatService::OnNotifyProjectileLaunch(const NotifyProjectileLaunch& acMes
 
     Projectile::LaunchData launchData{};
 
-    // Projectile::Launch relies on pParentCell being valid.
+    // Projectile::Launch relies on parentCell being valid.
     // TODO: it's possible that more of these values must have a value, should probably check for that in the game code.
     const uint32_t cParentCellId = modSystem.GetGameId(acMessage.ParentCellID);
-    launchData.pParentCell = Cast<TESObjectCELL>(TESForm::GetById(cParentCellId));
+    launchData.SetParentCellData(Cast<TESObjectCELL>(TESForm::GetById(cParentCellId)));
 
-    if (!launchData.pParentCell)
+    if (!launchData.GetParentCellData())
     {
         spdlog::warn("Cannot launch projectile, invalid parent cell: {:X}", cParentCellId);
         return;
     }
 
-    launchData.pShooter = Cast<TESObjectREFR>(TESForm::GetById(formIdComponent.Id));
+    launchData.SetShooterData(Cast<TESObjectREFR>(TESForm::GetById(formIdComponent.Id)));
 
-    launchData.Origin.x = acMessage.OriginX;
-    launchData.Origin.y = acMessage.OriginY;
-    launchData.Origin.z = acMessage.OriginZ;
+    NiPoint3 origin{};
+    origin.x = acMessage.OriginX;
+    origin.y = acMessage.OriginY;
+    origin.z = acMessage.OriginZ;
+    launchData.SetOriginData(origin);
 
     const uint32_t cProjectileBaseId = modSystem.GetGameId(acMessage.ProjectileBaseID);
-    launchData.pProjectileBase = TESForm::GetById(cProjectileBaseId);
+    launchData.SetProjectileBaseData(TESForm::GetById(cProjectileBaseId));
 
     const uint32_t cFromWeaponId = modSystem.GetGameId(acMessage.WeaponID);
-    launchData.pFromWeapon = Cast<TESObjectWEAP>(TESForm::GetById(cFromWeaponId));
+    launchData.SetWeaponSourceData(Cast<TESObjectWEAP>(TESForm::GetById(cFromWeaponId)));
 
     const uint32_t cFromAmmoId = modSystem.GetGameId(acMessage.AmmoID);
-    launchData.pFromAmmo = Cast<TESAmmo>(TESForm::GetById(cFromAmmoId));
+    launchData.SetAmmoSourceData(Cast<TESAmmo>(TESForm::GetById(cFromAmmoId)));
 
-    launchData.fZAngle = acMessage.ZAngle;
-    launchData.fXAngle = acMessage.XAngle;
-    launchData.fYAngle = acMessage.YAngle;
+    launchData.SetAngleZData(acMessage.ZAngle);
+    launchData.SetAngleXData(acMessage.XAngle);
 
     const uint32_t cSpellId = modSystem.GetGameId(acMessage.SpellID);
-    launchData.pSpell = Cast<MagicItem>(TESForm::GetById(cSpellId));
+    launchData.SetSpellData(Cast<MagicItem>(TESForm::GetById(cSpellId)));
 
-    launchData.eCastingSource = (MagicSystem::CastingSource)acMessage.CastingSource;
+    launchData.SetCastingSourceData(static_cast<MagicSystem::CastingSource>(acMessage.CastingSource));
 
-    launchData.iArea = acMessage.Area;
-    launchData.fPower = acMessage.Power;
-    launchData.fScale = acMessage.Scale;
+    launchData.SetAreaData(acMessage.Area);
+    launchData.SetPowerData(acMessage.Power);
+    launchData.SetScaleData(acMessage.Scale);
 
-    launchData.bAlwaysHit = acMessage.AlwaysHit;
-    launchData.bNoDamageOutsideCombat = acMessage.NoDamageOutsideCombat;
-    launchData.bAutoAim = acMessage.AutoAim;
+    launchData.SetAlwaysHitData(acMessage.AlwaysHit);
+    launchData.SetNoDamageOutsideCombatData(acMessage.NoDamageOutsideCombat);
+    launchData.SetAutoAimData(acMessage.AutoAim);
 
-    launchData.bForceConeOfFire = acMessage.ForceConeOfFire;
+    launchData.SetForceConeOfFireData(acMessage.ForceConeOfFire);
 
     // always use origin, or it'll recalculate it and it desyncs
-    launchData.bUseOrigin = true;
+    launchData.SetUseOriginData(true);
 
-    launchData.bUnkBool1 = acMessage.UnkBool1;
-    launchData.bUnkBool2 = acMessage.UnkBool2;
+    launchData.SetChainShatterData(acMessage.UnkBool2);
 
     BSPointerHandle<Projectile> result;
 

@@ -2,6 +2,8 @@
 
 #include <Games/Primitives.h>
 
+#include <cstdint>
+
 struct TESObjectREFR;
 struct TESForm;
 

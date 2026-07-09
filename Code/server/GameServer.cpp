@@ -574,7 +574,15 @@ void GameServer::OnConsume(const void* apData, const uint32_t aSize, const Conne
             return;
         }
 
-        m_adminMessageHandlers[pMessage->GetOpcode()](pMessage, aConnectionId);
+        const auto opcode = pMessage->GetOpcode();
+        auto& handler = m_adminMessageHandlers[opcode];
+        if (!handler)
+        {
+            spdlog::error("No admin handler registered for client opcode {} from {:x}", static_cast<uint32_t>(opcode), aConnectionId);
+            return;
+        }
+
+        handler(pMessage, aConnectionId);
     }
     else
     {*/
@@ -586,7 +594,15 @@ void GameServer::OnConsume(const void* apData, const uint32_t aSize, const Conne
         return;
     }
 
-    m_messageHandlers[pMessage->GetOpcode()](pMessage, aConnectionId);
+    const auto opcode = pMessage->GetOpcode();
+    auto& handler = m_messageHandlers[opcode];
+    if (!handler)
+    {
+        spdlog::error("No handler registered for client opcode {} from {:x}", static_cast<uint32_t>(opcode), aConnectionId);
+        return;
+    }
+
+    handler(pMessage, aConnectionId);
     //}
 }
 

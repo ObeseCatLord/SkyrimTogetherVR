@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <regex>
+#include <cwctype>
 #define SPDLOG_WCHAR_FILENAMES
 #include <spdlog/formatter.h>
 
@@ -12,6 +13,27 @@
 
 namespace stubs
 {
+bool g_IsSoulsREActive = false;
+bool g_IsHiggsActive = false;
+bool g_IsPlanckActive = false;
+
+namespace
+{
+bool DllNameEquals(std::wstring_view aName, std::wstring_view aExpected)
+{
+    if (aName.size() != aExpected.size())
+        return false;
+
+    for (size_t i = 0; i < aExpected.size(); ++i)
+    {
+        if (std::towlower(aName[i]) != std::towlower(aExpected[i]))
+            return false;
+    }
+
+    return true;
+}
+} // namespace
+
 // clang-format off
 
     // A list of modules blocked for a variety of reasons, but mainly
@@ -46,12 +68,33 @@ struct DllGreyEntry
 const DllGreyEntry kDllGreyList[] = 
 {
     {
+        L"EngineFixesVR.dll",
+        L"Data\\SKSE\\Plugins\\EngineFixesVR.ini",
+        "\\[EngineFixes\\]",            // Matches Engine Fixes VR INI releases.
+        "# SKYRIM TOGETHER VR marker for EngineFixesVR required compatibility settings v1, DO NOT CHANGE THIS LINE",
+
+        L"For EngineFixesVR to work with Skyrim Together VR, some settings are required:\n"
+        "\tMemoryManager = false\n"
+        "\tMaxStdio = 8192\n\n"
+
+        "OK:\tMakes the changes for you\n"
+        "Cancel:\tEngineFixesVR will not load",
+
+        "# SKYRIM TOGETHER VR marker for EngineFixesVR required compatibility settings v1, DO NOT CHANGE THIS LINE\n"
+        "# For EngineFixesVR to work with Skyrim Together VR, some settings are required:\n"
+        "#    MemoryManager = false\n"
+        "#    MaxStdio = 8192\n\n",
+
+        "^\\s*MemoryManager\\s*=.*\nMemoryManager = false\n"
+        "^\\s*MaxStdio\\s*=.*\nMaxStdio = 8192\n"
+    },
+    {
         L"EngineFixes.dll", 
         L"Data\\SKSE\\Plugins\\EngineFixes.toml",
         "^VerboseLogging\\s*=",         // Matches EngineFixes Release 6.x series.
-        "# SKYRIM TOGETHER REBORN marker for EngineFixes required compatibility settings v2, DO NOT CHANGE THIS LINE",
+        "# SKYRIM TOGETHER VR marker for EngineFixes required compatibility settings v2, DO NOT CHANGE THIS LINE",
 
-        L"For EngineFixes to work with Skyrim Together Reborn, some settings are required:\n"
+        L"For EngineFixes to work with Skyrim Together VR, some settings are required:\n"
         "\tMemoryManager = false\n"
         "\tScaleformAllocator = false\n"
         "\tMaxStdio = 8192\n\n"
@@ -62,8 +105,8 @@ const DllGreyEntry kDllGreyList[] =
         "If later you get the (harmless) SrtCrashFix64 popup, manually make this EngineFixes configuration change to suppress it:\n"
         "\tAnimationLoadSignedCrash = false",
 
-        "# SKYRIM TOGETHER REBORN marker for EngineFixes required compatibility settings v2, DO NOT CHANGE THIS LINE\n"
-        "# For EngineFixes to work with Skyrim Together Reborn, some settings are required:\n"
+        "# SKYRIM TOGETHER VR marker for EngineFixes required compatibility settings v2, DO NOT CHANGE THIS LINE\n"
+        "# For EngineFixes to work with Skyrim Together VR, some settings are required:\n"
         "#    MemoryManager = false\n"
         "#    ScaleformAllocator = false\n"
         "#    MaxStdio = 8192\n"
@@ -226,7 +269,7 @@ enum GreyListDisposition IsDllGreyListBlocked(const std::wstring_view aDllName)
     std::filesystem::path gamePath = LC->gamePath;
     for (auto& greyListEntry : kDllGreyList)
     {
-        if (std::wcscmp(aDllName.data(), greyListEntry.m_dllName) == 0)
+        if (DllNameEquals(aDllName, greyListEntry.m_dllName))
         {
             // DLL name matches, read in entire config file.
             // Might be multiple configs for differing versions, 
@@ -250,7 +293,7 @@ bool IsDllBlocked(std::wstring_view dllName)
 
     for (const wchar_t* dllEntry : kDllBlocklist)
     {
-        if (std::wcscmp(dllName.data(), dllEntry) == 0)
+        if (DllNameEquals(dllName, dllEntry))
         {
             return true;
         }
@@ -261,10 +304,16 @@ bool IsDllBlocked(std::wstring_view dllName)
 
 bool IsSoulsRE(std::wstring_view dllName)
 {
-    const wchar_t *dllEntry = L"SkyrimSoulsRE.dll";
-    if (std::wcscmp(dllName.data(), dllEntry) == 0)
-        return true;
+    return DllNameEquals(dllName, L"SkyrimSoulsRE.dll");
+}
 
-    return false;
+bool IsHiggs(std::wstring_view dllName)
+{
+    return DllNameEquals(dllName, L"higgs_vr.dll") || DllNameEquals(dllName, L"higgs.dll");
+}
+
+bool IsPlanck(std::wstring_view dllName)
+{
+    return DllNameEquals(dllName, L"activeragdoll.dll");
 }
 } // namespace stubs

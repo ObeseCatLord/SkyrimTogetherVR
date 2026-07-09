@@ -5,14 +5,14 @@ bool MagicItem::IsWardSpell() const noexcept
 {
     BGSKeyword* pMagicWard = Cast<BGSKeyword>(TESForm::GetById(0x1ea69));
 
-    if (keyword.count > 0 && keyword.Contains(pMagicWard))
+    if (GetKeywordFormData().ContainsKeywordData(pMagicWard))
         return true;
 
     // Spells typically don't have keywords, so we must check their effects
-    for (const EffectItem* pEffect : listOfEffects)
+    for (const EffectItem* pEffect : GetEffectsData())
     {
-        if (pEffect->pEffectSetting && pEffect->pEffectSetting->keywordForm.count > 0 && 
-            pEffect->pEffectSetting->keywordForm.Contains(pMagicWard))
+        auto* pEffectSetting = pEffect ? pEffect->GetEffectSettingData() : nullptr;
+        if (pEffectSetting && pEffectSetting->GetKeywordFormData().ContainsKeywordData(pMagicWard))
             return true;
     }
 
@@ -39,21 +39,21 @@ bool MagicItem::IsInvisibilitySpell() const noexcept
         MagicItem* pSpell  = nullptr;
         if (   (pBOSMod = ModManager::Get()->GetByName("ccbgssse038-bowofshadows.esl")) 
             && (pSpell  = Cast<MagicItem>(TESForm::GetById(pBOSMod->GetFormId(0x805)))))
-            bosFormID = pSpell->formID;
+            bosFormID = pSpell->GetFormIdData();
     }
 
-    if (formID == bosFormID)
+    if (GetFormIdData() == bosFormID)
         return false;
 
     BGSKeyword* pMagicInvisibility = Cast<BGSKeyword>(TESForm::GetById(0x1ea6f));
 
-    if (keyword.count > 0 && keyword.Contains(pMagicInvisibility))
+    if (GetKeywordFormData().ContainsKeywordData(pMagicInvisibility))
         return true;
 
-    for (const EffectItem* pEffect : listOfEffects)
+    for (const EffectItem* pEffect : GetEffectsData())
     {
-        if (pEffect->pEffectSetting && pEffect->pEffectSetting->keywordForm.count > 0 &&
-            pEffect->pEffectSetting->keywordForm.Contains(pMagicInvisibility))
+        auto* pEffectSetting = pEffect ? pEffect->GetEffectSettingData() : nullptr;
+        if (pEffectSetting && pEffectSetting->GetKeywordFormData().ContainsKeywordData(pMagicInvisibility))
             return true;
     }
     return false;
@@ -63,13 +63,13 @@ bool MagicItem::IsHealingSpell() const noexcept
 {
     BGSKeyword* pMagicRestoreHealth = Cast<BGSKeyword>(TESForm::GetById(0x1ceb0));
     
-    if (keyword.count > 0 && keyword.Contains(pMagicRestoreHealth))
+    if (GetKeywordFormData().ContainsKeywordData(pMagicRestoreHealth))
         return true;
 
-    for (const EffectItem* pEffect : listOfEffects)
+    for (const EffectItem* pEffect : GetEffectsData())
     {
-        if (pEffect->pEffectSetting && pEffect->pEffectSetting->keywordForm.count > 0 &&
-            pEffect->pEffectSetting->keywordForm.Contains(pMagicRestoreHealth))
+        auto* pEffectSetting = pEffect ? pEffect->GetEffectSettingData() : nullptr;
+        if (pEffectSetting && pEffectSetting->GetKeywordFormData().ContainsKeywordData(pMagicRestoreHealth))
             return true;
     }
     return false;
@@ -77,7 +77,7 @@ bool MagicItem::IsHealingSpell() const noexcept
 
 bool MagicItem::IsBuffSpell() const noexcept
 {
-    switch (formID)
+    switch (GetFormIdData())
     {
     case 0x4dee8: // Courage
     case 0x4deec: // Rally
@@ -90,9 +90,10 @@ bool MagicItem::IsBuffSpell() const noexcept
 
 bool MagicItem::IsBoundWeaponSpell() noexcept
 {
-    for (EffectItem* pEffect : listOfEffects)
+    for (EffectItem* pEffect : GetEffectsData())
     {
-        if (pEffect->pEffectSetting && pEffect->pEffectSetting->eArchetype == EffectArchetypes::ArchetypeID::kBoundWeapon)
+        auto* pEffectSetting = pEffect ? pEffect->GetEffectSettingData() : nullptr;
+        if (pEffectSetting && pEffectSetting->GetArchetypeData() == EffectArchetypes::ArchetypeID::kBoundWeapon)
             return true;
     }
 
@@ -101,9 +102,10 @@ bool MagicItem::IsBoundWeaponSpell() noexcept
 
 EffectItem* MagicItem::GetEffect(const uint32_t aEffectId) noexcept
 {
-    for (EffectItem* pEffect : listOfEffects)
+    for (EffectItem* pEffect : GetEffectsData())
     {
-        if (pEffect->pEffectSetting->formID == aEffectId)
+        auto* pEffectSetting = pEffect ? pEffect->GetEffectSettingData() : nullptr;
+        if (pEffectSetting && pEffectSetting->GetFormIdData() == aEffectId)
             return pEffect;
     }
 

@@ -11,22 +11,22 @@ void DebugService::DrawCalendarView()
 
     auto* pGameTime = TimeData::Get();
 
-    auto year = pGameTime->GameYear->f;
+    auto year = pGameTime->GetGameYearData()->GetValueData();
     ImGui::InputFloat("Year", &year, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
-    auto month = pGameTime->GameMonth->f;
+    auto month = pGameTime->GetGameMonthData()->GetValueData();
     ImGui::InputFloat("Month", &month, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
-    auto day = pGameTime->GameDay->f;
+    auto day = pGameTime->GetGameDayData()->GetValueData();
     ImGui::InputFloat("Day", &day, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
-    auto hour = pGameTime->GameHour->f;
+    auto hour = pGameTime->GetGameHourData()->GetValueData();
     ImGui::InputFloat("Hour", &hour, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
-    auto passed = pGameTime->GameDaysPassed->f;
+    auto passed = pGameTime->GetGameDaysPassedData()->GetValueData();
     ImGui::InputFloat("Passed", &passed, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
-    auto scale = pGameTime->TimeScale->f;
+    auto scale = pGameTime->GetTimeScaleData()->GetValueData();
     ImGui::InputFloat("Scale", &scale, 0, 0, "%.3f", ImGuiInputTextFlags_ReadOnly);
 
     ImGui::End();

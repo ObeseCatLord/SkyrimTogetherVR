@@ -8,6 +8,7 @@
 #include <Events/ProjectileLaunchedEvent.h>
 #include <Games/Skyrim/Forms/TESObjectCELL.h>
 #include <Forms/SpellItem.h>
+#include <Games/Skyrim/VR/VRHookPolicy.h>
 
 TP_THIS_FUNCTION(TLaunch, BSPointerHandle<Projectile>*, BSPointerHandle<Projectile>, Projectile::LaunchData& arData);
 static TLaunch* RealLaunch = nullptr;
@@ -33,7 +34,7 @@ BSPointerHandle<Projectile>* Projectile::Launch(BSPointerHandle<Projectile>* apR
         return nullptr;
     }
 
-    pProjectile->fPower = apLaunchData.fPower;
+    pProjectile->SetPowerData(apLaunchData.GetPowerData());
 
     return result;
 }
@@ -41,20 +42,20 @@ BSPointerHandle<Projectile>* Projectile::Launch(BSPointerHandle<Projectile>* apR
 BSPointerHandle<Projectile>* TP_MAKE_THISCALL(HookLaunch, BSPointerHandle<Projectile>, Projectile::LaunchData& arData)
 {
     // sync concentration spells through spell cast sync, the rest through projectile sync
-    if (arData.pSpell)
+    if (auto* pSpellData = arData.GetSpellData())
     {
-        if (auto* pSpell = Cast<SpellItem>(arData.pSpell))
+        if (auto* pSpell = Cast<SpellItem>(pSpellData))
         {
-            if (pSpell->eCastingType == MagicSystem::CastingType::CONCENTRATION)
+            if (pSpell->GetCastingTypeData() == MagicSystem::CastingType::CONCENTRATION)
             {
                 return TiltedPhoques::ThisCall(RealLaunch, apThis, arData);
             }
         }
     }
 
-    if (arData.pShooter)
+    if (auto* pShooter = arData.GetShooterData())
     {
-        Actor* pActor = Cast<Actor>(arData.pShooter);
+        Actor* pActor = Cast<Actor>(pShooter);
         if (pActor)
         {
             ActorExtension* pExtendedActor = pActor->GetExtension();
@@ -67,33 +68,33 @@ BSPointerHandle<Projectile>* TP_MAKE_THISCALL(HookLaunch, BSPointerHandle<Projec
     }
 
     ProjectileLaunchedEvent Event{};
-    Event.Origin = arData.Origin;
-    if (arData.pProjectileBase)
-        Event.ProjectileBaseID = arData.pProjectileBase->formID;
-    if (arData.pShooter)
-        Event.ShooterID = arData.pShooter->formID;
-    if (arData.pFromWeapon)
-        Event.WeaponID = arData.pFromWeapon->formID;
-    if (arData.pFromAmmo)
-        Event.AmmoID = arData.pFromAmmo->formID;
-    Event.ZAngle = arData.fZAngle;
-    Event.XAngle = arData.fXAngle;
-    Event.YAngle = arData.fYAngle;
-    if (arData.pParentCell)
-        Event.ParentCellID = arData.pParentCell->formID;
-    if (arData.pSpell)
-        Event.SpellID = arData.pSpell->formID;
-    Event.CastingSource = arData.eCastingSource;
-    Event.UnkBool1 = arData.bUnkBool1;
-    Event.Area = arData.iArea;
-    Event.Power = arData.fPower;
-    Event.Scale = arData.fScale;
-    Event.AlwaysHit = arData.bAlwaysHit;
-    Event.NoDamageOutsideCombat = arData.bNoDamageOutsideCombat;
-    Event.AutoAim = arData.bAutoAim;
-    Event.UnkBool2 = arData.bUnkBool2;
-    Event.DeferInitialization = arData.bDeferInitialization;
-    Event.ForceConeOfFire = arData.bForceConeOfFire;
+    Event.Origin = arData.GetOriginData();
+    if (auto* pProjectileBase = arData.GetProjectileBaseData())
+        Event.ProjectileBaseID = pProjectileBase->GetFormIdData();
+    if (auto* pShooter = arData.GetShooterData())
+        Event.ShooterID = pShooter->GetFormIdData();
+    if (auto* pWeaponSource = arData.GetWeaponSourceData())
+        Event.WeaponID = pWeaponSource->GetFormIdData();
+    if (auto* pAmmoSource = arData.GetAmmoSourceData())
+        Event.AmmoID = pAmmoSource->GetFormIdData();
+    Event.ZAngle = arData.GetAngleZData();
+    Event.XAngle = arData.GetAngleXData();
+    Event.YAngle = 0.0f;
+    if (auto* pParentCell = arData.GetParentCellData())
+        Event.ParentCellID = pParentCell->GetFormIdData();
+    if (auto* pSpell = arData.GetSpellData())
+        Event.SpellID = pSpell->GetFormIdData();
+    Event.CastingSource = arData.GetCastingSourceData();
+    Event.UnkBool1 = false;
+    Event.Area = arData.GetAreaData();
+    Event.Power = arData.GetPowerData();
+    Event.Scale = arData.GetScaleData();
+    Event.AlwaysHit = arData.IsAlwaysHitData();
+    Event.NoDamageOutsideCombat = arData.IsNoDamageOutsideCombatData();
+    Event.AutoAim = arData.IsAutoAimData();
+    Event.UnkBool2 = arData.IsChainShatterData();
+    Event.DeferInitialization = arData.DefersInitializationData();
+    Event.ForceConeOfFire = arData.ForcesConeOfFireData();
 
     auto result = TiltedPhoques::ThisCall(RealLaunch, apThis, arData);
 
@@ -104,7 +105,7 @@ BSPointerHandle<Projectile>* TP_MAKE_THISCALL(HookLaunch, BSPointerHandle<Projec
 
     TP_ASSERT(pProjectile, "No projectile found.");
 
-    Event.Power = pProjectile->fPower;
+    Event.Power = pProjectile->GetPowerData();
 
     World::Get().GetRunner().Trigger(Event);
 
@@ -120,6 +121,7 @@ static TiltedPhoques::Initializer s_projectileHooks(
 
         TP_HOOK(&RealLaunch, HookLaunch);
 
+#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_PROJECTILE_NULL_SHOOTER, TP_SKYRIM_VR_INLINE_PATCH_PROJECTILE_NULL_SHOOTER_VR_RESOLVED)
         VersionDbPtr<uint8_t> hookLoc(34452);
 
         struct C : TiltedPhoques::CodeGenerator
@@ -151,4 +153,5 @@ static TiltedPhoques::Initializer s_projectileHooks(
             }
         } gen(hookLoc.Get());
         TiltedPhoques::Jump(hookLoc.Get() + 0x374, gen.getCode());
+#endif
     });

@@ -66,7 +66,7 @@ void TESObjectREFR::Save_Reversed(const uint32_t aChangeFlags, Buffer::Writer& a
 
     if (aChangeFlags & CHANGE_REFR_BASEOBJECT)
     {
-        // save baseForm->formID;
+        // save base form id;
         // we don't because each player has it's own form id system
     }
 
@@ -80,7 +80,7 @@ void TESObjectREFR::Save_Reversed(const uint32_t aChangeFlags, Buffer::Writer& a
 
     // So skyrim
     uint32_t extraFlags = 0xA6021C40;
-    if (formType == Character)
+    if (GetFormTypeData() == Character)
         extraFlags = 0xA6061840;
 
     if (aChangeFlags & extraFlags)
@@ -159,7 +159,7 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
 
             const BShkbAnimationGraph* pGraph = nullptr;
 
-            if (pActor->formID == 0x14)
+            if (pActor->GetFormIdData() == 0x14)
                 pGraph = pManager->animationGraphs.Get(0);
             else
                 pGraph = pManager->animationGraphs.Get(pManager->animationGraphIndex);
@@ -174,7 +174,7 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             if (pExtendedActor->GraphDescriptorHash == 0)
             {
                 // Force third person graph to be used on player
-                if (pActor->formID == 0x14)
+                if (pActor->GetFormIdData() == 0x14)
                     pExtendedActor->GraphDescriptorHash = pManager->GetDescriptorKey(0);
                 else
                     pExtendedActor->GraphDescriptorHash = pManager->GetDescriptorKey();
@@ -295,26 +295,27 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
 
 uint32_t TESObjectREFR::GetCellId() const noexcept
 {
-    if (!parentCell)
+    const auto* pParentCell = GetParentCellData();
+    if (!pParentCell)
         return 0;
 
-    const auto* pWorldSpace = parentCell->worldspace;
+    const auto* pWorldSpace = pParentCell->GetWorldSpaceData();
 
-    return pWorldSpace != nullptr ? pWorldSpace->formID : parentCell->formID;
+    return pWorldSpace != nullptr ? pWorldSpace->GetFormIdData() : pParentCell->GetFormIdData();
 }
 
 TESWorldSpace* TESObjectREFR::GetWorldSpace() const noexcept
 {
-    auto* pParentCell = parentCell ? parentCell : GetParentCell();
-    if (pParentCell && !(pParentCell->cellFlags[0] & 1))
-        return pParentCell->worldspace;
+    auto* pParentCell = GetParentCellData() ? GetParentCellData() : GetParentCell();
+    if (pParentCell && !pParentCell->IsInteriorCellData())
+        return pParentCell->GetWorldSpaceData();
 
     return nullptr;
 }
 
 ExtraDataList* TESObjectREFR::GetExtraDataList() noexcept
 {
-    return &extraData;
+    return GetExtraDataListData();
 }
 
 // Delete() should only be used on temporaries
@@ -354,7 +355,7 @@ void TESObjectREFR::MoveTo(TESObjectCELL* apCell, const NiPoint3& acPosition) co
 
     POINTER_SKYRIMSE(TInternalMoveTo, s_internalMoveTo, 56626);
 
-    TiltedPhoques::ThisCall(s_internalMoveTo, this, GetNullHandle(), apCell, apCell->worldspace, acPosition, rotation);
+    TiltedPhoques::ThisCall(s_internalMoveTo, this, GetNullHandle(), apCell, apCell->GetWorldSpaceData(), acPosition, GetRotationData());
 }
 
 void TESObjectREFR::PayGold(int32_t aAmount) noexcept
@@ -437,19 +438,17 @@ TESContainer* TESObjectREFR::GetContainer() const noexcept
 
 int64_t TESObjectREFR::GetItemCountInInventory(TESForm* apItem) const noexcept
 {
-    int64_t count = GetContainer()->GetItemCount(apItem);
+    if (!apItem)
+        return 0;
 
-    auto* pContainerChanges = GetContainerChanges()->entries;
-    for (auto pChange : *pContainerChanges)
+    int64_t count = 0;
+    if (TESContainer* pContainer = GetContainer())
+        count = pContainer->GetItemCount(apItem);
+
+    if (auto* pContainerChanges = GetContainerChanges())
     {
-        if (pChange && pChange->form)
-        {
-            if (pChange->form->formID == apItem->formID)
-            {
-                count += pChange->count;
-                break;
-            }
-        }
+        if (const auto* pChange = pContainerChanges->FindEntryByFormId(apItem->GetFormIdData()))
+            count += pChange->GetCountDelta();
     }
 
     return count;
@@ -457,7 +456,7 @@ int64_t TESObjectREFR::GetItemCountInInventory(TESForm* apItem) const noexcept
 
 TESObjectCELL* TESObjectREFR::GetParentCellEx() const noexcept
 {
-    return parentCell ? parentCell : GetParentCell();
+    return GetParentCellData() ? GetParentCellData() : GetParentCell();
 }
 
 void TESObjectREFR::GetItemFromExtraData(Inventory::Entry& arEntry, ExtraDataList* apExtraDataList) noexcept
@@ -466,72 +465,77 @@ void TESObjectREFR::GetItemFromExtraData(Inventory::Entry& arEntry, ExtraDataLis
 
     if (ExtraCount* pExtraCount = Cast<ExtraCount>(apExtraDataList->GetByType(ExtraDataType::Count)))
     {
-        arEntry.Count = pExtraCount->count;
+        arEntry.Count = pExtraCount->GetCountData();
     }
 
     if (ExtraCharge* pExtraCharge = Cast<ExtraCharge>(apExtraDataList->GetByType(ExtraDataType::Charge)))
     {
-        arEntry.ExtraCharge = pExtraCharge->fCharge;
+        arEntry.ExtraCharge = pExtraCharge->GetChargeData();
     }
 
     if (ExtraEnchantment* pExtraEnchantment = Cast<ExtraEnchantment>(apExtraDataList->GetByType(ExtraDataType::Enchantment)))
     {
-        TP_ASSERT(pExtraEnchantment->pEnchantment, "Null enchantment in ExtraEnchantment");
-
-        modSystem.GetServerModId(pExtraEnchantment->pEnchantment->formID, arEntry.ExtraEnchantId);
-
-        if (pExtraEnchantment->pEnchantment->formID & 0xFF000000)
+        auto* pEnchantment = pExtraEnchantment->GetEnchantmentData();
+        TP_ASSERT(pEnchantment, "Null enchantment in ExtraEnchantment");
+        if (pEnchantment)
         {
-            for (EffectItem* pEffectItem : pExtraEnchantment->pEnchantment->listOfEffects)
-            {
-                TP_ASSERT(pEffectItem, "pEffectItem is null.");
-                if (!pEffectItem)
-                    continue;
+            modSystem.GetServerModId(pEnchantment->GetFormIdData(), arEntry.ExtraEnchantId);
 
-                Inventory::EffectItem effect;
-                effect.Magnitude = pEffectItem->data.fMagnitude;
-                effect.Area = pEffectItem->data.iArea;
-                effect.Duration = pEffectItem->data.iDuration;
-                effect.RawCost = pEffectItem->fRawCost;
-                modSystem.GetServerModId(pEffectItem->pEffectSetting->formID, effect.EffectId);
-                arEntry.EnchantData.Effects.push_back(effect);
+            if (pEnchantment->GetFormIdData() & 0xFF000000)
+            {
+                for (EffectItem* pEffectItem : pEnchantment->GetEffectsData())
+                {
+                    TP_ASSERT(pEffectItem, "pEffectItem is null.");
+                    if (!pEffectItem)
+                        continue;
+
+                    const auto& effectItemData = pEffectItem->GetEffectItemData();
+                    Inventory::EffectItem effect;
+                    effect.Magnitude = effectItemData.fMagnitude;
+                    effect.Area = effectItemData.iArea;
+                    effect.Duration = effectItemData.iDuration;
+                    effect.RawCost = pEffectItem->GetRawCostData();
+                    modSystem.GetServerModId(pEffectItem->GetEffectSettingData()->GetFormIdData(), effect.EffectId);
+                    arEntry.EnchantData.Effects.push_back(effect);
+                }
+
+                uint32_t objectId = modSystem.GetGameId(arEntry.BaseId);
+                TESForm* pObject = TESForm::GetById(objectId);
+                if (pObject)
+                    arEntry.EnchantData.IsWeapon = pObject->GetFormTypeData() == FormType::Weapon;
             }
 
-            uint32_t objectId = modSystem.GetGameId(arEntry.BaseId);
-            TESForm* pObject = TESForm::GetById(objectId);
-            if (pObject)
-                arEntry.EnchantData.IsWeapon = pObject->formType == FormType::Weapon;
+            arEntry.ExtraEnchantCharge = pExtraEnchantment->GetChargeData();
+            arEntry.ExtraEnchantRemoveUnequip = pExtraEnchantment->GetRemoveOnUnequipData();
         }
-
-        arEntry.ExtraEnchantCharge = pExtraEnchantment->usCharge;
-        arEntry.ExtraEnchantRemoveUnequip = pExtraEnchantment->bRemoveOnUnequip;
     }
 
     if (ExtraHealth* pExtraHealth = Cast<ExtraHealth>(apExtraDataList->GetByType(ExtraDataType::Health)))
     {
-        arEntry.ExtraHealth = pExtraHealth->fHealth;
+        arEntry.ExtraHealth = pExtraHealth->GetHealthData();
     }
 
     if (ExtraPoison* pExtraPoison = Cast<ExtraPoison>(apExtraDataList->GetByType(ExtraDataType::Poison)))
     {
-        TP_ASSERT(pExtraPoison->pPoison, "Null poison in ExtraPoison");
-        if (pExtraPoison && pExtraPoison->pPoison)
+        auto* pPoison = pExtraPoison->GetPoisonData();
+        TP_ASSERT(pPoison, "Null poison in ExtraPoison");
+        if (pPoison)
         {
-            modSystem.GetServerModId(pExtraPoison->pPoison->formID, arEntry.ExtraPoisonId);
-            arEntry.ExtraPoisonCount = pExtraPoison->uiCount;
+            modSystem.GetServerModId(pPoison->GetFormIdData(), arEntry.ExtraPoisonId);
+            arEntry.ExtraPoisonCount = pExtraPoison->GetCountData();
         }
     }
 
     if (ExtraSoul* pExtraSoul = Cast<ExtraSoul>(apExtraDataList->GetByType(ExtraDataType::Soul)))
     {
-        arEntry.ExtraSoulLevel = (int32_t)pExtraSoul->cSoul;
+        arEntry.ExtraSoulLevel = static_cast<int32_t>(pExtraSoul->GetSoulData());
     }
 
     /*
     if (ExtraTextDisplayData* pExtraTextDisplayData = Cast<ExtraTextDisplayData>(apExtraDataList->GetByType(ExtraDataType::TextDisplayData)))
     {
-        if (pExtraTextDisplayData->DisplayName)
-            arEntry.ExtraTextDisplayName = pExtraTextDisplayData->DisplayName;
+        if (const char* pDisplayName = pExtraTextDisplayData->GetDisplayNameStringData())
+            arEntry.ExtraTextDisplayName = pDisplayName;
         else
             arEntry.ExtraTextDisplayName = "";
     }
@@ -617,17 +621,17 @@ ExtraDataList* TESObjectREFR::GetExtraDataFromItem(const Inventory::Entry& arEnt
         ExtraTextDisplayData* pExtraText = Memory::Allocate<ExtraTextDisplayData>();
         *((uint64_t*)pExtraText) = 0x1416244D0;
         pExtraText->next = nullptr;
-        pExtraText->DisplayName = arEntry.ExtraTextDisplayName.c_str();
-        pExtraText->usCustomNameLength = arEntry.ExtraTextDisplayName.length();
-        pExtraText->iOwnerInstance = -2;
-        pExtraText->fTemperFactor = 1.0F;
+        pExtraText->SetDisplayNameData(arEntry.ExtraTextDisplayName.c_str());
+        pExtraText->SetCustomNameLengthData(static_cast<uint16_t>(arEntry.ExtraTextDisplayName.length()));
+        pExtraText->SetOwnerInstanceData(ExtraTextDisplayData::DisplayDataType::CustomName);
+        pExtraText->SetTemperFactorData(1.0F);
         pExtraDataList->Add(ExtraDataType::TextDisplayData, pExtraText);
     }
     */
 
-    if (pExtraDataList->data == nullptr)
+    if (pExtraDataList->GetDataData() == nullptr)
     {
-        Memory::Delete(pExtraDataList->bitfield);
+        Memory::Delete(pExtraDataList->GetBitfieldData());
         Memory::Delete(pExtraDataList);
         pExtraDataList = nullptr;
     }
@@ -647,21 +651,24 @@ Inventory TESObjectREFR::GetInventory(std::function<bool(TESForm&)> aFilter) con
 
     if (TESContainer* pBaseContainer = GetContainer())
     {
-        for (int i = 0; i < pBaseContainer->count; i++)
+        auto** pEntries = pBaseContainer->GetEntriesData();
+        const auto entryCount = pBaseContainer->GetEntryCountData();
+        for (uint32_t i = 0; pEntries && i < entryCount; i++)
         {
-            TESContainer::Entry* pGameEntry = pBaseContainer->entries[i];
-            if (!pGameEntry || !pGameEntry->form)
+            TESContainer::Entry* pGameEntry = pEntries[i];
+            TESForm* pEntryForm = pGameEntry ? pGameEntry->GetFormData() : nullptr;
+            if (!pGameEntry || !pEntryForm)
             {
                 spdlog::warn("Entry or form for inventory item is null.");
                 continue;
             }
 
-            if (!aFilter(*pGameEntry->form))
+            if (!aFilter(*pEntryForm))
                 continue;
 
             Inventory::Entry entry;
-            modSystem.GetServerModId(pGameEntry->form->formID, entry.BaseId);
-            entry.Count = pGameEntry->count;
+            modSystem.GetServerModId(pEntryForm->GetFormIdData(), entry.BaseId);
+            entry.Count = pGameEntry->GetCountData();
 
             inventory.Entries.push_back(std::move(entry));
         }
@@ -669,37 +676,42 @@ Inventory TESObjectREFR::GetInventory(std::function<bool(TESForm&)> aFilter) con
 
     Inventory extraInventory{};
 
-    auto pExtraContChangesEntries = GetContainerChanges()->entries;
-    for (auto pGameEntry : *pExtraContChangesEntries)
+    if (auto* pContainerChanges = GetContainerChanges())
     {
-        if (!pGameEntry)
-            continue;
+        pContainerChanges->VisitInventory([&](ExtraContainerChanges::Entry& arGameEntry) {
+            TESForm* pObject = arGameEntry.GetObject();
+            if (!pObject)
+                return;
 
-        if (!aFilter(*pGameEntry->form))
-            continue;
+            if (!aFilter(*pObject))
+                return;
 
-        Inventory::Entry entry{};
-        modSystem.GetServerModId(pGameEntry->form->formID, entry.BaseId);
-        entry.Count = pGameEntry->count;
+            Inventory::Entry entry{};
+            modSystem.GetServerModId(pObject->GetFormIdData(), entry.BaseId);
+            entry.Count = arGameEntry.GetCountDelta();
 
-        for (ExtraDataList* pExtraDataList : *pGameEntry->dataList)
-        {
-            if (!pExtraDataList)
-                continue;
+            if (auto* pExtraLists = arGameEntry.GetExtraLists())
+            {
+                for (ExtraDataList* pExtraDataList : *pExtraLists)
+                {
+                    if (!pExtraDataList)
+                        continue;
 
-            Inventory::Entry innerEntry;
-            innerEntry.BaseId = entry.BaseId;
-            innerEntry.Count = 1;
+                    Inventory::Entry innerEntry;
+                    innerEntry.BaseId = entry.BaseId;
+                    innerEntry.Count = 1;
 
-            GetItemFromExtraData(innerEntry, pExtraDataList);
+                    GetItemFromExtraData(innerEntry, pExtraDataList);
 
-            entry.Count -= innerEntry.Count;
+                    entry.Count -= innerEntry.Count;
 
-            extraInventory.Entries.push_back(std::move(innerEntry));
-        }
+                    extraInventory.Entries.push_back(std::move(innerEntry));
+                }
+            }
 
-        if (entry.Count != 0)
-            extraInventory.Entries.push_back(std::move(entry));
+            if (entry.Count != 0)
+                extraInventory.Entries.push_back(std::move(entry));
+        });
     }
 
     spdlog::debug("ExtraInventory count: {}", extraInventory.Entries.size());
@@ -750,7 +762,7 @@ Inventory TESObjectREFR::GetInventory(std::function<bool(TESForm&)> aFilter) con
 
 Inventory TESObjectREFR::GetArmor() const noexcept
 {
-    return GetInventory([](TESForm& aForm) { return aForm.formType == FormType::Armor; });
+    return GetInventory([](TESForm& aForm) { return aForm.GetFormTypeData() == FormType::Armor; });
 }
 
 Inventory TESObjectREFR::GetWornArmor() const noexcept
@@ -762,13 +774,13 @@ Inventory TESObjectREFR::GetWornArmor() const noexcept
 
 bool TESObjectREFR::IsItemInInventory(uint32_t aFormID) const noexcept
 {
-    Inventory inventory = GetInventory([aFormID](TESForm& aForm) { return aForm.formID == aFormID; });
+    Inventory inventory = GetInventory([aFormID](TESForm& aForm) { return aForm.GetFormIdData() == aFormID; });
     return !inventory.Entries.empty();
 }
 
 void TESObjectREFR::SetInventory(const Inventory& aInventory) noexcept
 {
-    spdlog::debug("Setting inventory for {:X}", formID);
+    spdlog::debug("Setting inventory for {:X}", GetFormIdData());
 
     ScopedInventoryOverride _;
 
@@ -810,7 +822,7 @@ Vector<uint32_t> TESObjectREFR::RemoveNonQuestItems(Inventory& aCurrentInventory
 
 void TESObjectREFR::SetInventoryRetainingQuestItems(Inventory& aCurrentInventory, const Inventory& acSourceInventory) noexcept
 {
-    spdlog::debug("Setting inventory for {:X}", formID);
+    spdlog::debug("Setting inventory for {:X}", GetFormIdData());
 
     ScopedInventoryOverride _;
 
@@ -855,7 +867,7 @@ void TESObjectREFR::AddOrRemoveItem(const Inventory::Entry& arEntry, bool aIsSet
             isWornLeft = pExtraDataList->Contains(ExtraDataType::WornLeft);
         }
 
-        spdlog::debug("Adding item {:X}, count {}", pObject->formID, arEntry.Count);
+        spdlog::debug("Adding item {:X}, count {}", pObject->GetFormIdData(), arEntry.Count);
         AddObjectToContainer(pObject, pExtraDataList, arEntry.Count, nullptr);
 
         // TODO: check Actor cast first?
@@ -866,7 +878,7 @@ void TESObjectREFR::AddOrRemoveItem(const Inventory::Entry& arEntry, bool aIsSet
     }
     else if (arEntry.Count < 0)
     {
-        spdlog::debug("Removing item {:X}, count {}", pObject->formID, -arEntry.Count);
+        spdlog::debug("Removing item {:X}, count {}", pObject->GetFormIdData(), -arEntry.Count);
         RemoveItem(pObject, -arEntry.Count, ITEM_REMOVE_REASON::kRemove, pExtraDataList, nullptr);
     }
 
@@ -940,8 +952,8 @@ bool TP_MAKE_THISCALL(HookPlayAnimationAndWait, void, uint32_t auiStackID, TESOb
     spdlog::debug("Animation: {}, EventName: {}", apAnimation->AsAscii(), apEventName->AsAscii());
 
 #if OBJECT_ANIM_SYNC
-    if (!s_cancelAnimationWaitEvent && (apSelf->formID < 0xFF000000))
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, apAnimation->AsAscii(), apEventName->AsAscii()));
+    if (!s_cancelAnimationWaitEvent && (apSelf->GetFormIdData() < 0xFF000000))
+        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->GetFormIdData(), apAnimation->AsAscii(), apEventName->AsAscii()));
 #endif
 
     return TiltedPhoques::ThisCall(RealPlayAnimationAndWait, apThis, auiStackID, apSelf, apAnimation, apEventName);
@@ -971,8 +983,8 @@ bool TP_MAKE_THISCALL(HookPlayAnimation, void, uint32_t auiStackID, TESObjectREF
     spdlog::debug("EventName: {}", apEventName->AsAscii());
 
 #if OBJECT_ANIM_SYNC
-    if (!s_cancelAnimationEvent && (apSelf->formID < 0xFF000000))
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, String{}, apEventName->AsAscii()));
+    if (!s_cancelAnimationEvent && (apSelf->GetFormIdData() < 0xFF000000))
+        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->GetFormIdData(), String{}, apEventName->AsAscii()));
 #endif
 
     return TiltedPhoques::ThisCall(RealPlayAnimation, apThis, auiStackID, apSelf, apEventName);
@@ -984,10 +996,11 @@ bool TP_MAKE_THISCALL(HookActivate, TESObjectREFR, TESObjectREFR* apActivator, u
 
     // Exclude books from activation since only reading them removes them from the cell
     // Note: Books are now unsynced 
-    if (pActivator && apThis->baseForm->formType != FormType::Book)
+    const auto* pBaseForm = apThis->GetBaseFormData();
+    if (pActivator && pBaseForm && pBaseForm->GetFormTypeData() != FormType::Book)
     {
         auto openState = TESObjectREFR::kNone;
-        if (apThis->baseForm->formType == FormType::Door)
+        if (pBaseForm->GetFormTypeData() == FormType::Door)
             openState = apThis->GetOpenState();
 
         World::Get().GetRunner().Trigger(
@@ -1005,16 +1018,16 @@ void TP_MAKE_THISCALL(HookAddInventoryItem, TESObjectREFR, TESBoundObject* apIte
         auto& modSystem = World::Get().GetModSystem();
 
         Inventory::Entry item{};
-        modSystem.GetServerModId(apItem->formID, item.BaseId);
+        modSystem.GetServerModId(apItem->GetFormIdData(), item.BaseId);
         item.Count = aCount;
 
         if (apExtraData)
             apThis->GetItemFromExtraData(item, apExtraData);
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item)));
+        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item)));
     }
 
-    spdlog::debug("Adding inventory item {:X} to {:X}", apItem->formID, apThis->formID);
+    spdlog::debug("Adding inventory item {:X} to {:X}", apItem->GetFormIdData(), apThis->GetFormIdData());
 
     TiltedPhoques::ThisCall(RealAddInventoryItem, apThis, apItem, apExtraData, aCount, apOldOwner);
 }
@@ -1027,7 +1040,7 @@ TP_MAKE_THISCALL(HookRemoveInventoryItem, TESObjectREFR, BSPointerHandle<TESObje
         auto& modSystem = World::Get().GetModSystem();
 
         Inventory::Entry item{};
-        modSystem.GetServerModId(apItem->formID, item.BaseId);
+        modSystem.GetServerModId(apItem->GetFormIdData(), item.BaseId);
 
         if (apExtraList)
         {
@@ -1037,10 +1050,10 @@ TP_MAKE_THISCALL(HookRemoveInventoryItem, TESObjectREFR, BSPointerHandle<TESObje
 
         item.Count = -aCount;
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item)));
+        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->GetFormIdData(), std::move(item)));
     }
 
-    spdlog::debug("Removing inventory item {:X} from {:X}", apItem->formID, apThis->formID);
+    spdlog::debug("Removing inventory item {:X} from {:X}", apItem->GetFormIdData(), apThis->GetFormIdData());
 
     ScopedEquipOverride _;
 
@@ -1049,7 +1062,7 @@ TP_MAKE_THISCALL(HookRemoveInventoryItem, TESObjectREFR, BSPointerHandle<TESObje
 
 void TP_MAKE_THISCALL(HookRotateX, TESObjectREFR, float aAngle)
 {
-    if (apThis->formType == Actor::Type)
+    if (apThis->GetFormTypeData() == Actor::Type)
     {
         const auto pActor = static_cast<Actor*>(apThis);
         // We don't allow remotes to move
@@ -1062,7 +1075,7 @@ void TP_MAKE_THISCALL(HookRotateX, TESObjectREFR, float aAngle)
 
 void TP_MAKE_THISCALL(HookRotateY, TESObjectREFR, float aAngle)
 {
-    if (apThis->formType == Actor::Type)
+    if (apThis->GetFormTypeData() == Actor::Type)
     {
         const auto pActor = static_cast<Actor*>(apThis);
         // We don't allow remotes to move
@@ -1075,7 +1088,7 @@ void TP_MAKE_THISCALL(HookRotateY, TESObjectREFR, float aAngle)
 
 void TP_MAKE_THISCALL(HookRotateZ, TESObjectREFR, float aAngle)
 {
-    if (apThis->formType == Actor::Type)
+    if (apThis->GetFormTypeData() == Actor::Type)
     {
         const auto pActor = static_cast<Actor*>(apThis);
         // We don't allow remotes to move
@@ -1091,9 +1104,9 @@ void TP_MAKE_THISCALL(HookLockChange, TESObjectREFR)
     TiltedPhoques::ThisCall(RealLockChange, apThis);
     const auto* pLock = apThis->GetLock();
     if(pLock)
-        World::Get().GetRunner().Trigger(LockChangeEvent(apThis->formID, pLock->IsLocked(), pLock->lockLevel));
+        World::Get().GetRunner().Trigger(LockChangeEvent(apThis->GetFormIdData(), pLock->IsLocked(), pLock->GetLockLevelData()));
     else
-        World::Get().GetRunner().Trigger(LockChangeEvent(apThis->formID, false, 0));
+        World::Get().GetRunner().Trigger(LockChangeEvent(apThis->GetFormIdData(), false, 0));
 }
 
 static TiltedPhoques::Initializer s_objectReferencesHooks(

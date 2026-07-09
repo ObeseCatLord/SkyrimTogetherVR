@@ -5,18 +5,20 @@ Vector<TESObjectREFR*> TESObjectCELL::GetRefsByFormTypes(const Vector<FormType>&
 {
     Vector<TESObjectREFR*> references{};
 
-    if (!refData.refArray)
+    const auto* pReferenceData = GetReferenceData();
+    if (!pReferenceData || !pReferenceData->GetReferenceArrayData())
         return references;
 
-    for (uint32_t i = 0; i < refData.capacity; i++)
+    for (uint32_t i = 0; i < pReferenceData->GetCapacityData(); i++)
     {
-        TESObjectREFR* pRef = refData.refArray[i].Get();
+        TESObjectREFR* pRef = pReferenceData->GetReferenceAtData(i);
         if (!pRef)
             continue;
 
         for (FormType formType : aFormTypes)
         {
-            if (pRef->baseForm->formType == formType)
+            const auto* pBaseForm = pRef->GetBaseFormData();
+            if (pBaseForm && pBaseForm->GetFormTypeData() == formType)
                 references.push_back(pRef);
         }
     }

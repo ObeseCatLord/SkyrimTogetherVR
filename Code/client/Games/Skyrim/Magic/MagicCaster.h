@@ -1,6 +1,12 @@
 #pragma once
 
 #include <Games/Magic/MagicSystem.h>
+#include <RuntimeLayout.h>
+#include <cstddef>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 struct ActiveEffect;
 struct MagicItem;
@@ -12,6 +18,9 @@ struct Projectile;
 
 struct MagicCaster
 {
+    using CommonLibMagicCasterOffsets = Skyrim::RuntimeLayout::MagicCasterCommonLibNgOffsets;
+    using LocalMagicCasterOffsets = Skyrim::RuntimeLayout::MagicCasterLocalShimOffsets;
+
     virtual ~MagicCaster();
     virtual uint64_t CastSpellImmediate(MagicItem* apSpell, bool abLoadCast, TESObjectREFR* apDesiredTarget, float afEffectivenessMult, bool abAdjustOnlyHostileEffectiveness, float afMagnitudeOverride);
     virtual uint64_t FindTouchTarget();
@@ -61,6 +70,33 @@ struct MagicCaster
         TYPE_COUNT = 0xA,
     };
 
+    [[nodiscard]] BSPointerHandle<TESObjectREFR*> GetDesiredTargetData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<BSPointerHandle<TESObjectREFR*>>(this, CommonLibMagicCasterOffsets::DesiredTarget);
+#else
+        return hDesiredTarget;
+#endif
+    }
+
+    [[nodiscard]] MagicItem* GetCurrentSpellData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<MagicItem*>(this, CommonLibMagicCasterOffsets::CurrentSpell);
+#else
+        return pCurrentSpell;
+#endif
+    }
+
+    [[nodiscard]] State GetStateData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Value<State>(this, CommonLibMagicCasterOffsets::State);
+#else
+        return eState;
+#endif
+    }
+
     GameArray<uint64_t> hSounds; // BSTArray<BSSoundHandle> hSounds;
     BSPointerHandle<TESObjectREFR*> hDesiredTarget;
     MagicItem* pCurrentSpell;
@@ -72,4 +108,10 @@ struct MagicCaster
     float fProjectileTimer;
 };
 
-static_assert(sizeof(MagicCaster) == 0x48);
+static_assert(MagicCaster::CommonLibMagicCasterOffsets::DesiredTarget == 0x20);
+static_assert(MagicCaster::CommonLibMagicCasterOffsets::CurrentSpell == 0x28);
+static_assert(MagicCaster::CommonLibMagicCasterOffsets::Size == 0x48);
+static_assert(offsetof(MagicCaster, hDesiredTarget) == MagicCaster::LocalMagicCasterOffsets::DesiredTarget);
+static_assert(offsetof(MagicCaster, pCurrentSpell) == MagicCaster::LocalMagicCasterOffsets::CurrentSpell);
+static_assert(offsetof(MagicCaster, eState) == MagicCaster::LocalMagicCasterOffsets::State);
+static_assert(sizeof(MagicCaster) == MagicCaster::LocalMagicCasterOffsets::Size);

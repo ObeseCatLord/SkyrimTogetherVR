@@ -6,6 +6,10 @@
 #include <Services/CharacterService.h>
 #include <Services/QuestService.h>
 #include <Services/TransportService.h>
+#include <Services/VRInventoryService.h>
+#include <Services/VRMovementService.h>
+#include <Services/VRPoseService.h>
+#include <vr_common/VRHandoffPath.h>
 
 #include <Games/References.h>
 #include <Games/Misc/SubtitleManager.h>
@@ -66,6 +70,523 @@
 
 #include <World.h>
 #include <Games/TES.h>
+#include <Misc/BSFixedString.h>
+#include <NetImmerse/NiAVObject.h>
+
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS
+#define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+#define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES
+#define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE 0
+#endif
+
+namespace
+{
+#if TP_SKYRIM_VR
+constexpr char kRemoteAvatarStatusFileName[] = "SkyrimTogetherVR.avatar";
+
+struct RemoteAvatarApplyResult
+{
+    bool LocalMovementAvailable{false};
+    bool RemoteMovementAvailable{false};
+    bool SameCellAvailable{false};
+    bool SameCell{false};
+    bool SameWorldSpaceAvailable{false};
+    bool SameWorldSpace{false};
+    bool SameSpaceForApply{false};
+    bool ActorAvailable{false};
+    bool RootAvailable{false};
+    bool HeadNodeFound{false};
+    bool LeftHandNodeFound{false};
+    bool RightHandNodeFound{false};
+    bool HmdCopied{false};
+    bool LeftHandCopied{false};
+    bool RightHandCopied{false};
+    bool VrikDetected{false};
+    bool VrikInterfaceAvailable{false};
+    bool VrikLeftFingersValid{false};
+    bool VrikRightFingersValid{false};
+    bool VrikCameraOffsetsValid{false};
+    bool MovementApplied{false};
+    bool HmdFallbackMovementApplied{false};
+    uint32_t InvalidTransformCount{0};
+    uint32_t InvalidVrikCount{0};
+    bool InvalidMovement{false};
+};
+
+struct RemoteAvatarStatusSnapshot
+{
+    uint32_t RemotePlayerCount{0};
+    uint32_t RemotePoseMatchCount{0};
+    uint32_t ComponentUpsertCount{0};
+    uint32_t ActorTargetAttemptCount{0};
+    uint32_t SameSpaceCount{0};
+    uint32_t SameCellCount{0};
+    uint32_t SameWorldSpaceCount{0};
+    uint32_t ActorTargetSkippedNoLocalMovementCount{0};
+    uint32_t ActorTargetSkippedNoRemoteMovementCount{0};
+    uint32_t ActorTargetSkippedDifferentCellCount{0};
+    uint32_t ActorTargetSkippedDifferentWorldSpaceCount{0};
+    uint32_t MissingFormIdCount{0};
+    uint32_t MissingActorCount{0};
+    uint32_t MissingRootCount{0};
+    uint32_t HeadNodeFoundCount{0};
+    uint32_t LeftHandNodeFoundCount{0};
+    uint32_t RightHandNodeFoundCount{0};
+    uint32_t HmdCopiedCount{0};
+    uint32_t LeftHandCopiedCount{0};
+    uint32_t RightHandCopiedCount{0};
+    uint32_t VrikDetectedCount{0};
+    uint32_t VrikInterfaceAvailableCount{0};
+    uint32_t VrikLeftFingersValidCount{0};
+    uint32_t VrikRightFingersValidCount{0};
+    uint32_t VrikCameraOffsetsValidCount{0};
+    uint32_t MovementAppliedCount{0};
+    uint32_t HmdFallbackMovementCount{0};
+    uint32_t InvalidTransformCount{0};
+    uint32_t InvalidVrikCount{0};
+    uint32_t InvalidMovementCount{0};
+    uint32_t SpellOriginValidCount{0};
+    uint32_t SpellDestinationValidCount{0};
+    uint32_t ArrowOriginValidCount{0};
+    uint32_t ArrowDestinationValidCount{0};
+    uint32_t BowAimValidCount{0};
+    uint32_t BowRotationValidCount{0};
+    uint32_t LeftWeaponOffsetValidCount{0};
+    uint32_t RightWeaponOffsetValidCount{0};
+    uint32_t PrimaryMagicOffsetValidCount{0};
+    uint32_t PrimaryMagicAimValidCount{0};
+    uint32_t SecondaryMagicOffsetValidCount{0};
+    uint32_t SecondaryMagicAimValidCount{0};
+    uint32_t StalePoseRemovedCount{0};
+    uint32_t RemoteEquipmentMatchCount{0};
+    uint32_t EquipmentComponentUpsertCount{0};
+    uint32_t StaleEquipmentRemovedCount{0};
+    uint32_t EquipmentWeaponDrawQueuedCount{0};
+    uint32_t EquipmentMissingFormIdCount{0};
+    uint32_t EquipmentMissingActorCount{0};
+    uint32_t LastEquipmentPlayerId{0};
+    uint32_t LastEquipmentFormId{0};
+    uint32_t LastEquipmentSequence{0};
+    bool LastEquipmentWeaponDrawn{false};
+    bool LastEquipmentWeaponFullyDrawn{false};
+    bool LastEquipmentDesiredWeaponDrawn{false};
+    bool LastEquipmentWeaponDrawQueued{false};
+    uint32_t LastPlayerId{0};
+    uint32_t LastFormId{0};
+    uint32_t LastPoseSequence{0};
+    bool LastSpellOriginValid{false};
+    bool LastSpellDestinationValid{false};
+    bool LastArrowOriginValid{false};
+    bool LastArrowDestinationValid{false};
+    bool LastBowAimValid{false};
+    bool LastBowRotationValid{false};
+    bool LastLeftWeaponOffsetValid{false};
+    bool LastRightWeaponOffsetValid{false};
+    bool LastPrimaryMagicOffsetValid{false};
+    bool LastPrimaryMagicAimValid{false};
+    bool LastSecondaryMagicOffsetValid{false};
+    bool LastSecondaryMagicAimValid{false};
+    RemoteAvatarApplyResult LastApply{};
+};
+
+bool HasGameId(const GameId& acId) noexcept
+{
+    return static_cast<bool>(acId);
+}
+
+bool IsFiniteFloat(float aValue) noexcept
+{
+    return std::isfinite(aValue);
+}
+
+bool IsFiniteVector(const glm::vec3& acValue) noexcept
+{
+    return IsFiniteFloat(acValue.x) && IsFiniteFloat(acValue.y) && IsFiniteFloat(acValue.z);
+}
+
+bool IsRemotePoseNodeSafe(const VRPoseNodeData& acPose) noexcept
+{
+    if (!acPose.Valid)
+        return false;
+
+    if (!IsFiniteVector(acPose.Position) || !IsFiniteVector(acPose.AxisX) || !IsFiniteVector(acPose.AxisY) || !IsFiniteVector(acPose.AxisZ))
+        return false;
+
+    return IsFiniteFloat(acPose.Scale) && acPose.Scale > 0.0f && acPose.Scale <= 10.0f;
+}
+
+bool IsRemoteFingerCurlSafe(const VRFingerCurlData& acFingers) noexcept
+{
+    return acFingers.Valid && IsFiniteFloat(acFingers.Thumb) && IsFiniteFloat(acFingers.Index) &&
+           IsFiniteFloat(acFingers.Middle) && IsFiniteFloat(acFingers.Ring) && IsFiniteFloat(acFingers.Pinky);
+}
+
+bool IsRemoteVrikCameraOffsetsSafe(const VRVrikData& acVrik) noexcept
+{
+    return acVrik.CameraOffsetsValid && IsFiniteVector(acVrik.CameraOffset) &&
+           IsFiniteVector(acVrik.FinalCameraOffset) && IsFiniteVector(acVrik.FinalSmoothingOffset);
+}
+
+bool DesiredRemoteWeaponDrawn(const VREquipmentUpdate& acEquipment) noexcept
+{
+    return acEquipment.WeaponDrawn || acEquipment.WeaponFullyDrawn;
+}
+
+RemoteAvatarApplyResult CheckRemoteAvatarSpace(const VRMovementService& acMovementService, uint32_t aPlayerId) noexcept
+{
+    RemoteAvatarApplyResult result{};
+
+    if (!acMovementService.HasLocalMovement())
+        return result;
+
+    result.LocalMovementAvailable = true;
+
+    const auto& remoteMovements = acMovementService.GetRemoteMovements();
+    const auto movementIt = remoteMovements.find(aPlayerId);
+    if (movementIt == remoteMovements.end())
+        return result;
+
+    result.RemoteMovementAvailable = true;
+
+    const auto& localMovement = acMovementService.GetLocalMovement();
+    const auto& remoteMovement = movementIt->second;
+    result.SameCellAvailable = HasGameId(localMovement.CellId) && HasGameId(remoteMovement.CellId);
+    result.SameCell = result.SameCellAvailable && localMovement.CellId == remoteMovement.CellId;
+    result.SameWorldSpaceAvailable = HasGameId(localMovement.WorldSpaceId) && HasGameId(remoteMovement.WorldSpaceId);
+    result.SameWorldSpace = result.SameWorldSpaceAvailable && localMovement.WorldSpaceId == remoteMovement.WorldSpaceId;
+
+    if (result.SameCellAvailable)
+        result.SameSpaceForApply = result.SameCell && (!result.SameWorldSpaceAvailable || result.SameWorldSpace);
+    else
+        result.SameSpaceForApply = result.SameWorldSpaceAvailable && result.SameWorldSpace;
+
+    return result;
+}
+
+std::filesystem::path GetHandoffDirectory()
+{
+    return SkyrimTogetherVR::Handoff::GetDirectory();
+}
+
+void WriteRemoteAvatarStatus(const RemoteAvatarStatusSnapshot& acStatus)
+{
+    std::error_code ec;
+    const auto handoffDir = GetHandoffDirectory();
+    std::filesystem::create_directories(handoffDir, ec);
+
+    std::ofstream file(handoffDir / kRemoteAvatarStatusFileName, std::ios::trunc);
+    if (!file)
+        return;
+
+    file << "ready=1\n";
+    file << "actorTargetsEnabled=" << (TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS ? "1" : "0") << "\n";
+    file << "actorSkeletonWritesEnabled=" << (TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES ? "1" : "0") << "\n";
+    file << "actorMovementAuthorityEnabled=0\n";
+    file << "remotePlayerCount=" << acStatus.RemotePlayerCount << "\n";
+    file << "remotePoseMatchCount=" << acStatus.RemotePoseMatchCount << "\n";
+    file << "componentUpsertCount=" << acStatus.ComponentUpsertCount << "\n";
+    file << "actorTargetAttemptCount=" << acStatus.ActorTargetAttemptCount << "\n";
+    file << "sameSpaceCount=" << acStatus.SameSpaceCount << "\n";
+    file << "sameCellCount=" << acStatus.SameCellCount << "\n";
+    file << "sameWorldSpaceCount=" << acStatus.SameWorldSpaceCount << "\n";
+    file << "actorTargetSkippedNoLocalMovementCount=" << acStatus.ActorTargetSkippedNoLocalMovementCount << "\n";
+    file << "actorTargetSkippedNoRemoteMovementCount=" << acStatus.ActorTargetSkippedNoRemoteMovementCount << "\n";
+    file << "actorTargetSkippedDifferentCellCount=" << acStatus.ActorTargetSkippedDifferentCellCount << "\n";
+    file << "actorTargetSkippedDifferentWorldSpaceCount=" << acStatus.ActorTargetSkippedDifferentWorldSpaceCount << "\n";
+    file << "missingFormIdCount=" << acStatus.MissingFormIdCount << "\n";
+    file << "missingActorCount=" << acStatus.MissingActorCount << "\n";
+    file << "missingRootCount=" << acStatus.MissingRootCount << "\n";
+    file << "headNodeFoundCount=" << acStatus.HeadNodeFoundCount << "\n";
+    file << "leftHandNodeFoundCount=" << acStatus.LeftHandNodeFoundCount << "\n";
+    file << "rightHandNodeFoundCount=" << acStatus.RightHandNodeFoundCount << "\n";
+    file << "hmdCopiedCount=" << acStatus.HmdCopiedCount << "\n";
+    file << "leftHandCopiedCount=" << acStatus.LeftHandCopiedCount << "\n";
+    file << "rightHandCopiedCount=" << acStatus.RightHandCopiedCount << "\n";
+    file << "vrikDetectedCount=" << acStatus.VrikDetectedCount << "\n";
+    file << "vrikInterfaceAvailableCount=" << acStatus.VrikInterfaceAvailableCount << "\n";
+    file << "vrikLeftFingersValidCount=" << acStatus.VrikLeftFingersValidCount << "\n";
+    file << "vrikRightFingersValidCount=" << acStatus.VrikRightFingersValidCount << "\n";
+    file << "vrikCameraOffsetsValidCount=" << acStatus.VrikCameraOffsetsValidCount << "\n";
+    file << "movementAppliedCount=" << acStatus.MovementAppliedCount << "\n";
+    file << "hmdFallbackMovementCount=" << acStatus.HmdFallbackMovementCount << "\n";
+    file << "invalidTransformCount=" << acStatus.InvalidTransformCount << "\n";
+    file << "invalidVrikCount=" << acStatus.InvalidVrikCount << "\n";
+    file << "invalidMovementCount=" << acStatus.InvalidMovementCount << "\n";
+    file << "spellOriginValidCount=" << acStatus.SpellOriginValidCount << "\n";
+    file << "spellDestinationValidCount=" << acStatus.SpellDestinationValidCount << "\n";
+    file << "arrowOriginValidCount=" << acStatus.ArrowOriginValidCount << "\n";
+    file << "arrowDestinationValidCount=" << acStatus.ArrowDestinationValidCount << "\n";
+    file << "bowAimValidCount=" << acStatus.BowAimValidCount << "\n";
+    file << "bowRotationValidCount=" << acStatus.BowRotationValidCount << "\n";
+    file << "leftWeaponOffsetValidCount=" << acStatus.LeftWeaponOffsetValidCount << "\n";
+    file << "rightWeaponOffsetValidCount=" << acStatus.RightWeaponOffsetValidCount << "\n";
+    file << "primaryMagicOffsetValidCount=" << acStatus.PrimaryMagicOffsetValidCount << "\n";
+    file << "primaryMagicAimValidCount=" << acStatus.PrimaryMagicAimValidCount << "\n";
+    file << "secondaryMagicOffsetValidCount=" << acStatus.SecondaryMagicOffsetValidCount << "\n";
+    file << "secondaryMagicAimValidCount=" << acStatus.SecondaryMagicAimValidCount << "\n";
+    file << "stalePoseRemovedCount=" << acStatus.StalePoseRemovedCount << "\n";
+    file << "remoteEquipmentMatchCount=" << acStatus.RemoteEquipmentMatchCount << "\n";
+    file << "equipmentComponentUpsertCount=" << acStatus.EquipmentComponentUpsertCount << "\n";
+    file << "staleEquipmentRemovedCount=" << acStatus.StaleEquipmentRemovedCount << "\n";
+    file << "equipmentWeaponDrawQueuedCount=" << acStatus.EquipmentWeaponDrawQueuedCount << "\n";
+    file << "equipmentMissingFormIdCount=" << acStatus.EquipmentMissingFormIdCount << "\n";
+    file << "equipmentMissingActorCount=" << acStatus.EquipmentMissingActorCount << "\n";
+    file << "last.playerId=" << acStatus.LastPlayerId << "\n";
+    file << "last.formId=" << acStatus.LastFormId << "\n";
+    file << "last.poseSequence=" << acStatus.LastPoseSequence << "\n";
+    file << "last.spellOriginValid=" << (acStatus.LastSpellOriginValid ? "1" : "0") << "\n";
+    file << "last.spellDestinationValid=" << (acStatus.LastSpellDestinationValid ? "1" : "0") << "\n";
+    file << "last.arrowOriginValid=" << (acStatus.LastArrowOriginValid ? "1" : "0") << "\n";
+    file << "last.arrowDestinationValid=" << (acStatus.LastArrowDestinationValid ? "1" : "0") << "\n";
+    file << "last.bowAimValid=" << (acStatus.LastBowAimValid ? "1" : "0") << "\n";
+    file << "last.bowRotationValid=" << (acStatus.LastBowRotationValid ? "1" : "0") << "\n";
+    file << "last.leftWeaponOffsetValid=" << (acStatus.LastLeftWeaponOffsetValid ? "1" : "0") << "\n";
+    file << "last.rightWeaponOffsetValid=" << (acStatus.LastRightWeaponOffsetValid ? "1" : "0") << "\n";
+    file << "last.primaryMagicOffsetValid=" << (acStatus.LastPrimaryMagicOffsetValid ? "1" : "0") << "\n";
+    file << "last.primaryMagicAimValid=" << (acStatus.LastPrimaryMagicAimValid ? "1" : "0") << "\n";
+    file << "last.secondaryMagicOffsetValid=" << (acStatus.LastSecondaryMagicOffsetValid ? "1" : "0") << "\n";
+    file << "last.secondaryMagicAimValid=" << (acStatus.LastSecondaryMagicAimValid ? "1" : "0") << "\n";
+    file << "lastEquipment.playerId=" << acStatus.LastEquipmentPlayerId << "\n";
+    file << "lastEquipment.formId=" << acStatus.LastEquipmentFormId << "\n";
+    file << "lastEquipment.sequence=" << acStatus.LastEquipmentSequence << "\n";
+    file << "lastEquipment.weaponDrawn=" << (acStatus.LastEquipmentWeaponDrawn ? "1" : "0") << "\n";
+    file << "lastEquipment.weaponFullyDrawn=" << (acStatus.LastEquipmentWeaponFullyDrawn ? "1" : "0") << "\n";
+    file << "lastEquipment.desiredWeaponDrawn=" << (acStatus.LastEquipmentDesiredWeaponDrawn ? "1" : "0") << "\n";
+    file << "lastEquipment.weaponDrawQueued=" << (acStatus.LastEquipmentWeaponDrawQueued ? "1" : "0") << "\n";
+    file << "last.localMovementAvailable=" << (acStatus.LastApply.LocalMovementAvailable ? "1" : "0") << "\n";
+    file << "last.remoteMovementAvailable=" << (acStatus.LastApply.RemoteMovementAvailable ? "1" : "0") << "\n";
+    file << "last.sameCellAvailable=" << (acStatus.LastApply.SameCellAvailable ? "1" : "0") << "\n";
+    file << "last.sameCell=" << (acStatus.LastApply.SameCell ? "1" : "0") << "\n";
+    file << "last.sameWorldSpaceAvailable=" << (acStatus.LastApply.SameWorldSpaceAvailable ? "1" : "0") << "\n";
+    file << "last.sameWorldSpace=" << (acStatus.LastApply.SameWorldSpace ? "1" : "0") << "\n";
+    file << "last.sameSpaceForApply=" << (acStatus.LastApply.SameSpaceForApply ? "1" : "0") << "\n";
+    file << "last.actorAvailable=" << (acStatus.LastApply.ActorAvailable ? "1" : "0") << "\n";
+    file << "last.rootAvailable=" << (acStatus.LastApply.RootAvailable ? "1" : "0") << "\n";
+    file << "last.headNodeFound=" << (acStatus.LastApply.HeadNodeFound ? "1" : "0") << "\n";
+    file << "last.leftHandNodeFound=" << (acStatus.LastApply.LeftHandNodeFound ? "1" : "0") << "\n";
+    file << "last.rightHandNodeFound=" << (acStatus.LastApply.RightHandNodeFound ? "1" : "0") << "\n";
+    file << "last.hmdCopied=" << (acStatus.LastApply.HmdCopied ? "1" : "0") << "\n";
+    file << "last.leftHandCopied=" << (acStatus.LastApply.LeftHandCopied ? "1" : "0") << "\n";
+    file << "last.rightHandCopied=" << (acStatus.LastApply.RightHandCopied ? "1" : "0") << "\n";
+    file << "last.vrikDetected=" << (acStatus.LastApply.VrikDetected ? "1" : "0") << "\n";
+    file << "last.vrikInterfaceAvailable=" << (acStatus.LastApply.VrikInterfaceAvailable ? "1" : "0") << "\n";
+    file << "last.vrikLeftFingersValid=" << (acStatus.LastApply.VrikLeftFingersValid ? "1" : "0") << "\n";
+    file << "last.vrikRightFingersValid=" << (acStatus.LastApply.VrikRightFingersValid ? "1" : "0") << "\n";
+    file << "last.vrikCameraOffsetsValid=" << (acStatus.LastApply.VrikCameraOffsetsValid ? "1" : "0") << "\n";
+    file << "last.movementApplied=" << (acStatus.LastApply.MovementApplied ? "1" : "0") << "\n";
+    file << "last.hmdFallbackMovementApplied=" << (acStatus.LastApply.HmdFallbackMovementApplied ? "1" : "0") << "\n";
+    file << "last.invalidTransformCount=" << acStatus.LastApply.InvalidTransformCount << "\n";
+    file << "last.invalidVrikCount=" << acStatus.LastApply.InvalidVrikCount << "\n";
+    file << "last.invalidMovement=" << (acStatus.LastApply.InvalidMovement ? "1" : "0") << "\n";
+}
+
+bool CopyPoseNodeToSceneNode(NiAVObject* apTarget, const VRPoseNodeData& acPose) noexcept
+{
+    if (!apTarget || !IsRemotePoseNodeSafe(acPose))
+        return false;
+
+    auto& world = apTarget->world;
+    world.rotate[0][0] = acPose.AxisX.x;
+    world.rotate[0][1] = acPose.AxisX.y;
+    world.rotate[0][2] = acPose.AxisX.z;
+    world.rotate[1][0] = acPose.AxisY.x;
+    world.rotate[1][1] = acPose.AxisY.y;
+    world.rotate[1][2] = acPose.AxisY.z;
+    world.rotate[2][0] = acPose.AxisZ.x;
+    world.rotate[2][1] = acPose.AxisZ.y;
+    world.rotate[2][2] = acPose.AxisZ.z;
+    world.translate.x = acPose.Position.x;
+    world.translate.y = acPose.Position.y;
+    world.translate.z = acPose.Position.z;
+    world.scale = acPose.Scale;
+    return true;
+}
+
+NiAVObject* FindChildNode(NiAVObject* apRoot, const char* apName) noexcept
+{
+    if (!apRoot || !apName || !apName[0])
+        return nullptr;
+
+    BSFixedString name(apName);
+    return apRoot->GetObjectByName(name);
+}
+
+void ApplyRemoteAvatarPoseToActor(Actor* apActor, const VRPoseUpdate& acPose, RemoteAvatarApplyResult& aResult) noexcept
+{
+    if (!apActor)
+        return;
+
+    aResult.ActorAvailable = true;
+    auto* pRoot = apActor->GetNiNode();
+    if (!pRoot)
+        return;
+
+    aResult.RootAvailable = true;
+    auto* pHead = FindChildNode(pRoot, "NPC Head [Head]");
+    auto* pLeftHand = FindChildNode(pRoot, "NPC L Hand [LHnd]");
+    auto* pRightHand = FindChildNode(pRoot, "NPC R Hand [RHnd]");
+    aResult.HeadNodeFound = pHead != nullptr;
+    aResult.LeftHandNodeFound = pLeftHand != nullptr;
+    aResult.RightHandNodeFound = pRightHand != nullptr;
+
+    if (acPose.Hmd.Valid && !IsRemotePoseNodeSafe(acPose.Hmd))
+        ++aResult.InvalidTransformCount;
+    if (acPose.LeftHand.Valid && !IsRemotePoseNodeSafe(acPose.LeftHand))
+        ++aResult.InvalidTransformCount;
+    if (acPose.RightHand.Valid && !IsRemotePoseNodeSafe(acPose.RightHand))
+        ++aResult.InvalidTransformCount;
+
+    aResult.HmdCopied = CopyPoseNodeToSceneNode(pHead, acPose.Hmd);
+    aResult.LeftHandCopied = CopyPoseNodeToSceneNode(pLeftHand, acPose.LeftHand);
+    aResult.RightHandCopied = CopyPoseNodeToSceneNode(pRightHand, acPose.RightHand);
+
+    aResult.VrikDetected = acPose.Vrik.Detected;
+    aResult.VrikInterfaceAvailable = acPose.Vrik.InterfaceAvailable;
+    aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
+    aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
+    aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
+
+    if (acPose.Vrik.LeftFingers.Valid && !aResult.VrikLeftFingersValid)
+        ++aResult.InvalidVrikCount;
+    if (acPose.Vrik.RightFingers.Valid && !aResult.VrikRightFingersValid)
+        ++aResult.InvalidVrikCount;
+    if (acPose.Vrik.CameraOffsetsValid && !aResult.VrikCameraOffsetsValid)
+        ++aResult.InvalidVrikCount;
+}
+
+void ValidateRemoteAvatarPoseForStatus(const VRPoseUpdate& acPose, RemoteAvatarApplyResult& aResult) noexcept
+{
+    if (acPose.Hmd.Valid && !IsRemotePoseNodeSafe(acPose.Hmd))
+        ++aResult.InvalidTransformCount;
+    if (acPose.LeftHand.Valid && !IsRemotePoseNodeSafe(acPose.LeftHand))
+        ++aResult.InvalidTransformCount;
+    if (acPose.RightHand.Valid && !IsRemotePoseNodeSafe(acPose.RightHand))
+        ++aResult.InvalidTransformCount;
+
+    aResult.VrikDetected = acPose.Vrik.Detected;
+    aResult.VrikInterfaceAvailable = acPose.Vrik.InterfaceAvailable;
+    aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
+    aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
+    aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
+
+    if (acPose.Vrik.LeftFingers.Valid && !aResult.VrikLeftFingersValid)
+        ++aResult.InvalidVrikCount;
+    if (acPose.Vrik.RightFingers.Valid && !aResult.VrikRightFingersValid)
+        ++aResult.InvalidVrikCount;
+    if (acPose.Vrik.CameraOffsetsValid && !aResult.VrikCameraOffsetsValid)
+        ++aResult.InvalidVrikCount;
+}
+
+void AccumulateSpaceResult(RemoteAvatarStatusSnapshot& aStatus, const RemoteAvatarApplyResult& acResult) noexcept
+{
+    if (acResult.SameSpaceForApply)
+        ++aStatus.SameSpaceCount;
+    if (acResult.SameCell)
+        ++aStatus.SameCellCount;
+    if (acResult.SameWorldSpace)
+        ++aStatus.SameWorldSpaceCount;
+}
+
+void AccumulateApplyResult(RemoteAvatarStatusSnapshot& aStatus, const RemoteAvatarApplyResult& acResult) noexcept
+{
+    if (!acResult.RootAvailable && acResult.ActorAvailable)
+        ++aStatus.MissingRootCount;
+    if (acResult.HeadNodeFound)
+        ++aStatus.HeadNodeFoundCount;
+    if (acResult.LeftHandNodeFound)
+        ++aStatus.LeftHandNodeFoundCount;
+    if (acResult.RightHandNodeFound)
+        ++aStatus.RightHandNodeFoundCount;
+    if (acResult.HmdCopied)
+        ++aStatus.HmdCopiedCount;
+    if (acResult.LeftHandCopied)
+        ++aStatus.LeftHandCopiedCount;
+    if (acResult.RightHandCopied)
+        ++aStatus.RightHandCopiedCount;
+    if (acResult.VrikDetected)
+        ++aStatus.VrikDetectedCount;
+    if (acResult.VrikInterfaceAvailable)
+        ++aStatus.VrikInterfaceAvailableCount;
+    if (acResult.VrikLeftFingersValid)
+        ++aStatus.VrikLeftFingersValidCount;
+    if (acResult.VrikRightFingersValid)
+        ++aStatus.VrikRightFingersValidCount;
+    if (acResult.VrikCameraOffsetsValid)
+        ++aStatus.VrikCameraOffsetsValidCount;
+    if (acResult.MovementApplied)
+        ++aStatus.MovementAppliedCount;
+    if (acResult.HmdFallbackMovementApplied)
+        ++aStatus.HmdFallbackMovementCount;
+    aStatus.InvalidTransformCount += acResult.InvalidTransformCount;
+    aStatus.InvalidVrikCount += acResult.InvalidVrikCount;
+    if (acResult.InvalidMovement)
+        ++aStatus.InvalidMovementCount;
+}
+
+void AccumulatePoseContext(RemoteAvatarStatusSnapshot& aStatus, const VRPoseUpdate& acPose) noexcept
+{
+    if (acPose.SpellOrigin.Valid)
+        ++aStatus.SpellOriginValidCount;
+    if (acPose.SpellDestination.Valid)
+        ++aStatus.SpellDestinationValidCount;
+    if (acPose.ArrowOrigin.Valid)
+        ++aStatus.ArrowOriginValidCount;
+    if (acPose.ArrowDestination.Valid)
+        ++aStatus.ArrowDestinationValidCount;
+    if (acPose.BowAim.Valid)
+        ++aStatus.BowAimValidCount;
+    if (acPose.BowRotation.Valid)
+        ++aStatus.BowRotationValidCount;
+    if (acPose.LeftWeaponOffset.Valid)
+        ++aStatus.LeftWeaponOffsetValidCount;
+    if (acPose.RightWeaponOffset.Valid)
+        ++aStatus.RightWeaponOffsetValidCount;
+    if (acPose.PrimaryMagicOffset.Valid)
+        ++aStatus.PrimaryMagicOffsetValidCount;
+    if (acPose.PrimaryMagicAim.Valid)
+        ++aStatus.PrimaryMagicAimValidCount;
+    if (acPose.SecondaryMagicOffset.Valid)
+        ++aStatus.SecondaryMagicOffsetValidCount;
+    if (acPose.SecondaryMagicAim.Valid)
+        ++aStatus.SecondaryMagicAimValidCount;
+
+    aStatus.LastSpellOriginValid = acPose.SpellOrigin.Valid;
+    aStatus.LastSpellDestinationValid = acPose.SpellDestination.Valid;
+    aStatus.LastArrowOriginValid = acPose.ArrowOrigin.Valid;
+    aStatus.LastArrowDestinationValid = acPose.ArrowDestination.Valid;
+    aStatus.LastBowAimValid = acPose.BowAim.Valid;
+    aStatus.LastBowRotationValid = acPose.BowRotation.Valid;
+    aStatus.LastLeftWeaponOffsetValid = acPose.LeftWeaponOffset.Valid;
+    aStatus.LastRightWeaponOffsetValid = acPose.RightWeaponOffset.Valid;
+    aStatus.LastPrimaryMagicOffsetValid = acPose.PrimaryMagicOffset.Valid;
+    aStatus.LastPrimaryMagicAimValid = acPose.PrimaryMagicAim.Valid;
+    aStatus.LastSecondaryMagicOffsetValid = acPose.SecondaryMagicOffset.Valid;
+    aStatus.LastSecondaryMagicAimValid = acPose.SecondaryMagicAim.Valid;
+}
+#endif
+}
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
     : m_world(aWorld)
@@ -116,7 +637,8 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher,
 
 void CharacterService::DeleteRemoteEntityComponents(entt::entity aEntity) const noexcept
 {
-    m_world.remove<FaceGenComponent, InterpolationComponent, RemoteAnimationComponent, RemoteComponent, CacheComponent, WaitingFor3D, PlayerComponent>(aEntity);
+    m_world.remove<FaceGenComponent, InterpolationComponent, RemoteAnimationComponent, RemoteVRPoseComponent, RemoteVREquipmentComponent, RemoteComponent, CacheComponent, WaitingFor3D,
+                   PlayerComponent>(aEntity);
 }
 
 bool CharacterService::TakeOwnership(const uint32_t acFormId, const uint32_t acServerId, const entt::entity acEntity) const noexcept
@@ -162,7 +684,7 @@ bool CharacterService::TakeOwnership(const uint32_t acFormId, const uint32_t acS
 void CharacterService::DeleteTempActor(const uint32_t aFormId) noexcept
 {
     Actor* pActor = Cast<Actor>(TESForm::GetById(aFormId));
-    if (pActor && ((pActor->formID & 0xFF000000) == 0xFF000000))
+    if (pActor && pActor->IsTemporary())
     {
         pActor->Delete();
         spdlog::info("\tDeleted actor {:X}", aFormId);
@@ -237,7 +759,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunSpawnUpdates();
     RunLocalUpdates();
     RunFactionsUpdates();
-    RunRemoteUpdates();
+    RunRemoteUpdates(acUpdateEvent);
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
 }
@@ -282,7 +804,7 @@ void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEve
             pActor->GetExtension()->SetRemote(false);
     }
 
-    m_world.clear<WaitingForAssignmentComponent, LocalComponent, RemoteComponent>();
+    m_world.clear<WaitingForAssignmentComponent, LocalComponent, RemoteComponent, RemoteVRPoseComponent, RemoteVREquipmentComponent>();
 }
 
 void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessage) noexcept
@@ -290,7 +812,8 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
     spdlog::info("Received for cookie {:X}, server id {:X}", acMessage.Cookie, acMessage.ServerId);
 
     auto view = m_world.view<WaitingForAssignmentComponent>();
-    const auto itor = std::find_if(std::begin(view), std::end(view), [view, cookie = acMessage.Cookie](auto entity) { return view.get<WaitingForAssignmentComponent>(entity).Cookie == cookie; });
+    const auto itor =
+        std::find_if(std::begin(view), std::end(view), [view, cookie = acMessage.Cookie](auto entity) { return view.get<WaitingForAssignmentComponent>(entity).Cookie == cookie; });
 
     if (itor == std::end(view))
     {
@@ -327,7 +850,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
 
     if (acMessage.Owner)
     {
-        spdlog::info("Received local actor, form id: {:X}", pActor->formID);
+        spdlog::info("Received local actor, form id: {:X}", pActor->GetFormIdData());
 
         m_world.emplace_or_replace<LocalComponent>(cEntity, acMessage.ServerId);
         auto& localAnimationComponent = m_world.emplace_or_replace<LocalAnimationComponent>(cEntity);
@@ -345,7 +868,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
     }
     else
     {
-        spdlog::info("Received remote actor, form id: {:X}, isweapondrawn: {}", pActor->formID, acMessage.IsWeaponDrawn);
+        spdlog::info("Received remote actor, form id: {:X}, isweapondrawn: {}", pActor->GetFormIdData(), acMessage.IsWeaponDrawn);
 
         m_world.emplace_or_replace<RemoteComponent>(cEntity, acMessage.ServerId, formIdComponent->Id);
 
@@ -366,7 +889,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         if (pActor->IsDead() != acMessage.IsDead)
             acMessage.IsDead ? pActor->Kill() : pActor->Respawn();
 
-        m_weaponDrawUpdates[pActor->formID] = {acMessage.IsWeaponDrawn};
+        m_weaponDrawUpdates[pActor->GetFormIdData()] = {acMessage.IsWeaponDrawn};
 
         MoveActor(pActor, acMessage.WorldSpaceId, acMessage.CellId, acMessage.Position);
     }
@@ -375,7 +898,8 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
 void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) const noexcept
 {
     auto remoteView = m_world.view<RemoteComponent>();
-    const auto remoteItor = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
+    const auto remoteItor =
+        std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
 
     if (remoteItor != std::end(remoteView))
     {
@@ -399,7 +923,9 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
             const auto cNpcId = World::Get().GetModSystem().GetGameId(acMessage.BaseId);
             if (cNpcId == 0)
             {
-                spdlog::error("Failed to retrieve NPC, it will not be spawned, possibly missing mod, base: {:X}:{:X}, form: {:X}:{:X}", acMessage.BaseId.BaseId, acMessage.BaseId.ModId, acMessage.FormId.BaseId, acMessage.FormId.ModId);
+                spdlog::error(
+                    "Failed to retrieve NPC, it will not be spawned, possibly missing mod, base: {:X}:{:X}, form: {:X}:{:X}", acMessage.BaseId.BaseId, acMessage.BaseId.ModId,
+                    acMessage.FormId.BaseId, acMessage.FormId.ModId);
                 return;
             }
 
@@ -420,7 +946,8 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
         const uint32_t cActorId = World::Get().GetModSystem().GetGameId(acMessage.FormId);
 
         auto waitingView = m_world.view<FormIdComponent, WaitingForAssignmentComponent>();
-        const auto waitingItor = std::find_if(std::begin(waitingView), std::end(waitingView), [waitingView, cActorId](auto entity) { return waitingView.get<FormIdComponent>(entity).Id == cActorId; });
+        const auto waitingItor =
+            std::find_if(std::begin(waitingView), std::end(waitingView), [waitingView, cActorId](auto entity) { return waitingView.get<FormIdComponent>(entity).Id == cActorId; });
 
         if (waitingItor != std::end(waitingView))
         {
@@ -434,7 +961,7 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
         if (!pActor)
         {
             spdlog::error("Failed to retrieve Actor {:X}, it will not be spawned, possibly missing mod", cActorId);
-            spdlog::error("\tForm : {:X}", pForm ? pForm->formID : 0);
+            spdlog::error("\tForm : {:X}", pForm ? pForm->GetFormIdData() : 0);
             return;
         }
 
@@ -453,19 +980,21 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
         return;
     }
 
-    spdlog::info("CharacterSpawnRequest, server id: {:X}, form id: {:X}", acMessage.ServerId, pActor->formID);
+    spdlog::info("CharacterSpawnRequest, server id: {:X}, form id: {:X}", acMessage.ServerId, pActor->GetFormIdData());
 
     if (pActor->IsDisabled())
     {
-        spdlog::warn("Disabled actor is being re-enabled: {:X}", pActor->formID);
+        spdlog::warn("Disabled actor is being re-enabled: {:X}", pActor->GetFormIdData());
         pActor->EnableImpl();
     }
 
     pActor->GetExtension()->SetRemote(true);
 
-    pActor->rotation.x = acMessage.Rotation.x;
-    pActor->rotation.z = acMessage.Rotation.y;
-    pActor->MoveTo(PlayerCharacter::Get()->parentCell, acMessage.Position);
+    auto rotation = pActor->GetRotationData();
+    rotation.x = acMessage.Rotation.x;
+    rotation.z = acMessage.Rotation.y;
+    pActor->SetRotationData(rotation);
+    pActor->MoveTo(PlayerCharacter::Get()->GetParentCellData(), acMessage.Position);
     pActor->SetActorValues(acMessage.InitialActorValues);
 
     pActor->GetExtension()->SetPlayer(acMessage.IsPlayer);
@@ -487,7 +1016,7 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
         pActor->SetCommandingActor(PlayerCharacter::Get()->GetHandle());
     }
 
-    auto& remoteComponent = m_world.emplace_or_replace<RemoteComponent>(*entity, acMessage.ServerId, pActor->formID);
+    auto& remoteComponent = m_world.emplace_or_replace<RemoteComponent>(*entity, acMessage.ServerId, pActor->GetFormIdData());
 
     auto& interpolationComponent = InterpolationSystem::Setup(m_world, *entity);
     interpolationComponent.Position = acMessage.Position;
@@ -540,12 +1069,12 @@ void CharacterService::OnRemoteSpawnDataReceived(const NotifySpawnData& acMessag
 
     pActor->SetActorValues(acMessage.NewActorData.InitialActorValues);
     pActor->SetActorInventory(acMessage.NewActorData.InitialInventory);
-    m_weaponDrawUpdates[pActor->formID] = {acMessage.NewActorData.IsWeaponDrawn};
+    m_weaponDrawUpdates[pActor->GetFormIdData()] = {acMessage.NewActorData.IsWeaponDrawn};
 
     if (pActor->IsDead() != acMessage.NewActorData.IsDead)
         acMessage.NewActorData.IsDead ? pActor->Kill() : pActor->Respawn();
 
-    spdlog::info("Applied remote spawn data, actor form id: {:X}", pActor->formID);
+    spdlog::info("Applied remote spawn data, actor form id: {:X}", pActor->GetFormIdData());
 }
 
 void CharacterService::OnReferencesMoveRequest(const ServerReferencesMoveRequest& acMessage) const noexcept
@@ -582,7 +1111,8 @@ void CharacterService::OnReferencesMoveRequest(const ServerReferencesMoveRequest
 void CharacterService::OnActionEvent(const ActionEvent& acActionEvent) const noexcept
 {
     auto view = m_world.view<LocalAnimationComponent, FormIdComponent>();
-    const auto itor = std::find_if(std::begin(view), std::end(view), [id = acActionEvent.ActorId, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
+    const auto itor =
+        std::find_if(std::begin(view), std::end(view), [id = acActionEvent.ActorId, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
 
     if (itor != std::end(view))
     {
@@ -595,7 +1125,8 @@ void CharacterService::OnActionEvent(const ActionEvent& acActionEvent) const noe
         // A `LocalAnimationComponent` is not attached yet, but the actor already exists and is running animations
 
         auto view = m_world.view<FormIdComponent, EarlyAnimationBufferComponent>();
-        const auto itor = std::find_if(std::begin(view), std::end(view), [id = acActionEvent.ActorId, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
+        const auto itor =
+            std::find_if(std::begin(view), std::end(view), [id = acActionEvent.ActorId, view](entt::entity entity) { return view.get<FormIdComponent>(entity).Id == id; });
 
         if (itor != std::end(view))
         {
@@ -724,7 +1255,7 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
         return;
     }
 
-    TESNPC* pNpc = Cast<TESNPC>(pActor->baseForm);
+    TESNPC* pNpc = Cast<TESNPC>(pActor->GetBaseFormData());
     if (!pNpc)
     {
         spdlog::warn(__FUNCTION__ ": could not find actor baseform for server id {:X}", serverId);
@@ -789,7 +1320,8 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
 {
     auto remoteView = m_world.view<RemoteComponent, FormIdComponent>();
 
-    const auto riderIt = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.RiderId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
+    const auto riderIt =
+        std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.RiderId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
 
     if (riderIt == std::end(remoteView))
     {
@@ -874,7 +1406,8 @@ void CharacterService::OnInitPackageEvent(const InitPackageEvent& acEvent) const
 void CharacterService::OnNotifyNewPackage(const NotifyNewPackage& acMessage) const noexcept
 {
     auto remoteView = m_world.view<RemoteComponent, FormIdComponent>();
-    const auto remoteIt = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ActorId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
+    const auto remoteIt =
+        std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ActorId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
 
     if (remoteIt == std::end(remoteView))
     {
@@ -943,7 +1476,8 @@ void CharacterService::OnDialogueEvent(const DialogueEvent& acEvent) noexcept
 void CharacterService::OnNotifyDialogue(const NotifyDialogue& acMessage) noexcept
 {
     auto remoteView = m_world.view<RemoteComponent, FormIdComponent>();
-    const auto remoteIt = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
+    const auto remoteIt =
+        std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
 
     if (remoteIt == std::end(remoteView))
     {
@@ -991,7 +1525,8 @@ void CharacterService::OnSubtitleEvent(const SubtitleEvent& acEvent) noexcept
 void CharacterService::OnNotifySubtitle(const NotifySubtitle& acMessage) noexcept
 {
     auto remoteView = m_world.view<RemoteComponent, FormIdComponent>();
-    const auto remoteIt = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
+    const auto remoteIt =
+        std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
 
     if (remoteIt == std::end(remoteView))
     {
@@ -1053,7 +1588,7 @@ void CharacterService::OnNotifyRelinquishControl(const NotifyRelinquishControl& 
             InterpolationSystem::Setup(m_world, entity);
             AnimationSystem::Setup(m_world, entity);
 
-            spdlog::info(__FUNCTION__ ": relinquished control of actor {:X} with server id {:X}", pActor->formID, acMessage.ServerId);
+            spdlog::info(__FUNCTION__ ": relinquished control of actor {:X} with server id {:X}", pActor->GetFormIdData(), acMessage.ServerId);
 
             return;
         }
@@ -1076,7 +1611,9 @@ void CharacterService::OnNotifyActorTeleport(const NotifyActorTeleport& acMessag
 
     MoveActor(pActor, acMessage.WorldSpaceId, acMessage.CellId, acMessage.Position);
 
-    spdlog::info("Successfully teleported actor, form id: {:X}, world space: {:X}, cell: {:X}, position: ({}, {}, {})", pActor->formID, acMessage.WorldSpaceId.BaseId, acMessage.CellId.BaseId, acMessage.Position.x, acMessage.Position.y, acMessage.Position.z);
+    spdlog::info(
+        "Successfully teleported actor, form id: {:X}, world space: {:X}, cell: {:X}, position: ({}, {}, {})", pActor->GetFormIdData(), acMessage.WorldSpaceId.BaseId,
+        acMessage.CellId.BaseId, acMessage.Position.x, acMessage.Position.y, acMessage.Position.z);
 }
 
 void CharacterService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept
@@ -1114,7 +1651,9 @@ void CharacterService::MoveActor(const Actor* apActor, const GameId& acWorldSpac
 
     if (!pCell)
     {
-        spdlog::error(__FUNCTION__ ": failed to fetch cell to teleport, actor: {:X}, worldspace: {:X}, cell: {:X}, position: {}, {}, {}", apActor->formID, acWorldSpaceId.BaseId, acCellId.BaseId, acPosition.x, acPosition.y, acPosition.z);
+        spdlog::error(
+            __FUNCTION__ ": failed to fetch cell to teleport, actor: {:X}, worldspace: {:X}, cell: {:X}, position: {}, {}, {}", apActor->GetFormIdData(), acWorldSpaceId.BaseId,
+            acCellId.BaseId, acPosition.x, acPosition.y, acPosition.z);
         return;
     }
 
@@ -1141,12 +1680,12 @@ void CharacterService::ProcessNewEntity(entt::entity aEntity) const noexcept
         // maybe check it server side, add a variable to the request.
         if (m_world.GetPartyService().IsLeader() && !pActor->IsTemporary() && !pActor->IsMount())
         {
-            spdlog::info("Sending ownership claim for actor {:X} with server id {:X}", pActor->formID, pRemoteComponent->Id);
+            spdlog::info("Sending ownership claim for actor {:X} with server id {:X}", pActor->GetFormIdData(), pRemoteComponent->Id);
 
-            TakeOwnership(pActor->formID, pRemoteComponent->Id, aEntity);
+            TakeOwnership(pActor->GetFormIdData(), pRemoteComponent->Id, aEntity);
         }
         else
-            spdlog::info("New entity remotely managed, form id: {:X}, server id: {:X}", pActor->formID, pRemoteComponent->Id);
+            spdlog::info("New entity remotely managed, form id: {:X}, server id: {:X}", pActor->GetFormIdData(), pRemoteComponent->Id);
 
         return;
     }
@@ -1172,7 +1711,7 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     if (!pActor)
         return;
 
-    TESNPC* pNpc = Cast<TESNPC>(pActor->baseForm);
+    TESNPC* pNpc = Cast<TESNPC>(pActor->GetBaseFormData());
     if (!pNpc)
         return;
 
@@ -1186,25 +1725,34 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
         return;
     }
 
-    if (!m_world.GetModSystem().GetServerModId(pActor->parentCell->formID, message.CellId))
+    const auto* pParentCell = pActor->GetParentCellData();
+    if (!pParentCell)
     {
-        spdlog::error("Server cell id not found for cell id {:X}", pActor->parentCell->formID);
+        spdlog::error("Server assignment failed for form id {:X}: parent cell unavailable", pActor->GetFormIdData());
+        return;
+    }
+
+    if (!m_world.GetModSystem().GetServerModId(pParentCell->GetFormIdData(), message.CellId))
+    {
+        spdlog::error("Server cell id not found for cell id {:X}", pParentCell->GetFormIdData());
         return;
     }
 
     if (const auto pWorldSpace = pActor->GetWorldSpace())
     {
-        if (!m_world.GetModSystem().GetServerModId(pWorldSpace->formID, message.WorldSpaceId))
+        if (!m_world.GetModSystem().GetServerModId(pWorldSpace->GetFormIdData(), message.WorldSpaceId))
             return;
     }
 
-    message.Position = pActor->position;
-    message.Rotation.x = pActor->rotation.x;
-    message.Rotation.y = pActor->rotation.z;
+    const auto& position = pActor->GetPositionData();
+    const auto& rotation = pActor->GetRotationData();
+    message.Position = position;
+    message.Rotation.x = rotation.x;
+    message.Rotation.y = rotation.z;
 
     // Serialize the base form
     const auto isPlayer = (formIdComponent.Id == 0x14);
-    const auto isTemporary = pActor->formID >= 0xFF000000;
+    const auto isTemporary = pActor->IsTemporary();
 
     if (isPlayer)
     {
@@ -1221,50 +1769,65 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
 
     if (isPlayer)
     {
-        auto& entries = message.FaceTints.Entries;
-
-        const auto& tints = PlayerCharacter::Get()->GetTints();
-
-        entries.resize(tints.length);
-
-        for (auto i = 0u; i < tints.length; ++i)
+        const auto* pPlayer = PlayerCharacter::Get();
+        if (pPlayer && pPlayer->CanReadTintData())
         {
-            entries[i].Alpha = tints[i]->alpha;
-            entries[i].Color = tints[i]->color;
-            entries[i].Type = tints[i]->type;
+            auto& entries = message.FaceTints.Entries;
 
-            if (tints[i]->texture)
-                entries[i].Name = tints[i]->texture->name.AsAscii();
+            const auto& tints = pPlayer->GetTints();
+
+            entries.resize(tints.length);
+
+            for (auto i = 0u; i < tints.length; ++i)
+            {
+                entries[i].Alpha = tints[i]->alpha;
+                entries[i].Color = tints[i]->color;
+                entries[i].Type = tints[i]->type;
+
+                if (tints[i]->texture)
+                    entries[i].Name = tints[i]->texture->name.AsAscii();
+            }
+
+            message.HasFaceTints = true;
         }
     }
 
     if (isPlayer)
     {
-        auto& questLog = message.QuestContent.Entries;
-        auto& modSystem = m_world.GetModSystem();
-
-        for (const auto& objective : PlayerCharacter::Get()->objectives)
+        const auto* pPlayer = PlayerCharacter::Get();
+        if (pPlayer && pPlayer->CanReadObjectiveData())
         {
-            auto* pQuest = objective.instance->quest;
-            if (!pQuest)
-                continue;
+            auto& questLog = message.QuestContent.Entries;
+            auto& modSystem = m_world.GetModSystem();
 
-            if (!QuestService::IsNonSyncableQuest(pQuest))
+            for (const auto& objective : pPlayer->GetObjectives())
             {
-                GameId id{};
+                if (!objective.instance)
+                    continue;
 
-                if (modSystem.GetServerModId(pQuest->formID, id))
+                auto* pQuest = objective.instance->quest;
+                if (!pQuest)
+                    continue;
+
+                if (!QuestService::IsNonSyncableQuest(pQuest))
                 {
-                    auto& entry = questLog.emplace_back();
-                    entry.Stage = pQuest->currentStage;
-                    entry.Id = id;
+                    GameId id{};
+
+                    if (modSystem.GetServerModId(pQuest->GetFormIdData(), id))
+                    {
+                        auto& entry = questLog.emplace_back();
+                        entry.Stage = pQuest->GetCurrentStageData();
+                        entry.Id = id;
+                    }
                 }
             }
-        }
 
-        // remove duplicates
-        const auto ip = std::unique(questLog.begin(), questLog.end());
-        questLog.resize(std::distance(questLog.begin(), ip));
+            // remove duplicates
+            const auto ip = std::unique(questLog.begin(), questLog.end());
+            questLog.resize(std::distance(questLog.begin(), ip));
+
+            message.HasQuestContent = true;
+        }
     }
 
     message.CurrentActorData = BuildActorData(pActor);
@@ -1272,16 +1835,16 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     message.FactionsContent = pActor->GetFactions();
     message.IsDragon = pActor->IsDragon();
     message.IsMount = pActor->IsMount();
-    message.IsPlayerSummon = pActor->GetCommandingActor() && pActor->GetCommandingActor()->formID == 0x14;
+    message.IsPlayerSummon = pActor->GetCommandingActor() && pActor->GetCommandingActor()->GetFormIdData() == 0x14;
 
     if (pNpc->IsTemporary())
         pNpc = pNpc->GetTemplateBase();
 
     if (isTemporary)
     {
-        if (pNpc && !m_world.GetModSystem().GetServerModId(pNpc->formID, message.FormId))
+        if (pNpc && !m_world.GetModSystem().GetServerModId(pNpc->GetFormIdData(), message.FormId))
         {
-            spdlog::error("Server NPC form id not found for form id {:X}", pNpc->formID);
+            spdlog::error("Server NPC form id not found for form id {:X}", pNpc->GetFormIdData());
             return;
         }
     }
@@ -1354,17 +1917,17 @@ void CharacterService::CancelServerAssignment(const entt::entity aEntity, const 
 
                 if (TESWorldSpace* pWorldSpace = pActor->GetWorldSpace())
                 {
-                    if (!modSystem.GetServerModId(pWorldSpace->formID, request.WorldSpaceId))
-                        spdlog::error("World space id not found, despite having a world space, {:X}", pWorldSpace->formID);
+                    if (!modSystem.GetServerModId(pWorldSpace->GetFormIdData(), request.WorldSpaceId))
+                        spdlog::error("World space id not found, despite having a world space, {:X}", pWorldSpace->GetFormIdData());
                 }
 
-                if (TESObjectCELL* pCell = pActor->GetParentCell())
+                if (TESObjectCELL* pCell = pActor->GetParentCellEx())
                 {
-                    if (!modSystem.GetServerModId(pCell->formID, request.CellId))
-                        spdlog::error("Cell id not found, despite having a cell, {:X}", pCell->formID);
+                    if (!modSystem.GetServerModId(pCell->GetFormIdData(), request.CellId))
+                        spdlog::error("Cell id not found, despite having a cell, {:X}", pCell->GetFormIdData());
                 }
 
-                request.Position = pActor->position;
+                request.Position = pActor->GetPositionData();
             }
         }
 
@@ -1429,9 +1992,11 @@ Actor* CharacterService::CreateCharacterForEntity(entt::entity aEntity) const no
     }
 
     pActor->GetExtension()->SetRemote(true);
-    pActor->rotation.x = acMessage.Rotation.x;
-    pActor->rotation.z = acMessage.Rotation.y;
-    pActor->MoveTo(PlayerCharacter::Get()->parentCell, pInterpolationComponent->Position);
+    auto rotation = pActor->GetRotationData();
+    rotation.x = acMessage.Rotation.x;
+    rotation.z = acMessage.Rotation.y;
+    pActor->SetRotationData(rotation);
+    pActor->MoveTo(PlayerCharacter::Get()->GetParentCellData(), pInterpolationComponent->Position);
     pActor->SetActorValues(acMessage.InitialActorValues);
 
     pActor->GetExtension()->SetPlayer(acMessage.IsPlayer);
@@ -1456,7 +2021,7 @@ ActorData CharacterService::BuildActorData(Actor* apActor) const noexcept
     actorData.InitialActorValues = apActor->GetEssentialActorValues();
     actorData.InitialInventory = apActor->GetActorInventory();
     actorData.IsDead = apActor->IsDead();
-    actorData.IsWeaponDrawn = apActor->actorState.IsWeaponFullyDrawn();
+    actorData.IsWeaponDrawn = apActor->GetActorStateData().IsWeaponFullyDrawn();
 
     return actorData;
 }
@@ -1489,8 +2054,10 @@ void CharacterService::RunLocalUpdates() const noexcept
     m_transport.Send(message);
 }
 
-void CharacterService::RunRemoteUpdates() noexcept
+void CharacterService::RunRemoteUpdates(const UpdateEvent& acUpdateEvent) noexcept
 {
+    UpdateRemoteVRPoseComponents(acUpdateEvent);
+
     // Delay by 300ms to let the interpolation system accumulate interpolation points
     const auto tick = m_transport.GetClock().GetCurrentTick() - 300;
 
@@ -1564,7 +2131,7 @@ void CharacterService::RunRemoteUpdates() noexcept
             pActor->LoadAnimationVariables(waitingFor3D.SpawnRequest.ActionsToReplay.Actions[0].Variables);
         }
 
-        m_weaponDrawUpdates[pActor->formID] = {waitingFor3D.SpawnRequest.IsWeaponDrawn};
+        m_weaponDrawUpdates[pActor->GetFormIdData()] = {waitingFor3D.SpawnRequest.IsWeaponDrawn};
 
         if (pActor->IsDead() != waitingFor3D.SpawnRequest.IsDead)
             waitingFor3D.SpawnRequest.IsDead ? pActor->Kill() : pActor->Respawn();
@@ -1574,11 +2141,188 @@ void CharacterService::RunRemoteUpdates() noexcept
 
         toRemove.push_back(entity);
 
-        spdlog::info("Applied 3D for actor, form id: {:X}", pActor->formID);
+        spdlog::info("Applied 3D for actor, form id: {:X}", pActor->GetFormIdData());
     }
 
     for (auto entity : toRemove)
         m_world.remove<WaitingFor3D>(entity);
+}
+
+void CharacterService::UpdateRemoteVRPoseComponents(const UpdateEvent& acUpdateEvent) noexcept
+{
+#if TP_SKYRIM_VR
+    static double s_remoteAvatarStatusWriteTimer = 0.0;
+    s_remoteAvatarStatusWriteTimer += acUpdateEvent.Delta;
+    RemoteAvatarStatusSnapshot avatarStatus{};
+
+    const auto& poseService = m_world.ctx().at<VRPoseService>();
+    const auto& remotePoses = poseService.GetRemotePoses();
+
+    auto remotePlayers = m_world.view<RemoteComponent, PlayerComponent>();
+    for (auto entity : remotePlayers)
+    {
+        ++avatarStatus.RemotePlayerCount;
+        const auto& player = remotePlayers.get<PlayerComponent>(entity);
+        const auto poseIt = remotePoses.find(player.Id);
+        if (poseIt == remotePoses.end())
+            continue;
+
+        ++avatarStatus.RemotePoseMatchCount;
+        m_world.emplace_or_replace<RemoteVRPoseComponent>(entity, player.Id, poseIt->second);
+        ++avatarStatus.ComponentUpsertCount;
+        avatarStatus.LastPlayerId = player.Id;
+        avatarStatus.LastPoseSequence = poseIt->second.Sequence;
+        AccumulatePoseContext(avatarStatus, poseIt->second);
+
+#if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS
+        ++avatarStatus.ActorTargetAttemptCount;
+
+#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+        const auto& movementService = m_world.ctx().at<VRMovementService>();
+        auto applyResult = CheckRemoteAvatarSpace(movementService, player.Id);
+        if (!applyResult.LocalMovementAvailable)
+            ++avatarStatus.ActorTargetSkippedNoLocalMovementCount;
+        if (!applyResult.RemoteMovementAvailable)
+            ++avatarStatus.ActorTargetSkippedNoRemoteMovementCount;
+        if (applyResult.SameCellAvailable && !applyResult.SameCell)
+            ++avatarStatus.ActorTargetSkippedDifferentCellCount;
+        if (applyResult.SameWorldSpaceAvailable && !applyResult.SameWorldSpace)
+            ++avatarStatus.ActorTargetSkippedDifferentWorldSpaceCount;
+
+        avatarStatus.LastApply = applyResult;
+        AccumulateSpaceResult(avatarStatus, applyResult);
+        if (!applyResult.SameSpaceForApply)
+            continue;
+#else
+        RemoteAvatarApplyResult applyResult{};
+        ++avatarStatus.ActorTargetSkippedNoRemoteMovementCount;
+        avatarStatus.LastApply = applyResult;
+        continue;
+#endif
+
+        auto* pFormId = m_world.try_get<FormIdComponent>(entity);
+        if (!pFormId)
+        {
+            ++avatarStatus.MissingFormIdCount;
+            continue;
+        }
+
+        avatarStatus.LastFormId = pFormId->Id;
+
+        auto* pActor = Cast<Actor>(TESForm::GetById(pFormId->Id));
+        if (!pActor)
+        {
+            ++avatarStatus.MissingActorCount;
+            continue;
+        }
+
+#if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES
+        ApplyRemoteAvatarPoseToActor(pActor, poseIt->second, applyResult);
+#else
+        applyResult.ActorAvailable = true;
+        applyResult.RootAvailable = pActor->GetNiNode() != nullptr;
+        ValidateRemoteAvatarPoseForStatus(poseIt->second, applyResult);
+#endif
+        avatarStatus.LastApply = applyResult;
+        AccumulateApplyResult(avatarStatus, applyResult);
+#endif
+    }
+
+    std::vector<entt::entity> stalePoseEntities;
+    auto poseView = m_world.view<RemoteVRPoseComponent>();
+    for (auto entity : poseView)
+    {
+        auto& poseComponent = poseView.get<RemoteVRPoseComponent>(entity);
+        if (remotePoses.find(poseComponent.PlayerId) != remotePoses.end())
+            continue;
+
+        stalePoseEntities.push_back(entity);
+    }
+
+    for (auto entity : stalePoseEntities)
+    {
+        m_world.remove<RemoteVRPoseComponent>(entity);
+        ++avatarStatus.StalePoseRemovedCount;
+    }
+
+#if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC && TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
+    const auto& inventoryService = m_world.ctx().at<VRInventoryService>();
+    const auto& remoteEquipment = inventoryService.GetRemoteEquipment();
+
+    for (auto entity : remotePlayers)
+    {
+        const auto& player = remotePlayers.get<PlayerComponent>(entity);
+        const auto equipmentIt = remoteEquipment.find(player.Id);
+        if (equipmentIt == remoteEquipment.end())
+            continue;
+
+        const auto* pPreviousEquipment = m_world.try_get<RemoteVREquipmentComponent>(entity);
+        const bool desiredWeaponDrawn = DesiredRemoteWeaponDrawn(equipmentIt->second);
+        const bool previousDesiredWeaponDrawn = pPreviousEquipment ? DesiredRemoteWeaponDrawn(pPreviousEquipment->Equipment) : false;
+        const bool shouldQueueWeaponDraw =
+            !pPreviousEquipment ||
+            pPreviousEquipment->Equipment.Sequence != equipmentIt->second.Sequence ||
+            previousDesiredWeaponDrawn != desiredWeaponDrawn;
+
+        ++avatarStatus.RemoteEquipmentMatchCount;
+        m_world.emplace_or_replace<RemoteVREquipmentComponent>(entity, player.Id, equipmentIt->second);
+        ++avatarStatus.EquipmentComponentUpsertCount;
+        avatarStatus.LastEquipmentPlayerId = player.Id;
+        avatarStatus.LastEquipmentSequence = equipmentIt->second.Sequence;
+        avatarStatus.LastEquipmentWeaponDrawn = equipmentIt->second.WeaponDrawn;
+        avatarStatus.LastEquipmentWeaponFullyDrawn = equipmentIt->second.WeaponFullyDrawn;
+        avatarStatus.LastEquipmentDesiredWeaponDrawn = desiredWeaponDrawn;
+
+        const auto* pFormId = m_world.try_get<FormIdComponent>(entity);
+        if (!pFormId || pFormId->Id == 0)
+        {
+            ++avatarStatus.EquipmentMissingFormIdCount;
+            continue;
+        }
+
+        avatarStatus.LastEquipmentFormId = pFormId->Id;
+
+        if (!shouldQueueWeaponDraw)
+            continue;
+
+        if (!Cast<Actor>(TESForm::GetById(pFormId->Id)))
+            ++avatarStatus.EquipmentMissingActorCount;
+
+        const auto drawIt = m_weaponDrawUpdates.find(pFormId->Id);
+        if (drawIt == m_weaponDrawUpdates.end() || drawIt->second.m_drawWeapon != desiredWeaponDrawn)
+        {
+            m_weaponDrawUpdates[pFormId->Id] = {desiredWeaponDrawn};
+            ++avatarStatus.EquipmentWeaponDrawQueuedCount;
+            avatarStatus.LastEquipmentWeaponDrawQueued = true;
+        }
+    }
+
+    std::vector<entt::entity> staleEquipmentEntities;
+    auto equipmentView = m_world.view<RemoteVREquipmentComponent>();
+    for (auto entity : equipmentView)
+    {
+        auto& equipmentComponent = equipmentView.get<RemoteVREquipmentComponent>(entity);
+        if (remoteEquipment.find(equipmentComponent.PlayerId) != remoteEquipment.end())
+            continue;
+
+        staleEquipmentEntities.push_back(entity);
+    }
+
+    for (auto entity : staleEquipmentEntities)
+    {
+        m_world.remove<RemoteVREquipmentComponent>(entity);
+        ++avatarStatus.StaleEquipmentRemovedCount;
+    }
+#endif
+
+    if (s_remoteAvatarStatusWriteTimer >= 1.0)
+    {
+        s_remoteAvatarStatusWriteTimer = 0.0;
+        WriteRemoteAvatarStatus(avatarStatus);
+    }
+#else
+    TP_UNUSED(acUpdateEvent);
+#endif
 }
 
 void CharacterService::RunFactionsUpdates() const noexcept
@@ -1638,7 +2382,7 @@ void CharacterService::RunSpawnUpdates() const noexcept
             float characterY = interpolationComponent.Position.y;
             const auto characterCoords = GridCellCoords::CalculateGridCellCoords(characterX, characterY);
             const TES* pTES = TES::Get();
-            const auto playerCoords = GridCellCoords(pTES->centerGridX, pTES->centerGridY);
+            const auto playerCoords = GridCellCoords(pTES->GetCenterGridXData(), pTES->GetCenterGridYData());
 
             // TODO(cosideci): IsDragon probably shouldn't be straight up false here.
             if (GridCellCoords::IsCellInGridCell(characterCoords, playerCoords, false))
@@ -1650,10 +2394,10 @@ void CharacterService::RunSpawnUpdates() const noexcept
                     if (!pActor)
                         continue;
 
-                    remoteComponent.CachedRefId = pActor->formID;
+                    remoteComponent.CachedRefId = pActor->GetFormIdData();
                 }
 
-                pActor->MoveTo(PlayerCharacter::Get()->parentCell, interpolationComponent.Position);
+                pActor->MoveTo(PlayerCharacter::Get()->GetParentCellData(), interpolationComponent.Position);
             }
         }
     }

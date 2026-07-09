@@ -16,6 +16,15 @@
 #include <Services/WeatherService.h>
 #include <Services/ScriptService.h>
 #include <Services/MapService.h>
+#include <Services/VRPoseRelayService.h>
+#include <Services/VRMovementRelayService.h>
+#include <Services/VREquipmentRelayService.h>
+#include <Services/VRActivationRelayService.h>
+#include <Services/VRMagicRelayService.h>
+#include <Services/VRCombatRelayService.h>
+#include <Services/VRProjectileRelayService.h>
+#include <Services/VRGrabRelayService.h>
+#include <Services/VRHiggsRelayService.h>
 
 #include <es_loader/ESLoader.h>
 
@@ -41,6 +50,15 @@ World::World()
     ctx().emplace<CombatService>(*this, m_dispatcher);
     ctx().emplace<WeatherService>(*this, m_dispatcher);
     ctx().emplace<MapService>(*this, m_dispatcher);
+    ctx().emplace<VRPoseRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRMovementRelayService>(*this, m_dispatcher);
+    ctx().emplace<VREquipmentRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRActivationRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRMagicRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRCombatRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRProjectileRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRGrabRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRHiggsRelayService>(*this, m_dispatcher);
 
     ESLoader::ESLoader loader;
     // emplace loaded mods into modscomponent.

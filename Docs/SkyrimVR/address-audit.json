@@ -1,0 +1,4979 @@
+{
+  "generatedBy": "Tools/SkyrimVR/audit_addresses.py",
+  "inputs": {
+    "refsRoot": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\_refs\\skyrim_vr_address_library",
+    "releaseCsv": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\_refs\\VRAddressLibraryRelease\\SKSE\\Plugins\\version-1-4-15-0.csv",
+    "runtimeCsvDir": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\SkyrimTogetherVR\\GameFiles\\SkyrimVR\\Data\\SKSE\\Plugins"
+  },
+  "missingNonRtti": [],
+  "missingRtti": [
+    {
+      "candidateId": 392386,
+      "id": 392386,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 299
+        }
+      ]
+    },
+    {
+      "candidateId": 392387,
+      "id": 392387,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 301
+        }
+      ]
+    },
+    {
+      "candidateId": 392388,
+      "id": 392388,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 303
+        }
+      ]
+    },
+    {
+      "candidateId": 392389,
+      "id": 392389,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 305
+        }
+      ]
+    },
+    {
+      "candidateId": 392390,
+      "id": 392390,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 307
+        }
+      ]
+    },
+    {
+      "candidateId": 392391,
+      "id": 392391,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 309
+        }
+      ]
+    },
+    {
+      "candidateId": 392392,
+      "id": 392392,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 311
+        }
+      ]
+    },
+    {
+      "candidateId": 392393,
+      "id": 392393,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 313
+        }
+      ]
+    },
+    {
+      "candidateId": 392394,
+      "id": 392394,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 315
+        }
+      ]
+    },
+    {
+      "candidateId": 392395,
+      "id": 392395,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 317
+        }
+      ]
+    },
+    {
+      "candidateId": 392396,
+      "id": 392396,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 319
+        }
+      ]
+    },
+    {
+      "candidateId": 392397,
+      "id": 392397,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 321
+        }
+      ]
+    },
+    {
+      "candidateId": 392466,
+      "id": 392466,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 457
+        }
+      ]
+    },
+    {
+      "candidateId": 392467,
+      "id": 392467,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 459
+        }
+      ]
+    },
+    {
+      "candidateId": 392468,
+      "id": 392468,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 461
+        }
+      ]
+    },
+    {
+      "candidateId": 392469,
+      "id": 392469,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 463
+        }
+      ]
+    },
+    {
+      "candidateId": 392470,
+      "id": 392470,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 465
+        }
+      ]
+    },
+    {
+      "candidateId": 392471,
+      "id": 392471,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 467
+        }
+      ]
+    },
+    {
+      "candidateId": 392520,
+      "id": 392520,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 545
+        }
+      ]
+    },
+    {
+      "candidateId": 392522,
+      "id": 392522,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 547
+        }
+      ]
+    },
+    {
+      "candidateId": 392523,
+      "id": 392523,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 549
+        }
+      ]
+    },
+    {
+      "candidateId": 392584,
+      "id": 392584,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 625
+        }
+      ]
+    },
+    {
+      "candidateId": 392585,
+      "id": 392585,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 627
+        }
+      ]
+    },
+    {
+      "candidateId": 392586,
+      "id": 392586,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 629
+        }
+      ]
+    },
+    {
+      "candidateId": 392587,
+      "id": 392587,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 631
+        }
+      ]
+    },
+    {
+      "candidateId": 392588,
+      "id": 392588,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 633
+        }
+      ]
+    },
+    {
+      "candidateId": 392589,
+      "id": 392589,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 635
+        }
+      ]
+    },
+    {
+      "candidateId": 392590,
+      "id": 392590,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 637
+        }
+      ]
+    },
+    {
+      "candidateId": 392592,
+      "id": 392592,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 639
+        }
+      ]
+    },
+    {
+      "candidateId": 392593,
+      "id": 392593,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 641
+        }
+      ]
+    },
+    {
+      "candidateId": 392597,
+      "id": 392597,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 643
+        }
+      ]
+    },
+    {
+      "candidateId": 392600,
+      "id": 392600,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 645
+        }
+      ]
+    },
+    {
+      "candidateId": 392601,
+      "id": 392601,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 647
+        }
+      ]
+    },
+    {
+      "candidateId": 392607,
+      "id": 392607,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 649
+        }
+      ]
+    },
+    {
+      "candidateId": 392609,
+      "id": 392609,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 651
+        }
+      ]
+    },
+    {
+      "candidateId": 392612,
+      "id": 392612,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 653
+        }
+      ]
+    },
+    {
+      "candidateId": 392613,
+      "id": 392613,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 655
+        }
+      ]
+    },
+    {
+      "candidateId": 392614,
+      "id": 392614,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 657
+        }
+      ]
+    },
+    {
+      "candidateId": 392615,
+      "id": 392615,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 659
+        }
+      ]
+    },
+    {
+      "candidateId": 392616,
+      "id": 392616,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 661
+        }
+      ]
+    },
+    {
+      "candidateId": 393061,
+      "id": 393061,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 1031
+        }
+      ]
+    },
+    {
+      "candidateId": 393081,
+      "id": 393081,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 1045
+        }
+      ]
+    },
+    {
+      "candidateId": 395324,
+      "id": 395324,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 2389
+        }
+      ]
+    },
+    {
+      "candidateId": 397427,
+      "id": 397427,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 2875
+        }
+      ]
+    },
+    {
+      "candidateId": 397436,
+      "id": 397436,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 2877
+        }
+      ]
+    },
+    {
+      "candidateId": 397515,
+      "id": 397515,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 3009
+        }
+      ]
+    },
+    {
+      "candidateId": 397516,
+      "id": 397516,
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "isRtti": true,
+          "line": 3011
+        }
+      ]
+    }
+  ],
+  "missingRttiUsedByCast": [],
+  "nonRttiResolutionSources": {
+    "addrlib": 181,
+    "release": 49,
+    "sse_vr": 43
+  },
+  "resolutionSources": {
+    "addrlib": 181,
+    "missing": 47,
+    "release": 50,
+    "sse_vr": 2802
+  },
+  "resolvedNonRtti": [
+    {
+      "id": 11437,
+      "name": "",
+      "offset": "0x1150c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\DefaultStringManager.cpp",
+          "isRtti": false,
+          "line": 9
+        }
+      ],
+      "resolvedId": 11308,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 11612,
+      "name": "",
+      "offset": "0x126270",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 115
+        }
+      ],
+      "resolvedId": 11612,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 11616,
+      "name": "",
+      "offset": "0x1266a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 129
+        }
+      ],
+      "resolvedId": 11616,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 11619,
+      "name": "",
+      "offset": "0x126ab0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 107
+        }
+      ],
+      "resolvedId": 11619,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 11620,
+      "name": "",
+      "offset": "0x126c00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 100
+        }
+      ],
+      "resolvedId": 11620,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 11806,
+      "name": "",
+      "offset": "0x129a30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 220
+        }
+      ],
+      "resolvedId": 11660,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 11822,
+      "name": "",
+      "offset": "0x132240",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 122
+        }
+      ],
+      "resolvedId": 11822,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 12052,
+      "name": "",
+      "offset": "0x136c30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 143
+        }
+      ],
+      "resolvedId": 11913,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 12060,
+      "name": "",
+      "offset": "0x973530",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "isRtti": false,
+          "line": 136
+        }
+      ],
+      "resolvedId": 12060,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 12401,
+      "name": "",
+      "offset": "0x147240",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\Lock.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 12401,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 13631,
+      "name": "",
+      "offset": "0x17da20",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 153
+        }
+      ],
+      "resolvedId": 13631,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 13718,
+      "name": "",
+      "offset": "0x185ed0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\ModManager.cpp",
+          "isRtti": false,
+          "line": 68
+        }
+      ],
+      "resolvedId": 13718,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 13723,
+      "name": "",
+      "offset": "0x17cc30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\ModManager.cpp",
+          "isRtti": false,
+          "line": 76
+        }
+      ],
+      "resolvedId": 13625,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 13878,
+      "name": "",
+      "offset": "0x1876a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 13
+        }
+      ],
+      "resolvedId": 13789,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 13894,
+      "name": "",
+      "offset": "0x1077c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\DefaultObjectManager.cpp",
+          "isRtti": false,
+          "line": 9
+        }
+      ],
+      "resolvedId": 10878,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 14298,
+      "name": "",
+      "offset": "0x1964c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "isRtti": false,
+          "line": 42
+        }
+      ],
+      "resolvedId": 14108,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 14375,
+      "name": "",
+      "offset": "0x19f140",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESNPC.cpp",
+          "isRtti": false,
+          "line": 19
+        }
+      ],
+      "resolvedId": 14375,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 14529,
+      "name": "",
+      "offset": "0xd90670",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Components\\TESContainer.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 14529,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 14617,
+      "name": "",
+      "offset": "0x1a3f60",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Forms.cpp",
+          "isRtti": false,
+          "line": 15
+        }
+      ],
+      "resolvedId": 14461,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 14774,
+      "name": "",
+      "offset": "0x7366a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSRandom\\BSRandom.cpp",
+          "isRtti": false,
+          "line": 20
+        }
+      ],
+      "resolvedId": 14774,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 14953,
+      "name": "",
+      "offset": "0x1b8350",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Components\\TESTexture.cpp",
+          "isRtti": false,
+          "line": 9
+        }
+      ],
+      "resolvedId": 14953,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 15002,
+      "name": "",
+      "offset": "0x1bb6a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 376
+        }
+      ],
+      "resolvedId": 15002,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 15006,
+      "name": "",
+      "offset": "0x1bb820",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 407
+        }
+      ],
+      "resolvedId": 15006,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 16005,
+      "name": "",
+      "offset": "0x1e7740",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "isRtti": false,
+          "line": 28
+        }
+      ],
+      "resolvedId": 15767,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 16040,
+      "name": "",
+      "offset": "0x1e99e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 414
+        }
+      ],
+      "resolvedId": 15802,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 16113,
+      "name": "",
+      "offset": "0x209130",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "isRtti": false,
+          "line": 85
+        }
+      ],
+      "resolvedId": 16113,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 16142,
+      "name": "",
+      "offset": "0x209fe0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 16142,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 16143,
+      "name": "",
+      "offset": "0x20a010",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "isRtti": false,
+          "line": 19
+        }
+      ],
+      "resolvedId": 16143,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 17201,
+      "name": "",
+      "offset": "0x22fce0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 110
+        }
+      ],
+      "resolvedId": 17201,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 18518,
+      "name": "",
+      "offset": "0x275180",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 84
+        }
+      ],
+      "resolvedId": 18518,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 18563,
+      "name": "",
+      "offset": "0x277910",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\NetImmerse\\ImageSpaceModifierInstance.h",
+          "isRtti": false,
+          "line": 24
+        }
+      ],
+      "resolvedId": 18563,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 18573,
+      "name": "",
+      "offset": "0x25e3c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\ImageSpaceModifierInstanceForm.h",
+          "isRtti": false,
+          "line": 12
+        }
+      ],
+      "resolvedId": 18188,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19075,
+      "name": "",
+      "offset": "0x294070",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESObjectCELL.cpp",
+          "isRtti": false,
+          "line": 32
+        }
+      ],
+      "resolvedId": 19075,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19364,
+      "name": "",
+      "offset": "0x2a8160",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "isRtti": false,
+          "line": 32
+        }
+      ],
+      "resolvedId": 19364,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19512,
+      "name": "",
+      "offset": "0x11772d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1115
+        }
+      ],
+      "resolvedId": 19512,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19689,
+      "name": "",
+      "offset": "0x2b3ed0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1121
+        }
+      ],
+      "resolvedId": 19689,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19702,
+      "name": "",
+      "offset": "0x33a760",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 434
+        }
+      ],
+      "resolvedId": 19702,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19708,
+      "name": "",
+      "offset": "0x2b4840",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1120
+        }
+      ],
+      "resolvedId": 19708,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19742,
+      "name": "",
+      "offset": "0x2a5710",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1312
+        }
+      ],
+      "resolvedId": 19315,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19784,
+      "name": "",
+      "offset": "0x2b7bb0",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 77
+        }
+      ],
+      "resolvedId": 19784,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19787,
+      "name": "",
+      "offset": "0x2a7d80",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1116
+        }
+      ],
+      "resolvedId": 19360,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19788,
+      "name": "",
+      "offset": "0x2a7e40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1117
+        }
+      ],
+      "resolvedId": 19361,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19789,
+      "name": "",
+      "offset": "0x2a7f00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1118
+        }
+      ],
+      "resolvedId": 19362,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19790,
+      "name": "",
+      "offset": "0x2a8010",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1305
+        }
+      ],
+      "resolvedId": 19363,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19796,
+      "name": "",
+      "offset": "0x2b8310",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1119
+        }
+      ],
+      "resolvedId": 19796,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 19800,
+      "name": "",
+      "offset": "0x2a9890",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 920
+        }
+      ],
+      "resolvedId": 19373,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19812,
+      "name": "",
+      "offset": "0x2aabf0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1310
+        }
+      ],
+      "resolvedId": 19385,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 19846,
+      "name": "",
+      "offset": "0x2b9860",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 123
+        }
+      ],
+      "resolvedId": 19846,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 20203,
+      "name": "",
+      "offset": "0x2bed70",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 36
+        }
+      ],
+      "resolvedId": 20203,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 20221,
+      "name": "",
+      "offset": "0x2cdcc0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 385
+        }
+      ],
+      "resolvedId": 20221,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 20223,
+      "name": "",
+      "offset": "0x2cde80",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 377
+        }
+      ],
+      "resolvedId": 20223,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 20460,
+      "name": "",
+      "offset": "0x2d6460",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESWorldSpace.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 20460,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 21600,
+      "name": "",
+      "offset": "0x3067f0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "isRtti": false,
+          "line": 15
+        }
+      ],
+      "resolvedId": 21600,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 21622,
+      "name": "",
+      "offset": "0x307c90",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 244
+        }
+      ],
+      "resolvedId": 21622,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 23231,
+      "name": "",
+      "offset": "0x342f50",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 43
+        }
+      ],
+      "resolvedId": 23231,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 24568,
+      "name": "",
+      "offset": "0x38aa50",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 255
+        }
+      ],
+      "resolvedId": 24568,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 24987,
+      "name": "",
+      "offset": "0x39d3a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 69
+        }
+      ],
+      "resolvedId": 24987,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 24991,
+      "name": "",
+      "offset": "0x37fc30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 36
+        }
+      ],
+      "resolvedId": 24472,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 25003,
+      "name": "",
+      "offset": "0x3802b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 87
+        }
+      ],
+      "resolvedId": 24481,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 25004,
+      "name": "",
+      "offset": "0x39e690",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 96
+        }
+      ],
+      "resolvedId": 25004,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 25066,
+      "name": "",
+      "offset": "0x388110",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 24537,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 26231,
+      "name": "",
+      "offset": "0x3c1a20",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 93
+        }
+      ],
+      "resolvedId": 25684,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 26241,
+      "name": "",
+      "offset": "0x368350",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 91
+        }
+      ],
+      "resolvedId": 26241,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 26242,
+      "name": "",
+      "offset": "0x3e1790",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 41
+        }
+      ],
+      "resolvedId": 26242,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 26243,
+      "name": "",
+      "offset": "0x375ad0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 92
+        }
+      ],
+      "resolvedId": 26243,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 26244,
+      "name": "",
+      "offset": "0x3e17c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "isRtti": false,
+          "line": 33
+        }
+      ],
+      "resolvedId": 26244,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 26503,
+      "name": "",
+      "offset": "0x3edce0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 56
+        }
+      ],
+      "resolvedId": 26503,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 27040,
+      "name": "",
+      "offset": "0x4002f0",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 64
+        }
+      ],
+      "resolvedId": 27040,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 27244,
+      "name": "",
+      "offset": "0x4066d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 348
+        }
+      ],
+      "resolvedId": 27244,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 32802,
+      "name": "",
+      "offset": "0x52cf30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 338
+        }
+      ],
+      "resolvedId": 32802,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 32803,
+      "name": "",
+      "offset": "0x8cd200",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 375
+        }
+      ],
+      "resolvedId": 32803,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 32883,
+      "name": "",
+      "offset": "0xcace00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "isRtti": false,
+          "line": 34
+        }
+      ],
+      "resolvedId": 32883,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 32885,
+      "name": "",
+      "offset": "0x500950",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "isRtti": false,
+          "line": 26
+        }
+      ],
+      "resolvedId": 32141,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 32886,
+      "name": "",
+      "offset": "0x500970",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "isRtti": false,
+          "line": 18
+        }
+      ],
+      "resolvedId": 32142,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 32887,
+      "name": "",
+      "offset": "0x500990",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 32143,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 33235,
+      "name": "",
+      "offset": "0x118f590",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "isRtti": false,
+          "line": 76
+        }
+      ],
+      "resolvedId": 33235,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 33236,
+      "name": "",
+      "offset": "0x118f5e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "isRtti": false,
+          "line": 84
+        }
+      ],
+      "resolvedId": 33236,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 33261,
+      "name": "",
+      "offset": "0x5402d0",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 97
+        }
+      ],
+      "resolvedId": 33261,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 33282,
+      "name": "",
+      "offset": "0x510b20",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "isRtti": false,
+          "line": 11
+        }
+      ],
+      "resolvedId": 32525,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 33285,
+      "name": "",
+      "offset": "0x5410a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "isRtti": false,
+          "line": 8
+        }
+      ],
+      "resolvedId": 33285,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34053,
+      "name": "",
+      "offset": "0x50a4a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 243
+        }
+      ],
+      "resolvedId": 34053,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34140,
+      "name": "",
+      "offset": "0x5681b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\ActorMagicCaster.cpp",
+          "isRtti": false,
+          "line": 73
+        }
+      ],
+      "resolvedId": 34140,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34144,
+      "name": "",
+      "offset": "0x546260",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\ActorMagicCaster.cpp",
+          "isRtti": false,
+          "line": 72
+        }
+      ],
+      "resolvedId": 33363,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 34370,
+      "name": "",
+      "offset": "0x571420",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Effects\\InvisibilityEffect.cpp",
+          "isRtti": false,
+          "line": 29
+        }
+      ],
+      "resolvedId": 34370,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34401,
+      "name": "",
+      "offset": "0x572930",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicCaster.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 34401,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34408,
+      "name": "",
+      "offset": "0x572c50",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicCaster.cpp",
+          "isRtti": false,
+          "line": 16
+        }
+      ],
+      "resolvedId": 34408,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34410,
+      "name": "",
+      "offset": "0x572ee0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 242
+        }
+      ],
+      "resolvedId": 34410,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34452,
+      "name": "",
+      "offset": "0x5754d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Projectiles\\Projectile.cpp",
+          "isRtti": false,
+          "line": 125
+        }
+      ],
+      "resolvedId": 34452,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34512,
+      "name": "",
+      "offset": "0x579df0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 41
+        }
+      ],
+      "resolvedId": 34512,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34525,
+      "name": "",
+      "offset": "0x57aea0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 241
+        }
+      ],
+      "resolvedId": 34525,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34526,
+      "name": "",
+      "offset": "0x5579c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 240
+        }
+      ],
+      "resolvedId": 33742,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 34529,
+      "name": "",
+      "offset": "0x57b000",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 80
+        }
+      ],
+      "resolvedId": 34529,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 34989,
+      "name": "",
+      "offset": "0x598b30",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Effects\\SummonCreatureEffect.h",
+          "isRtti": false,
+          "line": 30
+        }
+      ],
+      "resolvedId": 34989,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 35086,
+      "name": "",
+      "offset": "0x59e490",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1314
+        }
+      ],
+      "resolvedId": 35086,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 35269,
+      "name": "",
+      "offset": "0x5a6da0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\MenuTopicManager.cpp",
+          "isRtti": false,
+          "line": 40
+        }
+      ],
+      "resolvedId": 35269,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 35503,
+      "name": "",
+      "offset": "0x5b2360",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Forms.cpp",
+          "isRtti": false,
+          "line": 104
+        }
+      ],
+      "resolvedId": 35503,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 35993,
+      "name": "",
+      "offset": "0x5ce330",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "isRtti": false,
+          "line": 50
+        }
+      ],
+      "resolvedId": 35993,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36000,
+      "name": "",
+      "offset": "0x5ce550",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "isRtti": false,
+          "line": 120
+        }
+      ],
+      "resolvedId": 36000,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36035,
+      "name": "",
+      "offset": "0x5a0b00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "isRtti": false,
+          "line": 20
+        }
+      ],
+      "resolvedId": 35145,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 36047,
+      "name": "",
+      "offset": "0x5a0ff0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "isRtti": false,
+          "line": 122
+        }
+      ],
+      "resolvedId": 35157,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 36048,
+      "name": "",
+      "offset": "0x5d2fb0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "isRtti": false,
+          "line": 121
+        }
+      ],
+      "resolvedId": 36048,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36165,
+      "name": "",
+      "offset": "0x5d4fc0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\EnchantmentItem.cpp",
+          "isRtti": false,
+          "line": 11
+        }
+      ],
+      "resolvedId": 36165,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36166,
+      "name": "",
+      "offset": "0x5d5000",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Forms\\EnchantmentItem.cpp",
+          "isRtti": false,
+          "line": 13
+        }
+      ],
+      "resolvedId": 36166,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36291,
+      "name": "",
+      "offset": "0x5db010",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\TimeManager.cpp",
+          "isRtti": false,
+          "line": 25
+        }
+      ],
+      "resolvedId": 36291,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36544,
+      "name": "",
+      "offset": "0x5f2410",
+      "references": [
+        {
+          "file": "Code\\client\\TiltedOnlineApp.cpp",
+          "isRtti": false,
+          "line": 64
+        }
+      ],
+      "resolvedId": 36544,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36548,
+      "name": "",
+      "offset": "0x5f2a60",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 140
+        }
+      ],
+      "resolvedId": 36548,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 36564,
+      "name": "",
+      "offset": "0x5f4770",
+      "references": [
+        {
+          "file": "Code\\client\\SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 120
+        }
+      ],
+      "resolvedId": 36564,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37147,
+      "name": "",
+      "offset": "0x61e640",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 337
+        }
+      ],
+      "resolvedId": 37147,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37175,
+      "name": "",
+      "offset": "0x61f300",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1309
+        }
+      ],
+      "resolvedId": 37175,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37198,
+      "name": "",
+      "offset": "0x61fa68",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1324
+        }
+      ],
+      "resolvedId": 37198,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 37313,
+      "name": "",
+      "offset": "0x621900",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1311
+        }
+      ],
+      "resolvedId": 37313,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37334,
+      "name": "",
+      "offset": "0x562c10",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 150
+        }
+      ],
+      "resolvedId": 37334,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37335,
+      "name": "",
+      "offset": "0x622250",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1313
+        }
+      ],
+      "resolvedId": 37335,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37356,
+      "name": "",
+      "offset": "0x6226a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1304
+        }
+      ],
+      "resolvedId": 37356,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37448,
+      "name": "",
+      "offset": "0x6277b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1315
+        }
+      ],
+      "resolvedId": 37448,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37511,
+      "name": "",
+      "offset": "0x6295d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 370
+        }
+      ],
+      "resolvedId": 37511,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37521,
+      "name": "",
+      "offset": "0x629e60",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1317
+        }
+      ],
+      "resolvedId": 37521,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37525,
+      "name": "",
+      "offset": "0x62a180",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1316
+        }
+      ],
+      "resolvedId": 37525,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 37527,
+      "name": "",
+      "offset": "0x62a340",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 707
+        }
+      ],
+      "resolvedId": 37527,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 37542,
+      "name": "",
+      "offset": "0x62b510",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1323
+        }
+      ],
+      "resolvedId": 37542,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37577,
+      "name": "",
+      "offset": "0x62c830",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1325
+        },
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 111
+        }
+      ],
+      "resolvedId": 37577,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37677,
+      "name": "",
+      "offset": "0x633400",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 796
+        }
+      ],
+      "resolvedId": 37677,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37698,
+      "name": "",
+      "offset": "0x634d90",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 385
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "isRtti": false,
+          "line": 245
+        }
+      ],
+      "resolvedId": 37698,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37717,
+      "name": "",
+      "offset": "0x635220",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 804
+        }
+      ],
+      "resolvedId": 37717,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37757,
+      "name": "",
+      "offset": "0x637a90",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 51
+        }
+      ],
+      "resolvedId": 37757,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 37905,
+      "name": "",
+      "offset": "0x63f330",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1321
+        }
+      ],
+      "resolvedId": 37905,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 37975,
+      "name": "",
+      "offset": "0x612420",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1322
+        }
+      ],
+      "resolvedId": 36950,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 38533,
+      "name": "",
+      "offset": "0x664750",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 312
+        }
+      ],
+      "resolvedId": 38533,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38717,
+      "name": "",
+      "offset": "0x6385f0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1306
+        }
+      ],
+      "resolvedId": 37772,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 38757,
+      "name": "",
+      "offset": "0x63ab50",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 453
+        }
+      ],
+      "resolvedId": 37808,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 38894,
+      "name": "",
+      "offset": "0x688ec0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 220
+        }
+      ],
+      "resolvedId": 38894,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38896,
+      "name": "",
+      "offset": "0x688f00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 244
+        }
+      ],
+      "resolvedId": 38896,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38897,
+      "name": "",
+      "offset": "0x640cb0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 264
+        }
+      ],
+      "resolvedId": 37941,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 38899,
+      "name": "",
+      "offset": "0x689290",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 284
+        }
+      ],
+      "resolvedId": 38899,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38901,
+      "name": "",
+      "offset": "0x6411a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 232
+        }
+      ],
+      "resolvedId": 37945,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 38903,
+      "name": "",
+      "offset": "0x6898c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 254
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 274
+        }
+      ],
+      "resolvedId": 38903,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38928,
+      "name": "",
+      "offset": "0x68a550",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 476
+        }
+      ],
+      "resolvedId": 38928,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38929,
+      "name": "",
+      "offset": "0x68a570",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 474
+        }
+      ],
+      "resolvedId": 38929,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38930,
+      "name": "",
+      "offset": "0x68a5b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 478
+        }
+      ],
+      "resolvedId": 38930,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38933,
+      "name": "",
+      "offset": "0x68a7f0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 477
+        }
+      ],
+      "resolvedId": 38933,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38934,
+      "name": "",
+      "offset": "0x68a910",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 475
+        }
+      ],
+      "resolvedId": 38934,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38935,
+      "name": "",
+      "offset": "0x68aab0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 479
+        }
+      ],
+      "resolvedId": 38935,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38949,
+      "name": "",
+      "offset": "0x68ae90",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 187
+        }
+      ],
+      "resolvedId": 38949,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38952,
+      "name": "",
+      "offset": "0x68aef0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 286
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 336
+        }
+      ],
+      "resolvedId": 38952,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38953,
+      "name": "",
+      "offset": "0x68af10",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 112
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 287
+        }
+      ],
+      "resolvedId": 38953,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38959,
+      "name": "",
+      "offset": "0x68afe0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 141
+        }
+      ],
+      "resolvedId": 38959,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 38979,
+      "name": "",
+      "offset": "0x68b6d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\ActorState.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 38979,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 39002,
+      "name": "",
+      "offset": "0x68e580",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 335
+        }
+      ],
+      "resolvedId": 39002,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 39004,
+      "name": "",
+      "offset": "0x68e7b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 111
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 30
+        }
+      ],
+      "resolvedId": 39004,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 39114,
+      "name": "",
+      "offset": "0x69a110",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 140
+        }
+      ],
+      "resolvedId": 39114,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 39643,
+      "name": "",
+      "offset": "0x6d96f0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1320
+        }
+      ],
+      "resolvedId": 39643,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 39895,
+      "name": "",
+      "offset": "0x6e7dc0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\AIProcess.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 39895,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40245,
+      "name": "",
+      "offset": "0x6f75d0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1307
+        }
+      ],
+      "resolvedId": 40245,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40246,
+      "name": "",
+      "offset": "0x6f8310",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1308
+        }
+      ],
+      "resolvedId": 40246,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40255,
+      "name": "",
+      "offset": "0x69c710",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 169
+        }
+      ],
+      "resolvedId": 39181,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 40412,
+      "name": "",
+      "offset": "0x707340",
+      "references": [
+        {
+          "file": "Code\\client\\SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 122
+        }
+      ],
+      "resolvedId": 40412,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40454,
+      "name": "",
+      "offset": "0x709970",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1318
+        }
+      ],
+      "resolvedId": 40454,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40488,
+      "name": "",
+      "offset": "0x70b030",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 347
+        }
+      ],
+      "resolvedId": 40488,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40533,
+      "name": "",
+      "offset": "0x70ca10",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 345
+        }
+      ],
+      "resolvedId": 40533,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40535,
+      "name": "",
+      "offset": "0x70cbb0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 349
+        }
+      ],
+      "resolvedId": 40535,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 40536,
+      "name": "",
+      "offset": "0x70cd40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 350
+        }
+      ],
+      "resolvedId": 40536,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 42345,
+      "name": "",
+      "offset": "0x72c0a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "isRtti": false,
+          "line": 13
+        }
+      ],
+      "resolvedId": 41266,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 42704,
+      "name": "",
+      "offset": "0x767a40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "isRtti": false,
+          "line": 1319
+        }
+      ],
+      "resolvedId": 42704,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 44108,
+      "name": "",
+      "offset": "0x7b5cf0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Projectiles\\Projectile.cpp",
+          "isRtti": false,
+          "line": 118
+        }
+      ],
+      "resolvedId": 44108,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 47196,
+      "name": "",
+      "offset": "0x818380",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 44
+        }
+      ],
+      "resolvedId": 47196,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 47303,
+      "name": "",
+      "offset": "0x830da0",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 70
+        }
+      ],
+      "resolvedId": 47303,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 47307,
+      "name": "",
+      "offset": "0x8367c0",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 104
+        }
+      ],
+      "resolvedId": 47307,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 50790,
+      "name": "",
+      "offset": "0x876550",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "isRtti": false,
+          "line": 37
+        }
+      ],
+      "resolvedId": 49858,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 50796,
+      "name": "",
+      "offset": "0x876610",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "isRtti": false,
+          "line": 44
+        }
+      ],
+      "resolvedId": 49863,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 51093,
+      "name": "",
+      "offset": "0x8c6080",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 142
+        }
+      ],
+      "resolvedId": 51093,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 51538,
+      "name": "",
+      "offset": "0x6a9080",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 147
+        }
+      ],
+      "resolvedId": 51538,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 51925,
+      "name": "",
+      "offset": "0x8c23e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\LoadingScreen.cpp",
+          "isRtti": false,
+          "line": 49
+        }
+      ],
+      "resolvedId": 51046,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 52510,
+      "name": "",
+      "offset": "0x933d40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\SkillsMenu.cpp",
+          "isRtti": false,
+          "line": 13
+        }
+      ],
+      "resolvedId": 52510,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52518,
+      "name": "",
+      "offset": "0x933ea0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\SkillsMenu.cpp",
+          "isRtti": false,
+          "line": 23
+        }
+      ],
+      "resolvedId": 52518,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52626,
+      "name": "",
+      "offset": "0x93b1e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "isRtti": false,
+          "line": 46
+        }
+      ],
+      "resolvedId": 52626,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52627,
+      "name": "",
+      "offset": "0x93b250",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "isRtti": false,
+          "line": 28
+        }
+      ],
+      "resolvedId": 52627,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52847,
+      "name": "",
+      "offset": "0x94a280",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 81
+        }
+      ],
+      "resolvedId": 52847,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52849,
+      "name": "",
+      "offset": "0x94a3b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 905
+        }
+      ],
+      "resolvedId": 52849,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 52933,
+      "name": "",
+      "offset": "0x94ff10",
+      "references": [
+        {
+          "file": "Code\\client\\Utils.cpp",
+          "isRtti": false,
+          "line": 35
+        }
+      ],
+      "resolvedId": 52933,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 53112,
+      "name": "",
+      "offset": "0x95c430",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\MapMenu.cpp",
+          "isRtti": false,
+          "line": 12
+        }
+      ],
+      "resolvedId": 53112,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 53915,
+      "name": "",
+      "offset": "0x95aa60",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 113
+        }
+      ],
+      "resolvedId": 53105,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 53926,
+      "name": "",
+      "offset": "0x9869d0",
+      "references": [
+        {
+          "file": "Code\\client\\SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 121
+        }
+      ],
+      "resolvedId": 53926,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 54425,
+      "name": "",
+      "offset": "0x99b180",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "isRtti": false,
+          "line": 12
+        }
+      ],
+      "resolvedId": 54425,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 54522,
+      "name": "",
+      "offset": "0x97bd00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "isRtti": false,
+          "line": 22
+        }
+      ],
+      "resolvedId": 53705,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 55497,
+      "name": "",
+      "offset": "0x9c8200",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 346
+        }
+      ],
+      "resolvedId": 55497,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 55739,
+      "name": "",
+      "offset": "0x9baf10",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 164
+        }
+      ],
+      "resolvedId": 55141,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 56205,
+      "name": "",
+      "offset": "0x9d02a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1123
+        }
+      ],
+      "resolvedId": 55674,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 56206,
+      "name": "",
+      "offset": "0x9d0320",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 1122
+        }
+      ],
+      "resolvedId": 55675,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 56626,
+      "name": "",
+      "offset": "0xa01aa0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 356
+        }
+      ],
+      "resolvedId": 56626,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 57185,
+      "name": "",
+      "offset": "0xa10880",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 82
+        }
+      ],
+      "resolvedId": 57185,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 57704,
+      "name": "",
+      "offset": "0xa24e40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "isRtti": false,
+          "line": 90
+        }
+      ],
+      "resolvedId": 57704,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 58377,
+      "name": "",
+      "offset": "0xb135e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 44
+        }
+      ],
+      "resolvedId": 58377,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 58378,
+      "name": "",
+      "offset": "0xa9a480",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 119
+        }
+      ],
+      "resolvedId": 58378,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 59310,
+      "name": "",
+      "offset": "0xa7b730",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 96
+        }
+      ],
+      "resolvedId": 59310,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 60079,
+      "name": "",
+      "offset": "0xaa6570",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 128
+        }
+      ],
+      "resolvedId": 60079,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 63362,
+      "name": "",
+      "offset": "0xb57580",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 240
+        }
+      ],
+      "resolvedId": 63362,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 63372,
+      "name": "",
+      "offset": "0xb0d770",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 227
+        }
+      ],
+      "resolvedId": 63372,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 63591,
+      "name": "",
+      "offset": "0xb5f9a0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 207
+        }
+      ],
+      "resolvedId": 63591,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68115,
+      "name": "",
+      "offset": "0xc3d0e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Memory.cpp",
+          "isRtti": false,
+          "line": 72
+        },
+        {
+          "file": "Code\\client\\Games\\Memory.cpp",
+          "isRtti": false,
+          "line": 136
+        }
+      ],
+      "resolvedId": 66859,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 68117,
+      "name": "",
+      "offset": "0xc3d3e0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Memory.cpp",
+          "isRtti": false,
+          "line": 138
+        }
+      ],
+      "resolvedId": 66861,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 68221,
+      "name": "",
+      "offset": "0xc7ee60",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 165
+        }
+      ],
+      "resolvedId": 68221,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68261,
+      "name": "",
+      "offset": "0xc80600",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "isRtti": false,
+          "line": 79
+        }
+      ],
+      "resolvedId": 68261,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68276,
+      "name": "",
+      "offset": "0xc80ce0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSRandom\\BSRandom.cpp",
+          "isRtti": false,
+          "line": 17
+        }
+      ],
+      "resolvedId": 68276,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68545,
+      "name": "",
+      "offset": "0xc8c310",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "isRtti": false,
+          "line": 31
+        }
+      ],
+      "resolvedId": 68545,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68617,
+      "name": "",
+      "offset": "0xc8eb40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSInput\\BSInputDeviceManager.cpp",
+          "isRtti": false,
+          "line": 20
+        }
+      ],
+      "resolvedId": 68617,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 68781,
+      "name": "",
+      "offset": "0x14f6920",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "isRtti": false,
+          "line": 120
+        }
+      ],
+      "resolvedId": 68781,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 69066,
+      "name": "",
+      "offset": "0x13cb98b",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "isRtti": false,
+          "line": 85
+        }
+      ],
+      "resolvedId": 69066,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 69161,
+      "name": "",
+      "offset": "0xc6db20",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "isRtti": false,
+          "line": 14
+        }
+      ],
+      "resolvedId": 67819,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 69165,
+      "name": "",
+      "offset": "0xe10dd0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "isRtti": false,
+          "line": 28
+        }
+      ],
+      "resolvedId": 69165,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 69192,
+      "name": "",
+      "offset": "0xc6edb0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "isRtti": false,
+          "line": 37
+        }
+      ],
+      "resolvedId": 67847,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 69554,
+      "name": "",
+      "offset": "0xcb8000",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSTaskletManager.cpp",
+          "isRtti": false,
+          "line": 34
+        }
+      ],
+      "resolvedId": 69554,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 70640,
+      "name": "",
+      "offset": "0xcf2050",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\NetImmerse\\NiCamera.cpp",
+          "isRtti": false,
+          "line": 23
+        }
+      ],
+      "resolvedId": 70640,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 70717,
+      "name": "",
+      "offset": "0xcfcfb0",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 62
+        }
+      ],
+      "resolvedId": 70717,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 76207,
+      "name": "",
+      "offset": "0xe41490",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 25
+        }
+      ],
+      "resolvedId": 76207,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 77226,
+      "name": "",
+      "offset": "0xe43380",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "isRtti": false,
+          "line": 97
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "isRtti": false,
+          "line": 114
+        }
+      ],
+      "resolvedId": 77226,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 77246,
+      "name": "",
+      "offset": "0xe44b40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "isRtti": false,
+          "line": 129
+        }
+      ],
+      "resolvedId": 77246,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 77299,
+      "name": "",
+      "offset": "0xdbf9b0",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 63
+        }
+      ],
+      "resolvedId": 75507,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 82074,
+      "name": "",
+      "offset": "0xf916c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 30
+        }
+      ],
+      "resolvedId": 82074,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 82082,
+      "name": "",
+      "offset": "0xf92bc0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 133
+        }
+      ],
+      "resolvedId": 82082,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 82088,
+      "name": "",
+      "offset": "0xf93250",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 38
+        }
+      ],
+      "resolvedId": 82088,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 104247,
+      "name": "",
+      "offset": "0x126bbd0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 18
+        }
+      ],
+      "resolvedId": 97463,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 104296,
+      "name": "",
+      "offset": "0x13bc0b1",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 35
+        }
+      ],
+      "resolvedId": 104296,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 104359,
+      "name": "",
+      "offset": "0x13bc2da",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 176
+        }
+      ],
+      "resolvedId": 104359,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 104483,
+      "name": "",
+      "offset": "0x129a6c0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "isRtti": false,
+          "line": 124
+        }
+      ],
+      "resolvedId": 97745,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 104484,
+      "name": "",
+      "offset": "0x129a720",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "isRtti": false,
+          "line": 131
+        }
+      ],
+      "resolvedId": 97746,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 104651,
+      "name": "",
+      "offset": "0x13bcd88",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 206
+        }
+      ],
+      "resolvedId": 104651,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 104653,
+      "name": "",
+      "offset": "0x13bccfe",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "isRtti": false,
+          "line": 295
+        }
+      ],
+      "resolvedId": 104653,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 104655,
+      "name": "",
+      "offset": "0x13bcdbb",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "isRtti": false,
+          "line": 288
+        }
+      ],
+      "resolvedId": 104655,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 104788,
+      "name": "",
+      "offset": "0x13bd2a6",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 175
+        }
+      ],
+      "resolvedId": 104788,
+      "source": "addrlib",
+      "status": "addrlib",
+      "translation": "direct"
+    },
+    {
+      "id": 105220,
+      "name": "",
+      "offset": "0x13be40c",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 178
+        }
+      ],
+      "resolvedId": 105220,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 188603,
+      "name": "",
+      "offset": "0x15bf5d8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 171
+        }
+      ],
+      "resolvedId": 232777,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 370892,
+      "name": "",
+      "offset": "0x1b6d5f8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 44
+        }
+      ],
+      "resolvedId": 370892,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 380768,
+      "name": "",
+      "offset": "0x1baa654",
+      "references": [
+        {
+          "file": "Code\\client\\TiltedOnlineApp.cpp",
+          "isRtti": false,
+          "line": 131
+        }
+      ],
+      "resolvedId": 380768,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 381472,
+      "name": "",
+      "offset": "0x1bae534",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\References.cpp",
+          "isRtti": false,
+          "line": 38
+        }
+      ],
+      "resolvedId": 381472,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 382393,
+      "name": "",
+      "offset": "0x1bb3870",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 57
+        }
+      ],
+      "resolvedId": 382393,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 382400,
+      "name": "",
+      "offset": "0x1bb38f4",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 63
+        }
+      ],
+      "resolvedId": 382400,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400188,
+      "name": "",
+      "offset": "0x1c395b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Memory.cpp",
+          "isRtti": false,
+          "line": 15
+        }
+      ],
+      "resolvedId": 400188,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400269,
+      "name": "",
+      "offset": "0x1c39a18",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\ModManager.cpp",
+          "isRtti": false,
+          "line": 9
+        }
+      ],
+      "resolvedId": 400269,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400312,
+      "name": "",
+      "offset": "0x1c39c68",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "isRtti": false,
+          "line": 133
+        }
+      ],
+      "resolvedId": 400312,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400315,
+      "name": "",
+      "offset": "0x1f831b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\TES.cpp",
+          "isRtti": false,
+          "line": 14
+        }
+      ],
+      "resolvedId": 514167,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 400320,
+      "name": "",
+      "offset": "0x1c39cc8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\BGSCreatedObjectManager.cpp",
+          "isRtti": false,
+          "line": 5
+        }
+      ],
+      "resolvedId": 400320,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400327,
+      "name": "",
+      "offset": "0x1c39d20",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "isRtti": false,
+          "line": 20
+        }
+      ],
+      "resolvedId": 400327,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400441,
+      "name": "",
+      "offset": "0x1c3a320",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\TES.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 400441,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400443,
+      "name": "",
+      "offset": "0x1c3a33c",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "isRtti": false,
+          "line": 13
+        }
+      ],
+      "resolvedId": 400443,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400447,
+      "name": "",
+      "offset": "0x1c3a370",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\TimeManager.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 400447,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400475,
+      "name": "",
+      "offset": "0x1c3a518",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\GameVM.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 400475,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400508,
+      "name": "",
+      "offset": "0x1f88b40",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\FormFactory.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 514355,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 400636,
+      "name": "",
+      "offset": "0x1c3ad98",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "isRtti": false,
+          "line": 212
+        }
+      ],
+      "resolvedId": 400636,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400802,
+      "name": "",
+      "offset": "0x1c3b738",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "isRtti": false,
+          "line": 8
+        }
+      ],
+      "resolvedId": 400802,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400863,
+      "name": "",
+      "offset": "0x1c3bd10",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "isRtti": false,
+          "line": 24
+        }
+      ],
+      "resolvedId": 400863,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 400864,
+      "name": "",
+      "offset": "0x1c3bd18",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "isRtti": false,
+          "line": 6
+        }
+      ],
+      "resolvedId": 400864,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 401069,
+      "name": "",
+      "offset": "0x1c3cbd8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 45
+        }
+      ],
+      "resolvedId": 401069,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 401099,
+      "name": "",
+      "offset": "0x2fc4878",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Misc\\MenuTopicManager.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 514959,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 401100,
+      "name": "",
+      "offset": "0x1c3cdc0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 341
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 378
+        }
+      ],
+      "resolvedId": 401100,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 401263,
+      "name": "",
+      "offset": "0x1c3d784",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\MenuControls.cpp",
+          "isRtti": false,
+          "line": 11
+        }
+      ],
+      "resolvedId": 401263,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 403330,
+      "name": "",
+      "offset": "0x1c47da4",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Forms.cpp",
+          "isRtti": false,
+          "line": 106
+        }
+      ],
+      "resolvedId": 403330,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 403566,
+      "name": "",
+      "offset": "0x1c494b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 113
+        },
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 32
+        }
+      ],
+      "resolvedId": 403566,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 403567,
+      "name": "",
+      "offset": "0x1c494bc",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Animation.cpp",
+          "isRtti": false,
+          "line": 70
+        }
+      ],
+      "resolvedId": 403567,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 403568,
+      "name": "",
+      "offset": "0x1c494c8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 340
+        }
+      ],
+      "resolvedId": 403568,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 403759,
+      "name": "",
+      "offset": "0x2ffd778",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\WeatherManager.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 517228,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 403988,
+      "name": "",
+      "offset": "0x1c4bde0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "isRtti": false,
+          "line": 379
+        }
+      ],
+      "resolvedId": 403988,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 404125,
+      "name": "",
+      "offset": "0x1c4d1b0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\AI\\AITimer.h",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 404125,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 404238,
+      "name": "",
+      "offset": "0x1c4d910",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 139
+        }
+      ],
+      "resolvedId": 404238,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 405282,
+      "name": "",
+      "offset": "0x1c53d48",
+      "references": [
+        {
+          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "isRtti": false,
+          "line": 90
+        }
+      ],
+      "resolvedId": 405282,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 406126,
+      "name": "",
+      "offset": "0x1c58540",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\HUDMenuUtils.cpp",
+          "isRtti": false,
+          "line": 22
+        }
+      ],
+      "resolvedId": 406126,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 406160,
+      "name": "",
+      "offset": "0x1c587d8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\HUDMenuUtils.cpp",
+          "isRtti": false,
+          "line": 23
+        }
+      ],
+      "resolvedId": 406160,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 410506,
+      "name": "",
+      "offset": "0x316ad98",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Camera\\TESCamera.cpp",
+          "isRtti": false,
+          "line": 8
+        }
+      ],
+      "resolvedId": 523926,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 411155,
+      "name": "",
+      "offset": "0x1c75e00",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\INISettingCollection.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 411155,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 411347,
+      "name": "",
+      "offset": "0x1c77af0",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Renderer.cpp",
+          "isRtti": false,
+          "line": 21
+        }
+      ],
+      "resolvedId": 411347,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 411348,
+      "name": "",
+      "offset": "0x1c77b18",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Renderer.cpp",
+          "isRtti": false,
+          "line": 28
+        }
+      ],
+      "resolvedId": 411348,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 411393,
+      "name": "",
+      "offset": "0x3181700",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 65
+        }
+      ],
+      "resolvedId": 524907,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
+    },
+    {
+      "id": 414391,
+      "name": "",
+      "offset": "0x1c8d5e8",
+      "references": [
+        {
+          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "isRtti": false,
+          "line": 119
+        }
+      ],
+      "resolvedId": 414391,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 414675,
+      "name": "",
+      "offset": "0x1c8f6c0",
+      "references": [
+        {
+          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "isRtti": false,
+          "line": 61
+        }
+      ],
+      "resolvedId": 414675,
+      "source": "sse_vr",
+      "status": "exact_sse_vr",
+      "translation": "direct"
+    }
+  ],
+  "runtimeHelperCsvs": {
+    "addressOverrideDataRows": 2983,
+    "addressOverrides": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
+    "aeToSe": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
+    "aeToSeDataRows": 61,
+    "validationFailures": []
+  },
+  "schema": "skyrim_together_vr_address_audit_v1",
+  "summary": {
+    "addressOverrideHelperCsvRows": 2983,
+    "aeToSeHelperCsvRows": 61,
+    "helperCsvValidationFailures": 0,
+    "missingIdsIncludingRtti": 47,
+    "missingNonRttiIds": 0,
+    "missingRttiIdsUsedByCast": 0,
+    "uniqueAddressIds": 3080,
+    "uniqueNonRttiAddressIds": 273,
+    "uniqueRttiAddressIds": 2807
+  }
+}

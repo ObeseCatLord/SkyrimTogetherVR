@@ -2,6 +2,13 @@
 
 #include <Games/Skyrim/BSCore/BSTHashMap.h>
 #include <Misc/BSFixedString.h>
+#include <RuntimeLayout.h>
+
+#include <cstddef>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
 
 struct IMenu;
 
@@ -38,6 +45,9 @@ struct UIMessage
 class UI
 {
 public:
+    using CommonLibUIOffsets = Skyrim::RuntimeLayout::UICommonLibNgOffsets;
+    using LocalUIOffsets = Skyrim::RuntimeLayout::UILocalShimOffsets;
+
     static UI* Get();
 
     bool GetMenuOpen(const BSFixedString& acName) const;
@@ -55,6 +65,44 @@ public:
         IMenu* spMenu; // Actually a scaleform ptr TODO: reverse that stuff.
         TCreate* create;
     };
+
+    [[nodiscard]] GameArray<IMenu*>& GetMenuStackData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameArray<IMenu*>>(this, CommonLibUIOffsets::MenuStack);
+#else
+        return menuStack;
+#endif
+    }
+
+    [[nodiscard]] const GameArray<IMenu*>& GetMenuStackData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<GameArray<IMenu*>>(this, CommonLibUIOffsets::MenuStack);
+#else
+        return menuStack;
+#endif
+    }
+
+    [[nodiscard]] creation::BSTHashMap<BSFixedString, UIMenuEntry>& GetMenuMapData() noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(
+            this, CommonLibUIOffsets::MenuMap);
+#else
+        return menuMap;
+#endif
+    }
+
+    [[nodiscard]] const creation::BSTHashMap<BSFixedString, UIMenuEntry>& GetMenuMapData() const noexcept
+    {
+#if TP_SKYRIM_VR
+        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(
+            this, CommonLibUIOffsets::MenuMap);
+#else
+        return menuMap;
+#endif
+    }
 
     char pad_0[0x110]; // Too lazy to reverse inheritance for now.
 
@@ -88,5 +136,7 @@ public:
 };
 
 // intellisense is too dumb but the compiler knows.
-static_assert(sizeof(UI) == 0x1C8);
-static_assert(offsetof(UI, UI::numPausesGame) == 0x160);
+static_assert(sizeof(UI) == UI::LocalUIOffsets::Size);
+static_assert(offsetof(UI, UI::menuStack) == UI::LocalUIOffsets::MenuStack);
+static_assert(offsetof(UI, UI::menuMap) == UI::LocalUIOffsets::MenuMap);
+static_assert(offsetof(UI, UI::numPausesGame) == UI::LocalUIOffsets::NumPausesGame);

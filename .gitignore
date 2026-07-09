@@ -70,6 +70,7 @@ Artifacts/Server
 Artifacts/Server_r
 Artifacts/lib**
 Artifacts/logs**
+artifacts/
 **node_modules**
 **ovh.conf**
 

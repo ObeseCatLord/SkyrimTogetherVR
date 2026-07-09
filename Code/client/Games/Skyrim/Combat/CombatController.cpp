@@ -15,28 +15,30 @@ void ArrayQuickSortRecursiveCombatTargets(GameArray<CombatTargetSelector*>* apAr
 
 void CombatController::UpdateTarget()
 {
-    for (auto* pTargetSelector : targetSelectors)
+    auto& targetSelectorData = GetTargetSelectorsData();
+
+    for (auto* pTargetSelector : targetSelectorData)
     {
-        if ((pTargetSelector->flags & 2) == 0)
+        if (!pTargetSelector->HasFlagsData(2))
             pTargetSelector->Update();
     }
 
-    if (targetSelectors.length > 1)
-        ArrayQuickSortRecursiveCombatTargets(&targetSelectors, 0, targetSelectors.length - 1);
+    if (targetSelectorData.length > 1)
+        ArrayQuickSortRecursiveCombatTargets(&targetSelectorData, 0, targetSelectorData.length - 1);
 
-    pActiveTargetSelector = nullptr;
+    SetActiveTargetSelectorData(nullptr);
     BSPointerHandle<Actor> newTarget{};
 
-    if (targetSelectors.length)
+    if (targetSelectorData.length)
     {
-        for (auto* pTargetSelector : targetSelectors)
+        for (auto* pTargetSelector : targetSelectorData)
         {
-            if ((pTargetSelector->flags & 1) != 0 && (pTargetSelector->flags & 2) == 0)
+            if (pTargetSelector->HasFlagsData(1) && !pTargetSelector->HasFlagsData(2))
             {
                 newTarget = pTargetSelector->SelectTarget();
                 if (newTarget)
                 {
-                    pActiveTargetSelector = pTargetSelector;
+                    SetActiveTargetSelectorData(pTargetSelector);
                     break;
                 }
             }
@@ -44,15 +46,16 @@ void CombatController::UpdateTarget()
     }
 
     // If CombatComponent is attached, don't try to fetch a new target.
-    if (Actor* pAttacker = Cast<Actor>(TESObjectREFR::GetByHandle(attackerHandle)))
+    if (Actor* pAttacker = Cast<Actor>(TESObjectREFR::GetByHandle(GetAttackerHandleData())))
     {
         const auto view = World::Get().view<FormIdComponent, CombatComponent>();
-        const auto it = std::find_if(view.begin(), view.end(), [view, pAttacker](auto entity) { return view.get<FormIdComponent>(entity).Id == pAttacker->formID; });
+        const auto attackerId = pAttacker->GetFormIdData();
+        const auto it = std::find_if(view.begin(), view.end(), [view, attackerId](auto entity) { return view.get<FormIdComponent>(entity).Id == attackerId; });
         if (it != view.end())
             return;
     }
 
-    if (newTarget.handle.iBits == targetHandle)
+    if (newTarget.handle.iBits == GetTargetHandleData())
         return;
 
     Actor* pNewTarget = Cast<Actor>(TESObjectREFR::GetByHandle(newTarget.handle.iBits));
@@ -85,4 +88,3 @@ static TiltedPhoques::Initializer s_combatControllerHooks(
         TP_HOOK(&RealUpdateTarget, HookUpdateTarget);
 #endif
     });
-

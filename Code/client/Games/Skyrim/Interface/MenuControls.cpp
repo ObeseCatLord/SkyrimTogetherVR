@@ -3,7 +3,7 @@
 
 void MenuControls::SetToggle(bool b)
 {
-    canBeOpened = b;
+    SetToggleData(b);
 }
 
 MenuControls* MenuControls::GetInstance()
