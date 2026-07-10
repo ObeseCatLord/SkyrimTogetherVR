@@ -1,6 +1,8 @@
 #include <Services/PartyService.h>
 
+#include <Services/OverlayService.h>
 #include <Services/TransportService.h>
+#include <World.h>
 
 #include <Events/UpdateEvent.h>
 #include <Events/DisconnectedEvent.h>
@@ -125,17 +127,20 @@ void PartyService::OnPartyInfo(const NotifyPartyInfo& acPartyInfo) noexcept
             pWorldEncountersEnabled->SetValueData(1.f);
         }
 
-        auto pArguments = CefListValue::Create();
+        if (auto* pOverlayService = m_world.ctx().find<OverlayService>())
+        {
+            if (auto* pOverlay = pOverlayService->GetOverlayApp())
+            {
+                auto pArguments = CefListValue::Create();
+                auto pPlayerIds = CefListValue::Create();
+                for (int i = 0; i < m_partyMembers.size(); i++)
+                    pPlayerIds->SetInt(i, m_partyMembers[i]);
 
-        auto pPlayerIds = CefListValue::Create();
-        for (int i = 0; i < m_partyMembers.size(); i++)
-            pPlayerIds->SetInt(i, m_partyMembers[i]);
-
-        pArguments->SetList(0, pPlayerIds);
-        pArguments->SetInt(1, acPartyInfo.LeaderPlayerId);
-
-        if (auto* pOverlay = m_world.GetOverlayService().GetOverlayApp())
-            pOverlay->ExecuteAsync("partyInfo", pArguments);
+                pArguments->SetList(0, pPlayerIds);
+                pArguments->SetInt(1, acPartyInfo.LeaderPlayerId);
+                pOverlay->ExecuteAsync("partyInfo", pArguments);
+            }
+        }
     }
 }
 
@@ -145,10 +150,15 @@ void PartyService::OnPartyInvite(const NotifyPartyInvite& acPartyInvite) noexcep
 
     m_invitations[acPartyInvite.InviterId] = acPartyInvite.ExpiryTick;
 
-    auto pArguments = CefListValue::Create();
-    pArguments->SetInt(0, acPartyInvite.InviterId);
-    if (auto* pOverlay = m_world.GetOverlayService().GetOverlayApp())
-        pOverlay->ExecuteAsync("partyInviteReceived", pArguments);
+    if (auto* pOverlayService = m_world.ctx().find<OverlayService>())
+    {
+        if (auto* pOverlay = pOverlayService->GetOverlayApp())
+        {
+            auto pArguments = CefListValue::Create();
+            pArguments->SetInt(0, acPartyInvite.InviterId);
+            pOverlay->ExecuteAsync("partyInviteReceived", pArguments);
+        }
+    }
 }
 
 void PartyService::OnPartyJoined(const NotifyPartyJoined& acPartyJoined) noexcept

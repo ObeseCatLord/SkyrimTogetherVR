@@ -91,7 +91,6 @@ void VRMovementService::OnUpdate(const UpdateEvent& acEvent) noexcept
         movement.Sequence = m_lastMovement.Sequence;
         if (!m_hasMovement || movement != m_lastMovement)
         {
-            movement.Sequence = ++m_sequence;
             m_lastMovement = movement;
             m_hasMovement = true;
             m_statusDirty = true;
@@ -205,6 +204,7 @@ void VRMovementService::SendMovementUpdate() noexcept
         return;
 
     RequestVRMovementUpdate request{};
+    m_lastMovement.Sequence = ++m_sequence;
     request.Movement = m_lastMovement;
     m_transport.Send(request);
 }

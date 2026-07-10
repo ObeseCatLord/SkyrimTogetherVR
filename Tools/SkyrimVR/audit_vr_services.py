@@ -88,6 +88,7 @@ REQUIRED_MOVEMENT_OBSERVER_TOKENS = (
     "IsNewerSequence",
     "RequestVRMovementUpdate",
     "NotifyVRMovementUpdate",
+    "m_lastMovement.Sequence = ++m_sequence;",
     "localMovement",
     "remoteMovement",
     "Position",
@@ -118,6 +119,7 @@ REQUIRED_INVENTORY_OBSERVER_TOKENS = (
     "IsNewerSequence",
     "RequestVREquipmentUpdate",
     "NotifyVREquipmentUpdate",
+    "m_lastEquipment.Sequence = ++m_sequence;",
     "weaponDrawn",
     "weaponFullyDrawn",
     "leftWeapon",
@@ -153,6 +155,7 @@ REQUIRED_ACTIVATION_OBSERVER_TOKENS = (
     "localActivation",
     "remoteActivation",
     "TESActivateEvent",
+    "acEvent.GetActionRefData() != pPlayer",
     "ObjectId",
     "CellId",
     "WorldSpaceId",
@@ -519,6 +522,7 @@ REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
         "ApplyRemoteAvatarPoseToActor",
         "RemoteEquipmentMatchCount",
         "inventoryService.GetRemoteEquipment()",
+        "HasRemoteEquipmentPayloadChanged",
         "remoteEquipmentMatchCount",
         "equipmentWeaponDrawQueuedCount",
         "spellOriginValidCount",
@@ -540,6 +544,7 @@ REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
     "Code/client/World.cpp": (
         "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
         "ctx().emplace<VRPoseService>(m_dispatcher, m_transport);",
+        "ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);",
         "ctx().emplace<CharacterService>",
     ),
     "Code/client/xmake.lua": (
@@ -563,6 +568,7 @@ FORBIDDEN_REMOTE_AVATAR_COMPONENT_TOKENS = {
     "Code/client/Services/Generic/CharacterService.cpp": (
         "AgeSeconds",
         ">= 3.0",
+        "Equipment.Sequence != equipmentIt->second.Sequence",
     ),
 }
 
@@ -573,6 +579,7 @@ REQUIRED_REMOTE_PLAYER_PROXY_TOKENS = {
         "GetRemotePlayerCount",
         "GetRemotePlayers",
         "NotifyPlayerJoined",
+        "NotifyPlayerList",
         "NotifyPlayerCellChanged",
         "NotifyPlayerLeft",
     ),
@@ -588,6 +595,7 @@ REQUIRED_REMOTE_PLAYER_PROXY_TOKENS = {
         "VRGrabService",
         "VRHiggsService",
         "OnPlayerJoined",
+        "OnPlayerList",
         "OnPlayerCellChanged",
         "OnPlayerLeft",
         "WriteRemotePlayerStatusFile",

@@ -216,6 +216,7 @@ World::World()
     ctx().emplace<VRRemotePlayerService>(*this, m_dispatcher, m_transport);
 #endif
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+    ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
     ctx().emplace<CharacterService>(*this, m_dispatcher, m_transport);
 #endif
 #else

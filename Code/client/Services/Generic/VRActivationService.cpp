@@ -10,6 +10,7 @@
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyVRActivationEvent.h>
 #include <Messages/RequestVRActivationEvent.h>
+#include <PlayerCharacter.h>
 #include <TESObjectREFR.h>
 #include <Services/TransportService.h>
 #include <World.h>
@@ -174,6 +175,10 @@ void VRActivationService::PruneRemoteActivations(double aDelta) noexcept
 
 bool VRActivationService::CaptureActivation(const TESActivateEvent& acEvent, VRActivationEvent& aActivation) noexcept
 {
+    const auto* pPlayer = PlayerCharacter::Get();
+    if (!pPlayer || acEvent.GetActionRefData() != pPlayer)
+        return false;
+
     auto* pObject = acEvent.GetObjectActivatedData();
     auto* pBaseForm = pObject ? pObject->GetBaseFormData() : nullptr;
     if (!pObject || !pBaseForm)

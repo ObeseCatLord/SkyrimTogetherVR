@@ -105,7 +105,6 @@ void VRInventoryService::OnUpdate(const UpdateEvent& acEvent) noexcept
         equipment.Sequence = m_lastEquipment.Sequence;
         if (!m_hasEquipment || equipment != m_lastEquipment)
         {
-            equipment.Sequence = ++m_sequence;
             m_lastEquipment = equipment;
             m_hasEquipment = true;
             m_statusDirty = true;
@@ -181,6 +180,7 @@ void VRInventoryService::SendEquipmentUpdate() noexcept
         return;
 
     RequestVREquipmentUpdate request{};
+    m_lastEquipment.Sequence = ++m_sequence;
     request.Equipment = m_lastEquipment;
     m_transport.Send(request);
 }

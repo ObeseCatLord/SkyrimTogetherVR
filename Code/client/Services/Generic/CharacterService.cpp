@@ -254,6 +254,13 @@ bool DesiredRemoteWeaponDrawn(const VREquipmentUpdate& acEquipment) noexcept
     return acEquipment.WeaponDrawn || acEquipment.WeaponFullyDrawn;
 }
 
+bool HasRemoteEquipmentPayloadChanged(const VREquipmentUpdate& acPrevious, const VREquipmentUpdate& acCurrent) noexcept
+{
+    auto previous = acPrevious;
+    previous.Sequence = acCurrent.Sequence;
+    return previous != acCurrent;
+}
+
 RemoteAvatarApplyResult CheckRemoteAvatarSpace(const VRMovementService& acMovementService, uint32_t aPlayerId) noexcept
 {
     RemoteAvatarApplyResult result{};
@@ -2258,11 +2265,7 @@ void CharacterService::UpdateRemoteVRPoseComponents(const UpdateEvent& acUpdateE
 
         const auto* pPreviousEquipment = m_world.try_get<RemoteVREquipmentComponent>(entity);
         const bool desiredWeaponDrawn = DesiredRemoteWeaponDrawn(equipmentIt->second);
-        const bool previousDesiredWeaponDrawn = pPreviousEquipment ? DesiredRemoteWeaponDrawn(pPreviousEquipment->Equipment) : false;
-        const bool shouldQueueWeaponDraw =
-            !pPreviousEquipment ||
-            pPreviousEquipment->Equipment.Sequence != equipmentIt->second.Sequence ||
-            previousDesiredWeaponDrawn != desiredWeaponDrawn;
+        const bool shouldQueueWeaponDraw = !pPreviousEquipment || HasRemoteEquipmentPayloadChanged(pPreviousEquipment->Equipment, equipmentIt->second);
 
         ++avatarStatus.RemoteEquipmentMatchCount;
         m_world.emplace_or_replace<RemoteVREquipmentComponent>(entity, player.Id, equipmentIt->second);

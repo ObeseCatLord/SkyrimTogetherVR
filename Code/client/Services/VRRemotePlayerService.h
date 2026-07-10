@@ -9,6 +9,7 @@
 struct DisconnectedEvent;
 struct NotifyPlayerCellChanged;
 struct NotifyPlayerJoined;
+struct NotifyPlayerList;
 struct NotifyPlayerLeft;
 struct TransportService;
 struct UpdateEvent;
@@ -37,6 +38,7 @@ struct VRRemotePlayerService
 private:
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
     void OnPlayerJoined(const NotifyPlayerJoined& acMessage) noexcept;
+    void OnPlayerList(const NotifyPlayerList& acMessage) noexcept;
     void OnPlayerCellChanged(const NotifyPlayerCellChanged& acMessage) noexcept;
     void OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
@@ -51,6 +53,7 @@ private:
     bool m_statusDirty{true};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_playerJoinedConnection;
+    entt::scoped_connection m_playerListConnection;
     entt::scoped_connection m_playerCellChangedConnection;
     entt::scoped_connection m_playerLeftConnection;
     entt::scoped_connection m_disconnectedConnection;

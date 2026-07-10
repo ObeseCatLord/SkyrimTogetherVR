@@ -74,6 +74,10 @@ WRITER_REQUIRED = {
         '".avatarValidationBlocker="',
         'WriteBool(file, prefix + ".higgsAvatarValidationReady", higgsAvatarValidationReady);',
         '".higgsAvatarValidationBlocker="',
+        "aDispatcher.sink<NotifyPlayerList>()",
+        "VRRemotePlayerService::OnPlayerList",
+        "for (const auto& [playerId, username] : acMessage.Players)",
+        "player.Username = username;",
     ),
     "Code/client/Services/VRRemotePlayerService.h": (
         "struct VRRemotePlayerInfo",
@@ -85,6 +89,8 @@ WRITER_REQUIRED = {
         "double AgeSeconds",
         "GetRemotePlayerCount",
         "GetRemotePlayers",
+        "NotifyPlayerList",
+        "m_playerListConnection",
     ),
     "Code/client/World.cpp": (
         "TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE",
@@ -180,6 +186,7 @@ DOC_REQUIRED = {
 
 FORBIDDEN_WRITER_TOKENS = {
     "Code/client/Services/Generic/VRRemotePlayerService.cpp": (
+        "m_players = std::move(players);",
         "MoveTo(",
         "ForcePosition",
         "SetRotationData",

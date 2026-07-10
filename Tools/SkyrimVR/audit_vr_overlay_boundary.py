@@ -47,7 +47,8 @@ REQUIRED_TOKENS = {
         "if (!s_pOverlay)\n        return 0;",
     ),
     "Code/client/Services/Generic/PartyService.cpp": (
-        "if (auto* pOverlay = m_world.GetOverlayService().GetOverlayApp())",
+        "if (auto* pOverlayService = m_world.ctx().find<OverlayService>())",
+        "if (auto* pOverlay = pOverlayService->GetOverlayApp())",
     ),
     "Code/client/Services/Debug/DebugService.cpp": (
         "auto* pWindow = BSGraphics::GetMainWindow();",

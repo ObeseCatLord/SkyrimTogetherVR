@@ -58,6 +58,7 @@ SCRIPT_TOKENS = (
     "SkyrimTogetherVR packages must stage game files from GameFiles\\SkyrimVR",
     "Refusing GameFilesRoot",
     'Resolve-StagedVrGameFilesRoot -Path $GameFilesRoot',
+    "Remove-Item -Recurse -Force -LiteralPath $packageDir",
     '$staleRuntimeArtifactBaseNames = @(',
     '$staleRuntimeArtifactExtensions = @(".exe", ".dll", ".pdb", ".lib", ".exp")',
     '$staleRuntimeArtifactDirs = @(',

@@ -6,6 +6,7 @@
 #include <Events/UpdateEvent.h>
 #include <Messages/NotifyPlayerCellChanged.h>
 #include <Messages/NotifyPlayerJoined.h>
+#include <Messages/NotifyPlayerList.h>
 #include <Messages/NotifyPlayerLeft.h>
 #include <Services/TransportService.h>
 #include <Services/VRActivationService.h>
@@ -160,6 +161,7 @@ VRRemotePlayerService::VRRemotePlayerService(World& aWorld, entt::dispatcher& aD
 
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&VRRemotePlayerService::OnUpdate>(this);
     m_playerJoinedConnection = aDispatcher.sink<NotifyPlayerJoined>().connect<&VRRemotePlayerService::OnPlayerJoined>(this);
+    m_playerListConnection = aDispatcher.sink<NotifyPlayerList>().connect<&VRRemotePlayerService::OnPlayerList>(this);
     m_playerCellChangedConnection = aDispatcher.sink<NotifyPlayerCellChanged>().connect<&VRRemotePlayerService::OnPlayerCellChanged>(this);
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRRemotePlayerService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRRemotePlayerService::OnDisconnected>(this);
@@ -197,6 +199,24 @@ void VRRemotePlayerService::OnPlayerJoined(const NotifyPlayerJoined& acMessage) 
     player.CellId = acMessage.CellId;
     player.Level = acMessage.Level;
     player.AgeSeconds = 0.0;
+    m_statusDirty = true;
+}
+
+void VRRemotePlayerService::OnPlayerList(const NotifyPlayerList& acMessage) noexcept
+{
+    const auto localPlayerId = m_transport.GetLocalPlayerId();
+
+    for (const auto& [playerId, username] : acMessage.Players)
+    {
+        if (playerId == localPlayerId)
+            continue;
+
+        auto& player = m_players[playerId];
+        player.PlayerId = playerId;
+        player.Username = username;
+        player.AgeSeconds = 0.0;
+    }
+
     m_statusDirty = true;
 }
 

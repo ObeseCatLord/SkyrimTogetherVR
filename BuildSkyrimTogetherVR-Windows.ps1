@@ -433,6 +433,9 @@ if (-not $NoPackage) {
     }
 
     $packageDir = Join-Path $RepoRoot (Join-Path $PackageRoot $Mode)
+    if (Test-Path -LiteralPath $packageDir) {
+        Remove-Item -Recurse -Force -LiteralPath $packageDir
+    }
     New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
     $staleRuntimeArtifactBaseNames = @(
