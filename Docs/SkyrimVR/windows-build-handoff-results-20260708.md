@@ -2,6 +2,37 @@
 
 Date: July 8, 2026
 
+## July 11, 2026 Rebuild Update (Current)
+
+The repository was rebuilt on Windows after a source update. All four releasedbg package snapshots completed successfully and passed the non-runtime package audit:
+
+- `default`: 254 files, completed at 09:38:07 local time.
+- `avatar-sync`: 254 files, completed at 09:38:34 local time.
+- `gameplay`: 254 files, completed at 09:39:11 local time.
+- `dll-only`: 246 files, completed at 09:39:23 local time.
+
+The build was run by `C:\Users\obesecatlord\Desktop\BuildSkyrimTogetherVR-All.bat`. It initializes the Visual Studio x64 environment, invokes the four package-specific build wrappers directly, regenerates Papyrus, verifies the four package snapshots, and writes timestamped logs under `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs`. The successful run logs are:
+
+- `stvr-build-20260711-093740.log`
+- `stvr-verify-20260711-093740.log`
+
+### Corrections Made During This Rebuild
+
+- `Code\client\Services\Generic\VRPoseService.cpp`: the local `applyCapabilityState` lambda now explicitly captures `buildBaseResult`, resolving MSVC errors C3493 and C2326.
+- `Code\immersive_launcher\oobe\PathArgument.cpp`: corrected `acPath.ends_with(*"\\")` to the intended wide-string form `acPath.ends_with(L"\\")`, allowing the gameplay launcher target to compile.
+- The desktop batch avoids `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all` because that workflow collects and audits evidence after each package. The static evidence audit currently fails even when a package build succeeds, solely because `Tools\SkyrimVR\audit_windows_build.py` expects the Wine-script text `Wine is using its built-in powershell.exe stub`. This is a source/audit-contract mismatch, not a compiler or package failure.
+- Several repository wrappers prefer `py -3` when `where py` succeeds. On this host that launcher is not executable. The desktop batch puts a local compatibility `py.cmd` ahead of it and otherwise passes the known Python executable explicitly. A durable repository improvement would make these wrappers prefer an explicitly supplied Python command, or test `py -3 --version` before selecting it.
+
+### Runtime Prerequisite Caveat
+
+The current Skyrim VR install contains the VRIK, HIGGS, and PLANCK DLLs, but not all of their required Papyrus scripts. The successful lightweight package audits therefore report zero package failures while noting:
+
+- VRIK required files missing: 2 (`Data\Scripts\VRIK.pex`, `Data\Scripts\_vrik_qust_system.pex`)
+- HIGGS required files missing: 1 (`Data\Scripts\HiggsVR.pex`)
+- PLANCK required files missing: 1 (`Data\Scripts\planck.pex`)
+
+This does not invalidate the built packages. It does mean that a strict readiness audit or runtime validation should wait until the actual VRIK, HIGGS, and PLANCK mod archives are installed into the target Skyrim VR directory.
+
 This note summarizes the Windows build artifacts found in this repository after the Windows build handoff. It is intended to travel with the review handoff zip so the next agent can see what has already been built and what still needs validation.
 
 ## Built Package Snapshots

@@ -26,7 +26,7 @@ bool ValidatePath(const std::wstring& acPath)
     const std::wstring cTitlePath = acPath.substr(0, acPath.find_last_of('\\'));
     std::wstring errorText{};
 
-    if (acPath.find_last_of('\\') == std::string::npos || acPath.ends_with(*"\\"))
+    if (acPath.find_last_of('\\') == std::string::npos || acPath.ends_with(L"\\"))
     {
         SetLastError(ERROR_BAD_PATHNAME);
         errorText += L"Invalid path\n";

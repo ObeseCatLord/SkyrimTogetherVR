@@ -3,6 +3,8 @@
 #include <TiltedOnlinePCH.h>
 #include <VersionDb.h>
 
+#include <array>
+
 namespace
 {
 #if !defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1
@@ -13,10 +15,7 @@ constexpr wchar_t kScriptExtenderName[] = L"sksevr";
 // SKSEVR 2.0.12 is the runtime 1.4.15 release used by Skyrim VR.
 constexpr int kSKSEMinBuild = 2001200;
 constexpr const char* kUnsupportedScriptExtenderMessage = "SKSEVR 2.0.12 or newer is required";
-
-constexpr char kScriptExtenderEntrypoint[] = "StartSKSE";
-
-constexpr size_t kScriptExtenderNameLength = sizeof(kScriptExtenderName) / sizeof(wchar_t) - 1;
+constexpr wchar_t kGamePathEnvironmentVariable[] = L"STVR_GAME_PATH";
 
 HMODULE g_SKSEModuleHandle{nullptr};
 
@@ -68,6 +67,24 @@ std::string GetSKSEStyleExeVersion()
 
     return exeBuild;
 }
+
+std::filesystem::path GetGameDirectory()
+{
+    std::array<wchar_t, 32768> gamePath{};
+    const auto length = GetEnvironmentVariableW(
+        kGamePathEnvironmentVariable, gamePath.data(), static_cast<DWORD>(gamePath.size()));
+    if (length > 0 && length < gamePath.size())
+        return std::filesystem::path(std::wstring(gamePath.data(), length));
+
+    return std::filesystem::current_path();
+}
+
+std::filesystem::path GetScriptExtenderPath()
+{
+    const auto exeVersion = GetSKSEStyleExeVersion();
+    const std::wstring version(exeVersion.begin(), exeVersion.end());
+    return GetGameDirectory() / (std::wstring(kScriptExtenderName) + L"_" + version + L".dll");
+}
 } // namespace
 
 bool IsScriptExtenderLoaded()
@@ -75,89 +92,46 @@ bool IsScriptExtenderLoaded()
     return g_SKSEModuleHandle;
 }
 
-void LoadScriptExender()
+ScriptExtenderLoadResult LoadScriptExender()
 {
-    const auto exeVersion{GetSKSEStyleExeVersion()};
+    const auto path = GetScriptExtenderPath();
+    const auto moduleName = path.filename().wstring();
 
-    // Get the path of the game, where the Script Extender dll resides
-    const auto gameDir = std::filesystem::current_path();
-
-    std::list<std::filesystem::path> dllMatches;
-    for (const auto& dirEntry : std::filesystem::directory_iterator(gameDir))
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
     {
-        const auto& path = dirEntry.path();
-        if (path.extension() != L".dll")
-            continue;
-
-        auto fileName = path.filename().wstring();
-        if (fileName.length() < kScriptExtenderNameLength)
-            continue;
-
-        if (fileName.substr(0, kScriptExtenderNameLength) == kScriptExtenderName)
-        {
-            dllMatches.push_back(path);
-        }
+        spdlog::error("Required SKSEVR module is missing: {}", path.string());
+        return ScriptExtenderLoadResult::kModuleMissing;
     }
-
-    // and before you ask, no, they dont expose it via file version info
-    std::filesystem::path* needle = nullptr;
-    for (auto& match : dllMatches)
-    {
-        auto fname = match.filename().string();
-        if (fname.length() <= kScriptExtenderNameLength)
-            continue;
-
-        auto ptr = &fname[kScriptExtenderNameLength];
-        if (*ptr == '_')
-            ++ptr;
-
-        // make extra sure!
-        if (std::strncmp(ptr, exeVersion.c_str(), exeVersion.length()) == 0)
-        {
-            needle = &match;
-            break;
-        }
-    }
-
-    if (!needle)
-        return;
 
     FileVersion fileVersion{};
-    const bool versionVerified = GetFileVersion(*needle, fileVersion) == 0;
+    const bool versionVerified = GetFileVersion(path, fileVersion) == 0;
     if (!versionVerified)
     {
-        spdlog::warn("Unable to verify SKSEVR version resource for {}; continuing after filename/runtime match", needle->string());
+        spdlog::warn("Unable to verify SKSEVR version resource for {}; using the runtime-pinned module name", path.string());
     }
 
-    auto skseVersion = versionVerified ? fmt::format("v{}.{}.{}.{}", fileVersion.versions[0], fileVersion.versions[1], fileVersion.versions[2], fileVersion.versions[3]) : needle->filename().string();
-
-    // nice try.
-    int SkseVCum = fileVersion.versions[0] * 1000000 + fileVersion.versions[1] * 10000 + fileVersion.versions[2] * 100 + fileVersion.versions[3];
-    if (versionVerified && SkseVCum < kSKSEMinBuild)
+    const int skseVersion = fileVersion.versions[0] * 1000000 + fileVersion.versions[1] * 10000 + fileVersion.versions[2] * 100 + fileVersion.versions[3];
+    if (versionVerified && skseVersion < kSKSEMinBuild)
     {
         spdlog::error(kUnsupportedScriptExtenderMessage);
-        return;
+        return ScriptExtenderLoadResult::kVersionUnsupported;
     }
 
-    if (g_SKSEModuleHandle = LoadLibraryW(needle->c_str()))
+    g_SKSEModuleHandle = GetModuleHandleW(moduleName.c_str());
+    if (g_SKSEModuleHandle)
     {
-        if (auto* pStartSKSE = reinterpret_cast<void (*)()>(GetProcAddress(g_SKSEModuleHandle, kScriptExtenderEntrypoint)))
-        {
-            spdlog::info(
-                "Starting SKSE {}... be aware that messages that start without a colored [timestamp] prefix are "
-                "logs from the "
-                "Script Extender and its loaded mods.",
-                skseVersion);
-            pStartSKSE();
-            spdlog::info("SKSE is active");
-        }
-        else
-        {
-            spdlog::info("SKSEVR is active; StartSKSE export is not expected for this runtime");
-        }
+        spdlog::info("SKSEVR module already loaded: {}", path.string());
+        return ScriptExtenderLoadResult::kModuleLoaded;
     }
-    else
+
+    g_SKSEModuleHandle = LoadLibraryW(path.c_str());
+    if (!g_SKSEModuleHandle)
     {
-        spdlog::error("Failed to load {}! Check your privileges or re-download the Script Extender files.", needle->string());
+        spdlog::error("Failed to load required SKSEVR module: {}", path.string());
+        return ScriptExtenderLoadResult::kModuleLoadFailed;
     }
+
+    spdlog::info("SKSEVR module loaded: {}; operational initialization requires runtime verification", path.string());
+    return ScriptExtenderLoadResult::kModuleLoaded;
 }

@@ -1,6 +1,6 @@
 # SkyrimTogetherVR Code Review Handoff Letter
 
-Date: July 8, 2026
+Date: July 10, 2026
 
 This package is a source-review handoff for the SkyrimTogether VR port. The goal is to port Tilted Online / Skyrim Together Reborn to Skyrim VR as a separate VR-only repository and build target. Skyrim SE support is intentionally out of scope for this fork. The target runtime is Skyrim VR with SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK compatibility.
 
@@ -25,11 +25,13 @@ The port has been structured as a staged VR bring-up rather than a direct enable
 
 ## Current State
 
-This is not a release-ready runtime package yet. It is ready for code review and then a Windows/MSVC build attempt.
+This is not a release-ready runtime package yet. It is ready for code review and a fresh Windows/MSVC build from the current source revision.
 
 Important constraints:
 
-- The code has not been compiled in the final current state.
+- A Windows gameplay package was built on July 8, but it predates the current source revision and must not be treated as a current build or reinstalled as one.
+- A Linux Wine/MSVC experiment reached the compiler and CMake, but failed before a complete client package due to PowerShell execution and xmake package-link environment failures. It produced no deployable artifacts.
+- The current source revision still needs a clean Windows/MSVC build, package audit, and install dry-run.
 - Skyrim VR has not been launched by the porting agent.
 - Runtime validation has not happened.
 - Gameplay hooks and inline patches remain intentionally gated unless explicit validation targets/configuration are used.

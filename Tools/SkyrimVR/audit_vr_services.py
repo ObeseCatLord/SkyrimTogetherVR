@@ -391,6 +391,73 @@ REQUIRED_MOVEMENT_RELAY_TOKENS = {
     ),
 }
 
+REQUIRED_POSE_RELAY_TOKENS = {
+    "Code/encoding/Opcodes.h": (
+        "kRequestVRPoseUpdate",
+        "kNotifyVRPoseUpdate",
+    ),
+    "Code/encoding/Messages/ClientMessageFactory.h": (
+        "#include <Messages/RequestVRPoseUpdate.h>",
+        "RequestVRPoseUpdate",
+    ),
+    "Code/encoding/Messages/ServerMessageFactory.h": (
+        "#include <Messages/NotifyVRPoseUpdate.h>",
+        "NotifyVRPoseUpdate",
+    ),
+    "Code/encoding/Structs/VRPoseUpdate.h": (
+        "struct VRPoseUpdate",
+        "VRPoseNodeData",
+        "VRVrikData",
+    ),
+    "Code/encoding/Messages/RequestVRPoseUpdate.h": (
+        "struct RequestVRPoseUpdate",
+        "kRequestVRPoseUpdate",
+        "VRPoseUpdate Pose",
+    ),
+    "Code/encoding/Messages/NotifyVRPoseUpdate.h": (
+        "struct NotifyVRPoseUpdate",
+        "kNotifyVRPoseUpdate",
+        "uint32_t PlayerId",
+        "VRPoseUpdate Pose",
+    ),
+    "Code/server/Services/VRPoseRelayService.cpp": (
+        "PacketEvent<RequestVRPoseUpdate>",
+        "NotifyVRPoseUpdate",
+        "kMinPoseRelayIntervalMs",
+        "IsNewerSequence",
+        "OnPlayerLeave",
+        "ShouldRelayPose",
+        "pose.Sequence == 0",
+        "HasAnyPoseNode(pose)",
+        "IsPoseUpdateSafe(pose)",
+        "state.HasSequence",
+        "GameServer::Get()->GetTick()",
+        "now - state.LastRelayTick < kMinPoseRelayIntervalMs",
+        "m_playerPoseRelayState[aPlayerId]",
+        "m_playerPoseRelayState.erase",
+    ),
+    "Code/server/Services/VRPoseRelayService.h": (
+        "PlayerPoseRelayState",
+        "LastSequence",
+        "LastRelayTick",
+        "HasSequence",
+        "OnPlayerLeave",
+        "ShouldRelayPose",
+        "m_playerPoseRelayState",
+        "m_playerLeaveConnection",
+    ),
+    "Code/server/World.cpp": (
+        "#include <Services/VRPoseRelayService.h>",
+        "ctx().emplace<VRPoseRelayService>(*this, m_dispatcher);",
+    ),
+    "Code/tests/encoding.cpp": (
+        "BuildPoseUpdate",
+        "RequestVRPoseUpdate",
+        "NotifyVRPoseUpdate",
+        'GIVEN("VRPoseUpdate")',
+    ),
+}
+
 REQUIRED_EQUIPMENT_RELAY_TOKENS = {
     "Code/encoding/Opcodes.h": (
         "kRequestVREquipmentUpdate",
@@ -3988,6 +4055,7 @@ def main() -> int:
     missing_vr_commonlib_accessors = audit_required_token_map(root, REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS)
     forbidden_vr_raw_members = audit_forbidden_token_map(root, FORBIDDEN_VR_RAW_MEMBER_TOKENS)
     missing_movement_relay = audit_required_token_map(root, REQUIRED_MOVEMENT_RELAY_TOKENS)
+    missing_pose_relay = audit_required_token_map(root, REQUIRED_POSE_RELAY_TOKENS)
     missing_equipment_relay = audit_required_token_map(root, REQUIRED_EQUIPMENT_RELAY_TOKENS)
     missing_remote_equipment_component = audit_required_token_map(root, REQUIRED_REMOTE_EQUIPMENT_COMPONENT_TOKENS)
     forbidden_remote_equipment_component = audit_forbidden_token_map(root, FORBIDDEN_REMOTE_EQUIPMENT_COMPONENT_TOKENS)
@@ -4007,6 +4075,7 @@ def main() -> int:
     missing_vr_commonlib_accessor_count = sum(len(tokens) for tokens in missing_vr_commonlib_accessors.values())
     forbidden_vr_raw_member_count = sum(len(tokens) for tokens in forbidden_vr_raw_members.values())
     missing_movement_relay_count = sum(len(tokens) for tokens in missing_movement_relay.values())
+    missing_pose_relay_count = sum(len(tokens) for tokens in missing_pose_relay.values())
     missing_equipment_relay_count = sum(len(tokens) for tokens in missing_equipment_relay.values())
     missing_remote_equipment_component_count = sum(len(tokens) for tokens in missing_remote_equipment_component.values())
     forbidden_remote_equipment_component_count = sum(len(tokens) for tokens in forbidden_remote_equipment_component.values())
@@ -4046,6 +4115,7 @@ def main() -> int:
         handle.write(f"- `VRMovementService.cpp` observer tokens missing: {len(missing_movement)}\n")
         handle.write(f"- `VRMovementService.cpp` forbidden actor-sync tokens present: {len(forbidden_movement)}\n")
         handle.write(f"- VR movement relay tokens missing: {missing_movement_relay_count}\n")
+        handle.write(f"- VR pose relay tokens missing: {missing_pose_relay_count}\n")
         handle.write(f"- `VRInventoryService.cpp` observer tokens missing: {len(missing_inventory)}\n")
         handle.write(f"- `VRInventoryService.cpp` forbidden full-sync tokens present: {len(forbidden_inventory)}\n")
         handle.write(f"- VR equipment relay tokens missing: {missing_equipment_relay_count}\n")
@@ -4131,6 +4201,8 @@ def main() -> int:
         handle.write(fmt_tokens(forbidden_movement))
         handle.write("\n## Missing VR Movement Relay Tokens\n\n")
         handle.write(fmt_token_map(missing_movement_relay))
+        handle.write("\n## Missing VR Pose Relay Tokens\n\n")
+        handle.write(fmt_token_map(missing_pose_relay))
         handle.write("\n## Missing Inventory Observer Tokens\n\n")
         handle.write(fmt_tokens(missing_inventory))
         handle.write("\n## Forbidden Full-Sync Tokens In Inventory Observer\n\n")
@@ -4211,6 +4283,7 @@ def main() -> int:
     print(f"Missing VRMovementService observer tokens: {len(missing_movement)}")
     print(f"Forbidden VRMovementService actor-sync tokens: {len(forbidden_movement)}")
     print(f"Missing VR movement relay tokens: {missing_movement_relay_count}")
+    print(f"Missing VR pose relay tokens: {missing_pose_relay_count}")
     print(f"Missing VRInventoryService observer tokens: {len(missing_inventory)}")
     print(f"Forbidden VRInventoryService full-sync tokens: {len(forbidden_inventory)}")
     print(f"Missing VR equipment relay tokens: {missing_equipment_relay_count}")
@@ -4290,6 +4363,7 @@ def main() -> int:
         or missing_saveload
         or forbidden_saveload
         or missing_movement_relay
+        or missing_pose_relay
         or missing_equipment_relay
         or missing_remote_equipment_component
         or forbidden_remote_equipment_component

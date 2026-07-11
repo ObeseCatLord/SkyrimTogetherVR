@@ -40,8 +40,10 @@ REQUIRED_TOKENS = {
     "Code/client/ScriptExtender.cpp": (
         '#error "SkyrimTogetherVR client must be built with TP_SKYRIM_VR=1"',
         'L"sksevr"',
+        'L"STVR_GAME_PATH"',
         "SKSEVR 2.0.12 or newer is required",
-        "SKSEVR is active; StartSKSE export is not expected for this runtime",
+        "GetModuleHandleW(moduleName.c_str())",
+        "operational initialization requires runtime verification",
     ),
     "Code/client/Services/Generic/TransportService.cpp": (
         'request.Username = "Skyrim VR Player";',
@@ -94,7 +96,7 @@ FORBIDDEN_TOKENS = {
     "Code/client/ScriptExtender.cpp": (
         'L"skse64"',
         "Pre anniversary Script Extender is unsupported",
-        "kScriptExtenderStartExportOptional",
+        '"StartSKSE"',
     ),
     "Code/client/Services/Generic/TransportService.cpp": (
         "Some dragon boi",

@@ -104,6 +104,8 @@ struct VrikFingerSnapshot
 
 struct VrikSnapshot
 {
+    std::uint32_t Sequence{};
+    std::uint64_t CaptureTickMs{};
     unsigned int BuildNumber{};
     VrikFingerSnapshot LeftFingers{};
     VrikFingerSnapshot RightFingers{};
@@ -118,6 +120,7 @@ SKSEMessagingInterface* g_messaging = nullptr;
 std::atomic<vrikPluginApi::IVrikInterface001*> g_vrik{nullptr};
 std::atomic_bool g_running{false};
 std::atomic_bool g_snapshotAvailable{false};
+std::atomic_uint32_t g_snapshotSequence{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
 std::thread g_writerThread;
 std::mutex g_snapshotLock;
@@ -163,6 +166,8 @@ void CaptureVrikSnapshot()
         return;
 
     VrikSnapshot snapshot{};
+    snapshot.Sequence = g_snapshotSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+    snapshot.CaptureTickMs = GetTickCount64();
     snapshot.BuildNumber = pVrik->getBuildNumber();
     CaptureFingerSnapshot(snapshot.LeftFingers, true, pVrik);
     CaptureFingerSnapshot(snapshot.RightFingers, false, pVrik);
@@ -225,6 +230,9 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
     file << "vrik.detected=" << (IsVrikInstalled() || pVrik ? "1" : "0") << "\n";
     file << "vrik.interfaceAvailable=" << (pVrik ? "1" : "0") << "\n";
     file << "vrik.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
+    file << "vrik.snapshotSequence=" << (snapshotAvailable ? snapshot.Sequence : 0u) << "\n";
+    const auto bridgeTick = GetTickCount64();
+    file << "vrik.snapshotAgeMs=" << (snapshotAvailable ? bridgeTick - snapshot.CaptureTickMs : 0ull) << "\n";
 
     if (aLoaded && pVrik && snapshotAvailable)
     {

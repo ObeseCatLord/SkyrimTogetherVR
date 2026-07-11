@@ -112,6 +112,16 @@ bool HasKey(const TiltedPhoques::Map<std::string, std::string>& acValues, const 
     return acValues.find(apKey) != acValues.end();
 }
 
+void InvalidateVrikPayload(VRVrikData& aVrik) noexcept
+{
+    aVrik.LeftFingers = {};
+    aVrik.RightFingers = {};
+    aVrik.CameraOffsetsValid = false;
+    aVrik.CameraOffset = {};
+    aVrik.FinalCameraOffset = {};
+    aVrik.FinalSmoothingOffset = {};
+}
+
 uint32_t ParseUInt32(const TiltedPhoques::Map<std::string, std::string>& acValues, const char* apKey, uint32_t aDefault = 0) noexcept
 {
     const auto it = acValues.find(apKey);
@@ -297,7 +307,9 @@ bool HasCoherentVrikBridgeData(const TiltedPhoques::Map<std::string, std::string
         return false;
 
     if (!HasKey(acValues, "bridge.sequence") || !HasKey(acValues, "vrik.detected") ||
-        !HasKey(acValues, "vrik.interfaceAvailable") || !HasKey(acValues, "leftFingers.valid") ||
+        !HasKey(acValues, "vrik.interfaceAvailable") || !HasKey(acValues, "bridge.epoch") ||
+        !HasKey(acValues, "vrik.snapshotAvailable") || !HasKey(acValues, "vrik.snapshotSequence") ||
+        !HasKey(acValues, "leftFingers.valid") ||
         !HasKey(acValues, "rightFingers.valid") || !HasKey(acValues, "cameraOffsetsValid"))
         return false;
 
@@ -313,7 +325,7 @@ VRVrikData BuildLocalVrikData() noexcept
     using Clock = std::chrono::steady_clock;
 
     static VRVrikData s_cachedBridgeData{};
-    static uint32_t s_cachedBridgeSequence = 0;
+    static uint32_t s_cachedVrikSnapshotSequence = 0;
     static std::string s_cachedBridgeEpoch;
     static Clock::time_point s_cachedBridgeTime{};
     static bool s_hasCachedBridgeData = false;
@@ -326,6 +338,15 @@ VRVrikData BuildLocalVrikData() noexcept
     };
 
     const auto values = ReadKeyValueFile(GetVrikBridgePath());
+
+    const auto applyCapabilityState = [&values, &buildBaseResult]() noexcept
+    {
+        auto result = buildBaseResult();
+        result.Detected = result.Detected || ParseBool(values, "vrik.detected");
+        result.InterfaceAvailable = ParseBool(values, "vrik.interfaceAvailable");
+        return result;
+    };
+
     const auto now = Clock::now();
     const auto cachedFresh =
         s_hasCachedBridgeData &&
@@ -333,43 +354,60 @@ VRVrikData BuildLocalVrikData() noexcept
 
     if (values.empty() || !HasCoherentVrikBridgeData(values))
     {
+        auto result = cachedFresh ? s_cachedBridgeData : buildBaseResult();
+
         if (cachedFresh)
-            return s_cachedBridgeData;
-        return buildBaseResult();
+        {
+            const auto capabilityState = applyCapabilityState();
+            result.Detected = capabilityState.Detected;
+            result.InterfaceAvailable = capabilityState.InterfaceAvailable;
+        }
+        else
+        {
+            result = applyCapabilityState();
+        }
+
+        InvalidateVrikPayload(result);
+        return result;
     }
 
     const auto bridgeSequence = ParseUInt32(values, "bridge.sequence");
     const auto bridgeEpoch = ParseString(values, "bridge.epoch", "legacy");
     if (bridgeSequence == 0)
     {
-        if (cachedFresh)
-            return s_cachedBridgeData;
-        return buildBaseResult();
+        auto result = applyCapabilityState();
+        InvalidateVrikPayload(result);
+        return result;
     }
+
+    const auto vrikSnapshotAvailable = ParseBool(values, "vrik.snapshotAvailable");
+    const auto vrikSnapshotSequence = ParseUInt32(values, "vrik.snapshotSequence");
 
     const bool sameBridgeEpoch = s_hasCachedBridgeData && bridgeEpoch == s_cachedBridgeEpoch;
-    if (sameBridgeEpoch && !IsNewerSequence(bridgeSequence, s_cachedBridgeSequence))
-    {
-        if (cachedFresh)
-            return s_cachedBridgeData;
-        return buildBaseResult();
-    }
+    const bool hasNewSnapshot = vrikSnapshotAvailable &&
+        (!sameBridgeEpoch ? vrikSnapshotSequence > 0 : IsNewerSequence(vrikSnapshotSequence, s_cachedVrikSnapshotSequence));
 
-    auto result = buildBaseResult();
-    result.Detected = result.Detected || ParseBool(values, "vrik.detected");
-    result.InterfaceAvailable = ParseBool(values, "vrik.interfaceAvailable");
-    result.LeftFingers = BuildFingerData(values, "leftFingers");
-    result.RightFingers = BuildFingerData(values, "rightFingers");
-    result.CameraOffsetsValid = ParseBool(values, "cameraOffsetsValid");
-    if (result.CameraOffsetsValid)
+    auto result = applyCapabilityState();
+
+    if (!hasNewSnapshot)
     {
-        result.CameraOffset = ParseVec3(values, "cameraOffset");
-        result.FinalCameraOffset = ParseVec3(values, "finalCameraOffset");
-        result.FinalSmoothingOffset = ParseVec3(values, "finalSmoothingOffset");
+        InvalidateVrikPayload(result);
+    }
+    else
+    {
+        result.LeftFingers = BuildFingerData(values, "leftFingers");
+        result.RightFingers = BuildFingerData(values, "rightFingers");
+        result.CameraOffsetsValid = ParseBool(values, "cameraOffsetsValid");
+        if (result.CameraOffsetsValid)
+        {
+            result.CameraOffset = ParseVec3(values, "cameraOffset");
+            result.FinalCameraOffset = ParseVec3(values, "finalCameraOffset");
+            result.FinalSmoothingOffset = ParseVec3(values, "finalSmoothingOffset");
+        }
     }
 
     s_cachedBridgeData = result;
-    s_cachedBridgeSequence = bridgeSequence;
+    s_cachedVrikSnapshotSequence = hasNewSnapshot ? vrikSnapshotSequence : (sameBridgeEpoch ? s_cachedVrikSnapshotSequence : 0u);
     s_cachedBridgeEpoch = bridgeEpoch;
     s_cachedBridgeTime = now;
     s_hasCachedBridgeData = true;

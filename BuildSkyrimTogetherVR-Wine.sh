@@ -34,8 +34,8 @@ fi
 
 if grep -qiE "fixme:powershell|powershell:wmain stub" "${PS_PROBE_LOG}" || ! grep -Eq "[0-9]+\\.[0-9]+" "${PS_PROBE_LOG}"; then
     cat "${PS_PROBE_LOG}" >&2
-    echo "Wine is using its built-in powershell.exe stub, so the Windows build script did not run." >&2
-    echo "Install Windows PowerShell or PowerShell 7 in the Wine prefix, or set STVR_WINE_POWERSHELL=/path/to/pwsh.exe." >&2
+    echo "The selected PowerShell did not execute a command through Wine, so the Windows build script did not run." >&2
+    echo "Use a working Windows PowerShell installation in the Wine prefix, or set STVR_WINE_POWERSHELL=/path/to/pwsh.exe." >&2
     exit 1
 fi
 

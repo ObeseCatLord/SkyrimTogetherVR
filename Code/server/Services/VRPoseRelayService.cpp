@@ -1,3 +1,4 @@
+#include <cmath>
 #include <Services/VRPoseRelayService.h>
 
 #include <GameServer.h>
@@ -10,6 +11,111 @@
 namespace
 {
 constexpr uint64_t kMinPoseRelayIntervalMs = 45;
+// Broad but bounded sanity checks for Skyrim VR transforms to reject corrupt or hostile packets.
+constexpr float kMaxPosePositionComponent = 1000000.0f;
+constexpr float kMaxPoseBasisLength = 4.0f;
+constexpr float kMinPoseBasisLength = 0.2f;
+constexpr float kMaxPoseBasisDot = 0.35f;
+constexpr float kMinPoseScale = 0.01f;
+constexpr float kMaxPoseScale = 100.0f;
+constexpr float kMaxVrikOffsetComponent = 1000.0f;
+constexpr float kMaxFingerCurl = 1.0f;
+
+bool IsFiniteFloat(float aValue) noexcept
+{
+    return std::isfinite(aValue);
+}
+
+bool IsFiniteVector(const glm::vec3& aValue) noexcept
+{
+    return IsFiniteFloat(aValue.x) && IsFiniteFloat(aValue.y) && IsFiniteFloat(aValue.z);
+}
+
+bool IsBoundedVector(const glm::vec3& aValue, float aMaxAbsComponent) noexcept
+{
+    return std::abs(aValue.x) <= aMaxAbsComponent && std::abs(aValue.y) <= aMaxAbsComponent && std::abs(aValue.z) <= aMaxAbsComponent;
+}
+
+bool IsPoseNodeSafe(const VRPoseNodeData& acPose) noexcept
+{
+    if (!acPose.Valid)
+        return true;
+
+    if (!IsFiniteVector(acPose.Position) || !IsFiniteVector(acPose.AxisX) || !IsFiniteVector(acPose.AxisY) || !IsFiniteVector(acPose.AxisZ))
+        return false;
+
+    if (!IsBoundedVector(acPose.Position, kMaxPosePositionComponent))
+        return false;
+
+    if (!IsBoundedVector(acPose.AxisX, kMaxPoseBasisLength) || !IsBoundedVector(acPose.AxisY, kMaxPoseBasisLength) ||
+        !IsBoundedVector(acPose.AxisZ, kMaxPoseBasisLength))
+        return false;
+
+    const auto axisXLengthSq = acPose.AxisX.x * acPose.AxisX.x + acPose.AxisX.y * acPose.AxisX.y + acPose.AxisX.z * acPose.AxisX.z;
+    const auto axisYLengthSq = acPose.AxisY.x * acPose.AxisY.x + acPose.AxisY.y * acPose.AxisY.y + acPose.AxisY.z * acPose.AxisY.z;
+    const auto axisZLengthSq = acPose.AxisZ.x * acPose.AxisZ.x + acPose.AxisZ.y * acPose.AxisZ.y + acPose.AxisZ.z * acPose.AxisZ.z;
+    const auto minAxisLengthSq = kMinPoseBasisLength * kMinPoseBasisLength;
+    const auto maxAxisLengthSq = kMaxPoseBasisLength * kMaxPoseBasisLength;
+
+    if (axisXLengthSq < minAxisLengthSq || axisXLengthSq > maxAxisLengthSq)
+        return false;
+    if (axisYLengthSq < minAxisLengthSq || axisYLengthSq > maxAxisLengthSq)
+        return false;
+    if (axisZLengthSq < minAxisLengthSq || axisZLengthSq > maxAxisLengthSq)
+        return false;
+
+    const auto axisXYDot = acPose.AxisX.x * acPose.AxisY.x + acPose.AxisX.y * acPose.AxisY.y + acPose.AxisX.z * acPose.AxisY.z;
+    const auto axisXZDot = acPose.AxisX.x * acPose.AxisZ.x + acPose.AxisX.y * acPose.AxisZ.y + acPose.AxisX.z * acPose.AxisZ.z;
+    const auto axisYZDot = acPose.AxisY.x * acPose.AxisZ.x + acPose.AxisY.y * acPose.AxisZ.y + acPose.AxisY.z * acPose.AxisZ.z;
+    if (std::abs(axisXYDot) > kMaxPoseBasisDot || std::abs(axisXZDot) > kMaxPoseBasisDot ||
+        std::abs(axisYZDot) > kMaxPoseBasisDot)
+        return false;
+
+    return IsFiniteFloat(acPose.Scale) && acPose.Scale >= kMinPoseScale && acPose.Scale <= kMaxPoseScale;
+}
+
+bool IsSafeFingerCurlData(const VRFingerCurlData& acFingers) noexcept
+{
+    if (!acFingers.Valid)
+        return true;
+
+    return IsFiniteFloat(acFingers.Thumb) && IsFiniteFloat(acFingers.Index) && IsFiniteFloat(acFingers.Middle) &&
+           IsFiniteFloat(acFingers.Ring) && IsFiniteFloat(acFingers.Pinky) &&
+           acFingers.Thumb >= 0.0f && acFingers.Thumb <= kMaxFingerCurl &&
+           acFingers.Index >= 0.0f && acFingers.Index <= kMaxFingerCurl &&
+           acFingers.Middle >= 0.0f && acFingers.Middle <= kMaxFingerCurl &&
+           acFingers.Ring >= 0.0f && acFingers.Ring <= kMaxFingerCurl &&
+           acFingers.Pinky >= 0.0f && acFingers.Pinky <= kMaxFingerCurl;
+}
+
+bool IsSafeVrikCameraOffsets(const VRVrikData& acVrik) noexcept
+{
+    if (!acVrik.CameraOffsetsValid)
+        return true;
+
+    return IsFiniteVector(acVrik.CameraOffset) && IsFiniteVector(acVrik.FinalCameraOffset) && IsFiniteVector(acVrik.FinalSmoothingOffset) &&
+           IsBoundedVector(acVrik.CameraOffset, kMaxVrikOffsetComponent) &&
+           IsBoundedVector(acVrik.FinalCameraOffset, kMaxVrikOffsetComponent) &&
+           IsBoundedVector(acVrik.FinalSmoothingOffset, kMaxVrikOffsetComponent);
+}
+
+bool IsPoseUpdateSafe(const VRPoseUpdate& acPose) noexcept
+{
+    if (!IsPoseNodeSafe(acPose.Hmd) || !IsPoseNodeSafe(acPose.LeftHand) || !IsPoseNodeSafe(acPose.RightHand) ||
+        !IsPoseNodeSafe(acPose.SpellOrigin) || !IsPoseNodeSafe(acPose.SpellDestination) || !IsPoseNodeSafe(acPose.ArrowOrigin) ||
+        !IsPoseNodeSafe(acPose.ArrowDestination) || !IsPoseNodeSafe(acPose.BowAim) || !IsPoseNodeSafe(acPose.BowRotation) ||
+        !IsPoseNodeSafe(acPose.LeftWeaponOffset) || !IsPoseNodeSafe(acPose.RightWeaponOffset) || !IsPoseNodeSafe(acPose.PrimaryMagicOffset) ||
+        !IsPoseNodeSafe(acPose.PrimaryMagicAim) || !IsPoseNodeSafe(acPose.SecondaryMagicOffset) || !IsPoseNodeSafe(acPose.SecondaryMagicAim))
+        return false;
+
+    if (!IsSafeFingerCurlData(acPose.Vrik.LeftFingers) || !IsSafeFingerCurlData(acPose.Vrik.RightFingers))
+        return false;
+
+    if (!IsSafeVrikCameraOffsets(acPose.Vrik))
+        return false;
+
+    return true;
+}
 
 bool HasAnyPoseNode(const VRPoseUpdate& acPose) noexcept
 {
@@ -71,7 +177,11 @@ bool VRPoseRelayService::ShouldRelayPose(uint32_t aPlayerId, const RequestVRPose
     if (pose.Sequence == 0 || !HasAnyPoseNode(pose))
         return false;
 
-    auto& state = m_playerPoseRelayState[aPlayerId];
+    if (!IsPoseUpdateSafe(pose))
+        return false;
+
+    const auto stateIt = m_playerPoseRelayState.find(aPlayerId);
+    const auto& state = stateIt != m_playerPoseRelayState.end() ? stateIt->second : PlayerPoseRelayState{};
     if (state.HasSequence && !IsNewerSequence(pose.Sequence, state.LastSequence))
         return false;
 
@@ -79,8 +189,9 @@ bool VRPoseRelayService::ShouldRelayPose(uint32_t aPlayerId, const RequestVRPose
     if (state.LastRelayTick != 0 && now >= state.LastRelayTick && now - state.LastRelayTick < kMinPoseRelayIntervalMs)
         return false;
 
-    state.LastSequence = pose.Sequence;
-    state.LastRelayTick = now;
-    state.HasSequence = true;
+    auto& mutableState = m_playerPoseRelayState[aPlayerId];
+    mutableState.LastSequence = pose.Sequence;
+    mutableState.LastRelayTick = now;
+    mutableState.HasSequence = true;
     return true;
 }

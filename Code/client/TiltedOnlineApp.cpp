@@ -77,7 +77,14 @@ bool TiltedOnlineApp::BeginMain()
     World::Get().ctx().emplace<RenderSystemD3D11>(World::Get().ctx().at<OverlayService>(), World::Get().ctx().at<ImguiService>());
 #endif
 
-    LoadScriptExender();
+    const auto scriptExtenderResult = LoadScriptExender();
+    if (scriptExtenderResult != ScriptExtenderLoadResult::kModuleLoaded)
+    {
+        spdlog::error(
+            "SkyrimTogetherVR could not load the required SKSEVR module (result {}). "
+            "The connection handshake will report SKSE inactive.",
+            static_cast<unsigned int>(scriptExtenderResult));
+    }
 
 #if TP_SKYRIM_VR
     WriteVRCompatibilityStatusFile(
