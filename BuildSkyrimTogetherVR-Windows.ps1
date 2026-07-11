@@ -40,6 +40,8 @@ param(
 
     [string]$CompanionToolRoot = "Tools\SkyrimVR",
 
+    [string]$CefRuntimeDirectory = "",
+
     [string]$PackageRoot = "artifacts\SkyrimTogetherVR"
 )
 
@@ -49,6 +51,24 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RepoRoot
 $ResolvedPapyrusCompiler = ""
+$CefRuntimeVersion = "141.0.11"
+$CefRuntimeRequiredFiles = @(
+    "chrome_elf.dll",
+    "d3dcompiler_47.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
+    "libcef.dll",
+    "libEGL.dll",
+    "libGLESv2.dll",
+    "v8_context_snapshot.bin",
+    "vk_swiftshader.dll",
+    "vulkan-1.dll",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "icudtl.dat",
+    "resources.pak",
+    "locales\en-US.pak"
+)
 
 $Targets = @(
     $Targets | ForEach-Object {
@@ -80,6 +100,79 @@ function Copy-MatchingArtifact {
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -Force -LiteralPath $File.FullName -Destination $Destination
+}
+
+function Resolve-CefRuntimeDirectory {
+    param(
+        [string]$RequestedDirectory
+    )
+
+    $candidateDirectories = New-Object 'System.Collections.Generic.List[string]'
+    $requestedPaths = if (-not [string]::IsNullOrWhiteSpace($RequestedDirectory)) {
+        @($RequestedDirectory)
+    }
+    else {
+        @($env:STVR_CEF_RUNTIME_DIR)
+    }
+    foreach ($requestedPath in $requestedPaths) {
+        if ([string]::IsNullOrWhiteSpace($requestedPath)) {
+            continue
+        }
+
+        $resolvedPath = Resolve-PathAgainstRepo -Path $requestedPath
+        if (-not (Test-Path -LiteralPath $resolvedPath)) {
+            throw "Requested CEF runtime directory does not exist: $resolvedPath"
+        }
+        [void]$candidateDirectories.Add($resolvedPath)
+    }
+
+    if ($candidateDirectories.Count -eq 0) {
+        if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+            throw "LOCALAPPDATA is not set. Pass -CefRuntimeDirectory pointing at xmake's CEF bin directory."
+        }
+
+        $cefPackageRoot = Join-Path $env:LOCALAPPDATA (".xmake\packages\c\cef\{0}" -f $CefRuntimeVersion)
+        if (-not (Test-Path -LiteralPath $cefPackageRoot)) {
+            throw "CEF $CefRuntimeVersion is not installed under $cefPackageRoot. Run xmake require/install for the launcher target, or pass -CefRuntimeDirectory."
+        }
+
+        Get-ChildItem -LiteralPath $cefPackageRoot -Directory | ForEach-Object {
+            $binDirectory = Join-Path $_.FullName "bin"
+            if (Test-Path -LiteralPath $binDirectory) {
+                [void]$candidateDirectories.Add($binDirectory)
+            }
+        }
+    }
+
+    $validDirectories = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($candidateDirectory in $candidateDirectories) {
+        $binDirectory = if (Test-Path -LiteralPath (Join-Path $candidateDirectory "libcef.dll")) {
+            $candidateDirectory
+        }
+        else {
+            Join-Path $candidateDirectory "bin"
+        }
+        if (-not (Test-Path -LiteralPath $binDirectory)) {
+            continue
+        }
+
+        $missing = @($CefRuntimeRequiredFiles | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $binDirectory $_))
+        })
+        if ($missing.Count -eq 0) {
+            [void]$validDirectories.Add([System.IO.Path]::GetFullPath($binDirectory))
+        }
+    }
+
+    $validDirectories = @($validDirectories | Sort-Object -Unique)
+    if ($validDirectories.Count -eq 0) {
+        throw "No complete CEF $CefRuntimeVersion runtime was found. Required files include libcef.dll, resources.pak, and locales\en-US.pak. Pass -CefRuntimeDirectory to the xmake CEF bin directory."
+    }
+    if ($validDirectories.Count -gt 1) {
+        throw "Multiple complete CEF $CefRuntimeVersion runtimes were found: $($validDirectories -join '; '). Pass -CefRuntimeDirectory to select one."
+    }
+
+    return $validDirectories[0]
 }
 
 function Resolve-PathAgainstRepo {
@@ -386,6 +479,16 @@ if ($PreflightOnly) {
         $packagedPythonHelperNames | ForEach-Object { Write-Host "  Tools\SkyrimVR\$_" }
     }
 
+    $launcherTargets = @(
+        "SkyrimVRImmersiveLauncher",
+        "SkyrimVRImmersiveLauncherAvatarSync",
+        "SkyrimVRImmersiveLauncherGameplay"
+    )
+    if (@($Targets | Where-Object { $launcherTargets -contains $_ }).Count -gt 0) {
+        $cefRuntimeDir = Resolve-CefRuntimeDirectory -RequestedDirectory $CefRuntimeDirectory
+        Write-Host "Found complete CEF $CefRuntimeVersion runtime: $cefRuntimeDir"
+    }
+
     Write-Host "Preflight completed; no targets were built."
     return
 }
@@ -678,6 +781,31 @@ if (-not $NoPackage) {
     else {
         $packageFlavor = "default"
     }
+
+    $launcherTargets = @(
+        "SkyrimVRImmersiveLauncher",
+        "SkyrimVRImmersiveLauncherAvatarSync",
+        "SkyrimVRImmersiveLauncherGameplay"
+    )
+    $requiresCefRuntime = @($launcherTargets | Where-Object { $targetSet.Contains($_) }).Count -gt 0
+    $cefRuntimeManifest = $null
+    if ($requiresCefRuntime) {
+        $cefRuntimeDir = Resolve-CefRuntimeDirectory -RequestedDirectory $CefRuntimeDirectory
+        Get-ChildItem -LiteralPath $cefRuntimeDir -Force | ForEach-Object {
+            Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $packageDir
+        }
+        $cefRuntimeFiles = @(
+            Get-ChildItem -LiteralPath $cefRuntimeDir -Recurse -File | ForEach-Object {
+                $_.FullName.Substring($cefRuntimeDir.Length).TrimStart("\\") -replace "\\", "/"
+            } | Sort-Object
+        )
+        $cefRuntimeManifest = [ordered]@{
+            version = $CefRuntimeVersion
+            files = $cefRuntimeFiles
+        }
+        Write-Host "Copied complete CEF $CefRuntimeVersion runtime ($($cefRuntimeFiles.Count) files) to $packageDir"
+    }
+
     $packageSnapshotDir = Join-Path $RepoRoot (Join-Path $PackageRoot (Join-Path "packages" $packageFlavor))
     $packageManifest = [ordered]@{
         schema = "skyrim_together_vr_build_package_v1"
@@ -696,6 +824,7 @@ if (-not $NoPackage) {
         papyrusCompiled = [bool]$CompilePapyrus
         papyrusCompiler = $ResolvedPapyrusCompiler
         companionPanel = [bool](-not $SkipCompanionPanel)
+        cefRuntime = $cefRuntimeManifest
         generatedAtUtc = [DateTime]::UtcNow.ToString("o")
     }
     $manifestPath = Join-Path $packageDir "SkyrimTogetherVR_BuildManifest.json"

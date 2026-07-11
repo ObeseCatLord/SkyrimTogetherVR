@@ -202,6 +202,7 @@ Build.bat -- -Mode release
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all -- -Mode release
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only -- -Xmake C:\Tools\xmake\xmake.exe
 BuildSkyrimTogetherVR-Windows.bat -Toolchain msvc
+BuildSkyrimTogetherVR-Windows.bat -CefRuntimeDirectory "C:\Users\you\AppData\Local\.xmake\packages\c\cef\141.0.11\<package-id>\bin"
 BuildSkyrimTogetherVR-Windows.bat -Targets SkyrimTogetherVRClient
 BuildSkyrimTogetherVR-DLL-Windows.bat -PreflightOnly
 BuildSkyrimTogetherVR-DLL-Windows.bat -Mode release
@@ -234,6 +235,7 @@ The default package includes:
 ```text
 SkyrimTogetherVR.exe
 SkyrimTogetherVR_BuildManifest.json
+libcef.dll and the complete CEF 141.0.11 runtime/resource tree
 EarlyLoad.dll
 TPProcess.exe
 Data\SkyrimTogether.esp
@@ -272,7 +274,7 @@ The packaged companion helpers also include the shared source module `Tools/Skyr
 
 Before copying new artifacts, the script removes known stale runtime outputs from package root and `Data\SKSE\Plugins`. This keeps default and `--avatar-sync` packages mode-specific even if both are built into `artifacts\SkyrimTogetherVR\releasedbg` during the same session.
 
-The package root also contains `SkyrimTogetherVR_BuildManifest.json`. It records the build schema, mode, Windows x64 target list, default/avatar-sync/gameplay/DLL-only `packageFlavor`, copied artifacts, package snapshot root, whether staged game files and companion helpers were packaged, and whether the build script regenerated Papyrus bytecode. `audit_built_package.py` requires this build manifest, verifies it matches the selected audit mode before install, and inspects packaged PEX bytecode for the VR connection native/menu tokens so stale scripts cannot pass the package gate.
+The package root also contains `SkyrimTogetherVR_BuildManifest.json`. It records the build schema, mode, Windows x64 target list, default/avatar-sync/gameplay/DLL-only `packageFlavor`, copied artifacts, package snapshot root, whether staged game files and companion helpers were packaged, the CEF runtime version/file list for launcher packages, and whether the build script regenerated Papyrus bytecode. Launcher packages copy the complete xmake-installed CEF `141.0.11` runtime tree, including `libcef.dll`, `resources.pak`, and `locales\en-US.pak`; DLL-only packages intentionally do not contain CEF. The script finds the xmake package below `%LOCALAPPDATA%\.xmake\packages\c\cef\141.0.11` automatically. Set `STVR_CEF_RUNTIME_DIR` or forward `-CefRuntimeDirectory` only when using a nonstandard xmake cache. The launcher delay-loads `libcef.dll`, so the default VR connection-only path does not initialize CEF before a flat overlay is explicitly enabled. `audit_built_package.py` requires this metadata and tree, verifies `libcef.dll` is a delay import rather than a normal import, and inspects packaged PEX bytecode for the VR connection native/menu tokens so stale scripts cannot pass the package gate.
 
 After a Windows package build, validate the actual package tree before copying it into Skyrim VR:
 

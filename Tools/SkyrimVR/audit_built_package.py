@@ -3,6 +3,7 @@ import argparse
 import ast
 import json
 import pathlib
+import struct
 import sys
 import tempfile
 
@@ -17,6 +18,25 @@ BRIDGE_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
 )
 
+CEF_RUNTIME_VERSION = "141.0.11"
+CEF_RUNTIME_REQUIRED_FILES = (
+    "chrome_elf.dll",
+    "d3dcompiler_47.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
+    "libcef.dll",
+    "libEGL.dll",
+    "libGLESv2.dll",
+    "v8_context_snapshot.bin",
+    "vk_swiftshader.dll",
+    "vulkan-1.dll",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "icudtl.dat",
+    "resources.pak",
+    "locales/en-US.pak",
+)
+
 DLL_ONLY_REQUIRED_RUNTIME_FILES = (
     "EarlyLoad.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRVrikBridge.dll",
@@ -27,16 +47,19 @@ DLL_ONLY_REQUIRED_RUNTIME_FILES = (
 DEFAULT_REQUIRED_RUNTIME_FILES = (
     "SkyrimTogetherVR.exe",
     *BRIDGE_RUNTIME_FILES,
+    *CEF_RUNTIME_REQUIRED_FILES,
 )
 
 AVATAR_SYNC_REQUIRED_RUNTIME_FILES = (
     "SkyrimTogetherVRAvatarSync.exe",
     *BRIDGE_RUNTIME_FILES,
+    *CEF_RUNTIME_REQUIRED_FILES,
 )
 
 GAMEPLAY_REQUIRED_RUNTIME_FILES = (
     "SkyrimTogetherVRGameplay.exe",
     *BRIDGE_RUNTIME_FILES,
+    *CEF_RUNTIME_REQUIRED_FILES,
 )
 
 REQUIRED_STAGED_FILES = (
@@ -106,6 +129,9 @@ DLL_ONLY_FORBIDDEN_RUNTIME_FILES = (
     "SkyrimTogetherVRAvatarSync.exe",
     "SkyrimTogetherVRGameplay.exe",
     "TPProcess.exe",
+    "libcef.dll",
+    "resources.pak",
+    "locales",
 )
 
 VR_PREREQUISITE_FILES = {
@@ -133,6 +159,9 @@ VR_PREREQUISITE_FILES = {
 
 X64_MACHINE = 0x8664
 MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v1"
+IMAGE_DIRECTORY_ENTRY_IMPORT = 1
+IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT = 13
+IMAGE_DELAYLOAD_ATTRIBUTE_RVA = 1
 DEFAULT_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRClient",
     "SkyrimTogetherVRVrikBridge",
@@ -199,6 +228,128 @@ def pe_machine(path):
             return int.from_bytes(header[4:6], "little")
     except OSError:
         return None
+
+
+def pe_imported_libraries(path, *, delay_imports=False):
+    """Return the lower-case PE import names, or None when the PE cannot be parsed."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        return None
+    nt_offset = struct.unpack_from("<I", data, 0x3C)[0]
+    if nt_offset + 24 > len(data) or data[nt_offset : nt_offset + 4] != b"PE\0\0":
+        return None
+
+    coff_offset = nt_offset + 4
+    section_count = struct.unpack_from("<H", data, coff_offset + 2)[0]
+    optional_size = struct.unpack_from("<H", data, coff_offset + 16)[0]
+    optional_offset = coff_offset + 20
+    if optional_offset + optional_size > len(data) or optional_size < 112:
+        return None
+
+    optional_magic = struct.unpack_from("<H", data, optional_offset)[0]
+    if optional_magic == 0x20B:
+        number_of_rvas_offset = optional_offset + 108
+        data_directories_offset = optional_offset + 112
+        image_base = struct.unpack_from("<Q", data, optional_offset + 24)[0]
+    elif optional_magic == 0x10B:
+        number_of_rvas_offset = optional_offset + 92
+        data_directories_offset = optional_offset + 96
+        image_base = struct.unpack_from("<I", data, optional_offset + 28)[0]
+    else:
+        return None
+
+    if number_of_rvas_offset + 4 > len(data):
+        return None
+    number_of_rvas = struct.unpack_from("<I", data, number_of_rvas_offset)[0]
+    directory_index = IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT if delay_imports else IMAGE_DIRECTORY_ENTRY_IMPORT
+    directory_offset = data_directories_offset + directory_index * 8
+    if number_of_rvas <= directory_index or directory_offset + 8 > optional_offset + optional_size:
+        return set()
+
+    directory_rva, directory_size = struct.unpack_from("<II", data, directory_offset)
+    if directory_rva == 0 or directory_size == 0:
+        return set()
+
+    sections_offset = optional_offset + optional_size
+    if sections_offset + section_count * 40 > len(data):
+        return None
+
+    sections = []
+    for index in range(section_count):
+        offset = sections_offset + index * 40
+        virtual_size = struct.unpack_from("<I", data, offset + 8)[0]
+        virtual_address = struct.unpack_from("<I", data, offset + 12)[0]
+        raw_size = struct.unpack_from("<I", data, offset + 16)[0]
+        raw_offset = struct.unpack_from("<I", data, offset + 20)[0]
+        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset))
+
+    def rva_to_offset(rva):
+        for virtual_address, size, raw_offset in sections:
+            if virtual_address <= rva < virtual_address + size:
+                offset = raw_offset + rva - virtual_address
+                return offset if offset < len(data) else None
+        return None
+
+    descriptors_offset = rva_to_offset(directory_rva)
+    descriptor_size = 32 if delay_imports else 20
+    if descriptors_offset is None:
+        return None
+
+    libraries = set()
+    max_descriptors = directory_size // descriptor_size
+    for index in range(max_descriptors):
+        offset = descriptors_offset + index * descriptor_size
+        if offset + descriptor_size > len(data):
+            return None
+        descriptor = data[offset : offset + descriptor_size]
+        if not any(descriptor):
+            break
+
+        name_rva = struct.unpack_from("<I", descriptor, 4 if delay_imports else 12)[0]
+        if delay_imports and not (struct.unpack_from("<I", descriptor, 0)[0] & IMAGE_DELAYLOAD_ATTRIBUTE_RVA):
+            if name_rva < image_base:
+                return None
+            name_rva -= image_base
+        name_offset = rva_to_offset(name_rva)
+        if name_offset is None:
+            return None
+        end = data.find(b"\0", name_offset)
+        if end < 0:
+            return None
+        libraries.add(data[name_offset:end].decode("ascii", errors="replace").lower())
+
+    return libraries
+
+
+def launcher_runtime_files(avatar_sync=False, dll_only=False, gameplay=False):
+    if dll_only:
+        return ()
+    return tuple(
+        relative_file
+        for relative_file in required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+        if pathlib.PurePath(relative_file).suffix.lower() == ".exe"
+        and pathlib.PurePath(relative_file).name.lower() != "tpprocess.exe"
+    )
+
+
+def audit_cef_delay_import(package, failures, avatar_sync=False, dll_only=False, gameplay=False):
+    for relative_file in launcher_runtime_files(
+        avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay
+    ):
+        path = package / relative_file
+        normal_imports = pe_imported_libraries(path, delay_imports=False)
+        delay_imports = pe_imported_libraries(path, delay_imports=True)
+        if normal_imports is None or delay_imports is None:
+            failures.append(f"could not inspect launcher imports: {relative_file}")
+            continue
+        if "libcef.dll" in normal_imports:
+            failures.append(f"launcher package imports libcef.dll normally: {relative_file}")
+        if "libcef.dll" not in delay_imports:
+            failures.append(f"launcher package does not delay-import libcef.dll: {relative_file}")
 
 
 def exists_case_insensitive(directory, names):
@@ -379,6 +530,11 @@ def required_runtime_files(avatar_sync=False, dll_only=False, gameplay=False):
     return AVATAR_SYNC_REQUIRED_RUNTIME_FILES if avatar_sync else DEFAULT_REQUIRED_RUNTIME_FILES
 
 
+def manifest_runtime_files(avatar_sync=False, dll_only=False, gameplay=False):
+    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    return tuple(relative_file for relative_file in runtime_files if relative_file not in CEF_RUNTIME_REQUIRED_FILES)
+
+
 def expected_manifest_targets(avatar_sync=False, dll_only=False, gameplay=False):
     if dll_only:
         return DLL_ONLY_EXPECTED_MANIFEST_TARGETS
@@ -449,7 +605,7 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
         copied_set = set()
     else:
         copied_set = {str(artifact) for artifact in copied_artifacts}
-    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    runtime_files = manifest_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     missing_runtime_artifacts = [
         pathlib.PurePath(relative_file).name
         for relative_file in runtime_files
@@ -470,6 +626,34 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
             "dll-only build manifest copiedArtifacts has unexpected runtime artifact(s): "
             + ", ".join(unexpected_runtime_artifacts)
         )
+
+    cef_runtime = manifest.get("cefRuntime")
+    if dll_only:
+        if cef_runtime is not None:
+            failures.append("dll-only build manifest unexpectedly includes a CEF runtime")
+    elif not isinstance(cef_runtime, dict):
+        failures.append("launcher build manifest is missing CEF runtime metadata")
+    else:
+        if cef_runtime.get("version") != CEF_RUNTIME_VERSION:
+            failures.append(
+                "launcher build manifest has unexpected CEF runtime version: "
+                f"{cef_runtime.get('version')!r}"
+            )
+        files = cef_runtime.get("files")
+        if not isinstance(files, list):
+            failures.append("launcher build manifest CEF runtime files field is not a list")
+        else:
+            normalized_files = {str(path).replace("\\", "/") for path in files}
+            missing_cef_metadata = [
+                relative_file
+                for relative_file in CEF_RUNTIME_REQUIRED_FILES
+                if relative_file not in normalized_files
+            ]
+            if missing_cef_metadata:
+                failures.append(
+                    "launcher build manifest CEF runtime files missing: "
+                    + ", ".join(missing_cef_metadata)
+                )
 
 
 def audit_package(
@@ -492,7 +676,8 @@ def audit_package(
 
     runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     for relative_file in runtime_files:
-        check_file(package, relative_file, failures, require_pe=True)
+        require_pe = pathlib.PurePath(relative_file).suffix.lower() in {".dll", ".exe"}
+        check_file(package, relative_file, failures, require_pe=require_pe)
 
     for relative_file in REQUIRED_STAGED_FILES:
         check_file(package, relative_file, failures)
@@ -504,6 +689,7 @@ def audit_package(
         if relative not in REQUIRED_STAGED_FILES:
             failures.append(f"packaged Python helper import closure is not required by package audit: {relative}")
     audit_build_manifest(package, failures, avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    audit_cef_delay_import(package, failures, avatar_sync, dll_only=dll_only, gameplay=gameplay)
 
     ae_to_se_rows = count_csv_rows(package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv")
     overrides_rows = count_csv_rows(
@@ -591,12 +777,57 @@ def python_helper_fixture(path):
     return f"from __future__ import annotations\n{imports.get(path.name, '')}\n"
 
 
-def write_x64_pe(path):
-    data = bytearray(0x90)
+def write_x64_pe(path, normal_imports=(), delay_imports=()):
+    data = bytearray(0xA00)
     data[0:2] = b"MZ"
     data[0x3C:0x40] = (0x80).to_bytes(4, "little")
     data[0x80:0x84] = b"PE\0\0"
     data[0x84:0x86] = X64_MACHINE.to_bytes(2, "little")
+    struct.pack_into("<H", data, 0x86, 1)
+    struct.pack_into("<H", data, 0x94, 0xF0)
+
+    optional_offset = 0x98
+    struct.pack_into("<H", data, optional_offset, 0x20B)
+    struct.pack_into("<Q", data, optional_offset + 24, 0x140000000)
+    struct.pack_into("<I", data, optional_offset + 32, 0x1000)
+    struct.pack_into("<I", data, optional_offset + 36, 0x200)
+    struct.pack_into("<I", data, optional_offset + 56, 0x2000)
+    struct.pack_into("<I", data, optional_offset + 60, 0x200)
+    struct.pack_into("<I", data, optional_offset + 108, 16)
+
+    section_offset = optional_offset + 0xF0
+    data[section_offset : section_offset + 8] = b".rdata\0\0"
+    struct.pack_into("<I", data, section_offset + 8, 0x800)
+    struct.pack_into("<I", data, section_offset + 12, 0x1000)
+    struct.pack_into("<I", data, section_offset + 16, 0x800)
+    struct.pack_into("<I", data, section_offset + 20, 0x200)
+
+    def rva_to_offset(rva):
+        return 0x200 + rva - 0x1000
+
+    def write_import_table(rva, libraries, descriptor_size, name_offset, delay=False):
+        for index, library in enumerate(libraries):
+            descriptor_offset = rva_to_offset(rva) + index * descriptor_size
+            name_rva = 0x1400 + name_offset
+            if delay:
+                struct.pack_into("<I", data, descriptor_offset, IMAGE_DELAYLOAD_ATTRIBUTE_RVA)
+                struct.pack_into("<I", data, descriptor_offset + 4, name_rva)
+            else:
+                struct.pack_into("<I", data, descriptor_offset + 12, name_rva)
+            encoded = library.encode("ascii") + b"\0"
+            string_offset = rva_to_offset(name_rva)
+            data[string_offset : string_offset + len(encoded)] = encoded
+            name_offset += len(encoded)
+        return name_offset
+
+    normal_imports = tuple(normal_imports)
+    delay_imports = tuple(delay_imports)
+    if normal_imports:
+        struct.pack_into("<II", data, optional_offset + 112 + IMAGE_DIRECTORY_ENTRY_IMPORT * 8, 0x1000, (len(normal_imports) + 1) * 20)
+    next_name_offset = write_import_table(0x1000, normal_imports, 20, 0, delay=False)
+    if delay_imports:
+        struct.pack_into("<II", data, optional_offset + 112 + IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT * 8, 0x1200, (len(delay_imports) + 1) * 32)
+    write_import_table(0x1200, delay_imports, 32, next_name_offset, delay=True)
     write_file(path, bytes(data))
 
 
@@ -618,7 +849,7 @@ def papyrus_pex_fixture():
 
 
 def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=False):
-    runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    runtime_files = manifest_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     targets = expected_manifest_targets(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -637,6 +868,10 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
         "papyrusCompiled": True,
         "papyrusCompiler": str(package / "Caprica.exe"),
         "companionPanel": True,
+        "cefRuntime": None if dll_only else {
+            "version": CEF_RUNTIME_VERSION,
+            "files": list(CEF_RUNTIME_REQUIRED_FILES),
+        },
         "generatedAtUtc": "2026-01-01T00:00:00.0000000Z",
     }
     path = package / "SkyrimTogetherVR_BuildManifest.json"
@@ -647,7 +882,10 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
 def populate_test_package(package, avatar_sync=False, dll_only=False, gameplay=False):
     runtime_files = required_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     for relative_file in runtime_files:
-        write_x64_pe(package / relative_file)
+        is_launcher = relative_file in launcher_runtime_files(
+            avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay
+        )
+        write_x64_pe(package / relative_file, delay_imports=("libcef.dll",) if is_launcher else ())
 
     for relative_file in REQUIRED_STAGED_FILES:
         path = package / relative_file
@@ -676,6 +914,22 @@ def run_self_test():
             print("Default package self-test unexpectedly failed:")
             for failure in failures:
                 print(f"- {failure}")
+            return 1
+
+        eager_cef_package = root / "eager-cef"
+        populate_test_package(eager_cef_package)
+        write_x64_pe(eager_cef_package / "SkyrimTogetherVR.exe", normal_imports=("libcef.dll",))
+        failures, *_ = audit_package(eager_cef_package, skyrim_vr)
+        if "launcher package imports libcef.dll normally: SkyrimTogetherVR.exe" not in failures:
+            print("Package self-test did not reject a normal CEF launcher import.")
+            return 1
+
+        missing_delay_cef_package = root / "missing-delay-cef"
+        populate_test_package(missing_delay_cef_package)
+        write_x64_pe(missing_delay_cef_package / "SkyrimTogetherVR.exe")
+        failures, *_ = audit_package(missing_delay_cef_package, skyrim_vr)
+        if "launcher package does not delay-import libcef.dll: SkyrimTogetherVR.exe" not in failures:
+            print("Package self-test did not reject a missing CEF delay import.")
             return 1
 
         avatar_package = root / "avatar"

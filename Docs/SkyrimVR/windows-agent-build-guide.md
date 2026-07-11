@@ -29,6 +29,8 @@ Install or verify:
 - Windows SDK available to MSVC.
 - PowerShell 5.1 or newer.
 - xmake available in `PATH`, or note the path for `-Xmake`.
+- The launcher relies on the exact CEF `141.0.11` xmake package. The build script finds it below `%LOCALAPPDATA%\.xmake\packages\c\cef\141.0.11` after xmake resolves dependencies and packages its complete runtime automatically. For a nonstandard cache, pass `-CefRuntimeDirectory <CEF bin directory>` or set `STVR_CEF_RUNTIME_DIR`.
+- The VR launchers delay-load CEF. The default connection-only package must show `libcef.dll` only in the executable delay-import table; the package audit enforces this so CEF cannot start before the VR path deliberately enables a flat overlay.
 - Python 3 available as `py -3`, `python`, or `python3`.
 - Git is useful for status/review, but the build scripts do not require a commit.
 - Caprica only if regenerating Papyrus PEX files.

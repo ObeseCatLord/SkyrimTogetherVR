@@ -8,6 +8,7 @@ local function build_launcher()
     add_ldflags(
         "/FORCE:MULTIPLE",
         "/IGNORE:4254,4006",
+        "/DELAYLOAD:libcef.dll",
         "/DYNAMICBASE:NO",
         "/SAFESEH:NO",
         "/LARGEADDRESSAWARE",

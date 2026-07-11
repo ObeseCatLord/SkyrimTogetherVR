@@ -147,6 +147,13 @@ MODE_RUNTIME_FILES = {
     "dll-only": audit_built_package.DLL_ONLY_REQUIRED_RUNTIME_FILES,
 }
 
+MODE_MANIFEST_RUNTIME_FILES = {
+    "default": audit_built_package.manifest_runtime_files(),
+    "avatar-sync": audit_built_package.manifest_runtime_files(avatar_sync=True),
+    "gameplay": audit_built_package.manifest_runtime_files(gameplay=True),
+    "dll-only": audit_built_package.manifest_runtime_files(dll_only=True),
+}
+
 MODE_EXPECTED_TARGETS = {
     "default": audit_built_package.DEFAULT_EXPECTED_MANIFEST_TARGETS,
     "avatar-sync": audit_built_package.AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS,
@@ -214,7 +221,7 @@ def package_manifest_errors(manifest: dict[str, object], *, mode: str) -> list[s
     artifact_set = {str(artifact) for artifact in copied_artifacts} if isinstance(copied_artifacts, list) else set()
     if not isinstance(copied_artifacts, list):
         errors.append("copiedArtifacts is not a list")
-    required_artifacts = [pathlib.PurePath(path).name for path in MODE_RUNTIME_FILES[mode]]
+    required_artifacts = [pathlib.PurePath(path).name for path in MODE_MANIFEST_RUNTIME_FILES[mode]]
     missing_artifacts = [artifact for artifact in required_artifacts if artifact not in artifact_set]
     if missing_artifacts:
         errors.append("missing copied artifacts: " + ", ".join(missing_artifacts))
@@ -223,6 +230,26 @@ def package_manifest_errors(manifest: dict[str, object], *, mode: str) -> list[s
         unexpected_artifacts = [artifact for artifact in sorted(artifact_set) if artifact in forbidden]
         if unexpected_artifacts:
             errors.append("unexpected dll-only copied artifacts: " + ", ".join(unexpected_artifacts))
+
+    cef_runtime = manifest.get("cefRuntime")
+    if mode == "dll-only":
+        if cef_runtime is not None:
+            errors.append("dll-only manifest unexpectedly includes CEF runtime metadata")
+    elif not isinstance(cef_runtime, dict):
+        errors.append("launcher manifest is missing CEF runtime metadata")
+    else:
+        if cef_runtime.get("version") != audit_built_package.CEF_RUNTIME_VERSION:
+            errors.append(f"CEF runtime version={cef_runtime.get('version')!r}")
+        files = cef_runtime.get("files")
+        if not isinstance(files, list):
+            errors.append("CEF runtime files is not a list")
+        else:
+            file_set = {str(path).replace("\\", "/") for path in files}
+            missing_cef_files = [
+                path for path in audit_built_package.CEF_RUNTIME_REQUIRED_FILES if path not in file_set
+            ]
+            if missing_cef_files:
+                errors.append("CEF runtime files missing: " + ", ".join(missing_cef_files))
 
     return errors
 

@@ -50,6 +50,12 @@ SCRIPT_TOKENS = (
     "[switch]$PreflightOnly",
     '[string]$GameFilesRoot = "GameFiles\\SkyrimVR"',
     '[string]$CompanionToolRoot = "Tools\\SkyrimVR"',
+    '[string]$CefRuntimeDirectory = ""',
+    '$CefRuntimeVersion = "141.0.11"',
+    "$CefRuntimeRequiredFiles = @(",
+    "Resolve-CefRuntimeDirectory",
+    "STVR_CEF_RUNTIME_DIR",
+    "Copied complete CEF",
     "Resolve-PathAgainstRepo",
     "Resolve-StagedVrGameFilesRoot",
     "Resolve-PythonCommandPrefix",
@@ -413,7 +419,7 @@ WINE_SCRIPT_TOKENS = (
     'STVR_XMAKE',
     '$PSVersionTable.PSVersion.ToString()',
     'powershell:wmain stub',
-    "Wine is using its built-in powershell.exe stub",
+    "The selected PowerShell did not execute a command through Wine",
     "winepath -w",
     "-NoProfile",
     "-ExecutionPolicy",
@@ -781,6 +787,7 @@ def main():
     missing_wine_script_tokens = [token for token in WINE_SCRIPT_TOKENS if token not in wine_script]
     missing_launcher_tokens = [token for token in LAUNCHER_TOKENS if token not in launcher]
     code_xmake = read_text(root / "Code/xmake.lua")
+    immersive_launcher_xmake = read_text(root / "Code/immersive_launcher/xmake.lua")
     missing_linux_wrapper_tokens = [token for token in LINUX_WRAPPER_TOKENS if token not in code_xmake]
 
     if missing_default_targets:
@@ -789,6 +796,8 @@ def main():
         failures.append(f"required target check is missing: {', '.join(missing_required_targets)}")
     if missing_script_tokens:
         failures.append(f"script tokens missing: {', '.join(missing_script_tokens)}")
+    if '"/DELAYLOAD:libcef.dll"' not in immersive_launcher_xmake:
+        failures.append("VR launcher xmake file is missing /DELAYLOAD:libcef.dll")
     if not env_batch_path.exists():
         failures.append(f"Windows build environment bootstrap is missing: {env_batch_path}")
     if missing_env_batch_tokens:

@@ -67,6 +67,12 @@ REQUIRED_PACKAGE_SCRIPT_TOKENS = (
     '$staleRuntimeArtifactDirs = @(',
     "Resolve-PathAgainstRepo",
     "Resolve-StagedVrGameFilesRoot",
+    '[string]$CefRuntimeDirectory = ""',
+    '$CefRuntimeVersion = "141.0.11"',
+    "$CefRuntimeRequiredFiles = @(",
+    "Resolve-CefRuntimeDirectory",
+    "STVR_CEF_RUNTIME_DIR",
+    "Copied complete CEF",
     "SkyrimTogetherVR packages must stage game files from GameFiles\\SkyrimVR",
     "Refusing GameFilesRoot",
     'Resolve-StagedVrGameFilesRoot -Path $GameFilesRoot',
@@ -132,6 +138,8 @@ REQUIRED_PACKAGE_SCRIPT_TOKENS = (
 
 REQUIRED_BUILT_PACKAGE_AUDIT_TOKENS = (
     "BRIDGE_RUNTIME_FILES",
+    "CEF_RUNTIME_VERSION",
+    "CEF_RUNTIME_REQUIRED_FILES",
     "DLL_ONLY_REQUIRED_RUNTIME_FILES",
     "AVATAR_SYNC_REQUIRED_RUNTIME_FILES",
     "GAMEPLAY_REQUIRED_RUNTIME_FILES",
@@ -166,6 +174,13 @@ REQUIRED_BUILT_PACKAGE_AUDIT_TOKENS = (
     "dll-only build manifest has unexpected target(s)",
     "dll-only build manifest copiedArtifacts has unexpected runtime artifact(s)",
     "required_runtime_files",
+    "manifest_runtime_files",
+    "pe_imported_libraries",
+    "audit_cef_delay_import",
+    "launcher package imports libcef.dll normally",
+    "launcher package does not delay-import libcef.dll",
+    "launcher build manifest is missing CEF runtime metadata",
+    "dll-only build manifest unexpectedly includes a CEF runtime",
     "expected_manifest_targets",
     "package_mode_name",
     "write_build_manifest",
@@ -445,6 +460,8 @@ def main():
         failures.append("TargetConfig.h should not name a standalone SkyrimTogetherVR.dll client")
     if 'add_ldflags("/WHOLEARCHIVE:SkyrimTogetherVRClient", { force = true })' not in launcher_xmake:
         failures.append("SkyrimVRImmersiveLauncher must whole-archive link SkyrimTogetherVRClient")
+    if '"/DELAYLOAD:libcef.dll"' not in launcher_xmake:
+        failures.append("SkyrimVRImmersiveLauncher must delay-load libcef.dll")
 
     for relative_file, tokens in REQUIRED_DOC_TOKENS.items():
         text = read_text(root / relative_file)
