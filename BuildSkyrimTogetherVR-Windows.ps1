@@ -366,6 +366,7 @@ function Resolve-SkseVrSdk {
     $sevenZipCandidates = @(
         (Get-Command "7z.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command "7zz.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
+        "C:\Program Files\7-Zip\7z.exe",
         (Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"),
         (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
