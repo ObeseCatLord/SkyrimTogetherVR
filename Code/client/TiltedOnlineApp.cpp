@@ -84,9 +84,17 @@ bool TiltedOnlineApp::BeginMain()
     else if (GetScriptExtenderLoadResult() != ScriptExtenderLoadResult::kModuleLoaded)
     {
         spdlog::error(
-            "SkyrimTogetherVR could not load the required SKSEVR module (result {}). "
+            "SkyrimTogetherVR could not load the required SKSEVR Steam bootstrap shim (result {}). "
             "The connection handshake will report SKSE inactive.",
             static_cast<unsigned int>(GetScriptExtenderLoadResult()));
+    }
+    else if (!IsScriptExtenderLoaded())
+    {
+        spdlog::warn("SkyrimTogetherVR SKSEVR Steam bootstrap shim is installed, but the game-startup core module is not visible yet.");
+    }
+    else
+    {
+        spdlog::info("SkyrimTogetherVR SKSEVR core module loaded through the Steam startup shim.");
     }
 
 #if TP_SKYRIM_VR

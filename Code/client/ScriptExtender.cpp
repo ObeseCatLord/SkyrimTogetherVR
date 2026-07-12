@@ -4,6 +4,8 @@
 #include <VersionDb.h>
 
 #include <array>
+#include <chrono>
+#include <thread>
 
 namespace
 {
@@ -12,11 +14,13 @@ namespace
 #endif
 
 constexpr wchar_t kScriptExtenderName[] = L"sksevr";
+constexpr wchar_t kScriptExtenderSteamLoaderName[] = L"sksevr_steam_loader.dll";
 // SKSEVR 2.0.12 is the runtime 1.4.15 release used by Skyrim VR.
 constexpr const char* kUnsupportedScriptExtenderMessage = "SKSEVR 2.0.12 or newer is required";
 constexpr wchar_t kGamePathEnvironmentVariable[] = L"STVR_GAME_PATH";
 
 HMODULE g_SKSEModuleHandle{nullptr};
+HMODULE g_SKSESteamLoaderModuleHandle{nullptr};
 bool g_scriptExtenderLoadAttempted{false};
 ScriptExtenderLoadResult g_scriptExtenderLoadResult{ScriptExtenderLoadResult::kModuleLoadFailed};
 
@@ -55,7 +59,7 @@ int GetFileVersion(const std::filesystem::path& acFilePath, FileVersion& aVersio
     }
     VS_FIXEDFILEINFO* pvi;
     sz = sizeof(VS_FIXEDFILEINFO);
-    if (!VerQueryValueA(&buf[0], "\\", reinterpret_cast<LPVOID*>(&pvi), reinterpret_cast<unsigned int*>(&sz)))
+    if (!VerQueryValueA(&buf[0], "\\", reinterpret_cast<LPVOID*>(&pvi), reinterpret_cast<unsigned int*>(&sz)) || pvi->dwSignature != VS_FFI_SIGNATURE)
     {
         return 3;
     }
@@ -93,17 +97,70 @@ std::filesystem::path GetGameDirectory()
     return std::filesystem::current_path();
 }
 
-std::filesystem::path GetScriptExtenderPath()
+std::filesystem::path GetScriptExtenderCorePath()
 {
     const auto exeVersion = GetSKSEStyleExeVersion();
     const std::wstring version(exeVersion.begin(), exeVersion.end());
     return GetGameDirectory() / (std::wstring(kScriptExtenderName) + L"_" + version + L".dll");
 }
+
+std::filesystem::path GetScriptExtenderSteamLoaderPath()
+{
+    return GetGameDirectory() / kScriptExtenderSteamLoaderName;
+}
+
+bool IsModuleLoadedFromExpectedPath(const HMODULE aModuleHandle, const std::filesystem::path& aExpectedPath)
+{
+    std::array<wchar_t, 32768> modulePath{};
+    const auto length = GetModuleFileNameW(aModuleHandle, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (length == 0 || length >= static_cast<DWORD>(modulePath.size()))
+        return false;
+
+    std::error_code ec;
+    const auto expectedPath = std::filesystem::absolute(aExpectedPath, ec).lexically_normal();
+    if (ec)
+        return false;
+
+    const auto loadedPath = std::filesystem::absolute(std::filesystem::path(std::wstring(modulePath.data(), length)), ec).lexically_normal();
+    if (ec)
+        return false;
+
+    return _wcsicmp(expectedPath.c_str(), loadedPath.c_str()) == 0;
+}
+
+bool RefreshScriptExtenderCoreModule()
+{
+    if (g_SKSEModuleHandle)
+        return true;
+
+    const auto corePath = GetScriptExtenderCorePath();
+    const auto moduleHandle = GetModuleHandleW(corePath.filename().c_str());
+    if (!moduleHandle || !IsModuleLoadedFromExpectedPath(moduleHandle, corePath))
+        return false;
+
+    g_SKSEModuleHandle = moduleHandle;
+    spdlog::info("SKSEVR core module observed at expected game path: {}", corePath.string());
+    return true;
+}
 } // namespace
 
 bool IsScriptExtenderLoaded()
 {
-    return g_SKSEModuleHandle;
+    return RefreshScriptExtenderCoreModule();
+}
+
+bool WaitForScriptExtenderLoaded(const std::chrono::milliseconds aTimeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + aTimeout;
+    do
+    {
+        if (IsScriptExtenderLoaded())
+            return true;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    return IsScriptExtenderLoaded();
 }
 
 bool WasScriptExtenderLoadAttempted() noexcept
@@ -123,43 +180,84 @@ ScriptExtenderLoadResult LoadScriptExender()
 
     g_scriptExtenderLoadAttempted = true;
 
-    const auto path = GetScriptExtenderPath();
-    const auto moduleName = path.filename().wstring();
+    const auto corePath = GetScriptExtenderCorePath();
+    const auto coreModuleName = corePath.filename().wstring();
+    const auto steamLoaderPath = GetScriptExtenderSteamLoaderPath();
+    const auto steamLoaderModuleName = steamLoaderPath.filename().wstring();
 
     std::error_code ec;
-    if (!std::filesystem::exists(path, ec))
+    if (!std::filesystem::exists(corePath, ec))
     {
-        spdlog::error("Required SKSEVR module is missing: {}", path.string());
+        spdlog::error("Required SKSEVR core module is missing: {}", corePath.string());
         return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleMissing;
     }
 
     FileVersion fileVersion{};
-    const bool versionVerified = GetFileVersion(path, fileVersion) == 0;
-    if (!versionVerified)
+    if (GetFileVersion(corePath, fileVersion) != 0)
     {
-        spdlog::warn("Unable to verify SKSEVR version resource for {}; using the runtime-pinned module name", path.string());
+        spdlog::error("Unable to verify the SKSEVR core version resource: {}", corePath.string());
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kVersionUnsupported;
     }
 
-    if (versionVerified && !IsSkseVrVersionAtLeast2012(fileVersion))
+    if (!IsSkseVrVersionAtLeast2012(fileVersion))
     {
         spdlog::error(kUnsupportedScriptExtenderMessage);
         return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kVersionUnsupported;
     }
 
-    g_SKSEModuleHandle = GetModuleHandleW(moduleName.c_str());
-    if (g_SKSEModuleHandle)
+    // An already loaded matching core does not require the Steam shim again.
+    if (RefreshScriptExtenderCoreModule())
     {
-        spdlog::info("SKSEVR module already loaded: {}", path.string());
         return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoaded;
     }
 
-    g_SKSEModuleHandle = LoadLibraryW(path.c_str());
-    if (!g_SKSEModuleHandle)
+    if (GetModuleHandleW(coreModuleName.c_str()))
     {
-        spdlog::error("Failed to load required SKSEVR module: {}", path.string());
+        spdlog::error("A same-named SKSEVR core module is already loaded outside the expected game directory: {}", corePath.string());
         return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
     }
 
-    spdlog::info("SKSEVR module loaded: {}; operational initialization requires runtime verification", path.string());
+    if (!std::filesystem::exists(steamLoaderPath, ec))
+    {
+        spdlog::error("Required SKSEVR Steam bootstrap shim is missing: {}", steamLoaderPath.string());
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleMissing;
+    }
+
+    FileVersion steamLoaderVersion{};
+    if (GetFileVersion(steamLoaderPath, steamLoaderVersion) != 0 || !IsSkseVrVersionAtLeast2012(steamLoaderVersion) ||
+        !std::equal(std::begin(fileVersion.versions), std::end(fileVersion.versions), std::begin(steamLoaderVersion.versions)))
+    {
+        spdlog::error("SKSEVR core and Steam bootstrap shim must have matching version resources from a supported official release");
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kVersionUnsupported;
+    }
+
+    const auto steamLoaderModuleHandle = GetModuleHandleW(steamLoaderModuleName.c_str());
+    if (steamLoaderModuleHandle)
+    {
+        if (!IsModuleLoadedFromExpectedPath(steamLoaderModuleHandle, steamLoaderPath))
+        {
+            spdlog::error("A same-named SKSEVR Steam bootstrap shim is already loaded outside the expected game directory: {}", steamLoaderPath.string());
+            return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
+        }
+
+        g_SKSESteamLoaderModuleHandle = steamLoaderModuleHandle;
+        spdlog::info("SKSEVR Steam bootstrap shim already loaded: {}", steamLoaderPath.string());
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoaded;
+    }
+
+    g_SKSESteamLoaderModuleHandle = LoadLibraryW(steamLoaderPath.c_str());
+    if (!g_SKSESteamLoaderModuleHandle)
+    {
+        spdlog::error("Failed to load required SKSEVR Steam bootstrap shim: {}", steamLoaderPath.string());
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
+    }
+
+    if (!IsModuleLoadedFromExpectedPath(g_SKSESteamLoaderModuleHandle, steamLoaderPath))
+    {
+        spdlog::error("Loaded SKSEVR Steam bootstrap shim does not match the expected game-directory file: {}", steamLoaderPath.string());
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
+    }
+
+    spdlog::info("SKSEVR Steam bootstrap shim loaded: {}; SKSEVR core will load from the game startup thread and requires runtime verification", steamLoaderPath.string());
     return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoaded;
 }

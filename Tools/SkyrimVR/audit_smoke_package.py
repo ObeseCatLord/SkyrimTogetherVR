@@ -411,6 +411,7 @@ def packaged_python_import_closure(tool_dir):
 def installed_prerequisites(skyrim_vr):
     return {
         "sksevr": (skyrim_vr / "sksevr_1_4_15.dll").exists(),
+        "sksevr_steam_loader": (skyrim_vr / "sksevr_steam_loader.dll").exists(),
         "address_library": (skyrim_vr / "Data" / "SKSE" / "Plugins" / "version-1-4-15-0.csv").exists(),
     }
 
@@ -504,6 +505,8 @@ def main():
     if args.require_installed_prerequisites:
         if not prereq["sksevr"]:
             failures.append("target Skyrim VR install is missing sksevr_1_4_15.dll")
+        if not prereq["sksevr_steam_loader"]:
+            failures.append("target Skyrim VR install is missing sksevr_steam_loader.dll")
         if not prereq["address_library"]:
             failures.append(
                 "target Skyrim VR install is missing Data/SKSE/Plugins/version-1-4-15-0.csv"
@@ -514,6 +517,7 @@ def main():
     print(f"Address override CSV rows: {overrides_rows}")
     print("Packaged Python helper closure: " + ", ".join(helper_closure))
     print(f"Installed SKSEVR DLL present: {prereq['sksevr']}")
+    print(f"Installed SKSEVR Steam loader present: {prereq['sksevr_steam_loader']}")
     print(f"Installed VR Address Library CSV present: {prereq['address_library']}")
     print(f"Smoke package audit failures: {len(failures)}")
     for failure in failures:

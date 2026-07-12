@@ -714,6 +714,8 @@ def audit_package(
     if require_installed_prerequisites:
         if not prereq["sksevr"]:
             failures.append("target Skyrim VR install is missing sksevr_1_4_15.dll")
+        if not prereq["sksevr_steam_loader"]:
+            failures.append("target Skyrim VR install is missing sksevr_steam_loader.dll")
         if not prereq["address_library"]:
             failures.append(
                 "target Skyrim VR install is missing Data/SKSE/Plugins/version-1-4-15-0.csv"
@@ -751,6 +753,7 @@ def installed_prerequisites(skyrim_vr):
         ]
     return {
         "sksevr": (skyrim_vr / "sksevr_1_4_15.dll").exists(),
+        "sksevr_steam_loader": (skyrim_vr / "sksevr_steam_loader.dll").exists(),
         "address_library": (plugin_dir / "version-1-4-15-0.csv").exists(),
         "vrik": exists_case_insensitive(plugin_dir, ("vrik.dll",)),
         "higgs": higgs_dll_installed,
@@ -912,6 +915,21 @@ def run_self_test():
         failures, *_ = audit_package(default_package, skyrim_vr)
         if failures:
             print("Default package self-test unexpectedly failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+
+        write_file(skyrim_vr / "sksevr_1_4_15.dll")
+        write_file(skyrim_vr / "Data" / "SKSE" / "Plugins" / "version-1-4-15-0.csv")
+        failures, *_ = audit_package(default_package, skyrim_vr, require_installed_prerequisites=True)
+        if "target Skyrim VR install is missing sksevr_steam_loader.dll" not in failures:
+            print("Package self-test did not require sksevr_steam_loader.dll when strict prerequisites were requested.")
+            return 1
+
+        write_file(skyrim_vr / "sksevr_steam_loader.dll")
+        failures, *_ = audit_package(default_package, skyrim_vr, require_installed_prerequisites=True)
+        if failures:
+            print("Package self-test unexpectedly failed after installing strict SKSEVR prerequisites:")
             for failure in failures:
                 print(f"- {failure}")
             return 1
@@ -1164,6 +1182,7 @@ def main():
     print(f"AE-to-SE CSV rows: {ae_to_se_rows}")
     print(f"Address override CSV rows: {overrides_rows}")
     print(f"Installed SKSEVR DLL present: {prereq['sksevr']}")
+    print(f"Installed SKSEVR Steam loader present: {prereq['sksevr_steam_loader']}")
     print(f"Installed VR Address Library CSV present: {prereq['address_library']}")
     print(f"Installed VRIK DLL present: {prereq['vrik']}")
     print(f"Installed HIGGS DLL present: {prereq['higgs']}")

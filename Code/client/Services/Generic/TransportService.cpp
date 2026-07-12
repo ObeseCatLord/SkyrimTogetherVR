@@ -129,7 +129,20 @@ void TransportService::OnConnected()
 {
     AuthenticationRequest request{};
     request.Version = BUILD_COMMIT;
+#if TP_SKYRIM_VR
+    constexpr auto kSkseVrCoreLoadTimeout = std::chrono::milliseconds(250);
     request.SKSEActive = IsScriptExtenderLoaded();
+    if (!request.SKSEActive && GetScriptExtenderLoadResult() == ScriptExtenderLoadResult::kModuleLoaded)
+    {
+        request.SKSEActive = WaitForScriptExtenderLoaded(kSkseVrCoreLoadTimeout);
+        if (!request.SKSEActive)
+        {
+            spdlog::warn("SKSEVR core was not visible {} ms after connection; authentication will report SKSE inactive", kSkseVrCoreLoadTimeout.count());
+        }
+    }
+#else
+    request.SKSEActive = IsScriptExtenderLoaded();
+#endif
     request.MO2Active = GetModuleHandleW(kMO2DllName);
 
     request.Token = m_serverPassword;

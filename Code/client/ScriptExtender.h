@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 
 // Utility to import the 3rd-party Script Extender made by Ian Patterson et al.
@@ -22,3 +23,7 @@ ScriptExtenderLoadResult GetScriptExtenderLoadResult() noexcept;
 // Check whether the SKSEVR module was loaded. Operational initialization still
 // requires runtime validation.
 bool IsScriptExtenderLoaded();
+
+// Wait briefly for the Steam bootstrap shim to load the SKSEVR core at the
+// mapped game's VCRUNTIME startup boundary.
+bool WaitForScriptExtenderLoaded(std::chrono::milliseconds aTimeout);
