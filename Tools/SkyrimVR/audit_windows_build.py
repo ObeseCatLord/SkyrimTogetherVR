@@ -66,6 +66,7 @@ SCRIPT_TOKENS = (
     "sksevr_2_00_12.7z",
     "Resolve-StagedVrGameFilesRoot",
     "Resolve-PythonCommandPrefix",
+    "Test-PythonCommandPrefix",
     "Resolve-PapyrusCompilerForPreflight",
     "Invoke-PapyrusCompile",
     "SkyrimTogetherVR packages must stage game files from GameFiles\\SkyrimVR",

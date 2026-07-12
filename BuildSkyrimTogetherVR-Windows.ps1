@@ -414,23 +414,52 @@ function Resolve-PythonCommandPrefix {
         [string]$RequestedPython
     )
 
+    function Test-PythonCommandPrefix {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string[]]$CommandPrefix
+        )
+
+        $pythonExe = $CommandPrefix[0]
+        $pythonArgs = @()
+        if ($CommandPrefix.Count -gt 1) {
+            $pythonArgs += $CommandPrefix[1..($CommandPrefix.Count - 1)]
+        }
+        $pythonArgs += "--version"
+        & $pythonExe @pythonArgs *> $null
+        return $LASTEXITCODE -eq 0
+    }
+
     if ($RequestedPython.Length -gt 0) {
-        return @($RequestedPython)
+        $candidate = @($RequestedPython)
+        if (-not (Test-PythonCommandPrefix -CommandPrefix $candidate)) {
+            throw "Requested Python command cannot execute: $RequestedPython"
+        }
+        return $candidate
     }
 
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
-        return @("py", "-3")
+        $candidate = @("py", "-3")
+        if (Test-PythonCommandPrefix -CommandPrefix $candidate) {
+            return $candidate
+        }
     }
 
     if (Get-Command "python" -ErrorAction SilentlyContinue) {
-        return @("python")
+        $candidate = @("python")
+        if (Test-PythonCommandPrefix -CommandPrefix $candidate) {
+            return $candidate
+        }
     }
 
     if (Get-Command "python3" -ErrorAction SilentlyContinue) {
-        return @("python3")
+        $candidate = @("python3")
+        if (Test-PythonCommandPrefix -CommandPrefix $candidate) {
+            return $candidate
+        }
     }
 
-    throw "Python was not found. Install Python 3 or pass -Python C:\path\to\python.exe."
+    throw "No executable Python 3 command was found. Install Python 3 or pass -Python C:\path\to\python.exe."
 }
 
 function Invoke-Python {
