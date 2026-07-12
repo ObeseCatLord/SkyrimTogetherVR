@@ -34,7 +34,7 @@ FORBIDDEN_VERIFY_SOURCE_TOKENS = (
 )
 
 REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
-    "ScriptName SkyrimTogetherVRTickBridge Hidden",
+    "ScriptName SkyrimTogetherVRTickBridge Native Hidden",
     "Bool Function Tick() Global Native",
 )
 

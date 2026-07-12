@@ -54,7 +54,7 @@ REQUIRED_TOKENS = {
         "SkyrimTogetherVRTickBridge.Tick()",
     ),
     "GameFiles/SkyrimVR/scripts/source/SkyrimTogetherVRTickBridge.psc": (
-        "ScriptName SkyrimTogetherVRTickBridge Hidden",
+        "ScriptName SkyrimTogetherVRTickBridge Native Hidden",
         "Bool Function Tick() Global Native",
     ),
     "Tools/SkyrimVR/compile_papyrus.py": (

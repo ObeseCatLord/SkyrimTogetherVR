@@ -45,7 +45,7 @@ Caprica requires scripts containing native function declarations to be marked `N
 
 - `SkyrimTogetherVerifyLaunchScript.psc`: `ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Native Hidden`
 - `SkyrimTogetherUtils.psc`: `Scriptname SkyrimTogetherUtils Native Hidden`
-- `SkyrimTogetherVRTickBridge.psc`: `ScriptName SkyrimTogetherVRTickBridge Hidden`
+- `SkyrimTogetherVRTickBridge.psc`: `ScriptName SkyrimTogetherVRTickBridge Native Hidden`
 
 `SkyrimTogetherVRConnectionMenu.psc` avoids `state` as a local variable name because Caprica treats it as a reserved Papyrus keyword.
 

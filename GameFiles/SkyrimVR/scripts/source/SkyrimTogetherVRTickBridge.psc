@@ -1,3 +1,3 @@
-ScriptName SkyrimTogetherVRTickBridge Hidden
+ScriptName SkyrimTogetherVRTickBridge Native Hidden
 
 Bool Function Tick() Global Native
