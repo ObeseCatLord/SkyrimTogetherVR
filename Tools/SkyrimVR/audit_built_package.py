@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import ast
+import hashlib
 import json
 import pathlib
+import re
 import struct
 import sys
 import tempfile
@@ -158,7 +160,7 @@ VR_PREREQUISITE_FILES = {
 }
 
 X64_MACHINE = 0x8664
-MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v1"
+MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
 IMAGE_DIRECTORY_ENTRY_IMPORT = 1
 IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT = 13
 IMAGE_DELAYLOAD_ATTRIBUTE_RVA = 1
@@ -522,6 +524,37 @@ def load_build_manifest(package, failures):
     return {}
 
 
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def package_file_hashes(package):
+    return {
+        path.relative_to(package).as_posix(): sha256(path)
+        for path in package.rglob("*")
+        if path.is_file() and path.relative_to(package).as_posix() != "SkyrimTogetherVR_BuildManifest.json"
+    }
+
+
+def normalize_manifest_relative_path(value):
+    if not isinstance(value, str) or not value:
+        return None
+    path = pathlib.PurePosixPath(value.replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts or path.name == "SkyrimTogetherVR_BuildManifest.json":
+        return None
+    return path.as_posix()
+
+
+def manifest_artifact_path(package, artifact):
+    if artifact.startswith("SkyrimTogetherVR") and "Bridge." in artifact:
+        return package / "Data" / "SKSE" / "Plugins" / artifact
+    return package / artifact
+
+
 def required_runtime_files(avatar_sync=False, dll_only=False, gameplay=False):
     if dll_only:
         return DLL_ONLY_REQUIRED_RUNTIME_FILES
@@ -626,6 +659,75 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
             "dll-only build manifest copiedArtifacts has unexpected runtime artifact(s): "
             + ", ".join(unexpected_runtime_artifacts)
         )
+
+    source_revision = manifest.get("sourceRevision")
+    source_provenance = manifest.get("sourceProvenance")
+    if not isinstance(source_provenance, dict):
+        failures.append("build manifest sourceProvenance field is not an object")
+    else:
+        revision = source_provenance.get("revision")
+        source_tree_sha256 = source_provenance.get("sourceTreeSha256")
+        dirty = source_provenance.get("dirty")
+        dirty_approved = source_provenance.get("dirtyApproved")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+            failures.append("build manifest sourceProvenance revision is missing or invalid")
+        if not isinstance(source_tree_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", source_tree_sha256):
+            failures.append("build manifest sourceProvenance sourceTreeSha256 is missing or invalid")
+        if not isinstance(dirty, bool):
+            failures.append("build manifest sourceProvenance dirty flag is missing or invalid")
+        if not isinstance(dirty_approved, bool):
+            failures.append("build manifest sourceProvenance dirtyApproved flag is missing or invalid")
+        if isinstance(revision, str) and isinstance(source_tree_sha256, str) and isinstance(dirty, bool):
+            expected_source_revision = f"{revision}-dirty-{source_tree_sha256}" if dirty else revision
+            if source_revision != expected_source_revision:
+                failures.append("build manifest sourceRevision does not match sourceProvenance")
+        if dirty is True and dirty_approved is not True:
+            failures.append("build manifest sourceProvenance has an unapproved dirty source tree")
+        if dirty is False and dirty_approved is True:
+            failures.append("build manifest sourceProvenance marks a clean source tree as dirty-approved")
+
+    package_hashes = manifest.get("packageFileSha256")
+    if not isinstance(package_hashes, dict):
+        failures.append("build manifest packageFileSha256 field is not an object")
+    else:
+        normalized_hashes = {}
+        for relative_path, expected_hash in package_hashes.items():
+            normalized_path = normalize_manifest_relative_path(relative_path)
+            if normalized_path is None:
+                failures.append(f"build manifest packageFileSha256 has invalid path: {relative_path!r}")
+                continue
+            if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash):
+                failures.append(f"build manifest packageFileSha256 has invalid SHA-256: {normalized_path}")
+                continue
+            normalized_hashes[normalized_path] = expected_hash.lower()
+
+        actual_hashes = package_file_hashes(package)
+        missing_payload_hashes = sorted(set(actual_hashes) - set(normalized_hashes))
+        unexpected_payload_hashes = sorted(set(normalized_hashes) - set(actual_hashes))
+        if missing_payload_hashes:
+            failures.append("build manifest packageFileSha256 missing package file(s): " + ", ".join(missing_payload_hashes))
+        if unexpected_payload_hashes:
+            failures.append("build manifest packageFileSha256 has unexpected package file(s): " + ", ".join(unexpected_payload_hashes))
+        for relative_path in sorted(set(actual_hashes) & set(normalized_hashes)):
+            if actual_hashes[relative_path].lower() != normalized_hashes[relative_path]:
+                failures.append(f"build manifest package SHA-256 mismatch: {relative_path}")
+
+    artifact_hashes = manifest.get("artifactSha256")
+    if not isinstance(artifact_hashes, dict):
+        failures.append("build manifest artifactSha256 field is not an object")
+    else:
+        missing_hashes = [artifact for artifact in sorted(copied_set) if not isinstance(artifact_hashes.get(artifact), str)]
+        if missing_hashes:
+            failures.append("build manifest artifactSha256 missing copied artifact(s): " + ", ".join(missing_hashes))
+        for artifact in sorted(copied_set):
+            expected_hash = artifact_hashes.get(artifact)
+            if not isinstance(expected_hash, str):
+                continue
+            path = manifest_artifact_path(package, artifact)
+            if not path.is_file():
+                failures.append(f"build manifest copied artifact is missing from package: {artifact}")
+            elif sha256(path).lower() != expected_hash.lower():
+                failures.append(f"build manifest artifact SHA-256 mismatch: {artifact}")
 
     cef_runtime = manifest.get("cefRuntime")
     if dll_only:
@@ -854,6 +956,7 @@ def papyrus_pex_fixture():
 def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=False):
     runtime_files = manifest_runtime_files(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
     targets = expected_manifest_targets(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    copied_artifacts = [pathlib.PurePath(relative_file).name for relative_file in runtime_files]
     manifest = {
         "schema": MANIFEST_SCHEMA,
         "mode": "releasedbg",
@@ -863,8 +966,18 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
         "gameplay": gameplay,
         "packageFlavor": package_mode_name(avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay),
         "targets": list(targets),
-        "copiedArtifacts": [pathlib.PurePath(relative_file).name for relative_file in runtime_files],
-        "expectedArtifacts": [pathlib.PurePath(relative_file).name for relative_file in runtime_files],
+        "copiedArtifacts": copied_artifacts,
+        "expectedArtifacts": copied_artifacts,
+        "artifactSha256": {
+            artifact: sha256(manifest_artifact_path(package, artifact)) for artifact in copied_artifacts
+        },
+        "sourceRevision": "0" * 40,
+        "sourceProvenance": {
+            "revision": "0" * 40,
+            "sourceTreeSha256": "1" * 64,
+            "dirty": False,
+            "dirtyApproved": False,
+        },
         "packageRoot": str(package),
         "packageSnapshotRoot": str(package),
         "stagedGameFiles": True,
@@ -879,6 +992,7 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
     }
     path = package / "SkyrimTogetherVR_BuildManifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    manifest["packageFileSha256"] = package_file_hashes(package)
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
@@ -893,8 +1007,8 @@ def populate_test_package(package, avatar_sync=False, dll_only=False, gameplay=F
     for relative_file in REQUIRED_STAGED_FILES:
         path = package / relative_file
         if path.name == "SkyrimTogetherVR_BuildManifest.json":
-            write_build_manifest(package, avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
-        elif path.suffix.lower() == ".csv":
+            continue
+        if path.suffix.lower() == ".csv":
             write_csv(path)
         elif path.suffix.lower() == ".pex":
             write_file(path, papyrus_pex_fixture())
@@ -903,6 +1017,7 @@ def populate_test_package(package, avatar_sync=False, dll_only=False, gameplay=F
             path.write_text(python_helper_fixture(path), encoding="utf-8")
         else:
             write_file(path)
+    write_build_manifest(package, avatar_sync=avatar_sync, dll_only=dll_only, gameplay=gameplay)
 
 
 def run_self_test():
@@ -992,7 +1107,7 @@ def run_self_test():
             return 1
 
         wrong_dll_manifest_package = root / "wrong-dll-manifest"
-        populate_test_package(wrong_dll_manifest_package, dll_only=True)
+        populate_test_package(wrong_dll_manifest_package)
         write_build_manifest(wrong_dll_manifest_package)
         failures, *_ = audit_package(wrong_dll_manifest_package, skyrim_vr, dll_only=True)
         if "dll-only build manifest has unexpected target(s): SkyrimTogetherVRClient, SkyrimVRImmersiveLauncher, TPProcess" not in failures:
@@ -1087,11 +1202,58 @@ def run_self_test():
             return 1
 
         wrong_manifest_package = root / "wrong-manifest"
-        populate_test_package(wrong_manifest_package)
+        populate_test_package(wrong_manifest_package, avatar_sync=True)
         write_build_manifest(wrong_manifest_package, avatar_sync=True)
         failures, *_ = audit_package(wrong_manifest_package, skyrim_vr)
         if "build manifest avatarSync does not match audit mode: True" not in failures:
             print("Package self-test did not reject wrong manifest mode.")
+            print("\n".join(failures))
+            return 1
+
+        tampered_manifest_package = root / "tampered-manifest"
+        populate_test_package(tampered_manifest_package)
+        with (tampered_manifest_package / "SkyrimTogetherVR.exe").open("ab") as handle:
+            handle.write(b"tampered")
+        failures, *_ = audit_package(tampered_manifest_package, skyrim_vr)
+        if "build manifest artifact SHA-256 mismatch: SkyrimTogetherVR.exe" not in failures:
+            print("Package self-test did not reject a tampered runtime artifact.")
+            print("\n".join(failures))
+            return 1
+
+        tampered_payload_package = root / "tampered-payload"
+        populate_test_package(tampered_payload_package)
+        with (tampered_payload_package / "Tools" / "SkyrimVR" / "vr_paths.py").open("a", encoding="utf-8") as handle:
+            handle.write("\n# tampered\n")
+        failures, *_ = audit_package(tampered_payload_package, skyrim_vr)
+        if "build manifest package SHA-256 mismatch: Tools/SkyrimVR/vr_paths.py" not in failures:
+            print("Package self-test did not reject a tampered staged helper.")
+            print("\n".join(failures))
+            return 1
+
+        unavailable_source_package = root / "unavailable-source"
+        populate_test_package(unavailable_source_package)
+        manifest_path = unavailable_source_package / "SkyrimTogetherVR_BuildManifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sourceRevision"] = "unavailable"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        failures, *_ = audit_package(unavailable_source_package, skyrim_vr)
+        if "build manifest sourceRevision does not match sourceProvenance" not in failures:
+            print("Package self-test did not reject an unavailable source revision.")
+            print("\n".join(failures))
+            return 1
+
+        unapproved_dirty_source_package = root / "unapproved-dirty-source"
+        populate_test_package(unapproved_dirty_source_package)
+        manifest_path = unapproved_dirty_source_package / "SkyrimTogetherVR_BuildManifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        source_provenance = manifest["sourceProvenance"]
+        source_provenance["dirty"] = True
+        source_provenance["dirtyApproved"] = False
+        manifest["sourceRevision"] = f"{source_provenance['revision']}-dirty-{source_provenance['sourceTreeSha256']}"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        failures, *_ = audit_package(unapproved_dirty_source_package, skyrim_vr)
+        if "build manifest sourceProvenance has an unapproved dirty source tree" not in failures:
+            print("Package self-test did not reject an unapproved dirty source tree.")
             print("\n".join(failures))
             return 1
 

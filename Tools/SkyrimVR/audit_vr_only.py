@@ -66,7 +66,7 @@ REQUIRED_TOKENS = {
         "GetMappedTlsSlotCapacity()",
         "kScriptExtenderBootstrapTimeout",
         "TerminateProcess(GetCurrentProcess(), 5)",
-        "RunTiltedInit(LC->gamePath, LC->Version);",
+        "if (!RunTiltedInit(LC->gamePath, LC->Version))",
         "LC->gameMain();",
     ),
     "Code/immersive_launcher/loader/ExeLoader.cpp": (
@@ -177,7 +177,7 @@ def main() -> int:
             failures.append(f"{relative_path}: forbidden non-VR tokens present: {', '.join(present)}")
 
     launcher_text = read_text(root, "Code/immersive_launcher/Launcher.cpp")
-    address_init = launcher_text.find("RunTiltedInit(LC->gamePath, LC->Version);")
+    address_init = launcher_text.find("if (!RunTiltedInit(LC->gamePath, LC->Version))")
     skse_bootstrap = launcher_text.find("if (!BootstrapScriptExtenderOnLoaderThread())")
     game_entry = launcher_text.find("LC->gameMain();")
     if not (0 <= address_init < skse_bootstrap < game_entry):

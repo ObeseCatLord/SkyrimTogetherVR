@@ -20,7 +20,7 @@ import vr_paths
 
 DEFAULT_LOG_RELATIVE = pathlib.Path("logs/tp_client.log")
 BUILD_MANIFEST_NAME = "SkyrimTogetherVR_BuildManifest.json"
-BUILD_MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v1"
+BUILD_MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
 WINDOWS_MY_GAMES_RELATIVE = pathlib.Path("Documents") / "My Games" / "Skyrim VR" / "SKSE"
 HANDOFF_EXTRA_FILES = (
     vr_handoff.COMMAND_FILE,

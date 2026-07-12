@@ -31,7 +31,7 @@
 // These symbols are defined within the client code skyrimtogetherclient
 extern void InstallStartHook();
 extern void RunTiltedApp();
-extern void RunTiltedInit(const std::filesystem::path& acGamePath, const TiltedPhoques::String& aExeVersion);
+extern bool RunTiltedInit(const std::filesystem::path& acGamePath, const TiltedPhoques::String& aExeVersion);
 
 // Defined in EarlyLoad.dll
 bool __declspec(dllimport) EarlyInstallSucceeded();
@@ -253,7 +253,12 @@ int StartUp(int argc, char** argv)
     InstallStartHook();
     // Initialize all hooks before calling game init
     // TiltedPhoques::Initializer::RunAll();
-    RunTiltedInit(LC->gamePath, LC->Version);
+    if (!RunTiltedInit(LC->gamePath, LC->Version))
+    {
+        SetLastError(ERROR_DLL_INIT_FAILED);
+        Die(L"SkyrimTogetherVR could not install its VR hook set. Check tp_client.log for MinHook failures.", true);
+        return 4;
+    }
 
 #if TP_SKYRIM_VR
     // SKSEVR's official loader uses a separate injection thread before the

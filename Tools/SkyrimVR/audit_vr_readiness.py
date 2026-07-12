@@ -20,6 +20,7 @@ SOURCE_AUDITS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ESP/Papyrus/behavior files", ("Tools/SkyrimVR/audit_gamefiles.py",)),
     ("Smoke package source manifest", ("Tools/SkyrimVR/audit_smoke_package.py", "--require-installed-prerequisites")),
     ("Built package audit self-test", ("Tools/SkyrimVR/audit_built_package.py", "--self-test")),
+    ("Crash diagnostics", ("Tools/SkyrimVR/audit_crash_diagnostics.py",)),
     ("Built package installer self-test", ("Tools/SkyrimVR/install_built_package.py", "--self-test")),
     ("Bring-up hook guard", ("Tools/SkyrimVR/audit_bringup_hooks.py",)),
     ("VRIK IK lane", ("Tools/SkyrimVR/audit_vrik_ik.py",)),

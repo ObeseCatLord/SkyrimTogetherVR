@@ -22,6 +22,8 @@ param(
 
     [switch]$NoPackage,
 
+    [switch]$AllowDirtySource,
+
     [switch]$SkipGameFiles,
 
     [switch]$SkipCompanionPanel,
@@ -100,6 +102,103 @@ function Copy-MatchingArtifact {
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -Force -LiteralPath $File.FullName -Destination $Destination
+}
+
+function Get-SourceTreeSha256 {
+    $temporaryPath = [System.IO.Path]::GetTempFileName()
+    $excludedDirectoryNames = @(".git", ".xmake", "artifacts", "build", "node_modules")
+    try {
+        $manifestStream = [System.IO.File]::Open($temporaryPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $sourceFiles = @(
+                Get-ChildItem -LiteralPath $RepoRoot -Recurse -Force -File | Where-Object {
+                    $relativePath = $_.FullName.Substring($RepoRoot.Length).TrimStart([char[]]@('\', '/'))
+                    $pathSegments = $relativePath -split '[\\/]'
+                    -not ($pathSegments | Where-Object { $excludedDirectoryNames -contains $_ })
+                } | Sort-Object FullName
+            )
+            foreach ($sourceFile in $sourceFiles) {
+                $relativePath = $sourceFile.FullName.Substring($RepoRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+                $pathBytes = [System.Text.Encoding]::UTF8.GetBytes($relativePath + "`0")
+                $manifestStream.Write($pathBytes, 0, $pathBytes.Length)
+
+                $sourceStream = [System.IO.File]::OpenRead($sourceFile.FullName)
+                try {
+                    $sourceStream.CopyTo($manifestStream)
+                }
+                finally {
+                    $sourceStream.Dispose()
+                }
+
+                $separator = [byte[]]@(0)
+                $manifestStream.Write($separator, 0, $separator.Length)
+            }
+        }
+        finally {
+            $manifestStream.Dispose()
+        }
+
+        return (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    finally {
+        Remove-Item -Force -LiteralPath $temporaryPath -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-SourceProvenance {
+    $gitCommand = Get-Command "git" -ErrorAction SilentlyContinue
+    if ($null -eq $gitCommand) {
+        throw "Git is required to package SkyrimTogetherVR so the build manifest has an immutable source revision."
+    }
+
+    $revision = & $gitCommand.Source -C $RepoRoot rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($revision)) {
+        throw "Could not resolve the Git HEAD revision for the SkyrimTogetherVR build manifest."
+    }
+
+    $revision = $revision.Trim()
+    if ($revision -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Git returned an invalid HEAD revision for the SkyrimTogetherVR build manifest: $revision"
+    }
+
+    $status = & $gitCommand.Source -C $RepoRoot status --porcelain=v1 --untracked-files=all 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not determine whether the SkyrimTogetherVR source tree is clean."
+    }
+    $isDirty = @($status).Count -gt 0
+    if ($isDirty -and -not $AllowDirtySource) {
+        throw "The SkyrimTogetherVR source tree is dirty. Commit or stash the changes, or pass -AllowDirtySource to create an explicitly marked developer package."
+    }
+
+    $sourceTreeSha256 = Get-SourceTreeSha256
+    $sourceRevision = if ($isDirty) { "$revision-dirty-$sourceTreeSha256" } else { $revision }
+    return [ordered]@{
+        revision = $revision
+        sourceTreeSha256 = $sourceTreeSha256
+        dirty = [bool]$isDirty
+        dirtyApproved = [bool]($isDirty -and $AllowDirtySource)
+        sourceRevision = $sourceRevision
+    }
+}
+
+function Get-PackageFileSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ManifestPath
+    )
+
+    $manifestFullPath = [System.IO.Path]::GetFullPath($ManifestPath)
+    $packageFileSha256 = [ordered]@{}
+    Get-ChildItem -LiteralPath $PackageDirectory -Recurse -Force -File | Sort-Object FullName | ForEach-Object {
+        if ([System.IO.Path]::GetFullPath($_.FullName) -ne $manifestFullPath) {
+            $relativePath = $_.FullName.Substring($PackageDirectory.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+            $packageFileSha256[$relativePath] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+    return $packageFileSha256
 }
 
 function Resolve-CefRuntimeDirectory {
@@ -806,9 +905,26 @@ if (-not $NoPackage) {
         Write-Host "Copied complete CEF $CefRuntimeVersion runtime ($($cefRuntimeFiles.Count) files) to $packageDir"
     }
 
+    $artifactSha256 = [ordered]@{}
+    foreach ($artifactName in @($copied | Sort-Object -Unique)) {
+        if ($artifactName -like "SkyrimTogetherVR*Bridge.*") {
+            $artifactPath = Join-Path $packageDir (Join-Path "Data\SKSE\Plugins" $artifactName)
+        }
+        else {
+            $artifactPath = Join-Path $packageDir $artifactName
+        }
+        if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+            throw "Cannot hash copied artifact because it is missing from the package: $artifactPath"
+        }
+        $artifactSha256[$artifactName] = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
     $packageSnapshotDir = Join-Path $RepoRoot (Join-Path $PackageRoot (Join-Path "packages" $packageFlavor))
+    $manifestPath = Join-Path $packageDir "SkyrimTogetherVR_BuildManifest.json"
+    $sourceProvenance = Get-SourceProvenance
+    $packageFileSha256 = Get-PackageFileSha256 -PackageDirectory $packageDir -ManifestPath $manifestPath
     $packageManifest = [ordered]@{
-        schema = "skyrim_together_vr_build_package_v1"
+        schema = "skyrim_together_vr_build_package_v2"
         mode = $Mode
         platform = "windows"
         arch = "x64"
@@ -818,6 +934,10 @@ if (-not $NoPackage) {
         targets = @($Targets)
         copiedArtifacts = @($copied | Sort-Object -Unique)
         expectedArtifacts = @($expectedArtifactNames | Sort-Object -Unique)
+        artifactSha256 = $artifactSha256
+        packageFileSha256 = $packageFileSha256
+        sourceRevision = $sourceProvenance["sourceRevision"]
+        sourceProvenance = $sourceProvenance
         packageRoot = $packageDir
         packageSnapshotRoot = $packageSnapshotDir
         stagedGameFiles = [bool](-not $SkipGameFiles)
@@ -827,7 +947,6 @@ if (-not $NoPackage) {
         cefRuntime = $cefRuntimeManifest
         generatedAtUtc = [DateTime]::UtcNow.ToString("o")
     }
-    $manifestPath = Join-Path $packageDir "SkyrimTogetherVR_BuildManifest.json"
     $manifestJson = $packageManifest | ConvertTo-Json -Depth 5
     $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
     [System.IO.File]::WriteAllText($manifestPath, $manifestJson + [Environment]::NewLine, $utf8NoBom)

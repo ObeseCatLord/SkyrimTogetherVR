@@ -1,6 +1,7 @@
 [submodule "Libraries/TiltedReverse"]
 	path = Libraries/TiltedReverse
-	url = https://github.com/TiltedPhoques/TiltedReverse
+	url = https://github.com/ObeseCatLord/TiltedReverse.git
+	branch = stvr-vr-port
 [submodule "Libraries/TiltedUI"]
 	path = Libraries/TiltedUI
 	url = https://github.com/TiltedPhoques/TiltedUI

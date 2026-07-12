@@ -117,7 +117,7 @@ SCRIPT_TOKENS = (
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
     '$_ -split ","',
-    'schema = "skyrim_together_vr_build_package_v1"',
+    'schema = "skyrim_together_vr_build_package_v2"',
     "avatarSync = [bool]$avatarSyncPackage",
     "gameplay = [bool]$gameplayPackage",
     "papyrusCompiled = [bool]$CompilePapyrus",

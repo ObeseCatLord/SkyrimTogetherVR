@@ -95,25 +95,19 @@ static void ShowAddressLibraryError(const wchar_t* apGamePath)
     exit(4);
 }
 
-void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVersion)
+bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVersion)
 {
     if (!VersionDb::Get().Load(acGamePath, aExeVersion))
     {
         ShowAddressLibraryError(acGamePath.c_str());
     }
 
-    spdlog::info(
-        "Loaded Skyrim address data for runtime {} with {} entries",
-        VersionDb::Get().GetLoadedVersionString(),
-        VersionDb::Get().GetOffsetMap().size());
+    spdlog::info("Loaded Skyrim address data for runtime {} with {} entries", VersionDb::Get().GetLoadedVersionString(), VersionDb::Get().GetOffsetMap().size());
 
 #if TP_SKYRIM_VR
     spdlog::info(
-        "SkyrimTogetherVR runtime flags: connectionOnly={}, bringupHooks={}, unvalidatedHooks={}, validatedInlinePatches={}",
-        TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY,
-        TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS,
-        TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS,
-        TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES);
+        "SkyrimTogetherVR runtime flags: connectionOnly={}, bringupHooks={}, unvalidatedHooks={}, validatedInlinePatches={}", TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY,
+        TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS, TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS, TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES);
 #endif
 
     // VersionDb::Get().DumpToTextFile(R"(S:\Work\Tilted\fallout\_addresslib.txt)");
@@ -121,8 +115,7 @@ void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     g_appInstance = std::make_unique<TiltedOnlineApp>();
 
 #if TP_SKYRIM_VR
-    const auto vrCompatibilityStatus =
-        BuildVRCompatibilityStatus(acGamePath, stubs::g_IsHiggsActive, stubs::g_IsPlanckActive);
+    const auto vrCompatibilityStatus = BuildVRCompatibilityStatus(acGamePath, stubs::g_IsHiggsActive, stubs::g_IsPlanckActive);
     WriteVRCompatibilityStatusFile(acGamePath, vrCompatibilityStatus);
 
     if (vrCompatibilityStatus.HiggsInstalled)
@@ -149,7 +142,21 @@ void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     TiltedOnlineApp::InstallHooks2();
 #endif
 
-    TP_HOOK_COMMIT;
+    const auto hookSummary = TiltedPhoques::FunctionHookManager::GetInstance().InstallDelayedHooks();
+#if TP_SKYRIM_VR
+    if (hookSummary.Failures != 0)
+    {
+        spdlog::critical(
+            "SkyrimTogetherVR refused to enter Skyrim VR after {} MinHook failure(s): delayed {}/{}, immediate {}/{}.", hookSummary.Failures, hookSummary.DelayedInstalled,
+            hookSummary.DelayedAttempted, hookSummary.ImmediateInstalled, hookSummary.ImmediateAttempted);
+        return false;
+    }
+
+    spdlog::info(
+        "SkyrimTogetherVR pre-entry hook install verified: delayed {}/{}, immediate {}/{}.", hookSummary.DelayedInstalled, hookSummary.DelayedAttempted, hookSummary.ImmediateInstalled,
+        hookSummary.ImmediateAttempted);
+#endif
+    return true;
 }
 
 void RunTiltedApp()
