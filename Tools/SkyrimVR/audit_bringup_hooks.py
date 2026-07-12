@@ -98,6 +98,9 @@ REQUIRED_TOKENS = {
     "Code/client/SkyrimVM64.cpp": (
         "Installing SkyrimTogetherVR VM/main-loop bring-up hooks: vmUpdate={}, mainLoop={}, vmDestructor={}",
         "SkyrimTogetherVR main-loop hook reached",
+        "SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}",
+        "s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed)",
+        "callCount <= 2 || callCount % 300 == 0",
         "SkyrimTogetherVR VM update hook reached; ticking World::Update",
         "SkyrimTogetherVR VM destructor hook reached",
         "SkyrimTogetherVR pose nodes: hmd={:x}, left={:x}, right={:x}, spellOrigin={:x}, arrowOrigin={:x}, leftWeapon={:x}, rightWeapon={:x}",

@@ -1,6 +1,8 @@
 #include <TiltedOnlinePCH.h>
 #include "TiltedOnlineApp.h"
 
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <VR/VRPlayerPose.h>
 
@@ -40,6 +42,8 @@ static std::once_flag s_vmUpdateLogOnce;
 static std::once_flag s_mainLoopLogOnce;
 static std::once_flag s_vmDestructorLogOnce;
 static std::once_flag s_vrPoseLogOnce;
+static std::atomic_uint64_t s_mainLoopCallCount{0};
+static const auto s_mainLoopStartTime = std::chrono::steady_clock::now();
 #endif
 
 int TP_MAKE_THISCALL(HookVMUpdate, VMContext, float a2)
@@ -86,6 +90,13 @@ int TP_MAKE_THISCALL(HookVMUpdate, VMContext, float a2)
 short TP_MAKE_THISCALL(HookMainLoop, Main)
 {
 #if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
+    const auto callCount = s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (callCount <= 2 || callCount % 300 == 0)
+    {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_mainLoopStartTime).count();
+        spdlog::info("SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}", callCount, elapsedMs, GetCurrentThreadId());
+    }
+
     std::call_once(
         s_mainLoopLogOnce,
         []()
