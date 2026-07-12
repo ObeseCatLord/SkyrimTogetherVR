@@ -60,6 +60,17 @@ def main() -> int:
     failures.extend(
         require_tokens(
             root,
+            root / "Code" / "client" / "Games" / "Misc" / "BSScript.cpp",
+            (
+                "#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR",
+                "SkyrimTogetherVR VR Papyrus native registration bypassed; using the original engine binder",
+                "SkyrimTogetherVR VR Papyrus original binder completed",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
             root / "Code" / "immersive_launcher" / "Launcher.cpp",
             (
                 "if (!RunTiltedInit(LC->gamePath, LC->Version))",

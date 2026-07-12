@@ -300,7 +300,7 @@ REQUIRED_SAVELOAD_OBSERVER_TOKENS = (
     "playerCell.serverModId",
     "playerWorldSpace.serverModId",
     "IsVrPlayerReadyForSaveLoad",
-    "PlayerCharacter::Get",
+    "SkyrimTogetherVR::TryGetReadablePlayerForVR",
 )
 
 FORBIDDEN_SAVELOAD_OBSERVER_TOKENS = (
@@ -3971,6 +3971,29 @@ def audit_forbidden_token_map(root: pathlib.Path, forbidden_tokens: dict[str, tu
     return forbidden
 
 
+def audit_vr_papyrus_native_bypass(root: pathlib.Path) -> list[str]:
+    path = root / "Code/client/Games/Misc/BSScript.cpp"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    required_tokens = (
+        "#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR",
+        "SkyrimTogetherVR VR Papyrus native registration bypassed; using the original engine binder",
+        "TiltedPhoques::ThisCall(RealBindEverythingToScript, apThis);",
+        "SkyrimTogetherVR VR Papyrus original binder completed",
+    )
+    missing = missing_tokens(text, required_tokens)
+    first_native = text.find("new BSScript::IsRemotePlayerFunc")
+    guard = text.find("#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR")
+    completed = text.find("SkyrimTogetherVR VR Papyrus original binder completed")
+    guard_return = text.find("return;", completed) if completed >= 0 else -1
+
+    if guard >= 0 and first_native >= 0 and guard >= first_native:
+        missing.append("VR Papyrus bypass must precede the first custom NativeFunction")
+    if completed >= 0 and first_native >= 0 and (guard_return < 0 or guard_return >= first_native):
+        missing.append("VR Papyrus bypass must return before the first custom NativeFunction")
+
+    return missing
+
+
 def fmt_token_map(tokens_by_file: dict[str, list[str]]) -> str:
     if not tokens_by_file:
         return "None.\n"
@@ -4052,6 +4075,7 @@ def main() -> int:
     missing_saveload = missing_tokens(saveload_text, REQUIRED_SAVELOAD_OBSERVER_TOKENS)
     forbidden_saveload = present_tokens(saveload_text, FORBIDDEN_SAVELOAD_OBSERVER_TOKENS)
     missing_layout, forbidden_layout = audit_layout_tokens(root)
+    missing_vr_papyrus_bypass = audit_vr_papyrus_native_bypass(root)
     missing_vr_commonlib_accessors = audit_required_token_map(root, REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS)
     forbidden_vr_raw_members = audit_forbidden_token_map(root, FORBIDDEN_VR_RAW_MEMBER_TOKENS)
     missing_movement_relay = audit_required_token_map(root, REQUIRED_MOVEMENT_RELAY_TOKENS)
@@ -4144,6 +4168,7 @@ def main() -> int:
         handle.write(f"- `VRSaveLoadService.cpp` forbidden save/load mutation tokens present: {len(forbidden_saveload)}\n")
         handle.write(f"- CommonLib-informed layout/accessor tokens missing: {missing_layout_count}\n")
         handle.write(f"- Forbidden stale layout tokens present: {forbidden_layout_count}\n")
+        handle.write(f"- VR Papyrus native bypass requirements missing: {len(missing_vr_papyrus_bypass)}\n")
         handle.write(f"- VR CommonLib accessor use tokens missing: {missing_vr_commonlib_accessor_count}\n")
         handle.write(f"- Forbidden raw VR game-object member reads present: {forbidden_vr_raw_member_count}\n")
         handle.write(f"- `VRMovementService.h` exists: {'yes' if movement_header_path.exists() else 'no'}\n")
@@ -4259,6 +4284,8 @@ def main() -> int:
         handle.write(fmt_token_map(missing_layout))
         handle.write("\n## Forbidden Stale Layout Tokens\n\n")
         handle.write(fmt_token_map(forbidden_layout))
+        handle.write("\n## Missing VR Papyrus Native Bypass Requirements\n\n")
+        handle.write(fmt_tokens(missing_vr_papyrus_bypass))
         handle.write("\n## Missing VR CommonLib Accessor Use Tokens\n\n")
         handle.write(fmt_token_map(missing_vr_commonlib_accessors))
         handle.write("\n## Forbidden Raw VR Game-Object Member Reads\n\n")
@@ -4312,6 +4339,7 @@ def main() -> int:
     print(f"Forbidden VRSaveLoadService save/load mutation tokens: {len(forbidden_saveload)}")
     print(f"Missing CommonLib-informed layout/accessor tokens: {missing_layout_count}")
     print(f"Forbidden stale layout tokens: {forbidden_layout_count}")
+    print(f"Missing VR Papyrus native bypass requirements: {len(missing_vr_papyrus_bypass)}")
     print(f"Missing VR CommonLib accessor use tokens: {missing_vr_commonlib_accessor_count}")
     print(f"Forbidden raw VR game-object member reads: {forbidden_vr_raw_member_count}")
     print(f"VRMovementService.h exists: {movement_header_path.exists()}")
@@ -4380,6 +4408,7 @@ def main() -> int:
         or missing_grab_relay
         or missing_layout
         or forbidden_layout
+        or missing_vr_papyrus_bypass
         or missing_vr_commonlib_accessors
         or forbidden_vr_raw_members
         or not movement_header_path.exists()

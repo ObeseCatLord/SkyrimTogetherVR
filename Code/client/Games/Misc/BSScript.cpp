@@ -66,6 +66,14 @@ void TP_MAKE_THISCALL(HookBindEverythingToScript, BSScript::IVirtualMachine*)
         return;
     }
 
+#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR
+    // The custom NativeFunction constructor ABI has not been validated for Skyrim VR.
+    spdlog::info("SkyrimTogetherVR VR Papyrus native registration bypassed; using the original engine binder");
+    TiltedPhoques::ThisCall(RealBindEverythingToScript, apThis);
+    spdlog::info("SkyrimTogetherVR VR Papyrus original binder completed");
+    return;
+#endif
+
     BindSkyrimTogetherNative(pVm, new BSScript::IsRemotePlayerFunc("IsRemotePlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsRemotePlayer, BSScript::Variable::kBoolean));
     BindSkyrimTogetherNative(pVm, new BSScript::IsPlayerFunc("IsPlayer", "SkyrimTogetherUtils", PapyrusFunctions::IsPlayer, BSScript::Variable::kBoolean));
     BindSkyrimTogetherNative(
