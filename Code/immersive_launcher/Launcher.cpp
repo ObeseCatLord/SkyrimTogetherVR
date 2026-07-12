@@ -5,6 +5,7 @@
 
 #include "loader/ExeLoader.h"
 #include "loader/PathRerouting.h"
+#include "stubs/LoaderTrace.h"
 
 #include "Utils/Error.h"
 #include "Utils/FileVersion.inl"
@@ -93,6 +94,7 @@ bool BootstrapScriptExtenderOnLoaderThread()
     if (result.wait_for(kScriptExtenderBootstrapTimeout) != std::future_status::ready)
     {
         spdlog::critical("SkyrimTogetherVR SKSEVR bootstrap helper timed out after {} seconds", kScriptExtenderBootstrapTimeout.count());
+        stubs::FlushLdrLoadTrace();
         bootstrapThread.detach();
         spdlog::default_logger_raw()->flush();
         TerminateProcess(GetCurrentProcess(), 5);

@@ -4,10 +4,18 @@
 #include <MinHook.h>
 #include <winternl.h>
 
+#include <intrin.h>
+
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <cstdint>
+
 #include <FunctionHook.hpp>
 #include <TiltedCore/Initializer.hpp>
 
 #include "DllBlocklist.h"
+#include "LoaderTrace.h"
 #include "TargetConfig.h"
 #include "Utils/NtInternal.h"
 #include "utils/Error.h"
@@ -32,6 +40,140 @@ NTSTATUS(WINAPI* RealLdrGetDllHandle)(PWSTR, PULONG, PUNICODE_STRING, PVOID*) = 
 NTSTATUS(WINAPI* RealLdrGetDllFullName)(HMODULE, PUNICODE_STRING) = nullptr;
 NTSTATUS(WINAPI* RealLdrGetDllHandleEx)
 (ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, UNICODE_STRING* DllName, PVOID* DllHandle) = nullptr;
+
+#if TP_SKYRIM_VR
+constexpr size_t kLdrLoadTraceCapacity = 256;
+constexpr size_t kLdrLoadTraceThreadCapacity = 32;
+constexpr size_t kLdrLoadTraceNameCapacity = 160;
+
+enum LdrLoadTracePhase : LONG
+{
+    kLdrLoadTraceUnused,
+    kLdrLoadTraceWriting,
+    kLdrLoadTraceEntered,
+    kLdrLoadTraceReturned,
+};
+
+struct LdrLoadTraceEntry
+{
+    volatile LONG sequence = -1;
+    volatile LONG phase = kLdrLoadTraceUnused;
+    DWORD threadId = 0;
+    DWORD depth = 0;
+    volatile LONG64 callSite = 0;
+    volatile LONG64 startTick = 0;
+    volatile LONG64 endTick = 0;
+    volatile LONG status = 0;
+    USHORT nameLength = 0;
+    wchar_t name[kLdrLoadTraceNameCapacity]{};
+};
+
+struct LdrLoadTraceThreadState
+{
+    volatile LONG threadId = 0;
+    volatile LONG depth = 0;
+};
+
+struct LdrLoadTraceScope
+{
+    LdrLoadTraceEntry* entry = nullptr;
+    LdrLoadTraceThreadState* threadState = nullptr;
+};
+
+LdrLoadTraceEntry s_ldrLoadTrace[kLdrLoadTraceCapacity];
+LdrLoadTraceThreadState s_ldrLoadTraceThreads[kLdrLoadTraceThreadCapacity];
+volatile LONG s_ldrLoadTraceSequence = 0;
+volatile LONG s_ldrLoadTraceThreadSlotOverflow = 0;
+
+LdrLoadTraceThreadState* FindLdrLoadTraceThreadState(DWORD aThreadId) noexcept
+{
+    const auto threadId = static_cast<LONG>(aThreadId);
+    for (auto& state : s_ldrLoadTraceThreads)
+    {
+        const auto observedThreadId = InterlockedCompareExchange(&state.threadId, threadId, 0);
+        if (observedThreadId == 0 || observedThreadId == threadId)
+            return &state;
+    }
+
+    return nullptr;
+}
+
+LdrLoadTraceScope BeginLdrLoadTrace(const UNICODE_STRING* apFileName) noexcept
+{
+    const auto sequence = InterlockedIncrement(&s_ldrLoadTraceSequence) - 1;
+    auto& entry = s_ldrLoadTrace[static_cast<size_t>(sequence) % kLdrLoadTraceCapacity];
+
+    InterlockedExchange(&entry.phase, kLdrLoadTraceWriting);
+    InterlockedExchange(&entry.sequence, sequence);
+
+    const auto threadId = GetCurrentThreadId();
+    auto* threadState = FindLdrLoadTraceThreadState(threadId);
+    if (!threadState)
+        InterlockedIncrement(&s_ldrLoadTraceThreadSlotOverflow);
+    const auto depth = threadState ? static_cast<DWORD>(InterlockedIncrement(&threadState->depth)) : 0;
+
+    entry.threadId = threadId;
+    entry.depth = depth;
+    InterlockedExchange64(&entry.callSite, static_cast<LONG64>(reinterpret_cast<uintptr_t>(_ReturnAddress())));
+    InterlockedExchange64(&entry.startTick, static_cast<LONG64>(GetTickCount64()));
+    InterlockedExchange64(&entry.endTick, 0);
+    InterlockedExchange(&entry.status, static_cast<LONG>(0x00000103L)); // STATUS_PENDING
+
+    const auto sourceLength = apFileName && apFileName->Buffer ? apFileName->Length / sizeof(wchar_t) : 0;
+    const auto nameLength = static_cast<USHORT>(std::min<size_t>(sourceLength, kLdrLoadTraceNameCapacity - 1));
+    for (USHORT index = 0; index < nameLength; ++index)
+        entry.name[index] = apFileName->Buffer[index];
+    entry.name[nameLength] = L'\0';
+    entry.nameLength = nameLength;
+
+    MemoryBarrier();
+    InterlockedExchange(&entry.phase, kLdrLoadTraceEntered);
+
+    LdrLoadTraceScope scope{};
+    scope.entry = &entry;
+    scope.threadState = threadState;
+    return scope;
+}
+
+void CompleteLdrLoadTrace(const LdrLoadTraceScope& acScope, NTSTATUS aStatus) noexcept
+{
+    if (!acScope.entry)
+        return;
+
+    InterlockedExchange(&acScope.entry->status, static_cast<LONG>(aStatus));
+    InterlockedExchange64(&acScope.entry->endTick, static_cast<LONG64>(GetTickCount64()));
+    MemoryBarrier();
+    InterlockedExchange(&acScope.entry->phase, kLdrLoadTraceReturned);
+
+    if (acScope.threadState)
+        InterlockedDecrement(&acScope.threadState->depth);
+}
+
+void CopyTraceModuleName(const LdrLoadTraceEntry& acEntry, char* apOutput, size_t aOutputSize) noexcept
+{
+    if (aOutputSize == 0)
+        return;
+
+    const auto length = WideCharToMultiByte(CP_UTF8, 0, acEntry.name, acEntry.nameLength, apOutput, static_cast<int>(aOutputSize - 1), nullptr, nullptr);
+    if (length <= 0)
+    {
+        apOutput[0] = '\0';
+        return;
+    }
+
+    apOutput[length] = '\0';
+}
+
+const char* GetLdrLoadTracePhaseName(LONG aPhase) noexcept
+{
+    switch (aPhase)
+    {
+    case kLdrLoadTraceEntered: return "pending";
+    case kLdrLoadTraceReturned: return "returned";
+    default: return "unstable";
+    }
+}
+#endif
 
 inline bool IsUsingMO2()
 {
@@ -225,6 +367,10 @@ NTSTATUS WINAPI TP_LdrLoadDll(const wchar_t* apPath, uint32_t* apFlags, UNICODE_
 {
     TP_EMPTY_HOOK_PLACEHOLDER;
 
+#if TP_SKYRIM_VR
+    const auto traceScope = BeginLdrLoadTrace(apFileName);
+#endif
+
     std::wstring_view fileName(apFileName->Buffer, apFileName->Length / sizeof(wchar_t));
     const size_t pos = fileName.find_last_of(L"\\/");
     const std::wstring_view name = pos != std::wstring_view::npos ? fileName.substr(pos + 1) : fileName;
@@ -243,13 +389,66 @@ NTSTATUS WINAPI TP_LdrLoadDll(const wchar_t* apPath, uint32_t* apFlags, UNICODE_
         {
             // invalid image hash
             // this signals windows to *NOT TRY* loading it again at a later time.
+#if TP_SKYRIM_VR
+            CompleteLdrLoadTrace(traceScope, static_cast<NTSTATUS>(0xC0000428L));
+#endif
             return 0xC0000428;
         }
     }
 
-    return RealLdrLoadDll(apPath, apFlags, apFileName, apHandle);
+    const auto result = RealLdrLoadDll(apPath, apFlags, apFileName, apHandle);
+#if TP_SKYRIM_VR
+    CompleteLdrLoadTrace(traceScope, result);
+#endif
+    return result;
 }
 } // namespace
+
+#if TP_SKYRIM_VR
+void stubs::FlushLdrLoadTrace()
+{
+    const auto nextSequence = InterlockedCompareExchange(&s_ldrLoadTraceSequence, 0, 0);
+    if (nextSequence <= 0)
+    {
+        spdlog::critical("SkyrimTogetherVR LdrLoadDll trace is empty");
+        return;
+    }
+
+    const auto firstSequence = nextSequence > static_cast<LONG>(kLdrLoadTraceCapacity) ? nextSequence - static_cast<LONG>(kLdrLoadTraceCapacity) : 0;
+    if (firstSequence != 0)
+        spdlog::critical("SkyrimTogetherVR LdrLoadDll trace retained the most recent {} requests", kLdrLoadTraceCapacity);
+
+    const auto threadSlotOverflow = InterlockedCompareExchange(&s_ldrLoadTraceThreadSlotOverflow, 0, 0);
+    if (threadSlotOverflow != 0)
+        spdlog::critical("SkyrimTogetherVR LdrLoadDll trace could not assign a depth slot for {} requests", threadSlotOverflow);
+
+    const auto now = static_cast<LONG64>(GetTickCount64());
+    for (LONG sequence = firstSequence; sequence < nextSequence; ++sequence)
+    {
+        auto& entry = s_ldrLoadTrace[static_cast<size_t>(sequence) % kLdrLoadTraceCapacity];
+        if (InterlockedCompareExchange(&entry.sequence, 0, 0) != sequence)
+            continue;
+
+        const auto phase = InterlockedCompareExchange(&entry.phase, 0, 0);
+        if (phase != kLdrLoadTraceEntered && phase != kLdrLoadTraceReturned)
+            continue;
+
+        char moduleName[kLdrLoadTraceNameCapacity * 4]{};
+        CopyTraceModuleName(entry, moduleName, sizeof(moduleName));
+
+        const auto startTick = InterlockedCompareExchange64(&entry.startTick, 0, 0);
+        const auto endTick = phase == kLdrLoadTraceReturned ? InterlockedCompareExchange64(&entry.endTick, 0, 0) : now;
+        const auto elapsed = endTick >= startTick ? endTick - startTick : 0;
+        const auto status = static_cast<uint32_t>(InterlockedCompareExchange(&entry.status, 0, 0));
+        const auto callSite = static_cast<uint64_t>(InterlockedCompareExchange64(&entry.callSite, 0, 0));
+
+        spdlog::critical(
+            "SkyrimTogetherVR LdrLoadDll trace: sequence={} thread={} depth={} phase={} status=0x{:08X} elapsedMs={} "
+            "callsite=0x{:016X} module={}",
+            sequence, entry.threadId, entry.depth, GetLdrLoadTracePhaseName(phase), status, elapsed, callSite, moduleName[0] ? moduleName : "<unnamed>");
+    }
+}
+#endif
 
 #define VALIDATE(x) \
     if (x != MH_OK) \
