@@ -13,7 +13,6 @@ namespace
 
 constexpr wchar_t kScriptExtenderName[] = L"sksevr";
 // SKSEVR 2.0.12 is the runtime 1.4.15 release used by Skyrim VR.
-constexpr int kSKSEMinBuild = 2001200;
 constexpr const char* kUnsupportedScriptExtenderMessage = "SKSEVR 2.0.12 or newer is required";
 constexpr wchar_t kGamePathEnvironmentVariable[] = L"STVR_GAME_PATH";
 
@@ -24,6 +23,19 @@ struct FileVersion
     static constexpr uint8_t scVersionSize = 4;
     DWORD versions[scVersionSize];
 };
+
+bool IsSkseVrVersionAtLeast2012(const FileVersion& acVersion) noexcept
+{
+    // SKSEVR 2.0.12 is stored in the PE resource as 0.2.0.12.
+    constexpr DWORD kMinimumVersion[FileVersion::scVersionSize]{0, 2, 0, 12};
+    for (uint8_t i = 0; i < FileVersion::scVersionSize; ++i)
+    {
+        if (acVersion.versions[i] != kMinimumVersion[i])
+            return acVersion.versions[i] > kMinimumVersion[i];
+    }
+
+    return true;
+}
 
 int GetFileVersion(const std::filesystem::path& acFilePath, FileVersion& aVersion)
 {
@@ -46,7 +58,7 @@ int GetFileVersion(const std::filesystem::path& acFilePath, FileVersion& aVersio
         return 3;
     }
 
-    aVersion.versions[0] = pvi->dwProductVersionMS >> 16;
+    aVersion.versions[0] = pvi->dwFileVersionMS >> 16;
     aVersion.versions[1] = pvi->dwFileVersionMS & 0xFFFF;
     aVersion.versions[2] = pvi->dwFileVersionLS >> 16;
     aVersion.versions[3] = pvi->dwFileVersionLS & 0xFFFF;
@@ -111,8 +123,7 @@ ScriptExtenderLoadResult LoadScriptExender()
         spdlog::warn("Unable to verify SKSEVR version resource for {}; using the runtime-pinned module name", path.string());
     }
 
-    const int skseVersion = fileVersion.versions[0] * 1000000 + fileVersion.versions[1] * 10000 + fileVersion.versions[2] * 100 + fileVersion.versions[3];
-    if (versionVerified && skseVersion < kSKSEMinBuild)
+    if (versionVerified && !IsSkseVrVersionAtLeast2012(fileVersion))
     {
         spdlog::error(kUnsupportedScriptExtenderMessage);
         return ScriptExtenderLoadResult::kVersionUnsupported;

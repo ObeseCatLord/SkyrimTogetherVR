@@ -42,6 +42,8 @@ REQUIRED_TOKENS = {
         'L"sksevr"',
         'L"STVR_GAME_PATH"',
         "SKSEVR 2.0.12 or newer is required",
+        "IsSkseVrVersionAtLeast2012",
+        "0, 2, 0, 12",
         "GetModuleHandleW(moduleName.c_str())",
         "operational initialization requires runtime verification",
     ),
