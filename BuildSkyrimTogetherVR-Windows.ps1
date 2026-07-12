@@ -363,20 +363,25 @@ function Resolve-SkseVrSdk {
         throw "SKSEVR SDK checksum mismatch for $archivePath. Expected $expectedSha256, got $actualSha256."
     }
 
-    $sevenZipCandidates = @(
+    $sevenZipCandidates = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($candidate in @(
         (Get-Command "7z.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command "7zz.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         "C:\Program Files\7-Zip\7z.exe",
         (Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"),
         (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
-    $sevenZip = @($sevenZipCandidates | Select-Object -First 1)
-    if ($sevenZip.Count -eq 0) {
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            [void]$sevenZipCandidates.Add($candidate)
+        }
+    }
+    if ($sevenZipCandidates.Count -eq 0) {
         throw "The SKSEVR SDK is not extracted and 7-Zip was not found. Install 7-Zip, set SKSEVR_SDK_ROOT to an extracted official sksevr_2_00_12 SDK, or rerun the build."
     }
+    $sevenZip = $sevenZipCandidates[0]
 
     Write-Host "Extracting the verified SKSEVR SDK to $sdkCache"
-    & $sevenZip[0] x -y -aoa "-o$sdkCache" $archivePath
+    & $sevenZip x -y -aoa "-o$sdkCache" $archivePath
     if ($LASTEXITCODE -ne 0) {
         throw "7-Zip failed while extracting the SKSEVR SDK."
     }
