@@ -15,11 +15,12 @@ if not errorlevel 1 exit /b 0
 
 set "VSWHERE_DIR=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 if not exist "%VSWHERE_DIR%\vswhere.exe" set "VSWHERE_DIR=%ProgramFiles%\Microsoft Visual Studio\Installer"
-if not exist "%VSWHERE_DIR%\vswhere.exe" (
-    echo MSVC cl.exe was not found in PATH and vswhere.exe was not found.
-    echo If xmake cannot find MSVC automatically, rerun this from the x64 Native Tools Command Prompt for Visual Studio.
-    exit /b 0
-)
+if exist "%VSWHERE_DIR%\vswhere.exe" goto vswhere_ready
+echo MSVC cl.exe was not found in PATH and vswhere.exe was not found.
+echo If xmake cannot find MSVC automatically, rerun this from the x64 Native Tools Command Prompt for Visual Studio.
+exit /b 0
+
+:vswhere_ready
 
 set "VSROOT="
 set "VSWHERE_RESULT=%TEMP%\stvr-vswhere-%RANDOM%-%RANDOM%.txt"
@@ -38,11 +39,12 @@ if not defined VSROOT (
 )
 
 set "VSDEVCMD=%VSROOT%\Common7\Tools\VsDevCmd.bat"
-if not exist "%VSDEVCMD%" (
-    echo Expected Visual Studio developer command script was not found:
-    echo   %VSDEVCMD%
-    exit /b 1
-)
+if exist "%VSDEVCMD%" goto vsdevcmd_ready
+echo Expected Visual Studio developer command script was not found:
+echo   %VSDEVCMD%
+exit /b 1
+
+:vsdevcmd_ready
 
 echo Loading Visual Studio x64 build environment:
 echo   %VSDEVCMD%
