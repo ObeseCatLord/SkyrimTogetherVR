@@ -13,18 +13,24 @@ if errorlevel 1 (
 where cl.exe >nul 2>nul
 if not errorlevel 1 exit /b 0
 
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
+set "VSWHERE_DIR=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
+if not exist "%VSWHERE_DIR%\vswhere.exe" set "VSWHERE_DIR=%ProgramFiles%\Microsoft Visual Studio\Installer"
+if not exist "%VSWHERE_DIR%\vswhere.exe" (
     echo MSVC cl.exe was not found in PATH and vswhere.exe was not found.
     echo If xmake cannot find MSVC automatically, rerun this from the x64 Native Tools Command Prompt for Visual Studio.
     exit /b 0
 )
 
 set "VSROOT="
-for /f "usebackq tokens=*" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+pushd "%VSWHERE_DIR%"
+if errorlevel 1 (
+    echo Could not enter the Visual Studio installer directory.
+    exit /b 1
+)
+for /f "usebackq tokens=*" %%I in (`vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
     set "VSROOT=%%I"
 )
+popd
 if not defined VSROOT (
     echo MSVC cl.exe was not found in PATH and vswhere did not find a Visual C++ toolset.
     echo Install Visual Studio Build Tools with the Desktop development with C++ workload.
