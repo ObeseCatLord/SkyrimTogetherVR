@@ -65,6 +65,13 @@ Stage 1 is now observation-only:
 - forward compact events/state through `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgs` for logging and remote visualization
 - do not call mutating HIGGS functions
 
+The HIGGS post-VRIK/post-HIGGS callback is not used as a generic Skyrim
+Together update driver. It is invoked inside HIGGS's player-update work, where
+draining `World::Update()` could stall or reenter HIGGS/PLANCK-sensitive game
+state. Connection-only transport ticking uses the independent
+`SkyrimTogetherVRTickBridge` SKSEVR task path, keeping the HIGGS bridge as an
+observation-only owner of HIGGS API callbacks.
+
 `SkyrimTogetherVR.higgs` includes `bridge.loaded`, `bridge.sequence`, `bridge.epoch`, `higgs.detected`, `higgs.interfaceAvailable`, `higgs.callbacksRegistered`, `higgs.snapshotAvailable`, `higgs.snapshotSequence`, `higgs.twoHanding`, left/right hand state, finger values, optional grab transforms, and a bounded `recentEvent.*` list. The companion helper reads it as the `higgs` readout and the browser panel shows a compact HIGGS status table. The main client only relays coherent fresh bridge snapshots; stale or partial files leave `SkyrimTogetherVR.higgsnet` not ready.
 
 `GetGrabbedNodeName` is intentionally not polled in this first bridge pass because `BSFixedString` lifetime handling needs to be mirrored precisely before calling a by-value string-returning HIGGS API from the standalone bridge.

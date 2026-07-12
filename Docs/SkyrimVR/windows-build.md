@@ -36,6 +36,7 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
 - `EarlyLoad.dll`
 
 The main VR client is launcher-linked as `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`.
@@ -47,7 +48,7 @@ BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat
 BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
 ```
 
-The DLL-only audit requires the three SKSEVR bridge DLLs and `EarlyLoad.dll`, verifies the generated package manifest lists only `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, and `ImmersiveElf`, and rejects stale launcher or `TPProcess.exe` artifacts. This is useful for checking the native bridge DLL build, but it is not the full installable Skyrim Together VR runtime package.
+The DLL-only audit requires the four SKSEVR bridge DLLs and `EarlyLoad.dll`, verifies the generated package manifest lists only `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, and `ImmersiveElf`, and rejects stale launcher or `TPProcess.exe` artifacts. This is useful for checking the native bridge DLL build, but it is not the full installable Skyrim Together VR runtime package.
 
 To build the explicit VRIK/HIGGS remote-avatar validation package, use:
 
@@ -61,6 +62,7 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
 - `EarlyLoad.dll`
 - `TPProcess.exe`
 
@@ -78,6 +80,7 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
 - `EarlyLoad.dll`
 - `TPProcess.exe`
 
@@ -103,7 +106,7 @@ BuildAuditCollectSkyrimTogetherVR-Windows.bat --skyrim-vr "C:\SteamLibrary\steam
 BuildAuditCollectSkyrimTogetherVR-Windows.bat --compile-papyrus --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
 ```
 
-`PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat` is the top-level handoff runner. By default it runs the default package and the explicit two-client avatar-sync package through build, package audit, build-evidence collection, and evidence-zip audit. Add `--include-gameplay`, `--include-dll-only`, or `--all` when the gameplay package or DLL-producing partial package should be checked in the same session. Use `--default-only`, `--avatar-sync-only`, `--gameplay-only`, or `--dll-only` to isolate one mode. `--preflight-only` calls the matching build wrappers with `-PreflightOnly`, so it configures/checks the Windows target graph, staged files, and packaged helper closure without compiling targets. Add `--compile-papyrus` before the forwarded PowerShell options to regenerate the VR PEX files during final package builds.
+`PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat` is the top-level handoff runner. By default it runs the default package and the explicit two-client avatar-sync package through build, package audit, build-evidence collection, and evidence-zip audit. Add `--include-gameplay`, `--include-dll-only`, or `--all` when the gameplay package or DLL-producing partial package should be checked in the same session. Use `--default-only`, `--avatar-sync-only`, `--gameplay-only`, or `--dll-only` to isolate one mode. `--preflight-only` calls the matching build wrappers with `-PreflightOnly`, so it configures/checks the Windows target graph, staged files, SKSEVR SDK resolution, Papyrus compiler inputs, and packaged helper closure without compiling targets. Normal package builds regenerate the VR PEX files automatically; `--compile-papyrus` is retained as an explicit compatibility switch.
 
 The package manifest is a full-payload inventory. It records a SHA-256 for every staged package file except the self-referential manifest itself, plus the committed Git revision and a content fingerprint of the source tree. Normal package builds require a clean Git worktree. For an intentional developer build, such as one that regenerates tracked Papyrus bytecode, forward `-AllowDirtySource`; the manifest then marks that source state as dirty and approved and includes its unique content fingerprint. The built-package audit rejects unknown source states, unapproved dirty states, missing payload entries, and payload hash mismatches.
 
@@ -111,7 +114,7 @@ Each package build still updates `artifacts\SkyrimTogetherVR\releasedbg` for com
 
 The build-and-audit wrapper does not install files and does not launch Skyrim. By default it audits only the package tree. Add `--skyrim-vr` and `--require-prerequisites` when the Windows environment can see the target Skyrim VR install and you want the package audit to require SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK before handoff. Instead of `--skyrim-vr`, `--require-prerequisites` can use `SKYRIMVR_PATH` or `STVR_SKYRIM_VR`; without one of those explicit paths it fails before building. `BuildAuditCollectSkyrimTogetherVR-Windows.bat` wraps the matching build-and-audit command, then runs `CollectSkyrimTogetherVRBuildEvidence-Windows.bat`, then audits the newest evidence zip with `AuditSkyrimTogetherVRBuildEvidence-Windows.bat`. If the build or package audit fails, it still collects evidence and exits with the original failure code.
 
-Pass PowerShell build options after `--`. The build-and-audit wrappers preserve each forwarded argument as a separate quoted token, so paths with spaces such as `-- -Xmake "C:\Program Files\xmake\xmake.exe"` are forwarded intact. Before a final package handoff, pass `--compile-papyrus -- -PapyrusCompiler "C:\Path\To\Caprica.exe"` or set `CAPRICA` and pass `--compile-papyrus`; this regenerates the VR-specific `Data\scripts\*.pex` files before packaging. `--preflight-only --compile-papyrus` checks Python, Caprica, source, and output paths without compiling targets. When `-Mode release` or `-Mode debug` is forwarded after `--`, the wrapper audits and collects evidence from the matching `artifacts\SkyrimTogetherVR\<mode>` package instead of always reading `releasedbg`.
+Pass PowerShell build options after `--`. The build-and-audit wrappers preserve each forwarded argument as a separate quoted token, so paths with spaces such as `-- -Xmake "C:\Program Files\xmake\xmake.exe"` are forwarded intact. Before a final package handoff, pass `-- -PapyrusCompiler "C:\Path\To\Caprica.exe"` or set `CAPRICA`; this regenerates the VR-specific `Data\scripts\*.pex` files before packaging. `--preflight-only` checks Python, Caprica, source, SDK, and output paths without compiling targets. When `-Mode release` or `-Mode debug` is forwarded after `--`, the wrapper audits and collects evidence from the matching `artifacts\SkyrimTogetherVR\<mode>` package instead of always reading `releasedbg`.
 
 After any Windows build attempt, successful or failed, collect a no-build handoff archive with:
 
@@ -226,9 +229,12 @@ BuildSkyrimTogetherVR-Windows.bat -SkipGameFiles
 BuildSkyrimTogetherVR-Windows.bat -SkipCompanionPanel
 BuildSkyrimTogetherVR-Windows.bat -BuildUi
 BuildSkyrimTogetherVR-Windows.bat -PreflightOnly
+BuildSkyrimTogetherVR-Windows.bat -SkseVrSdkRoot "C:\SDKs\sksevr_2_00_12"
 ```
 
-If `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimVRImmersiveLauncher`, `ImmersiveElf`, or `TPProcess` are not listed after configuration, the script fails before building. That usually means xmake was not configured for Windows, or Visual Studio/MSVC is not visible to xmake.
+If `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, `SkyrimVRImmersiveLauncher`, `ImmersiveElf`, or `TPProcess` are not listed after configuration, the script fails before building. That usually means xmake was not configured for Windows, or Visual Studio/MSVC is not visible to xmake.
+
+The default package build regenerates the staged PEX files unless `-NoPackage` or `-SkipGameFiles` is supplied. `-SkipPapyrusCompile` is rejected for a package that includes `SkyrimTogetherVRTickBridge`, because the matching tick PEX must be rebuilt with the DLL. The build resolves the official SKSEVR 2.0.12 SDK for that target: provide `-SkseVrSdkRoot`/`SKSEVR_SDK_ROOT` only when its bridge-critical source hashes match the pinned archive, or let the script download the archive into `Tools\SkyrimVR\.sdk` after SHA-256 verification. Automatic extraction needs `7z.exe` or `7zz.exe` in `PATH` (or a normal 7-Zip install).
 
 The PowerShell script keeps `-GameFilesRoot` for compatibility with older local wrappers, but this port is VR-only. When staged game files are included, the path must resolve to this repository's `GameFiles\SkyrimVR`; passing `GameFiles\Skyrim` or another external staging tree fails before packaging. Use `-SkipGameFiles` only for artifact-only build checks.
 
@@ -244,11 +250,13 @@ Data\SkyrimTogether.esp
 Data\scripts\SkyrimTogetherUtils.pex
 Data\scripts\SkyrimTogetherVerifyLaunchScript.pex
 Data\scripts\SkyrimTogetherPlayerAliasScript.pex
+Data\scripts\SkyrimTogetherVRTickBridge.pex
 Data\scripts\SkyrimTogetherVRConnectionMenu.pex
 Data\scripts\SkyrimTogetherVRConnectionSpellEffect.pex
 Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll
+Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVR_AE_to_SE.csv
 Data\SKSE\Plugins\SkyrimTogetherVR_AddressOverrides.csv
 LaunchSkyrimTogetherVRCompanion.bat
@@ -346,7 +354,7 @@ python3 Tools/SkyrimVR/audit_vr_readiness.py --skyrim-vr "/path/to/SkyrimVR" --a
 python3 Tools/SkyrimVR/install_built_package.py --skyrim-vr "/path/to/SkyrimVR" --avatar-sync --install
 ```
 
-In `--avatar-sync` mode, the package audit still requires `EarlyLoad.dll`, `TPProcess.exe`, `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`, `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`, and `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`; only the launcher executable requirement changes from `SkyrimTogetherVR.exe` to `SkyrimTogetherVRAvatarSync.exe`. The audit rejects the opposite launcher executable for the selected mode, so stale default/avatar-sync packages cannot be mistaken for each other.
+In `--avatar-sync` mode, the package audit still requires `EarlyLoad.dll`, `TPProcess.exe`, and the VRIK/HIGGS/PLANCK/tick bridge DLLs; only the launcher executable requirement changes from `SkyrimTogetherVR.exe` to `SkyrimTogetherVRAvatarSync.exe`. The audit rejects the opposite launcher executable for the selected mode, so stale default/avatar-sync packages cannot be mistaken for each other.
 
 For the full gameplay build, require the gameplay executable instead:
 
@@ -358,7 +366,7 @@ python3 Tools/SkyrimVR/audit_vr_readiness.py --skyrim-vr "/path/to/SkyrimVR" --g
 python3 Tools/SkyrimVR/install_built_package.py --skyrim-vr "/path/to/SkyrimVR" --gameplay --install
 ```
 
-In `--gameplay` mode, the package audit requires `SkyrimTogetherVRGameplay.exe`, the VRIK/HIGGS/PLANCK bridge DLLs, `EarlyLoad.dll`, and `TPProcess.exe`. It rejects stale default and avatar-sync launcher executables, and the runtime evidence collector validates the package manifest with `gameplayAudit=1`.
+In `--gameplay` mode, the package audit requires `SkyrimTogetherVRGameplay.exe`, the VRIK/HIGGS/PLANCK/tick bridge DLLs, `EarlyLoad.dll`, and `TPProcess.exe`. It rejects stale default and avatar-sync launcher executables, and the runtime evidence collector validates the package manifest with `gameplayAudit=1`.
 
 When testing the mandatory VRIK/HIGGS avatar lane, HIGGS compatibility, or PLANCK compatibility on the target install, add `--require-vrik`, `--require-higgs`, or `--require-planck` so the audit fails before launch if those SKSEVR plugins are not installed. PLANCK is installed as `Data\SKSE\Plugins\activeragdoll.dll`; the SkyrimTogetherVR package also installs `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`, which writes `SkyrimTogetherVR.planck`. The post-run runtime audit's `--require-vrik` check requires both VRIK detection and the VRIK bridge API lane, and the default runtime checklist now requires `SkyrimTogetherVR.compatibility` to show HIGGS/PLANCK observation-only policy plus unvalidated-hook suppression state and `SkyrimTogetherVR.planck` to show PLANCK bridge loaded/sequence/epoch state, interface state, disabled current-hit polling, and disabled last-hit-data probe state when PLANCK is installed.
 
@@ -375,7 +383,7 @@ The first command is audit-only. The second copies VRIK, HIGGS, and PLANCK loose
 
 ## First VR Smoke-Test Package
 
-The main VR client is linked into `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`. The SKSEVR DLLs in `Data\SKSE\Plugins` are narrow bridge plugins for VRIK and HIGGS handoff state.
+The main VR client is linked into `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`. The SKSEVR DLLs in `Data\SKSE\Plugins` are narrow VRIK/HIGGS/PLANCK observation bridges plus the separate task-backed client tick bridge.
 
 Before the first runtime smoke test, the target Skyrim VR install still needs the public VR Address Library file:
 

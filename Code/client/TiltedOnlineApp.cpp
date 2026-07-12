@@ -2,6 +2,8 @@
 
 #include <TiltedOnlineApp.h>
 
+#include "VRTickBridge.h"
+
 #include <DInputHook.hpp>
 #include <dinput.h>
 #include <WindowsHook.hpp>
@@ -114,11 +116,19 @@ bool TiltedOnlineApp::BeginMain()
         ApplyNvidiaFix();
 #endif
 
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::TickBridge::Activate();
+#endif
+
     return true;
 }
 
 bool TiltedOnlineApp::EndMain()
 {
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::TickBridge::Retire();
+#endif
+
     UninstallHooks();
     if (m_pDevice)
         m_pDevice->Release();

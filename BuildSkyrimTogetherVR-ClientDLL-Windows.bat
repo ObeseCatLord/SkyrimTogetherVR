@@ -9,6 +9,7 @@ rem The client is linked into SkyrimTogetherVR.exe. The DLL-producing targets ar
 rem - Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll
 rem - Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll
 rem - Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll
+rem - Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll
 rem - EarlyLoad.dll
 
 if /I "%~1"=="--help" goto :usage
@@ -32,6 +33,7 @@ echo This builds the real DLL-producing Windows targets:
 echo   SkyrimTogetherVRVrikBridge.dll
 echo   SkyrimTogetherVRHiggsBridge.dll
 echo   SkyrimTogetherVRPlanckBridge.dll
+echo   SkyrimTogetherVRTickBridge.dll
 echo   EarlyLoad.dll
 echo.
 echo Examples:

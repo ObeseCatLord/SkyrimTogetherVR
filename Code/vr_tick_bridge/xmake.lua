@@ -1,0 +1,14 @@
+local sksevr_sdk_root = os.getenv("SKSEVR_SDK_ROOT") or "__missing_sksevr_sdk__"
+local sksevr_source_root = path.join(sksevr_sdk_root, "src")
+
+target("SkyrimTogetherVRTickBridge")
+    set_kind("shared")
+    set_group("Client")
+    set_basename("SkyrimTogetherVRTickBridge")
+    add_includedirs("..", sksevr_source_root, path.join(sksevr_source_root, "sksevr"))
+    add_defines("RUNTIME", "IS_VR", "RUNTIME_VERSION=0x010400F1")
+    add_cxflags("/FIcommon/IPrefix.h", {force = true})
+    add_files("main.cpp")
+    add_files(path.join(sksevr_source_root, "sksevr", "skse64", "GameAPI.cpp"))
+    add_files(path.join(sksevr_source_root, "sksevr", "skse64_common", "Relocation.cpp"))
+    add_syslinks("kernel32")

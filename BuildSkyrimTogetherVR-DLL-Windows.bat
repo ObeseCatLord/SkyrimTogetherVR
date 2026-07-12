@@ -5,6 +5,7 @@ rem Builds the DLL-producing SkyrimTogetherVR Windows targets:
 rem - Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll
 rem - Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll
 rem - Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll
+rem - Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll
 rem - EarlyLoad.dll
 rem The main VR client is launcher-linked as SkyrimTogetherVR.exe, not SkyrimTogetherVR.dll.
 rem
@@ -16,7 +17,7 @@ if /I "%~1"=="--help" goto :usage
 if /I "%~1"=="-h" goto :usage
 if "%~1"=="/?" goto :usage
 
-set "STVR_TARGETS=SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,ImmersiveElf"
+set "STVR_TARGETS=SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf"
 set "ROOT=%~dp0"
 
 call "%ROOT%SetupSkyrimTogetherVRBuildEnv-Windows.bat"
@@ -44,6 +45,7 @@ echo Builds the DLL-producing SkyrimTogetherVR targets on Windows:
 echo   SkyrimTogetherVRVrikBridge.dll
 echo   SkyrimTogetherVRHiggsBridge.dll
 echo   SkyrimTogetherVRPlanckBridge.dll
+echo   SkyrimTogetherVRTickBridge.dll
 echo   EarlyLoad.dll
 echo.
 echo Examples:

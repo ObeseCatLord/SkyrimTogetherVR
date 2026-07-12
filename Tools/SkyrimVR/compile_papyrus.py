@@ -14,6 +14,7 @@ import tempfile
 
 
 TARGET_SCRIPTS = (
+    "SkyrimTogetherVRTickBridge.psc",
     "SkyrimTogetherVerifyLaunchScript.psc",
     "SkyrimTogetherPlayerAliasScript.psc",
     "SkyrimTogetherUtils.psc",

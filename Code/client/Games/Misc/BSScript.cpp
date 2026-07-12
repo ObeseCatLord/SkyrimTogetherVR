@@ -165,6 +165,12 @@ int64_t TP_MAKE_THISCALL(HookCompareVariables, void, BSScript::Variable* apVar1,
 
 void InstallSkyrimTogetherPapyrusNativeHooks()
 {
+#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR
+    // Skyrim VR uses the standalone SKSEVR tick bridge. The flat-client
+    // NativeFunction ABI has not been validated here, so install no BSScript
+    // detours in the VR target.
+    return;
+#else
     std::call_once(
         s_papyrusNativeHookOnce,
         []()
@@ -175,11 +181,13 @@ void InstallSkyrimTogetherPapyrusNativeHooks()
 
             TP_HOOK(&RealBindEverythingToScript, HookBindEverythingToScript);
         });
+#endif
 }
 
 static TiltedPhoques::Initializer s_vmHooks(
     []()
     {
+#if !defined(TP_SKYRIM_VR) || !TP_SKYRIM_VR
         POINTER_SKYRIMSE(TRegisterPapyrusFunction, s_registerPapyrusFunction, 104788);
         POINTER_SKYRIMSE(TSignaturesMatch, s_signaturesMatch, 104359);
 
@@ -193,4 +201,5 @@ static TiltedPhoques::Initializer s_vmHooks(
         TP_HOOK(&RealRegisterPapyrusFunction, HookRegisterPapyrusFunction);
         TP_HOOK(&RealSignaturesMatch, HookSignaturesMatch);
         // TP_HOOK(&RealCompareVariables, HookCompareVariables);
+#endif
     });

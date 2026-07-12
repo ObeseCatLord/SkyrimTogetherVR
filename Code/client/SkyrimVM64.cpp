@@ -1,28 +1,65 @@
 #include <TiltedOnlinePCH.h>
-#include "TiltedOnlineApp.h"
 
 #include <atomic>
 #include <chrono>
 #include <mutex>
-#include <VR/VRPlayerPose.h>
-
-extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
-
-#include <GameVM.h>
 
 #ifndef TP_SKYRIM_VR
 #define TP_SKYRIM_VR 0
 #endif
 
-#ifndef TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-#define TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS 0
-#endif
-
-#ifndef TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
-#define TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY 0
-#endif
-
 struct Main;
+
+#if TP_SKYRIM_VR
+
+// This target is only observed in Skyrim VR. Its cadence must be proven before
+// any client or engine work is scheduled from it.
+TP_THIS_FUNCTION(TMainLoop, short, Main);
+static TMainLoop* MainLoop = nullptr;
+static std::once_flag s_mainLoopLogOnce;
+static std::atomic_uint64_t s_mainLoopCallCount{0};
+static const auto s_mainLoopStartTime = std::chrono::steady_clock::now();
+
+short TP_MAKE_THISCALL(HookMainLoop, Main)
+{
+    const auto callCount = s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (callCount <= 2 || callCount % 300 == 0)
+    {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_mainLoopStartTime).count();
+        spdlog::info("SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}", callCount, elapsedMs, GetCurrentThreadId());
+    }
+
+    std::call_once(
+        s_mainLoopLogOnce,
+        []()
+        {
+            spdlog::info("SkyrimTogetherVR main-loop observer reached");
+        });
+
+    return TiltedPhoques::ThisCall(MainLoop, apThis);
+}
+
+static void InstallVrMainLoopObserver()
+{
+    POINTER_SKYRIMSE(TMainLoop, cMainLoop, 36564);
+    MainLoop = cMainLoop.Get();
+
+    spdlog::info("Installing SkyrimTogetherVR main-loop observer: mainLoop={}", fmt::ptr(MainLoop));
+    TP_HOOK(&MainLoop, HookMainLoop);
+}
+
+void InstallVrMainLoopBringupHooks()
+{
+    InstallVrMainLoopObserver();
+}
+
+#else
+
+#include "TiltedOnlineApp.h"
+#include <GameVM.h>
+
+extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
+
 struct VMContext
 {
     char pad[0x680];
@@ -37,91 +74,24 @@ static TVMUpdate* VMUpdate = nullptr;
 static TMainLoop* MainLoop = nullptr;
 static TVMDestructor* VMDestructor = nullptr;
 
-#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-static std::once_flag s_vmUpdateLogOnce;
-static std::once_flag s_mainLoopLogOnce;
-static std::once_flag s_vmDestructorLogOnce;
-static std::once_flag s_vrPoseLogOnce;
-static std::atomic_uint64_t s_mainLoopCallCount{0};
-static const auto s_mainLoopStartTime = std::chrono::steady_clock::now();
-#endif
-
 int TP_MAKE_THISCALL(HookVMUpdate, VMContext, float a2)
 {
-#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-    std::call_once(
-        s_vmUpdateLogOnce,
-        []()
-        {
-            spdlog::info("SkyrimTogetherVR VM update hook reached; ticking World::Update");
-        });
     if (apThis->inactive == 0 && g_appInstance)
         g_appInstance->Update();
-    std::call_once(
-        s_vrPoseLogOnce,
-        []()
-        {
-            VRPlayerPose pose{};
-            if (SkyrimVR::CaptureLocalPlayerPose(pose))
-            {
-                spdlog::info(
-                    "SkyrimTogetherVR pose nodes: hmd={:x}, left={:x}, right={:x}, spellOrigin={:x}, arrowOrigin={:x}, leftWeapon={:x}, rightWeapon={:x}",
-                    pose.Hmd.Address(),
-                    pose.LeftHand.Address(),
-                    pose.RightHand.Address(),
-                    pose.SpellOrigin.Address(),
-                    pose.ArrowOrigin.Address(),
-                    pose.LeftWeaponOffset.Address(),
-                    pose.RightWeaponOffset.Address());
-            }
-            else
-            {
-                spdlog::info("SkyrimTogetherVR pose nodes are not available yet");
-            }
-        });
-#else
-    if (apThis->inactive == 0 && g_appInstance)
-        g_appInstance->Update();
-#endif
 
     return TiltedPhoques::ThisCall(VMUpdate, apThis, a2);
 }
 
 short TP_MAKE_THISCALL(HookMainLoop, Main)
 {
-#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-    const auto callCount = s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (callCount <= 2 || callCount % 300 == 0)
-    {
-        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_mainLoopStartTime).count();
-        spdlog::info("SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}", callCount, elapsedMs, GetCurrentThreadId());
-    }
-
-    std::call_once(
-        s_mainLoopLogOnce,
-        []()
-        {
-            spdlog::info("SkyrimTogetherVR main-loop hook reached");
-        });
-#else
     TP_EMPTY_HOOK_PLACEHOLDER
-#endif
 
     return TiltedPhoques::ThisCall(MainLoop, apThis);
 }
 
 uintptr_t TP_MAKE_THISCALL(HookVMDestructor, void)
 {
-#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-    std::call_once(
-        s_vmDestructorLogOnce,
-        []()
-        {
-            spdlog::info("SkyrimTogetherVR VM destructor hook reached");
-        });
-#else
     TP_EMPTY_HOOK_PLACEHOLDER
-#endif
 
     return TiltedPhoques::ThisCall(VMDestructor, apThis);
 }
@@ -136,14 +106,6 @@ static void InstallMainLoopHooks()
     MainLoop = cMainLoop.Get();
     VMDestructor = cVMDestructor.Get();
 
-#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-    spdlog::info(
-        "Installing SkyrimTogetherVR VM/main-loop bring-up hooks: vmUpdate={}, mainLoop={}, vmDestructor={}",
-        fmt::ptr(VMUpdate),
-        fmt::ptr(MainLoop),
-        fmt::ptr(VMDestructor));
-#endif
-
     TP_HOOK(&VMUpdate, HookVMUpdate);
     TP_HOOK(&MainLoop, HookMainLoop);
     TP_HOOK(&VMDestructor, HookVMDestructor);
@@ -155,3 +117,5 @@ void InstallVrMainLoopBringupHooks()
 }
 
 static TiltedPhoques::Initializer s_mainHooks([]() { InstallMainLoopHooks(); });
+
+#endif

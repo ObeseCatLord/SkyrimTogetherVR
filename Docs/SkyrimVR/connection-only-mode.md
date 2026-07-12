@@ -10,9 +10,17 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 
 ## Enabled
 
-- `World::Update()` is ticked from the VR VM update hook.
+- The main-loop address is observed only. `World::Update() is not called from a VR hook`;
+  the task bridge below is its sole default scheduler.
 - `RunnerService` drains queued main-thread work.
-- `TransportService` updates and can connect/authenticate.
+- `SkyrimTogetherVRTickBridge.dll` registers one normal SKSEVR Papyrus native.
+  The attached quest uses a 50 ms single-update timer to request one coalesced
+  `SKSETaskInterface` task. Only that task dispatches `World::Update()` after
+  endpoint, epoch, allocation-base, page-protection, and thread checks.
+  It rejects any runtime other than Skyrim VR 1.4.15 with SKSEVR 2.0.12 (or a
+  compatible later release index) because the legacy native-function ABI is
+  runtime-address-specific.
+- `TransportService` can poll/authenticate through the verified task path.
 - `ModSystem` receives server mod mappings.
 - `StringCacheService` receives and clears string-cache state.
 - `DiscordService` is present so authentication can include Discord state when available.
@@ -21,11 +29,16 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 - `DiscoveryService` runs in VR observation-only mode, discovering cell/grid/location changes and loaded actor form IDs without enabling actor sync consumers.
 - `PlayerService` runs in VR network-only mode, sending cell/grid and level updates while leaving death, difficulty, party, dialogue, and respawn handling disconnected.
 - `PlayerService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.playercell` with readiness, request counters, last grid/cell ids, and level-send state so server-visible player cell/grid/level flow can be validated before actor assignment or spawn is enabled.
-- `SkyrimTogetherUtils.psc` exposes native VR connection functions that can be called by a future VR menu, quest, book, or MCM-style surface.
-- `SkyrimTogetherVRConnectionMenu.psc/.pex` provides connect, disconnect, configured toggle, localhost toggle, status, and telemetry helper functions using those natives and `Debug.MessageBox`. The status helper reports connection state, remembered endpoint, local player id, discovery grid/cell/actor state, local pose/avatar/movement/equipment/activation/magic-effect/combat-hit/projectile/grab availability, remote pose/avatar/movement/equipment/activation/magic-effect/combat-hit/projectile/grab counts, HIGGS/PLANCK compatibility policy, and save/load readiness counters plus raw and server-mapped load cell/worldspace ids. The telemetry helper shows compact discovery, local/remote pose/avatar/movement/equipment, compatibility policy, staged action-lane samples, and save/load raw/server player/cell/worldspace ids without opening the flat overlay.
-- `SkyrimTogetherVerifyLaunchScript` grants the VR package spell form `0x1825` on quest init and player load.
-- The VR ESP repurposes the existing `DetectOtherPlayers` spell/effect forms as a `Skyrim Together VR` lesser-power style entry. Its effect script calls `SkyrimTogetherVRConnectionMenu.ToggleConfigured()`, which uses `SkyrimTogetherVR.connection` and falls back to `127.0.0.1:10578`.
-- The VR bring-up hook set installs only the Papyrus native-binding hook needed for those functions, without enabling the broader Papyrus registration/signature hooks from the normal gameplay batch.
+- `SkyrimTogetherUtils.psc` and `SkyrimTogetherVRConnectionMenu.psc/.pex` remain
+  staged future UI source, but the default VR target does not register their
+  flat-client natives. Do not use the bundled spell/effect as a connection
+  control until that ABI is separately ported and reviewed. That deferred menu
+  uses `Debug.MessageBox`; it is not part of the default control path.
+- `SkyrimTogetherVerifyLaunchScript` and its player-load alias only keep the
+  standalone tick bridge timer armed. They do not grant a connection spell.
+- The default VR target installs no BSScript native-binding, registration, or
+  signature detours. The standalone SKSEVR plugin owns its one normal Papyrus
+  registration.
 - `VRPoseService` captures local HMD, hand, weapon offset, spell/magic origin/aim, arrow-origin, and bow-node transforms.
 - VRIK IK sync is mandatory for SkyrimTogetherVR, so the pose stream includes a VRIK lane for detection state, finger curl values, and camera/smoothing offsets sourced from `SkyrimTogetherVRVrikBridge` when its SKSEVR handoff file is available.
 - `VRPoseService` sends `RequestVRPoseUpdate` at 20 Hz after connection and stores incoming `NotifyVRPoseUpdate` payloads by remote player id.
@@ -84,10 +97,16 @@ The first VR smoke test should show these one-time breadcrumbs in `logs/tp_clien
 
 - `SkyrimTogetherVR runtime flags:` with `connectionOnly=1`, `bringupHooks=1`, `unvalidatedHooks=0`, and `validatedInlinePatches=0`.
 - `Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks`.
-- `Installing SkyrimTogetherVR VM/main-loop bring-up hooks:` with resolved VM update, main-loop, and VM destructor addresses.
+- `Installing SkyrimTogetherVR main-loop observer:` with the resolved main-loop address.
 - `SkyrimTogetherVR client startup hook reached`.
-- `SkyrimTogetherVR main-loop hook reached`.
-- `SkyrimTogetherVR VM update hook reached; ticking World::Update`.
+- `SkyrimTogetherVR main-loop observer reached` and cadence records.
+- `SkyrimTogetherVR tick bridge endpoint prepared` before SKSEVR bootstrap.
+- `SkyrimTogetherVR tick bridge endpoint ready on thread` after client startup.
+- `SkyrimTogetherVR SKSE task tick dispatched World::Update` after the quest
+  timer reaches the SKSEVR task queue.
+- `SkyrimTogetherVRTickBridge: SKSEVR task and Papyrus bridge registered` in
+  the SKSEVR log. A runtime-gate message instead means the installed game or
+  SKSEVR version is incompatible and the client must not be tested.
 - `Installing SkyrimTogetherVR renderer bring-up hook:` with the resolved renderer-init address.
 - `SkyrimTogetherVR renderer init hook reached:` and `SkyrimTogetherVR renderer init completed` if the renderer hook executes.
 
@@ -95,7 +114,8 @@ If the renderer init address does not resolve, the client logs `SkyrimTogetherVR
 
 ## Test Autoconnect
 
-Because the flat overlay is disabled for VR, connection-only mode has an environment-variable test path:
+Because the flat overlay is disabled for VR, connection-only mode has an
+environment-variable handoff path driven by the SKSEVR task bridge:
 
 ```cmd
 set STVR_AUTOCONNECT=127.0.0.1:10578
@@ -103,6 +123,10 @@ set STVR_PASSWORD=optional_password
 ```
 
 `STVR_AUTOCONNECT` is queued only after `PlayerCharacter` and its parent cell are available. This avoids authenticating while still on the main menu or during early game load.
+
+The task bridge does not register HIGGS callbacks, call HIGGS or PLANCK APIs,
+or intercept controller input. HIGGS and PLANCK remain observation-only
+compatibility bridges.
 
 ## File Handoff
 
@@ -282,9 +306,14 @@ string Function GetSkyrimTogetherStatusSummary() global native
 string Function GetSkyrimTogetherTelemetryReadout() global native
 ```
 
-The C++ natives are bound directly through the VM hook and route connect/disconnect requests through `VRConnectionService`, so they use the same waiting-for-player guard and state values as the file handoff. Explicit `ConnectToSkyrimTogether(endpoint, password)` calls also update `SkyrimTogetherVR.connection`, giving MCM/book/quest script surfaces a way to persist the endpoint even before using the configured toggle.
+These declarations are staged source only. The VR client does not install the
+flat-client BSScript native binder because its NativeFunction ABI is not yet
+validated for Skyrim VR. The default connection path is `STVR_AUTOCONNECT` or
+the command/config/status file handoff, not these functions.
 
-`SkyrimTogetherUtils.pex` must be regenerated after native declaration changes. The current source declares the endpoint setter; the packaged `.pex` must be rebuilt in the final Papyrus build pass before that setter is used from in-game scripts.
+The PEX files are still regenerated with the package so their source and
+bytecode remain synchronized, but they are not a supported control surface in
+the default VR package.
 
 `SkyrimTogetherVRConnectionMenu.psc` layers a small script-friendly UI surface on top:
 
@@ -301,11 +330,11 @@ SkyrimTogetherVRConnectionMenu.ToggleLocalhost()
 SkyrimTogetherVRConnectionMenu.ToggleConfigured()
 ```
 
-That script has a matching `SkyrimTogetherVRConnectionMenu.pex` after the Papyrus rebuild. The current VR package entry point is the `Skyrim Together VR` spell in `SkyrimTogether.esp`, backed by `SkyrimTogetherVRConnectionSpellEffect.pex`, which toggles the remembered configured endpoint.
+That script has a matching `SkyrimTogetherVRConnectionMenu.pex` after the Papyrus rebuild, but its in-game spell/effect entry point is intentionally dormant in the default VR package pending a separate native-ABI port.
 
 ## Next Steps
 
-- Validate the granted `Skyrim Together VR` spell/power in-game and confirm cast-to-connect/cast-to-disconnect works in Skyrim VR.
+- Do not validate the dormant `Skyrim Together VR` spell/power as a connection control. Validate the SKSEVR task tick plus the file/environment handoff first.
 - Keep actor/gameplay services disabled in the default package until the explicit avatar-sync and gameplay packages pass runtime evidence.
 - Use the discovery handoff to validate loaded actor/cell observation in the default, avatar-sync, and gameplay packages.
 - Validate server-visible VR player cell/grid/level updates in the default, avatar-sync, and gameplay packages before making gameplay the recommended runtime path.

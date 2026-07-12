@@ -78,7 +78,6 @@ REQUIRED_TOKENS = {
         "PLANCK detected; keeping SkyrimTogetherVR in PLANCK/HIGGS-compatible hook mode",
         "HIGGS or PLANCK is installed; refusing to install unvalidated SkyrimTogetherVR gameplay hooks",
         "InstallVrMainLoopBringupHooks();",
-        "InstallSkyrimTogetherPapyrusNativeHooks();",
         "BSGraphics::InstallVrRenderBringupHooks();",
         "SkyrimTogetherVR client startup hook reached",
     ),
@@ -96,18 +95,14 @@ REQUIRED_TOKENS = {
         "PLANCK SKSE plugin is loaded; active-ragdoll compatibility guard is active",
     ),
     "Code/client/SkyrimVM64.cpp": (
-        "Installing SkyrimTogetherVR VM/main-loop bring-up hooks: vmUpdate={}, mainLoop={}, vmDestructor={}",
-        "SkyrimTogetherVR main-loop hook reached",
+        "Installing SkyrimTogetherVR main-loop observer: mainLoop={}",
+        "SkyrimTogetherVR main-loop observer reached",
         "SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}",
         "s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed)",
         "callCount <= 2 || callCount % 300 == 0",
-        "SkyrimTogetherVR VM update hook reached; ticking World::Update",
-        "SkyrimTogetherVR VM destructor hook reached",
-        "SkyrimTogetherVR pose nodes: hmd={:x}, left={:x}, right={:x}, spellOrigin={:x}, arrowOrigin={:x}, leftWeapon={:x}, rightWeapon={:x}",
-        "SkyrimTogetherVR pose nodes are not available yet",
-        "TP_HOOK(&VMUpdate, HookVMUpdate);",
+        "static void InstallVrMainLoopObserver()",
         "TP_HOOK(&MainLoop, HookMainLoop);",
-        "TP_HOOK(&VMDestructor, HookVMDestructor);",
+        "void InstallVrMainLoopBringupHooks()",
     ),
     "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp": (
         "Installing SkyrimTogetherVR renderer bring-up hook: rendererInit={}",
@@ -123,9 +118,9 @@ REQUIRED_TOKENS = {
         "Expected First-Run Log Breadcrumbs",
         "SkyrimTogetherVR runtime flags:",
         "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
-        "Installing SkyrimTogetherVR VM/main-loop bring-up hooks:",
-        "SkyrimTogetherVR main-loop hook reached",
-        "SkyrimTogetherVR VM update hook reached;",
+        "Installing SkyrimTogetherVR main-loop observer:",
+        "SkyrimTogetherVR main-loop observer reached",
+        "World::Update() is not called from a VR hook",
         "Installing SkyrimTogetherVR renderer bring-up hook:",
         "SkyrimTogetherVR renderer init hook reached:",
     ),
@@ -133,7 +128,7 @@ REQUIRED_TOKENS = {
         "runtime flag summary",
         "effective VR client target configuration",
         "explicit avatar-sync-only target configuration",
-        "resolved VM/main-loop hook addresses",
+        "resolved main-loop observer address",
         "resolved renderer-init hook address",
         "Tools/SkyrimVR/audit_bringup_hooks.py",
     ),
@@ -225,11 +220,37 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
     return failures
 
 
+def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
+    path = root / "Code" / "client" / "SkyrimVM64.cpp"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    failures: list[str] = []
+    vr_block_start = text.find("#if TP_SKYRIM_VR")
+    vr_block_end = text.find("#else", vr_block_start)
+    vr_block = text[vr_block_start:vr_block_end] if vr_block_start >= 0 and vr_block_end >= 0 else ""
+
+    for forbidden_token in (
+        "VMContext",
+        "TVMUpdate",
+        "TVMDestructor",
+        "HookVMUpdate",
+        "HookVMDestructor",
+        "TP_HOOK(&VMUpdate",
+        "TP_HOOK(&VMDestructor",
+        "g_appInstance->Update()",
+    ):
+        if forbidden_token in vr_block:
+            failures.append(f"Code/client/SkyrimVM64.cpp: VR observer block must not contain `{forbidden_token}`")
+
+    return failures
+
+
 def main():
     root = repo_root()
     failures = []
     structural_failures = audit_vr_target_configs(root)
     failures.extend(structural_failures)
+    observer_failures = audit_vr_main_loop_observer(root)
+    failures.extend(observer_failures)
 
     for relative_path, tokens in REQUIRED_TOKENS.items():
         path = root / relative_path
@@ -247,6 +268,7 @@ def main():
 
     print(f"Audited bring-up files: {len(REQUIRED_TOKENS)}")
     print(f"VR target config failures: {len(structural_failures)}")
+    print(f"VR main-loop observer failures: {len(observer_failures)}")
     print(f"Bring-up hook audit failures: {len(failures)}")
     for failure in failures:
         print(f"- {failure}")

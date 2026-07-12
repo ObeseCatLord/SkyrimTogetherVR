@@ -13,6 +13,7 @@ param(
         "SkyrimTogetherVRVrikBridge",
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
+        "SkyrimTogetherVRTickBridge",
         "SkyrimVRImmersiveLauncher",
         "ImmersiveElf",
         "TPProcess"
@@ -32,7 +33,11 @@ param(
 
     [switch]$CompilePapyrus,
 
+    [switch]$SkipPapyrusCompile,
+
     [string]$PapyrusCompiler = "",
+
+    [string]$SkseVrSdkRoot = "",
 
     [string]$Python = "",
 
@@ -106,7 +111,7 @@ function Copy-MatchingArtifact {
 
 function Get-SourceTreeSha256 {
     $temporaryPath = [System.IO.Path]::GetTempFileName()
-    $excludedDirectoryNames = @(".git", ".xmake", "artifacts", "build", "node_modules", "review-handoff")
+    $excludedDirectoryNames = @(".git", ".xmake", ".sdk", "artifacts", "build", "node_modules", "review-handoff")
     try {
         $manifestStream = [System.IO.File]::Open($temporaryPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {
@@ -285,6 +290,102 @@ function Resolve-PathAgainstRepo {
     }
 
     return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
+
+function Test-SkseVrSdkRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root
+    )
+
+    # Pin the exact official SDK sources compiled by SkyrimTogetherVRTickBridge.
+    # This also makes an explicit SDK root fail closed instead of silently
+    # accepting a different legacy ABI.
+    $expectedFiles = @{
+        "src\common\IPrefix.h" = "79e8b01a653213f6e9eb50213175bb002e5e1c37dfbfab1c1736ab1a8942ceab"
+        "src\common\ITypes.h" = "2cd96cd31945fcc906c59fa1d0d7324bd8f0e36f246611e65703f94d95aa8a06"
+        "src\sksevr\skse64\PluginAPI.h" = "d7d47ec8e6643cff46e1d31a2988cb4a46f9a71d81f68296aef9d6a620a80a87"
+        "src\sksevr\skse64\PapyrusArgs.h" = "a7d11a1a487a6e7f5d3238b52ba3f0be9b5b2ef4dce0d9019853c9c5496c354b"
+        "src\sksevr\skse64\PapyrusNativeFunctions.h" = "61ab1aad9c232d2a921a8f387f2e51f0ffec9cfc6a2ff1040b2b0d2f5f9373c2"
+        "src\sksevr\skse64\GameAPI.cpp" = "abb7908c9e865f4416aab6d83f0fc16a6eedebe3d041e6815ef89b197a7a9407"
+        "src\sksevr\skse64_common\Relocation.cpp" = "050655be00cff2fe688997f5f6d49aabac5040fec2b3c6846cacaf36cc71ea79"
+        "src\sksevr\skse64_common\skse_version.h" = "3a8fb69ccca94e0e7b3a0e41d772292c1a6de0933811873d27cd3d4a1b704f7b"
+    }
+
+    foreach ($entry in $expectedFiles.GetEnumerator()) {
+        $path = Join-Path $Root $entry.Key
+        if (-not (Test-Path -LiteralPath $path)) {
+            return $false
+        }
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Resolve-SkseVrSdk {
+    param(
+        [string]$RequestedRoot
+    )
+
+    foreach ($candidate in @($RequestedRoot, $env:SKSEVR_SDK_ROOT)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $candidateRoot = [System.IO.Path]::GetFullPath($candidate)
+            if (-not (Test-SkseVrSdkRoot -Root $candidateRoot)) {
+                throw "SKSEVR SDK root '$candidateRoot' does not match the pinned official 2.0.12 bridge sources. Remove it or provide the verified SDK."
+            }
+            $env:SKSEVR_SDK_ROOT = $candidateRoot
+            return $candidateRoot
+        }
+    }
+
+    $sdkCache = Join-Path $RepoRoot "Tools\SkyrimVR\.sdk"
+    $resolvedRoot = Join-Path $sdkCache "sksevr_2_00_12"
+    if (Test-SkseVrSdkRoot -Root $resolvedRoot) {
+        $env:SKSEVR_SDK_ROOT = $resolvedRoot
+        return $resolvedRoot
+    }
+
+    $archivePath = Join-Path $sdkCache "sksevr_2_00_12.7z"
+    $downloadUrl = "https://skse.silverlock.org/beta/sksevr_2_00_12.7z"
+    $expectedSha256 = "f03df5d8663f2c9a781f830fb0809c63a9a0e3b626d6d1a96e38493f81a3c9ad"
+    New-Item -ItemType Directory -Force -Path $sdkCache | Out-Null
+
+    if (-not (Test-Path -LiteralPath $archivePath)) {
+        Write-Host "Downloading the official SKSEVR 2.0.12 SDK: $downloadUrl"
+        Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $archivePath
+    }
+
+    $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $expectedSha256) {
+        throw "SKSEVR SDK checksum mismatch for $archivePath. Expected $expectedSha256, got $actualSha256."
+    }
+
+    $sevenZipCandidates = @(
+        (Get-Command "7z.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
+        (Get-Command "7zz.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
+        (Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
+    $sevenZip = @($sevenZipCandidates | Select-Object -First 1)
+    if ($sevenZip.Count -eq 0) {
+        throw "The SKSEVR SDK is not extracted and 7-Zip was not found. Install 7-Zip, set SKSEVR_SDK_ROOT to an extracted official sksevr_2_00_12 SDK, or rerun the build."
+    }
+
+    Write-Host "Extracting the verified SKSEVR SDK to $sdkCache"
+    & $sevenZip[0] x -y -aoa "-o$sdkCache" $archivePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "7-Zip failed while extracting the SKSEVR SDK."
+    }
+
+    if (-not (Test-SkseVrSdkRoot -Root $resolvedRoot)) {
+        throw "The extracted SKSEVR SDK does not match the pinned official 2.0.12 bridge sources."
+    }
+
+    $env:SKSEVR_SDK_ROOT = $resolvedRoot
+    return $resolvedRoot
 }
 
 function Resolve-StagedVrGameFilesRoot {
@@ -482,6 +583,19 @@ if ($env:OS -ne "Windows_NT") {
     Write-Warning "This script is intended to run from Windows with Visual Studio/MSVC available."
 }
 
+if (-not $SkipPapyrusCompile -and -not $NoPackage -and -not $SkipGameFiles) {
+    $CompilePapyrus = $true
+}
+
+if ($SkipPapyrusCompile -and -not $NoPackage -and -not $SkipGameFiles -and $Targets -contains "SkyrimTogetherVRTickBridge") {
+    throw "Cannot package SkyrimTogetherVRTickBridge with -SkipPapyrusCompile; SkyrimTogetherVRTickBridge.pex must be regenerated with the bridge DLL."
+}
+
+if ($Targets -contains "SkyrimTogetherVRTickBridge") {
+    $resolvedSkseVrSdk = Resolve-SkseVrSdk -RequestedRoot $SkseVrSdkRoot
+    Write-Host "Using SKSEVR 2.0.12 SDK: $resolvedSkseVrSdk"
+}
+
 if (-not (Get-Command $Xmake -ErrorAction SilentlyContinue)) {
     throw "Could not find xmake. Install xmake first or pass -Xmake C:\path\to\xmake.exe."
 }
@@ -503,7 +617,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $targetListText = ($targetList | Out-String)
-$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess")
+$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess")
 $requiredTargets += @("SkyrimTogetherVRClientAvatarSync", "SkyrimVRImmersiveLauncherAvatarSync", "SkyrimTogetherVRGameplayClient", "SkyrimVRImmersiveLauncherGameplay")
 foreach ($requiredTarget in $requiredTargets) {
     if ($targetListText -notmatch [regex]::Escape($requiredTarget)) {
@@ -650,6 +764,7 @@ if (-not $NoPackage) {
         "SkyrimTogetherVRVrikBridge",
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
+        "SkyrimTogetherVRTickBridge",
         "EarlyLoad",
         "TPProcess"
     )
@@ -780,6 +895,7 @@ if (-not $NoPackage) {
         "SkyrimTogetherVRVrikBridge",
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
+        "SkyrimTogetherVRTickBridge",
         "SkyrimTogetherVRClient",
         "SkyrimTogetherVRClientAvatarSync",
         "SkyrimTogetherVRGameplayClient",
@@ -797,6 +913,7 @@ if (-not $NoPackage) {
             "SkyrimTogetherVRVrikBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRVrikBridge.dll") }
             "SkyrimTogetherVRHiggsBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRHiggsBridge.dll") }
             "SkyrimTogetherVRPlanckBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRPlanckBridge.dll") }
+            "SkyrimTogetherVRTickBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRTickBridge.dll") }
             "SkyrimVRImmersiveLauncher" { $expectedArtifactNames.Add("SkyrimTogetherVR.exe") }
             "SkyrimVRImmersiveLauncherAvatarSync" { $expectedArtifactNames.Add("SkyrimTogetherVRAvatarSync.exe") }
             "SkyrimVRImmersiveLauncherGameplay" { $expectedArtifactNames.Add("SkyrimTogetherVRGameplay.exe") }
@@ -814,7 +931,7 @@ if (-not $NoPackage) {
     Get-ChildItem -LiteralPath $buildDir -Recurse -File | ForEach-Object {
         $file = $_
         if ($allowedArtifactBaseNames.Contains($file.BaseName) -and $artifactExtensions -contains $file.Extension.ToLowerInvariant()) {
-            if ($file.BaseName -eq "SkyrimTogetherVRVrikBridge" -or $file.BaseName -eq "SkyrimTogetherVRHiggsBridge" -or $file.BaseName -eq "SkyrimTogetherVRPlanckBridge") {
+            if ($file.BaseName -eq "SkyrimTogetherVRVrikBridge" -or $file.BaseName -eq "SkyrimTogetherVRHiggsBridge" -or $file.BaseName -eq "SkyrimTogetherVRPlanckBridge" -or $file.BaseName -eq "SkyrimTogetherVRTickBridge") {
                 Copy-MatchingArtifact -File $file -Destination (Join-Path $packageDir "Data\SKSE\Plugins")
             }
             else {
@@ -862,8 +979,8 @@ if (-not $NoPackage) {
         $targetSet.Contains("SkyrimTogetherVRGameplayClient") -or
         $targetSet.Contains("SkyrimVRImmersiveLauncherGameplay")
     )
-    $dllOnlyPackage = ($targetSet.Count -eq 4)
-    foreach ($dllOnlyTarget in @("SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "ImmersiveElf")) {
+    $dllOnlyPackage = ($targetSet.Count -eq 5)
+    foreach ($dllOnlyTarget in @("SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "ImmersiveElf")) {
         if (-not $targetSet.Contains($dllOnlyTarget)) {
             $dllOnlyPackage = $false
         }

@@ -1,0 +1,269 @@
+#include <common/IPrefix.h>
+
+#include <cstdint>
+#include <cwchar>
+#include <limits>
+#include <new>
+
+#include <skse64/PluginAPI.h>
+#include <skse64/PapyrusNativeFunctions.h>
+#include <skse64/gamethreads.h>
+#include <skse64_common/skse_version.h>
+
+#include <vr_common/VRTickBridge.h>
+
+// The official legacy SKSEVR SDK declares these primitive specializations in
+// PapyrusArgs.cpp. The bridge only needs bool, so defining that narrow pair
+// avoids linking the SDK's broad Papyrus argument implementation and its
+// unrelated globals.
+template <> void PackValue<bool>(VMValue* apDestination, bool* apSource, VMClassRegistry*)
+{
+    apDestination->SetBool(*apSource);
+}
+
+template <> UInt64 GetTypeID<bool>(VMClassRegistry*)
+{
+    return VMValue::kType_Bool;
+}
+
+namespace
+{
+using SkyrimTogetherVR::TickBridge::DispatchCallback;
+using SkyrimTogetherVR::TickBridge::Endpoint;
+using SkyrimTogetherVR::TickBridge::EndpointState;
+
+constexpr char kPluginName[] = "SkyrimTogetherVRTickBridge";
+constexpr char kPapyrusClass[] = "SkyrimTogetherVRTickBridge";
+
+SKSETaskInterface* g_taskInterface = nullptr;
+volatile LONG g_taskQueued = 0;
+volatile LONG g_mappingFaulted = 0;
+const Endpoint* g_endpoint = nullptr;
+
+bool IsSupportedRuntime(const SKSEInterface* apSkse) noexcept
+{
+    return apSkse && !apSkse->isEditor && apSkse->runtimeVersion == RUNTIME_VR_VERSION_1_4_15 && apSkse->skseVersion >= PACKED_SKSE_VERSION &&
+           apSkse->GetReleaseIndex && apSkse->GetReleaseIndex() >= SKSE_VERSION_RELEASEIDX;
+}
+
+void LogDebug(const char* apMessage) noexcept
+{
+    OutputDebugStringA(apMessage);
+    OutputDebugStringA("\n");
+}
+
+LONG ReadState(const Endpoint& acEndpoint) noexcept
+{
+    return InterlockedCompareExchange(const_cast<volatile LONG*>(reinterpret_cast<const volatile LONG*>(&acEndpoint.State)), 0, 0);
+}
+
+bool IsExecutableReadOnlyPage(DWORD aProtection) noexcept
+{
+    if ((aProtection & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        return false;
+
+    const auto baseProtection = aProtection & 0xffu;
+    return baseProtection == PAGE_EXECUTE || baseProtection == PAGE_EXECUTE_READ;
+}
+
+bool ParseMappingHandle(HANDLE& arHandle) noexcept
+{
+    wchar_t text[2 + sizeof(std::uintptr_t) * 2 + 1]{};
+    const auto length = GetEnvironmentVariableW(SkyrimTogetherVR::TickBridge::kMappingHandleEnvironment, text, _countof(text));
+    if (length < 3 || length >= _countof(text) || text[0] != L'0' || (text[1] != L'x' && text[1] != L'X'))
+        return false;
+
+    wchar_t* end = nullptr;
+    const auto value = std::wcstoull(text + 2, &end, 16);
+    if (!end || *end != L'\0' || value == 0 || value > std::numeric_limits<std::uintptr_t>::max())
+        return false;
+
+    arHandle = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(value));
+    return true;
+}
+
+bool MapEndpoint() noexcept
+{
+    if (g_endpoint)
+        return true;
+    if (InterlockedCompareExchange(&g_mappingFaulted, 0, 0) != 0)
+        return false;
+
+    HANDLE mapping = nullptr;
+    if (!ParseMappingHandle(mapping))
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: missing or malformed endpoint handle");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+
+    auto* endpoint = static_cast<const Endpoint*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(Endpoint)));
+    if (!endpoint)
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint map failed");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+
+    g_endpoint = endpoint;
+    return true;
+}
+
+bool ValidateReadyEndpoint(const Endpoint& acEndpoint, DispatchCallback& arCallback) noexcept
+{
+    if (acEndpoint.Magic != SkyrimTogetherVR::TickBridge::kEndpointMagic || acEndpoint.AbiVersion != SkyrimTogetherVR::TickBridge::kEndpointAbiVersion ||
+        acEndpoint.StructSize != sizeof(Endpoint) || acEndpoint.PublisherProcessId != GetCurrentProcessId())
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint ABI validation failed");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+
+    if (acEndpoint.Reserved0 != 0)
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint reserved fields are non-zero");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+
+    for (const auto reserved : acEndpoint.Reserved)
+    {
+        if (reserved != 0)
+        {
+            LogDebug("SkyrimTogetherVRTickBridge: endpoint reserved fields are non-zero");
+            InterlockedExchange(&g_mappingFaulted, 1);
+            return false;
+        }
+    }
+
+    const auto state = static_cast<EndpointState>(ReadState(acEndpoint));
+    if (state != EndpointState::Ready)
+        return false;
+    if (!acEndpoint.ImageBase || !acEndpoint.CallbackRva || acEndpoint.CallbackRva > std::numeric_limits<std::uintptr_t>::max() - acEndpoint.ImageBase)
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint callback range is invalid");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+    if (acEndpoint.ImageBase != reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)))
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint image base does not match this process");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+    if (acEndpoint.ReadyThreadId != GetCurrentThreadId())
+        return false;
+
+    const auto callbackAddress = acEndpoint.ImageBase + acEndpoint.CallbackRva;
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(reinterpret_cast<const void*>(callbackAddress), &memory, sizeof(memory)) != sizeof(memory) || memory.State != MEM_COMMIT ||
+        memory.AllocationBase != reinterpret_cast<void*>(acEndpoint.ImageBase) || !IsExecutableReadOnlyPage(memory.Protect))
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: endpoint callback page validation failed");
+        InterlockedExchange(&g_mappingFaulted, 1);
+        return false;
+    }
+
+    arCallback = reinterpret_cast<DispatchCallback>(callbackAddress);
+    return true;
+}
+
+class ClientUpdateTask final : public TaskDelegate
+{
+public:
+    void Run() override
+    {
+        if (!g_endpoint)
+            return;
+
+        DispatchCallback callback = nullptr;
+        if (!ValidateReadyEndpoint(*g_endpoint, callback))
+            return;
+
+        callback(g_endpoint->Epoch);
+    }
+
+    void Dispose() override
+    {
+        InterlockedExchange(&g_taskQueued, 0);
+        delete this;
+    }
+};
+
+bool QueueClientUpdate() noexcept
+{
+    if (!g_taskInterface || !MapEndpoint())
+        return false;
+    if (InterlockedCompareExchange(&g_mappingFaulted, 0, 0) != 0)
+        return false;
+    if (InterlockedCompareExchange(&g_taskQueued, 1, 0) != 0)
+        return true;
+
+    auto* const task = new (std::nothrow) ClientUpdateTask();
+    if (!task)
+    {
+        InterlockedExchange(&g_taskQueued, 0);
+        LogDebug("SkyrimTogetherVRTickBridge: task allocation failed");
+        return false;
+    }
+
+    g_taskInterface->AddTask(task);
+    return true;
+}
+
+bool PapyrusTick(StaticFunctionTag*)
+{
+    return QueueClientUpdate();
+}
+
+bool RegisterPapyrusFunctions(VMClassRegistry* apRegistry)
+{
+    if (!apRegistry)
+        return false;
+
+    apRegistry->RegisterFunction(new NativeFunction0<StaticFunctionTag, bool>("Tick", kPapyrusClass, PapyrusTick, apRegistry));
+    return true;
+}
+} // namespace
+
+extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSkse, PluginInfo* apInfo)
+{
+    if (!apInfo)
+        return false;
+
+    apInfo->infoVersion = PluginInfo::kInfoVersion;
+    apInfo->name = kPluginName;
+    apInfo->version = 1;
+
+    if (!IsSupportedRuntime(apSkse))
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: requires Skyrim VR 1.4.15 and SKSEVR 2.0.12 or newer");
+        return false;
+    }
+
+    return true;
+}
+
+extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSkse)
+{
+    if (!IsSupportedRuntime(apSkse) || !apSkse->QueryInterface)
+        return false;
+
+    g_taskInterface = static_cast<SKSETaskInterface*>(apSkse->QueryInterface(kInterface_Task));
+    const auto* papyrus = static_cast<SKSEPapyrusInterface*>(apSkse->QueryInterface(kInterface_Papyrus));
+    if (!g_taskInterface || g_taskInterface->interfaceVersion < SKSETaskInterface::kInterfaceVersion || !papyrus ||
+        papyrus->interfaceVersion < SKSEPapyrusInterface::kInterfaceVersion || !papyrus->Register)
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: required SKSEVR task or Papyrus interface is unavailable");
+        return false;
+    }
+
+    if (!papyrus->Register(RegisterPapyrusFunctions))
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: Papyrus registration failed");
+        return false;
+    }
+
+    LogDebug("SkyrimTogetherVRTickBridge: SKSEVR task and Papyrus bridge registered");
+    return true;
+}

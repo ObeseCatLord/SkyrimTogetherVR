@@ -22,13 +22,25 @@ STALE_PEX_TOKENS = (
 )
 
 REQUIRED_VERIFY_SOURCE_TOKENS = (
+    "StartTickBridge",
+    "RegisterForSingleUpdate(0.05)",
+    "Event OnUpdate()",
+    "SkyrimTogetherVRTickBridge.Tick()",
+)
+
+FORBIDDEN_VERIFY_SOURCE_TOKENS = (
+    "DidLaunchSkyrimTogether",
     "Skyrim Together VR is not running!",
-    "SkyrimTogetherVR.exe",
-    "SkyrimVR",
-    "GrantConnectionMenuSpell",
-    "GetFormFromFile",
-    "AddSpell",
-    "0x00001825",
+)
+
+REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
+    "ScriptName SkyrimTogetherVRTickBridge Hidden",
+    "Bool Function Tick() Global Native",
+)
+
+REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
+    "SkyrimTogetherVRTickBridge",
+    "Tick",
 )
 
 REQUIRED_UTILS_NATIVE_TOKENS = (
@@ -64,7 +76,6 @@ REQUIRED_VR_MENU_SOURCE_TOKENS = (
 
 REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS = (
     "OnPlayerLoadGame",
-    "GrantConnectionMenuSpell",
     "VerifyLaunch",
 )
 
@@ -225,8 +236,25 @@ def audit_papyrus(package):
     if verify_source.exists():
         text = verify_source.read_text(encoding="utf-8", errors="replace")
         missing_verify_tokens = [token for token in REQUIRED_VERIFY_SOURCE_TOKENS if token not in text]
+        missing_verify_tokens.extend(f"forbidden:{token}" for token in FORBIDDEN_VERIFY_SOURCE_TOKENS if token in text)
     else:
         missing_verify_tokens = list(REQUIRED_VERIFY_SOURCE_TOKENS)
+
+    tick_bridge_source = source_dir / "SkyrimTogetherVRTickBridge.psc"
+    missing_tick_bridge_source_tokens = []
+    if tick_bridge_source.exists():
+        text = tick_bridge_source.read_text(encoding="utf-8", errors="replace")
+        missing_tick_bridge_source_tokens = [token for token in REQUIRED_TICK_BRIDGE_SOURCE_TOKENS if token not in text]
+    else:
+        missing_tick_bridge_source_tokens = list(REQUIRED_TICK_BRIDGE_SOURCE_TOKENS)
+
+    tick_bridge_pex = scripts / "SkyrimTogetherVRTickBridge.pex"
+    missing_tick_bridge_pex_tokens = []
+    if tick_bridge_pex.exists():
+        data = tick_bridge_pex.read_bytes()
+        missing_tick_bridge_pex_tokens = [token for token in REQUIRED_TICK_BRIDGE_PEX_TOKENS if token.encode("ascii") not in data]
+    else:
+        missing_tick_bridge_pex_tokens = list(REQUIRED_TICK_BRIDGE_PEX_TOKENS)
 
     utils_source = source_dir / "SkyrimTogetherUtils.psc"
     missing_utils_source_tokens = []
@@ -306,6 +334,8 @@ def audit_papyrus(package):
         "exact_case_mismatches": exact_case_mismatches,
         "stale_pex": stale_pex,
         "missing_verify_tokens": missing_verify_tokens,
+        "missing_tick_bridge_source_tokens": missing_tick_bridge_source_tokens,
+        "missing_tick_bridge_pex_tokens": missing_tick_bridge_pex_tokens,
         "missing_utils_source_tokens": missing_utils_source_tokens,
         "missing_utils_pex_tokens": missing_utils_pex_tokens,
         "missing_vr_menu_source_tokens": missing_vr_menu_source_tokens,
@@ -475,6 +505,10 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
             handle.write("None.\n")
         handle.write("- Missing VR tokens in `SkyrimTogetherVerifyLaunchScript.psc`:\n")
         handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_verify_tokens"]]))
+        handle.write("- Missing SKSEVR tick bridge source tokens:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_tick_bridge_source_tokens"]]))
+        handle.write("- Missing SKSEVR tick bridge PEX tokens:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_tick_bridge_pex_tokens"]]))
         handle.write("- Missing VR connection native declarations in `SkyrimTogetherUtils.psc`:\n")
         handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_utils_source_tokens"]]))
         handle.write("- Missing VR connection native declarations in `SkyrimTogetherUtils.pex`:\n")
@@ -508,6 +542,7 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
             papyrus["missing_pex"]
             or papyrus["stale_pex"]
             or papyrus["missing_utils_pex_tokens"]
+            or papyrus["missing_tick_bridge_pex_tokens"]
             or papyrus["missing_vr_menu_pex_tokens"]
             or papyrus["missing_player_alias_pex_tokens"]
             or papyrus["missing_vr_effect_pex_tokens"]
@@ -587,6 +622,7 @@ def main():
     else:
         print(f"Missing ESP masters in VR Data: not checked; {plugin['vr_data']} was not found")
     print(f"Stale Papyrus PEX token hits: {stale_pex_count}")
+    print(f"Missing SKSEVR tick bridge PEX tokens: {len(papyrus['missing_tick_bridge_pex_tokens'])}")
     print(f"Missing VR connection spell ESP tokens: {len(plugin['missing_vr_menu_tokens'])}")
     print(f"Papyrus source files without matching PEX: {len(papyrus['missing_pex'])}")
     print(f"Missing SkyrimTogetherUtils.pex VR native declarations: {len(papyrus['missing_utils_pex_tokens'])}")

@@ -4,21 +4,22 @@ The VR package includes generated PEX bytecode for the VR-specific script edits:
 
 - `scripts/SkyrimTogetherVerifyLaunchScript.pex`
 - `scripts/SkyrimTogetherPlayerAliasScript.pex`
+- `scripts/SkyrimTogetherVRTickBridge.pex`
 - `scripts/SkyrimTogetherUtils.pex`
 - `scripts/SkyrimTogetherVRConnectionMenu.pex`
 - `scripts/SkyrimTogetherVRConnectionSpellEffect.pex`
 
 Run `Tools/SkyrimVR/audit_gamefiles.py` after rebuilding to confirm stale launch strings and missing native declarations stay at zero.
 
-After the source addition of `SetSkyrimTogetherConnectionConfig()` and the `Configure*()` menu helpers, rebuild `SkyrimTogetherUtils.pex` and `SkyrimTogetherVRConnectionMenu.pex` before treating the in-game endpoint configuration path as active.
+The default packaged build now recompiles these PEX files automatically. `SkyrimTogetherVRTickBridge.pex` is required for the supported task-backed connection scheduler. The older `SkyrimTogetherUtils` and connection-menu scripts remain staged future UI source; the default VR package does not register their flat-client natives.
 
 The Windows package build can do this as part of the final handoff:
 
 ```bat
-PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --compile-papyrus --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
 ```
 
-If `CAPRICA` points at `Caprica.exe`, `--compile-papyrus` is enough. The package manifest records whether Papyrus was regenerated, and `Tools/SkyrimVR/audit_built_package.py` rejects packaged PEX files that do not contain the VR connection native/menu tokens.
+If `CAPRICA` points at `Caprica.exe`, no additional flag is needed. The package manifest records whether Papyrus was regenerated, and `Tools/SkyrimVR/audit_built_package.py` rejects a package missing the tick bridge PEX or required staged source bytecode.
 
 ## Local Toolchain
 
@@ -44,6 +45,7 @@ Caprica requires scripts containing native function declarations to be marked `N
 
 - `SkyrimTogetherVerifyLaunchScript.psc`: `ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Native Hidden`
 - `SkyrimTogetherUtils.psc`: `Scriptname SkyrimTogetherUtils Native Hidden`
+- `SkyrimTogetherVRTickBridge.psc`: `ScriptName SkyrimTogetherVRTickBridge Hidden`
 
 `SkyrimTogetherVRConnectionMenu.psc` avoids `state` as a local variable name because Caprica treats it as a reserved Papyrus keyword.
 
@@ -56,6 +58,7 @@ The Skyrim Special Edition Creation Kit compiler should also work once installed
 ```cmd
 PapyrusCompiler.exe SkyrimTogetherVerifyLaunchScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
 PapyrusCompiler.exe SkyrimTogetherPlayerAliasScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
+PapyrusCompiler.exe SkyrimTogetherVRTickBridge.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
 PapyrusCompiler.exe SkyrimTogetherUtils.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
 PapyrusCompiler.exe SkyrimTogetherVRConnectionMenu.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
 PapyrusCompiler.exe SkyrimTogetherVRConnectionSpellEffect.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"

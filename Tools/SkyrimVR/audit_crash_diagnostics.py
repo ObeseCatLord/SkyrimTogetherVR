@@ -63,8 +63,9 @@ def main() -> int:
             root / "Code" / "client" / "Games" / "Misc" / "BSScript.cpp",
             (
                 "#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR",
-                "SkyrimTogetherVR VR Papyrus native registration bypassed; using the original engine binder",
-                "SkyrimTogetherVR VR Papyrus original binder completed",
+                "The flat-client",
+                "install no BSScript",
+                "#if !defined(TP_SKYRIM_VR) || !TP_SKYRIM_VR",
             ),
         )
     )

@@ -39,6 +39,7 @@ DEFAULT_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "SkyrimVRImmersiveLauncher",
     "ImmersiveElf",
     "TPProcess",
@@ -49,6 +50,7 @@ AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "ImmersiveElf",
     "TPProcess",
 )
@@ -58,6 +60,7 @@ GAMEPLAY_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "ImmersiveElf",
     "TPProcess",
 )
@@ -68,6 +71,7 @@ DEFAULT_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
+    "SkyrimTogetherVRTickBridge.dll",
 )
 AVATAR_SYNC_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRAvatarSync.exe",
@@ -76,6 +80,7 @@ AVATAR_SYNC_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
+    "SkyrimTogetherVRTickBridge.dll",
 )
 GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRGameplay.exe",
@@ -84,6 +89,7 @@ GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
+    "SkyrimTogetherVRTickBridge.dll",
 )
 
 

@@ -3976,20 +3976,21 @@ def audit_vr_papyrus_native_bypass(root: pathlib.Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
     required_tokens = (
         "#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR",
-        "SkyrimTogetherVR VR Papyrus native registration bypassed; using the original engine binder",
-        "TiltedPhoques::ThisCall(RealBindEverythingToScript, apThis);",
-        "SkyrimTogetherVR VR Papyrus original binder completed",
+        "Skyrim VR uses the standalone SKSEVR tick bridge.",
+        "install no BSScript",
+        "#if !defined(TP_SKYRIM_VR) || !TP_SKYRIM_VR",
     )
     missing = missing_tokens(text, required_tokens)
-    first_native = text.find("new BSScript::IsRemotePlayerFunc")
-    guard = text.find("#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR")
-    completed = text.find("SkyrimTogetherVR VR Papyrus original binder completed")
-    guard_return = text.find("return;", completed) if completed >= 0 else -1
 
-    if guard >= 0 and first_native >= 0 and guard >= first_native:
-        missing.append("VR Papyrus bypass must precede the first custom NativeFunction")
-    if completed >= 0 and first_native >= 0 and (guard_return < 0 or guard_return >= first_native):
-        missing.append("VR Papyrus bypass must return before the first custom NativeFunction")
+    install = text.find("void InstallSkyrimTogetherPapyrusNativeHooks()")
+    vr_guard = text.find("#if defined(TP_SKYRIM_VR) && TP_SKYRIM_VR", install)
+    vr_return = text.find("return;", vr_guard) if vr_guard >= 0 else -1
+    non_vr_guard = text.find("#if !defined(TP_SKYRIM_VR) || !TP_SKYRIM_VR", install)
+    initializer = text.find("static TiltedPhoques::Initializer s_vmHooks")
+    if install < 0 or vr_guard < 0 or vr_return < 0 or non_vr_guard < 0 or not (install < vr_guard < vr_return < non_vr_guard):
+        missing.append("VR must return before installing any BSScript native detour")
+    if initializer < 0 or text.find("#if !defined(TP_SKYRIM_VR) || !TP_SKYRIM_VR", initializer) < 0:
+        missing.append("VR must skip the BSScript static hook initializer")
 
     return missing
 

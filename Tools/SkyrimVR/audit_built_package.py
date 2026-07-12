@@ -18,6 +18,7 @@ BRIDGE_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRVrikBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll",
 )
 
 CEF_RUNTIME_VERSION = "141.0.11"
@@ -44,6 +45,7 @@ DLL_ONLY_REQUIRED_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRVrikBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll",
 )
 
 DEFAULT_REQUIRED_RUNTIME_FILES = (
@@ -70,6 +72,7 @@ REQUIRED_STAGED_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "Data/scripts/SkyrimTogetherUtils.pex",
+    "Data/scripts/SkyrimTogetherVRTickBridge.pex",
     "Data/scripts/SkyrimTogetherVerifyLaunchScript.pex",
     "Data/scripts/SkyrimTogetherPlayerAliasScript.pex",
     "Data/scripts/SkyrimTogetherVRConnectionMenu.pex",
@@ -109,6 +112,7 @@ FORBIDDEN_PACKAGE_FILES = (
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
+    "SkyrimTogetherVRTickBridge.dll",
 )
 
 DEFAULT_FORBIDDEN_RUNTIME_FILES = (
@@ -169,6 +173,7 @@ DEFAULT_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "SkyrimVRImmersiveLauncher",
     "ImmersiveElf",
     "TPProcess",
@@ -177,6 +182,7 @@ DLL_ONLY_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "ImmersiveElf",
 )
 AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
@@ -185,6 +191,7 @@ AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "ImmersiveElf",
     "TPProcess",
 )
@@ -194,6 +201,7 @@ GAMEPLAY_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRVrikBridge",
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
+    "SkyrimTogetherVRTickBridge",
     "ImmersiveElf",
     "TPProcess",
 )
@@ -436,6 +444,8 @@ def pex_tokens_for_package_file(relative_path):
     name = pathlib.PurePath(relative_path).name.lower()
     if name == "skyrimtogetherutils.pex":
         return audit_gamefiles.REQUIRED_UTILS_NATIVE_TOKENS
+    if name == "skyrimtogethervrtickbridge.pex":
+        return audit_gamefiles.REQUIRED_TICK_BRIDGE_PEX_TOKENS
     if name == "skyrimtogethervrconnectionmenu.pex":
         return audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS
     if name == "skyrimtogetherplayeraliasscript.pex":

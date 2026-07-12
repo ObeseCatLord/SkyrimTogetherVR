@@ -26,9 +26,11 @@ It intentionally stays outside Skyrim's input and rendering stack. It is suitabl
 
 ## Papyrus
 
-The current in-game control surface is the `SkyrimTogetherVRConnectionMenu` Papyrus helper. It calls the native `SkyrimTogetherUtils` connection functions and uses `Debug.MessageBox` for status and telemetry readouts.
-
-The packaged `Skyrim Together VR` lesser-power style entry calls `SkyrimTogetherVRConnectionMenu.ToggleConfigured()`, which uses the remembered endpoint from `SkyrimTogetherVR.connection` and falls back to localhost. This gives the VR package a controller-friendly connect/disconnect path without DirectInput overlay toggles.
+`SkyrimTogetherVRConnectionMenu` is retained as deferred UI source, but the
+default VR package does not register the inherited flat-client native ABI and
+does not grant its spell. The supported controller/input-neutral control
+surface is the companion/file handoff until a separate native-ABI port is
+reviewed.
 
 ## Audit
 

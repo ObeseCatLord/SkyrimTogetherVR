@@ -47,7 +47,7 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
     ),
     "source/BuildSkyrimTogetherVR-DLL-Windows.bat": (
         "SetupSkyrimTogetherVRBuildEnv-Windows.bat",
-        "SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,ImmersiveElf",
+        "SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf",
     ),
     "source/BuildSkyrimTogetherVR-DLLs-Windows.bat": (
         "Compatibility alias",
@@ -61,6 +61,8 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
     "source/BuildSkyrimTogetherVR-Windows.ps1": (
         "SkyrimTogetherVR_BuildManifest.json",
         "CompilePapyrus",
+        "Resolve-SkseVrSdk",
+        "SKSEVR_SDK_ROOT",
         "Invoke-PapyrusCompile",
         "papyrusCompiled",
         "packageFlavor = $packageFlavor",
@@ -99,6 +101,7 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
         "SkyrimTogetherVRClientAvatarSync",
         "SkyrimTogetherVRGameplayClient",
         "SkyrimTogetherVRPlanckBridge",
+        "SkyrimTogetherVRTickBridge",
         "SkyrimVRImmersiveLauncherAvatarSync",
         "SkyrimVRImmersiveLauncherGameplay",
     ),
@@ -108,6 +111,25 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
         "SkyrimVR.exe",
         "Data",
         "SkyrimTogetherReborn",
+    ),
+    "source/Code/vr_common/VRTickBridge.h": (
+        "STVR_TICK_BRIDGE_HANDLE",
+        "kEndpointAbiVersion",
+        "DispatchCallback",
+    ),
+    "source/Code/client/VRTickBridge.cpp": (
+        "CreateFileMappingW",
+        "EndpointState::Ready",
+        "SKSE task tick dispatched World::Update",
+    ),
+    "source/Code/vr_tick_bridge/xmake.lua": (
+        "target(\"SkyrimTogetherVRTickBridge\")",
+        "SKSEVR_SDK_ROOT",
+    ),
+    "source/Code/vr_tick_bridge/main.cpp": (
+        "SKSETaskInterface",
+        "NativeFunction0<StaticFunctionTag, bool>",
+        "g_taskInterface->AddTask(task)",
     ),
     "source/Code/client/xmake.lua": (
         "build_vr_client(\"SkyrimTogetherVRClient\")",

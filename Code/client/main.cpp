@@ -3,6 +3,8 @@
 #include <TiltedOnlinePCH.h>
 #include <VRCompatibilityStatus.h>
 
+#include "VRTickBridge.h"
+
 #include <Commctrl.h>
 #include <Windows.h>
 
@@ -34,7 +36,6 @@ std::unique_ptr<TiltedOnlineApp> g_appInstance{nullptr};
 
 extern HICON g_SharedWindowIcon;
 extern void InstallVrMainLoopBringupHooks();
-extern void InstallSkyrimTogetherPapyrusNativeHooks();
 namespace BSGraphics
 {
 void InstallVrRenderBringupHooks();
@@ -46,7 +47,6 @@ static void InstallVrBringupHooks()
 #if TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS
     spdlog::info("Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks");
     InstallVrMainLoopBringupHooks();
-    InstallSkyrimTogetherPapyrusNativeHooks();
     BSGraphics::InstallVrRenderBringupHooks();
 #else
     spdlog::warn("SkyrimTogetherVR bring-up hooks are disabled at compile time");
@@ -115,6 +115,12 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     g_appInstance = std::make_unique<TiltedOnlineApp>();
 
 #if TP_SKYRIM_VR
+    if (!SkyrimTogetherVR::TickBridge::Initialize())
+    {
+        spdlog::critical("SkyrimTogetherVR could not initialize the required SKSEVR task endpoint");
+        return false;
+    }
+
     const auto vrCompatibilityStatus = BuildVRCompatibilityStatus(acGamePath, stubs::g_IsHiggsActive, stubs::g_IsPlanckActive);
     WriteVRCompatibilityStatusFile(acGamePath, vrCompatibilityStatus);
 

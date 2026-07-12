@@ -2,6 +2,26 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
+## Current Default Runtime Boundary
+
+The default package is a connection-only VR bring-up build. Its only supported
+client scheduler is `SkyrimTogetherVRTickBridge.dll`: a normal SKSEVR Papyrus
+native requests a coalesced one-shot `SKSETaskInterface` task from the quest's
+50 ms timer, and that task validates a process-local launcher endpoint before
+calling `World::Update()`. The inherited VM update/destructor detours and the
+main-loop hook are not schedulers; the main-loop hook is observation-only.
+
+The default target installs no flat-client BSScript native-binding,
+registration, or signature detours. As a result, `SkyrimTogetherUtils` and the
+connection-menu spell remain staged future UI source rather than active
+connection controls. Use `STVR_AUTOCONNECT` or the companion command/config
+file handoff for testing. HIGGS and PLANCK remain observation-only and are not
+used to drive client updates.
+
+The implementation-history bullets below are retained for traceability. Where
+they describe a former VM/BSScript/spell control path, this current boundary
+supersedes them.
+
 ## Implemented Foundations
 
 - Added a VR-only xmake target graph with `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, and `SkyrimVRImmersiveLauncher`; the normal Skyrim SE `SkyrimTogetherClient` and `SkyrimImmersiveLauncher` targets are intentionally absent.
@@ -82,17 +102,17 @@ This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together
   - address database load count
   - runtime flag summary for connection-only, bring-up hook, unvalidated hook, and validated inline-patch state
   - client startup hook
-  - resolved VM/main-loop hook addresses
-  - main-loop hook
-  - VM update hook
+  - resolved main-loop observer address
+  - main-loop observer cadence
   - resolved renderer-init hook address
   - renderer-init hook
   - initial VR HMD/hand/spell/arrow node pointer capture
-- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining the first-run startup, main-loop, VM-update, render-init, and pose-node log breadcrumbs.
+- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining the first-run startup, main-loop observer, and render-init breadcrumbs.
 - `Tools/SkyrimVR/audit_bringup_hooks.py` also parses the effective VR client target configuration in `Code/client/xmake.lua`, so `SkyrimTogetherVRClient` must stay connection-only with unvalidated gameplay hooks, validated inline patches, and remote avatar actor targets disabled; `SkyrimTogetherVRClientAvatarSync` and `SkyrimTogetherVRGameplayClient` may enable the guarded remote-avatar actor-target validation path, and they still keep the dangerous hook gates disabled.
 - Added VR connection-only mode:
   - `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1` on the VR target
-  - ticks reduced `World::Update()` from the VR VM update hook
+  - dispatches reduced transport/session updates through a dedicated SKSEVR
+    task bridge, not through inherited VM or main-loop address hooks
   - keeps transport/session, runner, Discord, mod mapping, and string cache services active
   - skips character sync, the full player/gameplay sync service set, behavior patching, DirectInput overlay toggles, and flat D3D11 overlay/render startup
   - adds `VRConnectionService` for guarded `STVR_AUTOCONNECT=host:port`, optional `STVR_PASSWORD`, and file-based command/status handoff without a flat overlay
@@ -135,17 +155,15 @@ This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together
   - adds `VRHiggsRelayService` on the server to rebroadcast HIGGS state snapshots without requiring spawned character or object entities
   - enables `VRSaveLoadService` in observation-only mode through `TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE=1`
   - writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.saveload` with `TESLoadGameEvent` counts, local player readiness after load, and raw plus server-mapped player/cell/worldspace identities without calling `BGSSaveLoadManager`, reconnecting transport, or mutating actor/gameplay state
-  - adds `SkyrimTogetherUtils` Papyrus natives for VR scripts to connect, disconnect, query online state, save the remembered endpoint/password to `SkyrimTogetherVR.connection`, read the current connection state string, and read the remembered configured endpoint/password from `SkyrimTogetherVR.connection`
-  - adds compiled `SkyrimTogetherVRConnectionMenu.psc/.pex` helpers for endpoint configuration, configure-and-connect, connect, disconnect, configured toggle, localhost toggle, status, and telemetry message-box control
+  - retains `SkyrimTogetherUtils` Papyrus declarations and compiled `SkyrimTogetherVRConnectionMenu.psc/.pex` as staged future UI source; they are not bound or used as default VR connection controls
   - exposes `GetSkyrimTogetherStatusSummary()` to Papyrus so the VR message-box status surface can show remembered endpoint, local player id, discovery grid/cell/actor state, player cell/grid/level counters, pose/movement/equipment/activation/magic-effect/combat-hit/projectile/grab/HIGGS readiness, remote pose/movement/equipment/activation/magic-effect/combat-hit/projectile/grab/HIGGS counts, and save/load readiness counters plus raw/server load cell and worldspace ids
   - exposes `GetSkyrimTogetherTelemetryReadout()` to Papyrus so the VR message-box surface can show compact discovery, player cell/grid/level handoff state, local and remote pose/movement/equipment, action-lane, HIGGS samples, and save/load raw/server player/cell/worldspace ids without enabling the flat overlay or actor sync consumers
-  - grants the VR package spell form `0x1825` as `Skyrim Together VR` from `SkyrimTogetherVerifyLaunchScript` on quest init and player load
-  - patches the existing VR ESP effect form `0x1824` with `SkyrimTogetherVRConnectionSpellEffect`, which calls `SkyrimTogetherVRConnectionMenu.ToggleConfigured()`
+  - retains the VR package spell/effect source as dormant future UI work; `SkyrimTogetherVerifyLaunchScript` does not grant it on quest init or player load
   - adds `Tools/SkyrimVR/patch_vr_menu_esp.py` to reapply or check the staged VR connection spell/effect patch
-  - installs the Papyrus native-binding hook from the VR bring-up hook set without enabling the broader unvalidated gameplay hook batch, and logs Skyrim Together native bind failures from the CommonLib-shaped `BindNativeMethod` return value
+  - removes the VR BSScript native-binding/register/signature detours and uses the standalone SKSEVR tick bridge for its only default Papyrus native
   - documents the mode in `Docs/SkyrimVR/connection-only-mode.md`
 - Added a VR overlay/input boundary gate:
-  - the default VR target uses the companion panel and Papyrus message-box control surfaces instead of the flat CEF/D3D11 overlay
+  - the default VR target uses the companion panel/file handoff instead of flat CEF/D3D11 overlay or unvalidated in-game Papyrus control
   - the renderer-init VR branch logs and returns before installing the desktop WndProc, flat overlay render system, or DirectInput toggle path
   - `Tools/SkyrimVR/audit_vr_overlay_boundary.py` verifies the connection-only service boundary, renderer-init early-return path, companion/browser surface, Papyrus `Debug.MessageBox` surface, and docs
   - documents the boundary in `Docs/SkyrimVR/vr-overlay-boundary.md`
@@ -476,7 +494,7 @@ Current result:
 - `SkyrimTogetherVerifyLaunchScript.pex` no longer contains stale SE launch/path strings.
 - `SkyrimTogetherUtils.pex` now contains the VR connection native declarations.
 - `SkyrimTogetherVRConnectionMenu.psc/.pex` is present for the VR-safe message-box control surface and uses `GetSkyrimTogetherStatusSummary` plus `GetSkyrimTogetherTelemetryReadout`.
-- `SkyrimTogetherPlayerAliasScript.pex` grants the connection spell on player load.
+- `SkyrimTogetherPlayerAliasScript.pex` re-arms the tick bridge timer on player load; it does not grant a connection spell.
 - `SkyrimTogetherVRConnectionSpellEffect.pex` is present and routes the spell effect to `ToggleConfigured()`.
 - The VR ESP contains the `SkyrimTogetherVRConnectionSpellEffect` VMAD token and `Skyrim Together VR` spell text.
 - `PetFramework_PetQuest.psc` now maps to `PetFramework_PetQuest.pex` with exact source/PEX case.
@@ -525,7 +543,12 @@ Current result:
 - Baseline runtime evidence now reports remote-player proxy, remote-avatar readiness, and HIGGS-aware remote-avatar readiness as `not_required` unless collected or audited with `--require-remote-player` or `--avatar-sync`, so single-client startup/pose/prerequisite evidence can be reviewed without falsely failing the two-client VRIK/HIGGS avatar lane.
 - `Tools/SkyrimVR/audit_vr_handoff.py` covers the desktop/launcher-side bridge for the expected command, status, staged telemetry files, `players` command, browser `Remote Players` table, HIGGS bridge status, PLANCK bridge status, packaged helper, browser-opening flags, and launcher-side companion panel link.
 - `Tools/SkyrimVR/audit_vr_overlay_boundary.py` passes and confirms the default VR build stays on the companion/Papyrus control surfaces, keeps the flat CEF/D3D11 overlay out of connection-only mode, leaves the renderer-init VR branch as a log-and-return path, and keeps gameplay-package `OverlayService`/debug/input callers guarded when the flat overlay app and desktop render window are absent.
-- `Tools/SkyrimVR/audit_bringup_hooks.py` passes and confirms the default VR target keeps dangerous hooks, inline patches, and remote avatar actor targets disabled while preserving first-run startup, main-loop, VM-update, render-init, pose-node log breadcrumbs, and the explicit avatar-sync-only target configuration.
+- `Tools/SkyrimVR/audit_bringup_hooks.py` passes and confirms the default VR target keeps VM update/destructor hooks, dangerous inline patches, and remote avatar actor targets disabled while preserving first-run startup, main-loop observer, render-init breadcrumbs, and the explicit avatar-sync-only target configuration.
+- `SkyrimTogetherVRTickBridge` is a standalone SKSEVR plugin with normal
+  Papyrus registration and one-shot task dispatch. It validates a process-local
+  launcher endpoint before calling the connection-only `World::Update()` on the
+  SKSE task thread. It has no HIGGS, PLANCK, VRIK, renderer, input, or gameplay
+  hook dependency. `Tools/SkyrimVR/audit_tick_bridge.py` guards the boundary.
 - `Tools/SkyrimVR/audit_smoke_package.py` covers the first VR smoke-test package manifest for the launcher-linked client executable, `SkyrimTogetherVR_BuildManifest.json`, `EarlyLoad.dll`, `TPProcess.exe`, VRIK/HIGGS/PLANCK SKSEVR bridge DLL locations, generated address helper CSVs, VR ESP/Papyrus entry files, and companion helper files.
 - `Tools/SkyrimVR/audit_built_package.py` is available for the post-Windows-build package gate. It checks either the latest `artifacts/SkyrimTogetherVR/releasedbg` tree or the stable package snapshots under `artifacts/SkyrimTogetherVR/packages` for the default launcher, explicit avatar-sync executable, or DLL-only artifact set, `SkyrimTogetherVR_BuildManifest.json`, shared `EarlyLoad.dll`/`TPProcess.exe`/VRIK bridge/HIGGS bridge/PLANCK bridge runtime files, staged ESP/Papyrus/helper files, generated address CSV rows, SKSE bridge DLL placement, forbidden main `SkyrimTogetherVR.dll` output, x64 PE headers on runtime artifacts, packaged PEX bytecode tokens for the VR connection native/menu path, and optional installed SKSEVR/VRIK/HIGGS/PLANCK prerequisites. Its `--self-test` mode creates temporary package trees and verifies the package audit accepts clean default/avatar-sync/DLL-only layouts with matching build manifest target sets while rejecting stale opposite-mode launchers, missing `Data\SkyrimTogether.esp`, wrong manifest mode, stale/missing Papyrus bytecode tokens, and root-level staged files.
 - `Tools/SkyrimVR/audit_vr_readiness.py` passes the no-launch source/prerequisite gates with a warning when the Windows-built package is absent, and fails with `--require-built-package` until the selected package path exists and passes the built-package audit. Use `VerifySkyrimTogetherVRWindowsPackages-Windows.bat` after `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all` to run readiness against `artifacts\SkyrimTogetherVR\packages\default` and `artifacts\SkyrimTogetherVR\packages\avatar-sync` plus the DLL-only snapshot audit.
@@ -579,7 +602,7 @@ The Windows client/launcher targets are still unverified on this machine. The Li
 - Validate the launcher-side companion panel link from a Windows-built `SkyrimTogetherVR.exe`.
 - Runtime-validate `SkyrimTogetherVRAvatarSync.exe` with two clients, VRIK installed, and HIGGS installed, then implement a separately reviewed remote-embodiment path; direct scene-node writes remain gated off.
 - Runtime-validate the default `SkyrimTogetherVR.remoteplayers` proxy readout with two clients, then extend it to a stable in-game remote-player debug marker or proxy avatar path that can remain enabled by default.
-- Validate the packaged `Skyrim Together VR` spell/power entry point in-game.
+- Do not use the dormant `Skyrim Together VR` spell/power as a connection control until the flat-client BSScript native ABI has been separately ported and reviewed.
 - Runtime-validate the dedicated HIGGS bridge plus networked HIGGS intent/state relay; keep mutating HIGGS APIs disabled until ownership/conflict handling exists.
 - Re-enable systems one by one after validation:
   - movement

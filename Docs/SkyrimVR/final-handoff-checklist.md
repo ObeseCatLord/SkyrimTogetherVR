@@ -8,14 +8,14 @@ Run this first on the Windows build machine:
 
 ```bat
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
-PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --compile-papyrus --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --preflight-only --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
 ```
 
 Expected result:
 
 - Windows x64 xmake targets are visible.
 - Staged `GameFiles\SkyrimVR` package files are found.
-- Papyrus compile inputs are resolved when `--compile-papyrus` is used.
+- The default package's Papyrus compile inputs and pinned SKSEVR SDK resolve.
 - Packaged Python helper closure resolves.
 - SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK prerequisites are visible when `--require-prerequisites` is used.
 
@@ -25,7 +25,7 @@ Run the main handoff command:
 
 ```bat
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
-PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --compile-papyrus --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites -- -PapyrusCompiler "C:\Tools\Caprica\Caprica.exe"
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --gameplay-only --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
 ```
 
@@ -34,12 +34,13 @@ This builds/audits/collects evidence for:
 - default package: `SkyrimTogetherVR.exe`
 - mandatory VRIK/HIGGS avatar-sync package: `SkyrimTogetherVRAvatarSync.exe`
 - full gameplay package: `SkyrimTogetherVRGameplay.exe`
-- DLL-only partial package: `SkyrimTogetherVRVrikBridge.dll`, `SkyrimTogetherVRHiggsBridge.dll`, `SkyrimTogetherVRPlanckBridge.dll`, `EarlyLoad.dll`
+- DLL-only partial package: `SkyrimTogetherVRVrikBridge.dll`, `SkyrimTogetherVRHiggsBridge.dll`, `SkyrimTogetherVRPlanckBridge.dll`, `SkyrimTogetherVRTickBridge.dll`, `EarlyLoad.dll`
 
 Expected result:
 
 - Package audit passes for each selected mode.
-- `SkyrimTogetherUtils.pex` and `SkyrimTogetherVRConnectionMenu.pex` contain the VR connection config native/menu tokens, including `SetSkyrimTogetherConnectionConfig` and `ConfigureAndConnect`.
+- `SkyrimTogetherVRTickBridge.pex` is present alongside the timer quest scripts and `SkyrimTogetherVRTickBridge.dll` is under `Data\SKSE\Plugins`.
+- The flat-client `SkyrimTogetherUtils`/connection-menu PEX files are staged source parity only; the default VR package does not use them as an active connection control.
 - Stable package snapshots are written to `artifacts\SkyrimTogetherVR\packages\default`, `artifacts\SkyrimTogetherVR\packages\avatar-sync`, `artifacts\SkyrimTogetherVR\packages\gameplay`, and `artifacts\SkyrimTogetherVR\packages\dll-only`; `artifacts\SkyrimTogetherVR\releasedbg` remains the most recent package for compatibility.
 - Build evidence zips such as `SkyrimTogetherVR-build-evidence-default-YYYYMMDD-HHMMSSZ.zip` are written under `artifacts\SkyrimTogetherVR\build-evidence`.
 - Build evidence zips include copied source evidence for the Windows build wrappers, `source\SetupSkyrimTogetherVRBuildEnv-Windows.bat`, `source\BuildSkyrimTogetherVR-Windows.ps1`, VR xmake target files such as `source\Code\client\xmake.lua`, plus `inline-patch-manifest.json`, `inline-patch-audit.md`, `address-audit.json`, and `address-audit.md` under `source\Docs\SkyrimVR\...`.
