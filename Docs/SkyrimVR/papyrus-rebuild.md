@@ -49,7 +49,7 @@ Caprica requires scripts containing native function declarations to be marked `N
 
 `SkyrimTogetherVRConnectionMenu.psc` avoids `state` as a local variable name because Caprica treats it as a reserved Papyrus keyword.
 
-The compile-only `ReferenceAlias` and `ActiveMagicEffect` stubs include the inherited event signatures needed for the VR player-load grant path and spell-effect entry point.
+The compile-only `Quest`, `ReferenceAlias`, and `ActiveMagicEffect` stubs include the inherited timer/event signatures needed for the VR tick timer, player-load rearm path, and spell-effect entry point.
 
 ## Official Compiler Option
 

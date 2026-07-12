@@ -38,6 +38,11 @@ REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
     "Bool Function Tick() Global Native",
 )
 
+REQUIRED_QUEST_IMPORT_TOKENS = (
+    "Scriptname Quest Native Hidden",
+    "Function RegisterForSingleUpdate(float afInterval) Native",
+)
+
 REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
     "SkyrimTogetherVRTickBridge",
     "Tick",
@@ -256,6 +261,14 @@ def audit_papyrus(package):
     else:
         missing_tick_bridge_pex_tokens = list(REQUIRED_TICK_BRIDGE_PEX_TOKENS)
 
+    quest_import = root / "Tools" / "SkyrimVR" / "PapyrusImports" / "Quest.psc"
+    missing_quest_import_tokens = []
+    if quest_import.exists():
+        text = quest_import.read_text(encoding="utf-8", errors="replace")
+        missing_quest_import_tokens = [token for token in REQUIRED_QUEST_IMPORT_TOKENS if token not in text]
+    else:
+        missing_quest_import_tokens = list(REQUIRED_QUEST_IMPORT_TOKENS)
+
     utils_source = source_dir / "SkyrimTogetherUtils.psc"
     missing_utils_source_tokens = []
     if utils_source.exists():
@@ -336,6 +349,7 @@ def audit_papyrus(package):
         "missing_verify_tokens": missing_verify_tokens,
         "missing_tick_bridge_source_tokens": missing_tick_bridge_source_tokens,
         "missing_tick_bridge_pex_tokens": missing_tick_bridge_pex_tokens,
+        "missing_quest_import_tokens": missing_quest_import_tokens,
         "missing_utils_source_tokens": missing_utils_source_tokens,
         "missing_utils_pex_tokens": missing_utils_pex_tokens,
         "missing_vr_menu_source_tokens": missing_vr_menu_source_tokens,
