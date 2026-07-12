@@ -83,6 +83,7 @@ REQUIRED_TOKENS = {
         "PostLoad",
         "audit_higgs_bridge.py",
         "virtual method order",
+        "do not query live HIGGS state",
     ),
     "Docs/SkyrimVR/windows-build.md": (
         "SkyrimTogetherVRHiggsBridge",
@@ -155,6 +156,41 @@ def extract_virtual_methods(text: str, interface_name: str) -> list[str]:
     return methods
 
 
+def extract_function_block(text: str, function_name: str) -> str:
+    match = re.search(rf"\b{re.escape(function_name)}\s*\(", text)
+    if not match:
+        return ""
+
+    brace_start = text.find("{", match.end())
+    if brace_start == -1:
+        return ""
+
+    depth = 0
+    for index in range(brace_start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace_start + 1 : index]
+
+    return ""
+
+
+def audit_higgs_snapshot_lifecycle(root: pathlib.Path) -> list[str]:
+    bridge_path = root / BRIDGE_HIGGS_INTERFACE
+    if not bridge_path.exists():
+        return [f"HIGGS bridge source is missing: {bridge_path}"]
+
+    register_callbacks = extract_function_block(bridge_path.read_text(encoding="utf-8", errors="replace"), "RegisterCallbacks")
+    if not register_callbacks:
+        return ["could not extract HIGGS RegisterCallbacks body"]
+    if "CaptureHiggsSnapshot();" in register_callbacks:
+        return ["HIGGS RegisterCallbacks must not query live HIGGS state before PostVrikPostHiggs"]
+
+    return []
+
+
 def audit_higgs_interface_abi(root: pathlib.Path) -> tuple[list[str], int]:
     failures: list[str] = []
     upstream_path = (root / UPSTREAM_HIGGS_INTERFACE).resolve()
@@ -212,6 +248,7 @@ def main() -> int:
 
     abi_failures, abi_method_count = audit_higgs_interface_abi(root)
     failures.extend(abi_failures)
+    failures.extend(audit_higgs_snapshot_lifecycle(root))
 
     print(f"Audited HIGGS bridge files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_CALL_TOKENS))}")
     print(f"Audited IHiggsInterface001 virtual methods: {abi_method_count}")

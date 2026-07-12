@@ -60,6 +60,7 @@ Stage 1 is now observation-only:
 - request `IHiggsInterface001` from `SkyrimTogetherVRHiggsBridge` after SKSE `PostLoad` or `PostPostLoad`
 - register pulled, grabbed, dropped, stashed, consumed, collision, and two-handing callbacks
 - register a `PostVrikPostHiggs` callback and read `GetGrabbedObject`, `IsHoldingObject`, `IsTwoHanding`, `GetFingerValues`, and `GetGrabTransform` from that HIGGS-owned update phase
+- do not query live HIGGS state while registering callbacks during SKSE `PostLoad`/`PostPostLoad`; the first snapshot must come from `PostVrikPostHiggs`
 - cache the HIGGS snapshot under a bridge mutex; the file writer thread serializes only cached data and recent event records, not live HIGGS API calls
 - forward compact events/state through `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgs` for logging and remote visualization
 - do not call mutating HIGGS functions

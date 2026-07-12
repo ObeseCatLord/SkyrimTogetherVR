@@ -436,7 +436,7 @@ void RegisterCallbacks(HiggsPluginAPI::IHiggsInterface001* apHiggs)
     apHiggs->AddStartTwoHandingCallback(OnStartTwoHanding);
     apHiggs->AddStopTwoHandingCallback(OnStopTwoHanding);
     apHiggs->AddPostVrikPostHiggsCallback(OnPostVrikPostHiggs);
-    CaptureHiggsSnapshot();
+    // Live HIGGS state is valid only from its post-update callback.
 }
 
 void WritePoint(std::ofstream& aFile, const char* apName, const NiPoint3& acPoint)
