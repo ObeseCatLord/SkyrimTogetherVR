@@ -11,6 +11,7 @@
 // - 2021/2/25: Added CEG decryption method.
 
 #include <Windows.h>
+#include <cstddef>
 #include <cstdint>
 
 class ExeLoader
@@ -24,6 +25,12 @@ public:
     bool Load(const uint8_t* apProgramBuffer);
 
     TEntryPoint GetEntryPoint() const { return static_cast<TEntryPoint>(m_pEntryPoint); }
+
+    // The manually mapped game uses TLS slot zero. Apply its initialized block
+    // to a thread created after Load() before that thread enters native plugins.
+    static bool ApplyMappedTlsToCurrentThread() noexcept;
+    static size_t GetMappedTlsTemplateSize() noexcept;
+    static size_t GetMappedTlsSlotCapacity() noexcept;
 
 private:
     void LoadSections(const IMAGE_NT_HEADERS* apNtHeader);

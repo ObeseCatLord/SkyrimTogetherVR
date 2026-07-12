@@ -1,6 +1,6 @@
 # SkyrimTogetherVR Code Review Handoff Letter
 
-Date: July 10, 2026
+Date: July 12, 2026
 
 This package is a source-review handoff for the SkyrimTogether VR port. The goal is to port Tilted Online / Skyrim Together Reborn to Skyrim VR as a separate VR-only repository and build target. Skyrim SE support is intentionally out of scope for this fork. The target runtime is Skyrim VR with SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK compatibility.
 
@@ -29,11 +29,14 @@ This is not a release-ready runtime package yet. It is ready for code review and
 
 Important constraints:
 
+- The last installed default package was built from commit `6e04eb9e`; it was launched under UMU/GE-Proton and SKSEVR successfully loaded PLANCK, HIGGS, and the three SkyrimTogetherVR bridge DLLs. It then stalled exactly at `checking plugin ... VRIK.dll`, before reaching the mapped game entry point.
+- The target install was upgraded from a partial VRIK 0.8.2 deployment to a complete local VRIK 0.8.5 payload, including its DLL, ESP, scripts, settings, gestures, and mesh assets. The stall remained, so it is not attributed to missing VRIK files.
+- Current source replaces same-thread SKSEVR loading with a TLS-prepared helper thread and a strict pre-game barrier. It also logs the bootstrap phases, guards the 10,772-byte Skyrim VR TLS template against the 28,384-byte launcher reserve, and terminates a timed-out bootstrap safely. No built package includes this change yet.
 - A Windows gameplay package was built on July 8, but it predates the current source revision and must not be treated as a current build or reinstalled as one.
 - A Linux Wine/MSVC experiment reached the compiler and CMake, but failed before a complete client package due to PowerShell execution and xmake package-link environment failures. It produced no deployable artifacts.
 - The current source revision still needs a clean Windows/MSVC build, package audit, and install dry-run.
-- Skyrim VR has not been launched by the porting agent.
-- Runtime validation has not happened.
+- Skyrim VR was launched for bootstrap diagnostics, but no successful in-game session has yet been reached with SkyrimTogetherVR.
+- Runtime gameplay validation has not happened.
 - Gameplay hooks and inline patches remain intentionally gated unless explicit validation targets/configuration are used.
 - The local worktree contains many uncommitted and untracked files that are part of the VR port. Review the packaged source tree as the authoritative handoff state, not only `git status`.
 
@@ -45,6 +48,7 @@ Please focus review on these areas first:
 - `RuntimeLayout.h` offsets and semantic accessors against CommonLibSSE-NG VR headers.
 - Remaining raw member access to `TESObjectREFR`, `Actor`, `PlayerCharacter`, `TESObjectCELL`, inventory, magic, combat, and save/load structures.
 - SKSEVR loader behavior and launcher path handling, especially `STVR_GAME_PATH` propagation into the client and bridge DLL handoff paths.
+- The helper-thread SKSEVR bootstrap in `Code/immersive_launcher/Launcher.cpp` and its mapped TLS transfer in `Code/immersive_launcher/loader/ExeLoader.cpp`. The next build must prove VRIK loads successfully rather than merely proving that SKSEVR was found.
 - VR Address Library translation/audit data and whether generated helper CSVs match the target Skyrim VR runtime.
 - VRIK/HIGGS/PLANCK bridge boundaries. HIGGS and PLANCK should remain observation-only unless the review validates safe mutating APIs and ownership rules.
 - Avatar-sync validation target behavior. The current remote avatar application path is deliberately narrow and should be treated as provisional until two-client VR evidence confirms it.
@@ -73,7 +77,13 @@ Before treating this as ready for in-game testing, the next agent should:
 - Run the built-package readiness checks against the real Skyrim VR install with SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK present.
 - Run install dry-runs before copying files into Skyrim VR.
 
-The recommended first full Windows handoff command is:
+The required next Windows build for the bootstrap correction is:
+
+```bat
+BuildAndAuditSkyrimTogetherVR-Windows.bat
+```
+
+After that package succeeds, the broader handoff command is:
 
 ```bat
 PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites

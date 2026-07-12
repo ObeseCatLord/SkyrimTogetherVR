@@ -51,9 +51,25 @@ REQUIRED_TOKENS = {
     ),
     "Code/immersive_launcher/Launcher.cpp": (
         "client/ScriptExtender.h",
+        "BootstrapScriptExtenderOnLoaderThread",
         "LoadScriptExender();",
+        "ExeLoader::ApplyMappedTlsToCurrentThread()",
+        "GetMappedTlsTemplateSize()",
+        "GetMappedTlsSlotCapacity()",
+        "kScriptExtenderBootstrapTimeout",
+        "TerminateProcess(GetCurrentProcess(), 5)",
         "RunTiltedInit(LC->gamePath, LC->Version);",
         "LC->gameMain();",
+    ),
+    "Code/immersive_launcher/loader/ExeLoader.cpp": (
+        "ApplyMappedTlsToCurrentThread",
+        "g_mappedTlsTemplate",
+        "g_mappedTlsTemplateSize",
+        "g_mappedTlsTemplateSize > GetMappedTlsSlotCapacity()",
+    ),
+    "Code/immersive_launcher/loader/TlsMemory.cpp": (
+        "GetMappedTlsSlotCapacity",
+        "return sizeof(tls);",
     ),
     "Code/client/TiltedOnlineApp.cpp": (
         "pre-entry SKSEVR bootstrap was not attempted",
@@ -154,10 +170,10 @@ def main() -> int:
 
     launcher_text = read_text(root, "Code/immersive_launcher/Launcher.cpp")
     address_init = launcher_text.find("RunTiltedInit(LC->gamePath, LC->Version);")
-    skse_bootstrap = launcher_text.find("LoadScriptExender();")
+    skse_bootstrap = launcher_text.find("if (!BootstrapScriptExtenderOnLoaderThread())")
     game_entry = launcher_text.find("LC->gameMain();")
     if not (0 <= address_init < skse_bootstrap < game_entry):
-        failures.append("immersive launcher must bootstrap SKSEVR after address initialization and before mapped game entry")
+        failures.append("immersive launcher must run the TLS-prepared SKSEVR bootstrap after address initialization and before mapped game entry")
 
     print(f"Audited VR-only files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_TOKENS))}")
     print(f"VR-only audit failures: {len(failures)}")

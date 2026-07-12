@@ -7,6 +7,7 @@
  */
 
 #include <cstdint>
+#include <cstddef>
 
 // Changes:
 // - 2021/2/23: use TLS touched class to automatically initialize TLS.
@@ -24,3 +25,8 @@ struct TlsToucher
 };
 
 TlsToucher toucher;
+
+size_t GetMappedTlsSlotCapacity() noexcept
+{
+    return sizeof(tls);
+}

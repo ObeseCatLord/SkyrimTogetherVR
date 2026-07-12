@@ -19,6 +19,14 @@
 #include "utils/Error.h"
 #include "utils/NtInternal.h"
 
+size_t GetMappedTlsSlotCapacity() noexcept;
+
+namespace
+{
+const uint8_t* g_mappedTlsTemplate = nullptr;
+size_t g_mappedTlsTemplateSize = 0;
+} // namespace
+
 #if defined(_M_AMD64)
 typedef enum _FUNCTION_TABLE_TYPE
 {
@@ -167,21 +175,49 @@ void ExeLoader::LoadSections(const IMAGE_NT_HEADERS* apNtHeader)
 
 void ExeLoader::LoadTLS(const IMAGE_NT_HEADERS* apNtHeader, const IMAGE_NT_HEADERS* apSourceNt)
 {
+    g_mappedTlsTemplate = nullptr;
+    g_mappedTlsTemplateSize = 0;
+
     if (apNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size)
     {
         const auto* sourceTls = GetTargetRVA<IMAGE_TLS_DIRECTORY>(apNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
         const auto* targetTls = GetTargetRVA<IMAGE_TLS_DIRECTORY>(apSourceNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
+        const auto tlsTemplateSize = static_cast<size_t>(sourceTls->EndAddressOfRawData - sourceTls->StartAddressOfRawData);
 
         *(DWORD*)(sourceTls->AddressOfIndex) = 0;
 
-        LPVOID tlsBase = *(LPVOID*)__readgsqword(0x58);
+        g_mappedTlsTemplate = reinterpret_cast<const uint8_t*>(sourceTls->StartAddressOfRawData);
+        g_mappedTlsTemplateSize = tlsTemplateSize;
 
         DWORD oldProtect;
-        VirtualProtect(reinterpret_cast<LPVOID>(targetTls->StartAddressOfRawData), sourceTls->EndAddressOfRawData - sourceTls->StartAddressOfRawData, PAGE_READWRITE, &oldProtect);
+        VirtualProtect(reinterpret_cast<LPVOID>(targetTls->StartAddressOfRawData), tlsTemplateSize, PAGE_READWRITE, &oldProtect);
 
-        std::memcpy(tlsBase, reinterpret_cast<void*>(sourceTls->StartAddressOfRawData), sourceTls->EndAddressOfRawData - sourceTls->StartAddressOfRawData);
-        std::memcpy((void*)targetTls->StartAddressOfRawData, reinterpret_cast<void*>(sourceTls->StartAddressOfRawData), sourceTls->EndAddressOfRawData - sourceTls->StartAddressOfRawData);
+        ApplyMappedTlsToCurrentThread();
+        std::memcpy(reinterpret_cast<void*>(targetTls->StartAddressOfRawData), g_mappedTlsTemplate, g_mappedTlsTemplateSize);
     }
+}
+
+bool ExeLoader::ApplyMappedTlsToCurrentThread() noexcept
+{
+    if (!g_mappedTlsTemplate || g_mappedTlsTemplateSize == 0 || g_mappedTlsTemplateSize > GetMappedTlsSlotCapacity())
+        return false;
+
+    auto* const tlsBase = *reinterpret_cast<uint8_t**>(__readgsqword(0x58));
+    if (!tlsBase)
+        return false;
+
+    std::memcpy(tlsBase, g_mappedTlsTemplate, g_mappedTlsTemplateSize);
+    return true;
+}
+
+size_t ExeLoader::GetMappedTlsTemplateSize() noexcept
+{
+    return g_mappedTlsTemplateSize;
+}
+
+size_t ExeLoader::GetMappedTlsSlotCapacity() noexcept
+{
+    return ::GetMappedTlsSlotCapacity();
 }
 
 void ExeLoader::LoadExceptionTable(IMAGE_NT_HEADERS* apNtHeader)

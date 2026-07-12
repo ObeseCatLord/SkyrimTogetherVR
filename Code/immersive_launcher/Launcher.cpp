@@ -20,6 +20,12 @@
 #include <BranchInfo.h>
 #include <Shellapi.h>
 #include <client/ScriptExtender.h>
+#include <spdlog/spdlog.h>
+
+#include <chrono>
+#include <future>
+#include <memory>
+#include <thread>
 
 // These symbols are defined within the client code skyrimtogetherclient
 extern void InstallStartHook();
@@ -39,6 +45,72 @@ static LaunchContext* g_context = nullptr;
 static bool g_launchCompanionPanel = false;
 static bool g_companionPanelOnly = false;
 static bool g_disableCompanionPanel = false;
+
+namespace
+{
+constexpr auto kScriptExtenderBootstrapTimeout = std::chrono::seconds(60);
+
+bool BootstrapScriptExtenderOnLoaderThread()
+{
+    auto completion = std::make_shared<std::promise<ScriptExtenderLoadResult>>();
+    auto result = completion->get_future();
+
+    std::thread bootstrapThread(
+        [completion]()
+        {
+            ScriptExtenderLoadResult loadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
+            spdlog::info("SkyrimTogetherVR SKSEVR bootstrap helper started (thread {})", GetCurrentThreadId());
+
+            try
+            {
+                if (!ExeLoader::ApplyMappedTlsToCurrentThread())
+                {
+                    spdlog::error(
+                        "SkyrimTogetherVR SKSEVR bootstrap helper could not apply mapped Skyrim VR TLS "
+                        "(template {} bytes, slot capacity {} bytes)",
+                        ExeLoader::GetMappedTlsTemplateSize(), ExeLoader::GetMappedTlsSlotCapacity());
+                }
+                else
+                {
+                    spdlog::info("SkyrimTogetherVR SKSEVR bootstrap helper applied mapped Skyrim VR TLS (thread {})", GetCurrentThreadId());
+                    spdlog::info("SkyrimTogetherVR SKSEVR bootstrap helper entering LoadScriptExender");
+                    loadResult = LoadScriptExender();
+                    spdlog::info("SkyrimTogetherVR SKSEVR bootstrap helper returned from LoadScriptExender (result {})", static_cast<unsigned int>(loadResult));
+                }
+            }
+            catch (const std::exception& e)
+            {
+                spdlog::error("SkyrimTogetherVR SKSEVR bootstrap helper threw: {}", e.what());
+            }
+            catch (...)
+            {
+                spdlog::error("SkyrimTogetherVR SKSEVR bootstrap helper threw an unknown exception");
+            }
+
+            completion->set_value(loadResult);
+        });
+
+    if (result.wait_for(kScriptExtenderBootstrapTimeout) != std::future_status::ready)
+    {
+        spdlog::critical("SkyrimTogetherVR SKSEVR bootstrap helper timed out after {} seconds", kScriptExtenderBootstrapTimeout.count());
+        bootstrapThread.detach();
+        spdlog::default_logger_raw()->flush();
+        TerminateProcess(GetCurrentProcess(), 5);
+        return false;
+    }
+
+    const auto loadResult = result.get();
+    bootstrapThread.join();
+    if (loadResult != ScriptExtenderLoadResult::kModuleLoaded)
+    {
+        spdlog::error("SkyrimTogetherVR SKSEVR bootstrap helper failed before mapped game entry (result {})", static_cast<unsigned int>(loadResult));
+        return false;
+    }
+
+    spdlog::info("SkyrimTogetherVR SKSEVR bootstrap helper completed before mapped game entry");
+    return true;
+}
+} // namespace
 
 bool EnvRequestsCompanionPanel()
 {
@@ -182,13 +254,18 @@ int StartUp(int argc, char** argv)
     RunTiltedInit(LC->gamePath, LC->Version);
 
 #if TP_SKYRIM_VR
-    // SKSEVR's official loader injects before the target thread begins. The
-    // immersive launcher maps Skyrim VR into this process, so bootstrap it here
-    // after address initialization but before entering the mapped executable.
-    LoadScriptExender();
+    // SKSEVR's official loader uses a separate injection thread before the
+    // target thread begins. Recreate that thread topology for the mapped game.
+    if (!BootstrapScriptExtenderOnLoaderThread())
+    {
+        SetLastError(ERROR_DLL_INIT_FAILED);
+        Die(L"SkyrimTogetherVR could not initialize SKSEVR before starting Skyrim VR.", true);
+        return 4;
+    }
 #endif
 
     // This shouldn't return until the game is killed
+    spdlog::info("SkyrimTogetherVR entering mapped Skyrim VR gameMain");
     LC->gameMain();
     return 0;
 }
