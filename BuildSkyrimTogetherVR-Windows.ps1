@@ -106,12 +106,12 @@ function Copy-MatchingArtifact {
 
 function Get-SourceTreeSha256 {
     $temporaryPath = [System.IO.Path]::GetTempFileName()
-    $excludedDirectoryNames = @(".git", ".xmake", "artifacts", "build", "node_modules")
+    $excludedDirectoryNames = @(".git", ".xmake", "artifacts", "build", "node_modules", "review-handoff")
     try {
         $manifestStream = [System.IO.File]::Open($temporaryPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {
             $sourceFiles = @(
-                Get-ChildItem -LiteralPath $RepoRoot -Recurse -Force -File | Where-Object {
+                Get-ChildItem -LiteralPath $RepoRoot -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object {
                     $relativePath = $_.FullName.Substring($RepoRoot.Length).TrimStart([char[]]@('\', '/'))
                     $pathSegments = $relativePath -split '[\\/]'
                     -not ($pathSegments | Where-Object { $excludedDirectoryNames -contains $_ })
@@ -955,9 +955,10 @@ if (-not $NoPackage) {
     if (Test-Path -LiteralPath $packageSnapshotDir) {
         Remove-Item -Recurse -Force -LiteralPath $packageSnapshotDir
     }
-    New-Item -ItemType Directory -Force -Path $packageSnapshotDir | Out-Null
-    Get-ChildItem -LiteralPath $packageDir -Force | ForEach-Object {
-        Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $packageSnapshotDir
+    $robocopy = Join-Path $env:SystemRoot "System32\robocopy.exe"
+    & $robocopy $packageDir $packageSnapshotDir /E /COPY:DAT /R:5 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -gt 7) {
+        throw "Could not copy the SkyrimTogetherVR package snapshot; robocopy exited with code $LASTEXITCODE."
     }
     Write-Host "Copied SkyrimTogetherVR package snapshot to $packageSnapshotDir"
 }

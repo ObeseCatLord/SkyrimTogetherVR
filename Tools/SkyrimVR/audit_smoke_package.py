@@ -135,7 +135,7 @@ REQUIRED_PACKAGE_SCRIPT_TOKENS = (
     "Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256",
     "artifactSha256 = $artifactSha256",
     "packageFileSha256 = $packageFileSha256",
-    "sourceRevision = $sourceProvenance.sourceRevision",
+    'sourceRevision = $sourceProvenance["sourceRevision"]',
     "sourceProvenance = $sourceProvenance",
     "SkyrimTogetherVR_BuildManifest.json",
     "$packageManifest | ConvertTo-Json -Depth 5",
