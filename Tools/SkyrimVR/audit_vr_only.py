@@ -46,6 +46,19 @@ REQUIRED_TOKENS = {
         "0, 2, 0, 12",
         "GetModuleHandleW(moduleName.c_str())",
         "operational initialization requires runtime verification",
+        "WasScriptExtenderLoadAttempted",
+        "GetScriptExtenderLoadResult",
+    ),
+    "Code/immersive_launcher/Launcher.cpp": (
+        "client/ScriptExtender.h",
+        "LoadScriptExender();",
+        "RunTiltedInit(LC->gamePath, LC->Version);",
+        "LC->gameMain();",
+    ),
+    "Code/client/TiltedOnlineApp.cpp": (
+        "pre-entry SKSEVR bootstrap was not attempted",
+        "WasScriptExtenderLoadAttempted()",
+        "GetScriptExtenderLoadResult()",
     ),
     "Code/client/Services/Generic/TransportService.cpp": (
         'request.Username = "Skyrim VR Player";',
@@ -138,6 +151,13 @@ def main() -> int:
         present = [token for token in tokens if token in text]
         if present:
             failures.append(f"{relative_path}: forbidden non-VR tokens present: {', '.join(present)}")
+
+    launcher_text = read_text(root, "Code/immersive_launcher/Launcher.cpp")
+    address_init = launcher_text.find("RunTiltedInit(LC->gamePath, LC->Version);")
+    skse_bootstrap = launcher_text.find("LoadScriptExender();")
+    game_entry = launcher_text.find("LC->gameMain();")
+    if not (0 <= address_init < skse_bootstrap < game_entry):
+        failures.append("immersive launcher must bootstrap SKSEVR after address initialization and before mapped game entry")
 
     print(f"Audited VR-only files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_TOKENS))}")
     print(f"VR-only audit failures: {len(failures)}")

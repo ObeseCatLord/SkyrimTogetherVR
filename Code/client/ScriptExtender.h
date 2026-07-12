@@ -14,6 +14,11 @@ enum class ScriptExtenderLoadResult : uint8_t
 
 ScriptExtenderLoadResult LoadScriptExender();
 
+// The immersive launcher must attempt SKSEVR bootstrap before entering the
+// manually mapped Skyrim VR executable.
+bool WasScriptExtenderLoadAttempted() noexcept;
+ScriptExtenderLoadResult GetScriptExtenderLoadResult() noexcept;
+
 // Check whether the SKSEVR module was loaded. Operational initialization still
 // requires runtime validation.
 bool IsScriptExtenderLoaded();

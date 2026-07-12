@@ -19,6 +19,7 @@
 
 #include <BranchInfo.h>
 #include <Shellapi.h>
+#include <client/ScriptExtender.h>
 
 // These symbols are defined within the client code skyrimtogetherclient
 extern void InstallStartHook();
@@ -179,6 +180,13 @@ int StartUp(int argc, char** argv)
     // Initialize all hooks before calling game init
     // TiltedPhoques::Initializer::RunAll();
     RunTiltedInit(LC->gamePath, LC->Version);
+
+#if TP_SKYRIM_VR
+    // SKSEVR's official loader injects before the target thread begins. The
+    // immersive launcher maps Skyrim VR into this process, so bootstrap it here
+    // after address initialization but before entering the mapped executable.
+    LoadScriptExender();
+#endif
 
     // This shouldn't return until the game is killed
     LC->gameMain();

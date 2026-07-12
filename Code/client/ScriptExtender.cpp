@@ -17,6 +17,8 @@ constexpr const char* kUnsupportedScriptExtenderMessage = "SKSEVR 2.0.12 or newe
 constexpr wchar_t kGamePathEnvironmentVariable[] = L"STVR_GAME_PATH";
 
 HMODULE g_SKSEModuleHandle{nullptr};
+bool g_scriptExtenderLoadAttempted{false};
+ScriptExtenderLoadResult g_scriptExtenderLoadResult{ScriptExtenderLoadResult::kModuleLoadFailed};
 
 struct FileVersion
 {
@@ -104,8 +106,23 @@ bool IsScriptExtenderLoaded()
     return g_SKSEModuleHandle;
 }
 
+bool WasScriptExtenderLoadAttempted() noexcept
+{
+    return g_scriptExtenderLoadAttempted;
+}
+
+ScriptExtenderLoadResult GetScriptExtenderLoadResult() noexcept
+{
+    return g_scriptExtenderLoadResult;
+}
+
 ScriptExtenderLoadResult LoadScriptExender()
 {
+    if (g_scriptExtenderLoadAttempted)
+        return g_scriptExtenderLoadResult;
+
+    g_scriptExtenderLoadAttempted = true;
+
     const auto path = GetScriptExtenderPath();
     const auto moduleName = path.filename().wstring();
 
@@ -113,7 +130,7 @@ ScriptExtenderLoadResult LoadScriptExender()
     if (!std::filesystem::exists(path, ec))
     {
         spdlog::error("Required SKSEVR module is missing: {}", path.string());
-        return ScriptExtenderLoadResult::kModuleMissing;
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleMissing;
     }
 
     FileVersion fileVersion{};
@@ -126,23 +143,23 @@ ScriptExtenderLoadResult LoadScriptExender()
     if (versionVerified && !IsSkseVrVersionAtLeast2012(fileVersion))
     {
         spdlog::error(kUnsupportedScriptExtenderMessage);
-        return ScriptExtenderLoadResult::kVersionUnsupported;
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kVersionUnsupported;
     }
 
     g_SKSEModuleHandle = GetModuleHandleW(moduleName.c_str());
     if (g_SKSEModuleHandle)
     {
         spdlog::info("SKSEVR module already loaded: {}", path.string());
-        return ScriptExtenderLoadResult::kModuleLoaded;
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoaded;
     }
 
     g_SKSEModuleHandle = LoadLibraryW(path.c_str());
     if (!g_SKSEModuleHandle)
     {
         spdlog::error("Failed to load required SKSEVR module: {}", path.string());
-        return ScriptExtenderLoadResult::kModuleLoadFailed;
+        return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoadFailed;
     }
 
     spdlog::info("SKSEVR module loaded: {}; operational initialization requires runtime verification", path.string());
-    return ScriptExtenderLoadResult::kModuleLoaded;
+    return g_scriptExtenderLoadResult = ScriptExtenderLoadResult::kModuleLoaded;
 }
