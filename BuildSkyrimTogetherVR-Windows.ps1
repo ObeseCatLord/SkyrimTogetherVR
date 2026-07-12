@@ -381,7 +381,7 @@ function Resolve-SkseVrSdk {
     $sevenZip = $sevenZipCandidates[0]
 
     Write-Host "Extracting the verified SKSEVR SDK to $sdkCache"
-    & $sevenZip x -y -aoa "-o$sdkCache" $archivePath
+    & $sevenZip x -y -aoa "-o$sdkCache" $archivePath | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "7-Zip failed while extracting the SKSEVR SDK."
     }
