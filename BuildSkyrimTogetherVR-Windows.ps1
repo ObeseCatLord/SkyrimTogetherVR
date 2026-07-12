@@ -712,6 +712,14 @@ if ($PreflightOnly) {
     return
 }
 
+$sourceProvenanceForPackage = $null
+if (-not $NoPackage) {
+    # Capture the reviewed source revision before normal PEX generation writes
+    # tracked bytecode. The package separately records every generated payload
+    # hash, so a clean source package does not need -AllowDirtySource.
+    $sourceProvenanceForPackage = Get-SourceProvenance
+}
+
 if ($CompilePapyrus) {
     $gameFilesDir = Resolve-StagedVrGameFilesRoot -Path $GameFilesRoot
     if (-not (Test-Path -LiteralPath $gameFilesDir)) {
@@ -1044,7 +1052,10 @@ if (-not $NoPackage) {
 
     $packageSnapshotDir = Join-Path $RepoRoot (Join-Path $PackageRoot (Join-Path "packages" $packageFlavor))
     $manifestPath = Join-Path $packageDir "SkyrimTogetherVR_BuildManifest.json"
-    $sourceProvenance = Get-SourceProvenance
+    if ($null -eq $sourceProvenanceForPackage) {
+        throw "Package source provenance was not captured before generated outputs were written."
+    }
+    $sourceProvenance = $sourceProvenanceForPackage
     $packageFileSha256 = Get-PackageFileSha256 -PackageDirectory $packageDir -ManifestPath $manifestPath
     $packageManifest = [ordered]@{
         schema = "skyrim_together_vr_build_package_v2"

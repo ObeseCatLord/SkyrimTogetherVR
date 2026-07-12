@@ -131,6 +131,7 @@ SCRIPT_TOKENS = (
     "gameplay = [bool]$gameplayPackage",
     "papyrusCompiled = [bool]$CompilePapyrus",
     "Cannot package SkyrimTogetherVRTickBridge with -SkipPapyrusCompile",
+    "$sourceProvenanceForPackage = Get-SourceProvenance",
     '$packageFlavor = "gameplay"',
     '$dllOnlyPackage = ($targetSet.Count -eq 5)',
     '$packageFlavor = "default"',
