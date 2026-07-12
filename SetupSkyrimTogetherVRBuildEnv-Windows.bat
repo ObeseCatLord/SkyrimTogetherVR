@@ -22,15 +22,15 @@ if not exist "%VSWHERE_DIR%\vswhere.exe" (
 )
 
 set "VSROOT="
-pushd "%VSWHERE_DIR%"
+set "VSWHERE_RESULT=%TEMP%\stvr-vswhere-%RANDOM%-%RANDOM%.txt"
+"%VSWHERE_DIR%\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%VSWHERE_RESULT%"
 if errorlevel 1 (
-    echo Could not enter the Visual Studio installer directory.
+    del /q "%VSWHERE_RESULT%" >nul 2>nul
+    echo vswhere.exe failed while locating the Visual Studio C++ toolset.
     exit /b 1
 )
-for /f "usebackq tokens=*" %%I in (`vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
-    set "VSROOT=%%I"
-)
-popd
+set /p VSROOT=<"%VSWHERE_RESULT%"
+del /q "%VSWHERE_RESULT%" >nul 2>nul
 if not defined VSROOT (
     echo MSVC cl.exe was not found in PATH and vswhere did not find a Visual C++ toolset.
     echo Install Visual Studio Build Tools with the Desktop development with C++ workload.
