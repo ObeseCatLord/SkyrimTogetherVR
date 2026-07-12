@@ -4,6 +4,8 @@ Connection-only mode does not start the flat CEF/D3D11 overlay. `VRConnectionSer
 
 `Tools/SkyrimVR/vr_handoff.py` is the current desktop helper for this protocol. It can write connect/disconnect commands, remember the endpoint/password used by the in-game configured spell path, and summarize the status, pose, movement, equipment, discovery, activation, magic, combat, projectile, and save/load readout files.
 
+During early executable startup, the Skyrim VR player singleton can be non-null before its page is readable. Default VR startup and first-update services use `TryGetReadablePlayerForVR()` to treat that state as no player, defer player-derived work, and keep connection handoff telemetry active. The filter only checks mapped-page readability; it does not validate player layout or lifetime. See `player-singleton-startup-guard.md` before enabling broader player-state features.
+
 ## Command File
 
 Write commands to:

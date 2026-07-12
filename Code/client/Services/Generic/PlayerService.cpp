@@ -24,6 +24,7 @@
 #include <Structs/ServerSettings.h>
 
 #include <PlayerCharacter.h>
+#include <VR/VRPlayerReadiness.h>
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESGlobal.h>
 #include <Games/Overrides.h>
@@ -494,7 +495,7 @@ void PlayerService::RunVrLevelUpdates(const double acDeltaTime) noexcept
 
     m_vrLevelUpdateTimer = 0.0;
 
-    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return;
 
@@ -543,7 +544,7 @@ void PlayerService::WriteVrPlayerCellStatusFile() noexcept
     if (!file)
         return;
 
-    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     const bool ready = pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
 
     file << "ready=" << (ready ? "1" : "0") << "\n";

@@ -9,13 +9,14 @@ the already-built default VR launcher failed during process startup.
 
 - The first launch failed because the packaged launcher had no CEF runtime.
 - Supplying the exact CEF `141.0.11` runtime resolved that loader error, but
-  the process then crashed with access violation `0xc0000005` at
-  `libcef.dll + 0x60a27f`.
-- The default VR target is intentionally connection-only and disables the flat
-  overlay, so it should not initialize CEF during startup.
-- Import-table inspection showed the old `SkyrimTogetherVR.exe` imported
-  `libcef.dll` normally. That makes the Windows loader initialize CEF before
-  the connection-only target can avoid its overlay path.
+  the process then crashed with access violation `0xc0000005` in the launcher
+  image's `0x180...` range.
+- The overlap with CEF's preferred image base led to an initial, incorrect CEF
+  attribution. The later minidump shows that CEF was not loaded and that the
+  fault was in launcher `.zdata`; see `player-singleton-startup-guard.md`.
+- Import-table inspection of the old executable still showed a normal
+  `libcef.dll` import. Delay loading remains valid packaging hardening for the
+  connection-only launcher.
 
 ## Fix
 
@@ -29,11 +30,12 @@ launcher packages and records its version and file list in the package manifest.
 The package audit rejects a launcher that either imports `libcef.dll` normally
 or does not delay-import it.
 
-## Required Rebuild Gate
+## Current Status
 
-The installed executable predates this fix and cannot be made delay-loaded by
-copying DLLs beside it. On Windows, build from commit `3e340c4a` or newer, then
-run the package verifier before installation:
+The July 11 default package was rebuilt and deployed with the CEF delay import.
+CEF hardening does not resolve the separate player-singleton startup fault. The
+new `player-singleton-startup-guard.md` source change requires a newer Windows
+default package and package audit before another Linux runtime attempt:
 
 ```bat
 BuildSkyrimTogetherVR-Windows.bat -Mode release
@@ -45,6 +47,5 @@ For a nonstandard xmake package cache, pass
 `STVR_CEF_RUNTIME_DIR`. A passing verifier must report `libcef.dll` as a delay
 import for `SkyrimTogetherVR.exe`.
 
-Do not redeploy the old launcher. After the rebuilt default package passes the
-audit, install it and use the existing Linux launcher script to connect to the
-server.
+After the rebuilt default package passes the audit, install it and use the
+existing Linux launcher script to connect to the server.

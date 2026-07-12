@@ -9,6 +9,7 @@
 #include <Messages/NotifyVREquipmentUpdate.h>
 #include <Messages/RequestVREquipmentUpdate.h>
 #include <PlayerCharacter.h>
+#include <VR/VRPlayerReadiness.h>
 #include <Services/TransportService.h>
 #include <World.h>
 #include <vr_common/VRHandoffPath.h>
@@ -27,10 +28,9 @@ std::filesystem::path GetHandoffDirectory()
     return SkyrimTogetherVR::Handoff::GetDirectory();
 }
 
-bool IsVrPlayerReadyForInventory() noexcept
+bool IsVrPlayerReadyForInventory(const PlayerCharacter* apPlayer) noexcept
 {
-    const auto* pPlayer = PlayerCharacter::Get();
-    return pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
+    return apPlayer && apPlayer->GetBaseFormData() && apPlayer->GetParentCellData();
 }
 
 uint32_t GetFormId(const TESForm* apForm) noexcept
@@ -158,8 +158,8 @@ void VRInventoryService::OnDisconnected(const DisconnectedEvent& acEvent) noexce
 
 bool VRInventoryService::CaptureLocalEquipment(VREquipmentUpdate& aUpdate) noexcept
 {
-    const auto* pPlayer = PlayerCharacter::Get();
-    if (!IsVrPlayerReadyForInventory() || !pPlayer)
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
+    if (!IsVrPlayerReadyForInventory(pPlayer))
         return false;
 
     const auto& actorState = pPlayer->GetActorStateData();
@@ -194,8 +194,8 @@ void VRInventoryService::WriteInventoryStatusFile() noexcept
     if (!file)
         return;
 
-    const auto* pPlayer = PlayerCharacter::Get();
-    const bool ready = IsVrPlayerReadyForInventory();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
+    const bool ready = IsVrPlayerReadyForInventory(pPlayer);
 
     file << "ready=" << (ready ? "1" : "0") << "\n";
     file << "policy=equipment_snapshot_only\n";

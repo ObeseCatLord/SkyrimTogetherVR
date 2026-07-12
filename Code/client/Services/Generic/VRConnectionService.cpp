@@ -13,6 +13,7 @@
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <PlayerCharacter.h>
+#include <VR/VRPlayerReadiness.h>
 #include <Services/TransportService.h>
 #include <World.h>
 
@@ -25,7 +26,7 @@ constexpr char kStatusFileName[] = "SkyrimTogetherVR.status";
 
 bool IsVrPlayerReadyForConnection() noexcept
 {
-    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     return pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
 }
 

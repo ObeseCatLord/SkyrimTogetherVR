@@ -231,6 +231,25 @@ REQUIRED_INSTALLER_TOKENS = (
     "Install self-test passed.",
 )
 
+REQUIRED_VR_PLAYER_READINESS_TOKENS = {
+    "Code/client/Games/Skyrim/VR/VRPlayerReadiness.h": (
+        "TryGetReadablePlayerForVR",
+        "IsReadablePlayerPage",
+        "VirtualQuery",
+        "MEM_COMMIT",
+        "PAGE_GUARD",
+        "PAGE_NOACCESS",
+        "deferring player-derived work",
+    ),
+    "Code/client/Services/Generic/DiscoveryService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/PlayerService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/VRConnectionService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/VRMovementService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/VRInventoryService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/VRSaveLoadService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Games/Skyrim/VR/VRPlayerPose.cpp": ("TryGetReadablePlayerForVR",),
+}
+
 REQUIRED_DOC_TOKENS = {
     "Docs/SkyrimVR/windows-build.md": (
         "First VR Smoke-Test Package",
@@ -315,6 +334,12 @@ REQUIRED_DOC_TOKENS = {
         "requiredMovementRelay",
         "avatarSyncAudit",
         "cannot be relaxed by omitting `requiredRemotePlayer`",
+    ),
+    "Docs/SkyrimVR/player-singleton-startup-guard.md": (
+        "TryGetReadablePlayerForVR",
+        "VirtualQuery",
+        "0x18060cbcf",
+        "Windows default package",
     ),
 }
 
@@ -462,6 +487,12 @@ def main():
         failures.append("SkyrimVRImmersiveLauncher must whole-archive link SkyrimTogetherVRClient")
     if '"/DELAYLOAD:libcef.dll"' not in launcher_xmake:
         failures.append("SkyrimVRImmersiveLauncher must delay-load libcef.dll")
+
+    for relative_file, tokens in REQUIRED_VR_PLAYER_READINESS_TOKENS.items():
+        text = read_text(root / relative_file)
+        for token in tokens:
+            if token not in text:
+                failures.append(f"{relative_file} missing VR player-readiness token: {token}")
 
     for relative_file, tokens in REQUIRED_DOC_TOKENS.items():
         text = read_text(root / relative_file)

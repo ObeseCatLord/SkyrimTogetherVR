@@ -4,6 +4,7 @@
 #include <Games/TES.h>
 
 #include <Games/References.h>
+#include <VR/VRPlayerReadiness.h>
 
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESWorldSpace.h>
@@ -76,7 +77,7 @@ DiscoveryService::DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher)
 
 void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
 {
-    PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return;
 
@@ -97,7 +98,7 @@ void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
 
 void DiscoveryService::VisitExteriorCell(bool aForceTrigger) noexcept
 {
-    const PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    const PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return;
 
@@ -169,7 +170,7 @@ void DiscoveryService::VisitInteriorCell(bool aForceTrigger) noexcept
 {
     ResetCachedCellData();
 
-    const PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    const PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     const TESObjectCELL* pParentCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
     if (!pParentCell)
         return;
@@ -243,7 +244,7 @@ void DiscoveryService::DetectGridCellChange(TESWorldSpace* aWorldSpace, bool aNe
         }
     }
 
-    const PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    const PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     TESObjectCELL* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
     if (!pCell)
         pCell = pModManager->GetCellFromCoordinates(pTES->GetCurrentGridXData(), pTES->GetCurrentGridYData(), aWorldSpace, false);
@@ -270,7 +271,7 @@ void DiscoveryService::DetectGridCellChange(TESWorldSpace* aWorldSpace, bool aNe
 
 void DiscoveryService::VisitForms() noexcept
 {
-    auto* pPlayer = PlayerCharacter::Get();
+    auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return;
 
@@ -431,7 +432,7 @@ void DiscoveryService::WriteVrDiscoveryStatusFile() noexcept
     if (!file)
         return;
 
-    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
     const auto* pWorldSpace = pPlayer ? pPlayer->GetWorldSpace() : nullptr;
 

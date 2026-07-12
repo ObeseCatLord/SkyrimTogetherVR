@@ -2,6 +2,7 @@
 
 #include <NetImmerse/NiNode.h>
 #include <PlayerCharacter.h>
+#include <VR/VRPlayerReadiness.h>
 
 namespace
 {
@@ -41,7 +42,7 @@ bool CaptureLocalPlayerPose(VRPlayerPose& aOut) noexcept
     aOut = {};
 
 #if TP_SKYRIM_VR
-    const PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    const PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return false;
 

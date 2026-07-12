@@ -10,6 +10,7 @@
 #include <Messages/NotifyVRMovementUpdate.h>
 #include <Messages/RequestVRMovementUpdate.h>
 #include <PlayerCharacter.h>
+#include <VR/VRPlayerReadiness.h>
 #include <Services/TransportService.h>
 #include <World.h>
 #include <vr_common/VRHandoffPath.h>
@@ -30,10 +31,9 @@ std::filesystem::path GetHandoffDirectory()
     return SkyrimTogetherVR::Handoff::GetDirectory();
 }
 
-bool IsVrPlayerReadyForMovement() noexcept
+bool IsVrPlayerReadyForMovement(const PlayerCharacter* apPlayer) noexcept
 {
-    const auto* pPlayer = PlayerCharacter::Get();
-    return pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
+    return apPlayer && apPlayer->GetBaseFormData() && apPlayer->GetParentCellData();
 }
 
 GameId ToServerId(World& aWorld, uint32_t aFormId) noexcept
@@ -182,8 +182,8 @@ void VRMovementService::PruneRemoteMovements(double aDelta) noexcept
 
 bool VRMovementService::CaptureLocalMovement(VRMovementUpdate& aUpdate) noexcept
 {
-    const auto* pPlayer = PlayerCharacter::Get();
-    if (!IsVrPlayerReadyForMovement() || !pPlayer)
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
+    if (!IsVrPlayerReadyForMovement(pPlayer))
         return false;
 
     const auto* pWorldSpace = pPlayer->GetWorldSpace();
@@ -218,7 +218,8 @@ void VRMovementService::WriteMovementStatusFile() noexcept
     if (!file)
         return;
 
-    const bool ready = IsVrPlayerReadyForMovement();
+    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
+    const bool ready = IsVrPlayerReadyForMovement(pPlayer);
 
     file << "ready=" << (ready ? "1" : "0") << "\n";
     file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
