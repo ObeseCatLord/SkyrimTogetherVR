@@ -52,7 +52,6 @@ REQUIRED_QUEST_IMPORT_TOKENS = (
     "Function RegisterForSingleUpdate(float afInterval) Native",
     "Event OnInit()",
     "Event OnUpdate()",
-    "If !SkyrimTogetherVRTickBridge.ClaimCadence(2)",
 )
 
 REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
@@ -105,6 +104,7 @@ REQUIRED_PLAYER_ALIAS_PEX_TOKENS = REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS
 REQUIRED_MIGRATION_SOURCE_TOKENS = (
     "ScriptName SkyrimTogetherVRMigrationXScript extends Quest Hidden",
     "SkyrimTogetherVRTickBridge.ClaimCadence(2)",
+    "If !SkyrimTogetherVRTickBridge.ClaimCadence(2)",
     "SkyrimTogetherVRTickBridge.ArmOnInit()",
     "RegisterForSingleUpdate(0.05)",
     "Event OnUpdate()",

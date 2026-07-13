@@ -22,17 +22,41 @@
 #include <vr_common/VRTickBridge.h>
 
 // The official legacy SKSEVR SDK declares these primitive specializations in
-// PapyrusArgs.cpp. The bridge only needs bool, so defining that narrow pair
-// avoids linking the SDK's broad Papyrus argument implementation and its
-// unrelated globals.
+// PapyrusArgs.cpp. Keep the exact small subset used by this bridge local so it
+// does not link the SDK's broad argument implementation and its unrelated
+// globals.
 template <> void PackValue<bool>(VMValue* apDestination, bool* apSource, VMClassRegistry*)
 {
     apDestination->SetBool(*apSource);
 }
 
+template <> void UnpackValue<SInt32>(SInt32* apDestination, VMValue* apSource)
+{
+    switch (apSource->type)
+    {
+    case VMValue::kType_Int:
+        *apDestination = apSource->data.u;
+        break;
+    case VMValue::kType_Float:
+        *apDestination = apSource->data.f;
+        break;
+    case VMValue::kType_Bool:
+        *apDestination = apSource->data.b;
+        break;
+    default:
+        *apDestination = 0;
+        break;
+    }
+}
+
 template <> UInt64 GetTypeID<bool>(VMClassRegistry*)
 {
     return VMValue::kType_Bool;
+}
+
+template <> UInt64 GetTypeID<SInt32>(VMClassRegistry*)
+{
+    return VMValue::kType_Int;
 }
 
 // NativeFunction owns four StringCache::Ref members. This is the exact
