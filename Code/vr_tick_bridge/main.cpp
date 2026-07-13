@@ -33,6 +33,23 @@ template <> UInt64 GetTypeID<bool>(VMClassRegistry*)
     return VMValue::kType_Bool;
 }
 
+// NativeFunction owns four StringCache::Ref members. This is the exact
+// constructor used by the pinned SKSEVR GameTypes.cpp, whose fixed address is
+// valid only after the explicit VR runtime gate below.
+StringCache::Ref::Ref()
+{
+    CALL_MEMBER_FN(this, ctor)("");
+}
+
+// NativeFunction0's generic Run implementation emits this symbol even for a
+// StaticFunctionTag. Its static-type branch never executes the handle path, so
+// an inert implementation keeps this bridge independent of PapyrusArgs.cpp and
+// its unvalidated object-handle globals.
+void* UnpackHandle(VMValue*, UInt32)
+{
+    return nullptr;
+}
+
 namespace
 {
 using SkyrimTogetherVR::TickBridge::DispatchCallback;

@@ -34,6 +34,8 @@ REQUIRED_TOKENS = {
         "NativeFunction0<StaticFunctionTag, bool>",
         "PackValue<bool>",
         "GetTypeID<bool>",
+        "StringCache::Ref::Ref()",
+        "void* UnpackHandle(VMValue*, UInt32)",
         "RUNTIME_VR_VERSION_1_4_15",
         "SKSE_VERSION_RELEASEIDX",
         "IsSupportedRuntime",
