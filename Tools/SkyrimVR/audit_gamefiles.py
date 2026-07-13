@@ -128,7 +128,8 @@ REQUIRED_MIGRATION_ALIAS_SOURCE_TOKENS = (
 
 REQUIRED_MIGRATION_ALIAS_PEX_TOKENS = (
     "SkyrimTogetherVRMigrationScript",
-    "SkyrimTogetherVRMigrationXScript",
+    # Caprica serializes the property script type with a lowercase first byte.
+    "skyrimTogetherVRMigrationXScript",
     "OnPlayerLoadGame",
     "ArmOnPlayerLoadGame",
     "VerifyLaunch",
