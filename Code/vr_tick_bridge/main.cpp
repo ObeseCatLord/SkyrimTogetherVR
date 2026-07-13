@@ -1,6 +1,8 @@
 #include "LegacySksePrefix.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <limits>
 #include <new>
@@ -62,6 +64,10 @@ constexpr char kPapyrusClass[] = "SkyrimTogetherVRTickBridge";
 SKSETaskInterface* g_taskInterface = nullptr;
 volatile LONG g_taskQueued = 0;
 volatile LONG g_mappingFaulted = 0;
+volatile LONG g_tickCallCount = 0;
+volatile LONG g_taskEnqueueCount = 0;
+volatile LONG g_taskRunCount = 0;
+volatile LONG64 g_lastRateLimitedLogAt = 0;
 const Endpoint* g_endpoint = nullptr;
 
 bool IsSupportedRuntime(const SKSEInterface* apSkse) noexcept
@@ -70,10 +76,54 @@ bool IsSupportedRuntime(const SKSEInterface* apSkse) noexcept
            apSkse->GetReleaseIndex && apSkse->GetReleaseIndex() >= SKSE_VERSION_RELEASEIDX;
 }
 
+bool ShouldWriteRateLimitedLog() noexcept
+{
+    constexpr ULONGLONG kLogIntervalMilliseconds = 5'000;
+    const auto now = GetTickCount64();
+    const auto previous = static_cast<ULONGLONG>(InterlockedCompareExchange64(&g_lastRateLimitedLogAt, 0, 0));
+    if (now < previous || now - previous < kLogIntervalMilliseconds)
+        return false;
+
+    return InterlockedCompareExchange64(&g_lastRateLimitedLogAt, static_cast<LONG64>(now), static_cast<LONG64>(previous)) == static_cast<LONG64>(previous);
+}
+
 void LogDebug(const char* apMessage) noexcept
 {
     OutputDebugStringA(apMessage);
     OutputDebugStringA("\n");
+
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&LogDebug),
+            &module))
+        return;
+
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(module, path, _countof(path));
+    if (length == 0 || length >= _countof(path))
+        return;
+
+    auto* const leaf = std::wcsrchr(path, L'\\');
+    if (!leaf || (leaf - path) + 1 >= static_cast<ptrdiff_t>(_countof(path)))
+        return;
+
+    constexpr wchar_t kLogName[] = L"SkyrimTogetherVRTickBridge.log";
+    if (wcscpy_s(leaf + 1, _countof(path) - static_cast<size_t>((leaf - path) + 1), kLogName) != 0)
+        return;
+
+    char line[640]{};
+    const auto count = _snprintf_s(line, _countof(line), _TRUNCATE, "[%llu] %s\r\n", static_cast<unsigned long long>(GetTickCount64()), apMessage);
+    if (count <= 0)
+        return;
+
+    const auto handle = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD written = 0;
+    WriteFile(handle, line, static_cast<DWORD>(count), &written, nullptr);
+    CloseHandle(handle);
 }
 
 LONG ReadState(const Endpoint& acEndpoint) noexcept
@@ -176,7 +226,11 @@ bool ValidateReadyEndpoint(const Endpoint& acEndpoint, DispatchCallback& arCallb
         return false;
     }
     if (acEndpoint.ReadyThreadId != GetCurrentThreadId())
+    {
+        if (ShouldWriteRateLimitedLog())
+            LogDebug("SkyrimTogetherVRTickBridge: task rejected reason=ready_thread_mismatch");
         return false;
+    }
 
     const auto callbackAddress = acEndpoint.ImageBase + acEndpoint.CallbackRva;
     MEMORY_BASIC_INFORMATION memory{};
@@ -197,14 +251,32 @@ class ClientUpdateTask final : public TaskDelegate
 public:
     void Run() override
     {
+        const auto runCount = InterlockedIncrement(&g_taskRunCount);
         if (!g_endpoint)
+        {
+            if (ShouldWriteRateLimitedLog())
+                LogDebug("SkyrimTogetherVRTickBridge: task rejected reason=missing_endpoint");
             return;
+        }
 
         DispatchCallback callback = nullptr;
         if (!ValidateReadyEndpoint(*g_endpoint, callback))
             return;
 
-        callback(g_endpoint->Epoch);
+        const auto dispatchResult = static_cast<SkyrimTogetherVR::TickBridge::DispatchResult>(callback(g_endpoint->Epoch));
+        if (runCount == 1 || dispatchResult != SkyrimTogetherVR::TickBridge::DispatchResult::Success || ShouldWriteRateLimitedLog())
+        {
+            char message[192]{};
+            _snprintf_s(
+                message,
+                _countof(message),
+                _TRUNCATE,
+                "SkyrimTogetherVRTickBridge: task_run=%ld dispatch_result=%u thread=%lu",
+                runCount,
+                static_cast<unsigned int>(dispatchResult),
+                static_cast<unsigned long>(GetCurrentThreadId()));
+            LogDebug(message);
+        }
     }
 
     void Dispose() override
@@ -232,12 +304,42 @@ bool QueueClientUpdate() noexcept
     }
 
     g_taskInterface->AddTask(task);
+    const auto enqueueCount = InterlockedIncrement(&g_taskEnqueueCount);
+    if (enqueueCount == 1 || (enqueueCount % 100) == 0)
+    {
+        char message[128]{};
+        _snprintf_s(message, _countof(message), _TRUNCATE, "SkyrimTogetherVRTickBridge: task_enqueued=%ld", enqueueCount);
+        LogDebug(message);
+    }
     return true;
 }
 
 bool PapyrusTick(StaticFunctionTag*)
 {
-    return QueueClientUpdate();
+    const auto tickCount = InterlockedIncrement(&g_tickCallCount);
+    if (tickCount == 1 || (tickCount % 100) == 0)
+    {
+        char message[128]{};
+        _snprintf_s(message, _countof(message), _TRUNCATE, "SkyrimTogetherVRTickBridge: papyrus_tick=%ld", tickCount);
+        LogDebug(message);
+    }
+
+    const auto queued = QueueClientUpdate();
+    if (!queued && ShouldWriteRateLimitedLog())
+        LogDebug("SkyrimTogetherVRTickBridge: papyrus_tick rejected");
+    return queued;
+}
+
+bool PapyrusArmOnInit(StaticFunctionTag*)
+{
+    LogDebug("SkyrimTogetherVRTickBridge: papyrus_arm=OnInit");
+    return g_taskInterface != nullptr;
+}
+
+bool PapyrusArmOnPlayerLoadGame(StaticFunctionTag*)
+{
+    LogDebug("SkyrimTogetherVRTickBridge: papyrus_arm=OnPlayerLoadGame");
+    return g_taskInterface != nullptr;
 }
 
 bool RegisterPapyrusFunctions(VMClassRegistry* apRegistry)
@@ -246,6 +348,10 @@ bool RegisterPapyrusFunctions(VMClassRegistry* apRegistry)
         return false;
 
     apRegistry->RegisterFunction(new NativeFunction0<StaticFunctionTag, bool>("Tick", kPapyrusClass, PapyrusTick, apRegistry));
+    apRegistry->RegisterFunction(new NativeFunction0<StaticFunctionTag, bool>("ArmOnInit", kPapyrusClass, PapyrusArmOnInit, apRegistry));
+    apRegistry->RegisterFunction(
+        new NativeFunction0<StaticFunctionTag, bool>("ArmOnPlayerLoadGame", kPapyrusClass, PapyrusArmOnPlayerLoadGame, apRegistry));
+    LogDebug("SkyrimTogetherVRTickBridge: Papyrus registration callback completed");
     return true;
 }
 } // namespace

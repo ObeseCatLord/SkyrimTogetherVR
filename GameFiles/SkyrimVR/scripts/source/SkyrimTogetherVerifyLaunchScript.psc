@@ -1,6 +1,7 @@
-ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Native Hidden
+ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Hidden
 
 Event OnInit()
+    SkyrimTogetherVRTickBridge.ArmOnInit()
     VerifyLaunch()
 EndEvent
 

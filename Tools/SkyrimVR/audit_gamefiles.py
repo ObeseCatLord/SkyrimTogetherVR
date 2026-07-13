@@ -25,17 +25,21 @@ REQUIRED_VERIFY_SOURCE_TOKENS = (
     "StartTickBridge",
     "RegisterForSingleUpdate(0.05)",
     "Event OnUpdate()",
+    "SkyrimTogetherVRTickBridge.ArmOnInit()",
     "SkyrimTogetherVRTickBridge.Tick()",
 )
 
 FORBIDDEN_VERIFY_SOURCE_TOKENS = (
     "DidLaunchSkyrimTogether",
+    "ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Native",
     "Skyrim Together VR is not running!",
 )
 
 REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
     "ScriptName SkyrimTogetherVRTickBridge Native Hidden",
     "Bool Function Tick() Global Native",
+    "Bool Function ArmOnInit() Global Native",
+    "Bool Function ArmOnPlayerLoadGame() Global Native",
 )
 
 REQUIRED_QUEST_IMPORT_TOKENS = (
@@ -46,6 +50,8 @@ REQUIRED_QUEST_IMPORT_TOKENS = (
 REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
     "SkyrimTogetherVRTickBridge",
     "Tick",
+    "ArmOnInit",
+    "ArmOnPlayerLoadGame",
 )
 
 REQUIRED_UTILS_NATIVE_TOKENS = (
@@ -81,6 +87,7 @@ REQUIRED_VR_MENU_SOURCE_TOKENS = (
 
 REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS = (
     "OnPlayerLoadGame",
+    "ArmOnPlayerLoadGame",
     "VerifyLaunch",
 )
 

@@ -41,11 +41,14 @@ The compile-only import stubs are not package files and should not be copied int
 
 ## Source Notes
 
-Caprica requires scripts containing native function declarations to be marked `Native`. The VR sources now make that explicit:
+Caprica requires scripts containing native function declarations to be marked `Native`. Only the scripts that actually declare native functions use that marker:
 
-- `SkyrimTogetherVerifyLaunchScript.psc`: `ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Native Hidden`
 - `SkyrimTogetherUtils.psc`: `Scriptname SkyrimTogetherUtils Native Hidden`
 - `SkyrimTogetherVRTickBridge.psc`: `ScriptName SkyrimTogetherVRTickBridge Native Hidden`
+
+`SkyrimTogetherVerifyLaunchScript.psc` deliberately remains a normal quest
+script so its `OnInit` and `OnUpdate` timer lifecycle is represented as regular
+Papyrus bytecode.
 
 `SkyrimTogetherVRConnectionMenu.psc` avoids `state` as a local variable name because Caprica treats it as a reserved Papyrus keyword.
 
