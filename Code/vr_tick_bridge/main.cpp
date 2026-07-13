@@ -1,4 +1,4 @@
-#include <common/IPrefix.h>
+#include "LegacySksePrefix.h"
 
 #include <cstdint>
 #include <cwchar>

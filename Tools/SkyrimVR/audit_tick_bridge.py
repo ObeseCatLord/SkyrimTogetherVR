@@ -61,12 +61,15 @@ REQUIRED_TOKENS = {
         '"SkyrimTogetherVRTickBridge.psc"',
     ),
     "Code/vr_tick_bridge/xmake.lua": (
-        "add_cxflags(\"/FIcommon/IPrefix.h\"",
-        'remove_defines("NOMINMAX")',
+        "add_cxflags(\"/FILegacySksePrefix.h\"",
         '"/permissive"',
         'add_defines("RUNTIME", "IS_VR", "RUNTIME_VERSION=0x010400F1")',
         '"GameAPI.cpp"',
         '"Relocation.cpp"',
+    ),
+    "Code/vr_tick_bridge/LegacySksePrefix.h": (
+        "#undef NOMINMAX",
+        "#include <common/IPrefix.h>",
     ),
     "BuildSkyrimTogetherVR-Windows.ps1": (
         "SkyrimTogetherVRTickBridge",
