@@ -16,6 +16,8 @@ REQUIRED_STAGED_FILES = (
     "scripts/SkyrimTogetherVRTickBridge.pex",
     "scripts/SkyrimTogetherVerifyLaunchScript.pex",
     "scripts/SkyrimTogetherPlayerAliasScript.pex",
+    "scripts/SkyrimTogetherVRMigrationXScript.pex",
+    "scripts/SkyrimTogetherVRMigrationScript.pex",
     "scripts/SkyrimTogetherVRConnectionMenu.pex",
     "scripts/SkyrimTogetherVRConnectionSpellEffect.pex",
 )

@@ -17,7 +17,7 @@ import zlib
 RECORD_HEADER_SIZE = 24
 GROUP_HEADER_SIZE = 24
 COMPRESSED_RECORD_FLAG = 0x00040000
-START_GAME_ENABLED_FLAG = 0x0001
+START_GAME_ENABLED_FLAG = 0x0010
 
 
 class PluginFormatError(ValueError):
@@ -116,15 +116,36 @@ def iter_subrecords(payload):
         raise PluginFormatError("XXXX subrecord without a following subrecord")
 
 
+def plugin_master_count(data):
+    """Return the number of masters recorded by a normal ESP/ESM header."""
+    if len(data) < RECORD_HEADER_SIZE or data[:4] != b"TES4":
+        raise PluginFormatError("input is not a TES4 plugin")
+    header_size = read_u32(data, 4)
+    header_end = RECORD_HEADER_SIZE + header_size
+    if header_end > len(data):
+        raise PluginFormatError("truncated TES4 header")
+    return sum(1 for signature, _value in iter_subrecords(data[RECORD_HEADER_SIZE:header_end]) if signature == b"MAST")
+
+
 def start_game_enabled_quest_ids(plugin):
-    """Return Start Game Enabled QUST FormIDs in their plugin record order."""
+    """Return new Start Game Enabled QUST FormIDs in their plugin record order.
+
+    A plugin can override a master quest that is already Start Game Enabled.
+    xEdit does not put that inherited startup into this plugin's SEQ file.  For a
+    normal ESP, records owned by the plugin have a FormID top byte equal to the
+    number of masters in its TES4 header; inherited records use a lower index.
+    """
     data = pathlib.Path(plugin).read_bytes()
     if len(data) < RECORD_HEADER_SIZE or data[:4] != b"TES4":
         raise PluginFormatError(f"{plugin} is not a TES4 plugin")
 
+    self_index = plugin_master_count(data)
+    if self_index > 0xFD:
+        raise PluginFormatError(f"unsupported master count for a normal ESP: {self_index}")
+
     quest_ids = []
     for signature, _flags, form_id, payload in iter_records(data):
-        if signature != b"QUST":
+        if signature != b"QUST" or (form_id >> 24) != self_index:
             continue
         dnam = next((value for kind, value in iter_subrecords(payload) if kind == b"DNAM"), None)
         if dnam is not None and len(dnam) >= 2 and read_u16(dnam, 0) & START_GAME_ENABLED_FLAG:

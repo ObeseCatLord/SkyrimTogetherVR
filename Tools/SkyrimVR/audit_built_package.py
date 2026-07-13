@@ -76,6 +76,8 @@ REQUIRED_STAGED_FILES = (
     "Data/scripts/SkyrimTogetherVRTickBridge.pex",
     "Data/scripts/SkyrimTogetherVerifyLaunchScript.pex",
     "Data/scripts/SkyrimTogetherPlayerAliasScript.pex",
+    "Data/scripts/SkyrimTogetherVRMigrationXScript.pex",
+    "Data/scripts/SkyrimTogetherVRMigrationScript.pex",
     "Data/scripts/SkyrimTogetherVRConnectionMenu.pex",
     "Data/scripts/SkyrimTogetherVRConnectionSpellEffect.pex",
     "LaunchSkyrimTogetherVRCompanion.bat",
@@ -451,6 +453,10 @@ def pex_tokens_for_package_file(relative_path):
         return audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS
     if name == "skyrimtogetherplayeraliasscript.pex":
         return audit_gamefiles.REQUIRED_PLAYER_ALIAS_PEX_TOKENS
+    if name == "skyrimtogethervrmigrationxscript.pex":
+        return audit_gamefiles.REQUIRED_MIGRATION_PEX_TOKENS
+    if name == "skyrimtogethervrmigrationscript.pex":
+        return audit_gamefiles.REQUIRED_MIGRATION_ALIAS_PEX_TOKENS
     if name == "skyrimtogethervrconnectionspelleffect.pex":
         return audit_gamefiles.REQUIRED_VR_EFFECT_PEX_TOKENS
     return ()
@@ -496,6 +502,32 @@ def audit_packaged_papyrus(package, failures):
                 f"packaged Papyrus bytecode is missing VR token(s): {relative_path}: "
                 + ", ".join(missing_tokens)
             )
+
+
+def audit_startup_quest_assets(package, skyrim_vr, failures):
+    data_dir = package / "Data"
+    plugin_path = data_dir / "SkyrimTogether.esp"
+    sequence_path = data_dir / "Seq" / "SkyrimTogether.seq"
+    if not plugin_path.exists() or not sequence_path.exists():
+        return
+
+    try:
+        plugin = audit_gamefiles.audit_plugin(data_dir, skyrim_vr)
+    except (OSError, ValueError) as exc:
+        failures.append(f"could not audit packaged startup quest assets: {exc}")
+        return
+
+    if plugin["sequence_error"]:
+        failures.append(f"packaged startup SEQ generation failed: {plugin['sequence_error']}")
+    if plugin["startup_migration_error"]:
+        failures.append(f"packaged startup migration quest verification failed: {plugin['startup_migration_error']}")
+    if plugin["missing_expected_start_quests"]:
+        failures.append(
+            "packaged startup migration is missing expected quest FormID(s): "
+            + ", ".join(f"0x{form_id:08X}" for form_id in plugin["missing_expected_start_quests"])
+        )
+    if not plugin["sequence_matches"]:
+        failures.append("packaged startup SEQ does not exactly match the staged SkyrimTogether.esp")
 
 
 def check_file(package, relative_path, failures, require_pe=False):
@@ -795,6 +827,7 @@ def audit_package(
     for relative_file in REQUIRED_STAGED_FILES:
         check_file(package, relative_file, failures)
     audit_packaged_papyrus(package, failures)
+    audit_startup_quest_assets(package, skyrim_vr, failures)
     helper_closure, helper_failures = packaged_python_import_closure(package)
     failures.extend(helper_failures)
     for helper in helper_closure:
@@ -959,6 +992,8 @@ def papyrus_pex_fixture():
         audit_gamefiles.REQUIRED_TICK_BRIDGE_PEX_TOKENS,
         audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS,
         audit_gamefiles.REQUIRED_PLAYER_ALIAS_PEX_TOKENS,
+        audit_gamefiles.REQUIRED_MIGRATION_PEX_TOKENS,
+        audit_gamefiles.REQUIRED_MIGRATION_ALIAS_PEX_TOKENS,
         audit_gamefiles.REQUIRED_VR_EFFECT_PEX_TOKENS,
     ):
         tokens.extend(token_group)
@@ -1019,6 +1054,16 @@ def populate_test_package(package, avatar_sync=False, dll_only=False, gameplay=F
     for relative_file in REQUIRED_STAGED_FILES:
         path = package / relative_file
         if path.name == "SkyrimTogetherVR_BuildManifest.json":
+            continue
+        if relative_file == "Data/SkyrimTogether.esp":
+            source = pathlib.Path(__file__).resolve().parents[2] / "GameFiles" / "SkyrimVR" / "SkyrimTogether.esp"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source.read_bytes())
+            continue
+        elif relative_file == "Data/Seq/SkyrimTogether.seq":
+            source = pathlib.Path(__file__).resolve().parents[2] / "GameFiles" / "SkyrimVR" / "Seq" / "SkyrimTogether.seq"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source.read_bytes())
             continue
         if path.suffix.lower() == ".csv":
             write_csv(path)

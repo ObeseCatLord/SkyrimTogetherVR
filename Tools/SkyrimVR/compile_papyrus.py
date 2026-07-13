@@ -17,6 +17,8 @@ TARGET_SCRIPTS = (
     "SkyrimTogetherVRTickBridge.psc",
     "SkyrimTogetherVerifyLaunchScript.psc",
     "SkyrimTogetherPlayerAliasScript.psc",
+    "SkyrimTogetherVRMigrationXScript.psc",
+    "SkyrimTogetherVRMigrationScript.psc",
     "SkyrimTogetherUtils.psc",
     "SkyrimTogetherVRConnectionMenu.psc",
     "SkyrimTogetherVRConnectionSpellEffect.psc",

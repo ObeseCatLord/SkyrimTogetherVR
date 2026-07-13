@@ -5,6 +5,7 @@ import pathlib
 import re
 from collections import Counter
 
+import add_startup_migration_quest
 import generate_seq
 import vr_paths
 
@@ -26,7 +27,9 @@ REQUIRED_VERIFY_SOURCE_TOKENS = (
     "StartTickBridge",
     "RegisterForSingleUpdate(0.05)",
     "Event OnUpdate()",
+    "If !SkyrimTogetherVRTickBridge.ClaimCadence(1)",
     "SkyrimTogetherVRTickBridge.ArmOnInit()",
+    "SkyrimTogetherVRTickBridge.ClaimCadence(1)",
     "SkyrimTogetherVRTickBridge.Tick()",
 )
 
@@ -39,6 +42,7 @@ FORBIDDEN_VERIFY_SOURCE_TOKENS = (
 REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
     "ScriptName SkyrimTogetherVRTickBridge Native Hidden",
     "Bool Function Tick() Global Native",
+    "Bool Function ClaimCadence(Int aiOwner) Global Native",
     "Bool Function ArmOnInit() Global Native",
     "Bool Function ArmOnPlayerLoadGame() Global Native",
 )
@@ -48,6 +52,7 @@ REQUIRED_QUEST_IMPORT_TOKENS = (
     "Function RegisterForSingleUpdate(float afInterval) Native",
     "Event OnInit()",
     "Event OnUpdate()",
+    "If !SkyrimTogetherVRTickBridge.ClaimCadence(2)",
 )
 
 REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
@@ -55,6 +60,7 @@ REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
     "Tick",
     "ArmOnInit",
     "ArmOnPlayerLoadGame",
+    "ClaimCadence",
 )
 
 REQUIRED_UTILS_NATIVE_TOKENS = (
@@ -96,6 +102,38 @@ REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS = (
 
 REQUIRED_PLAYER_ALIAS_PEX_TOKENS = REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS
 
+REQUIRED_MIGRATION_SOURCE_TOKENS = (
+    "ScriptName SkyrimTogetherVRMigrationXScript extends Quest Hidden",
+    "SkyrimTogetherVRTickBridge.ClaimCadence(2)",
+    "SkyrimTogetherVRTickBridge.ArmOnInit()",
+    "RegisterForSingleUpdate(0.05)",
+    "Event OnUpdate()",
+    "SkyrimTogetherVRTickBridge.Tick()",
+)
+
+REQUIRED_MIGRATION_PEX_TOKENS = (
+    "SkyrimTogetherVRMigrationXScript",
+    "ClaimCadence",
+    "ArmOnInit",
+    "Tick",
+)
+
+REQUIRED_MIGRATION_ALIAS_SOURCE_TOKENS = (
+    "ScriptName SkyrimTogetherVRMigrationScript extends ReferenceAlias",
+    "SkyrimTogetherVRMigrationXScript Property VerifyLaunchScript Auto",
+    "OnPlayerLoadGame",
+    "ArmOnPlayerLoadGame",
+    "VerifyLaunch",
+)
+
+REQUIRED_MIGRATION_ALIAS_PEX_TOKENS = (
+    "SkyrimTogetherVRMigrationScript",
+    "SkyrimTogetherVRMigrationXScript",
+    "OnPlayerLoadGame",
+    "ArmOnPlayerLoadGame",
+    "VerifyLaunch",
+)
+
 REQUIRED_VR_MENU_PEX_TOKENS = (
     "SkyrimTogetherVRConnectionMenu",
     "ConnectToSkyrimTogether",
@@ -134,7 +172,10 @@ REQUIRED_VR_MENU_ESP_TOKENS = (
     b"Opens the Skyrim Together VR connection menu.",
 )
 
-EXPECTED_START_GAME_ENABLED_QUEST_IDS = (0x02003DD0,)
+EXPECTED_START_GAME_ENABLED_QUEST_IDS = (
+    0x02003DD0,
+    add_startup_migration_quest.MIGRATION_FORM_ID,
+)
 
 
 def read_u16(data, offset):
@@ -216,6 +257,7 @@ def audit_plugin(package, skyrim_vr):
 
     sequence_ids = []
     sequence_error = None
+    startup_migration_error = None
     expected_sequence = b""
     if plugin.exists():
         try:
@@ -223,6 +265,10 @@ def audit_plugin(package, skyrim_vr):
             expected_sequence = generate_seq.sequence_bytes(plugin)
         except (OSError, generate_seq.PluginFormatError) as exc:
             sequence_error = str(exc)
+        try:
+            add_startup_migration_quest.verify_plugin(plugin)
+        except (OSError, add_startup_migration_quest.MigrationError, generate_seq.PluginFormatError) as exc:
+            startup_migration_error = str(exc)
     sequence_actual = sequence.read_bytes() if sequence.exists() and sequence.is_file() else None
     missing_expected_start_quests = sorted(
         set(EXPECTED_START_GAME_ENABLED_QUEST_IDS) - set(sequence_ids)
@@ -244,6 +290,7 @@ def audit_plugin(package, skyrim_vr):
         "sequence_actual": sequence_actual,
         "sequence_matches": sequence_actual == expected_sequence and bool(expected_sequence),
         "missing_expected_start_quests": missing_expected_start_quests,
+        "startup_migration_error": startup_migration_error,
     }
 
 
@@ -355,6 +402,44 @@ def audit_papyrus(package, repo):
     else:
         missing_player_alias_pex_tokens = list(REQUIRED_PLAYER_ALIAS_PEX_TOKENS)
 
+    migration_source = source_dir / "SkyrimTogetherVRMigrationXScript.psc"
+    missing_migration_source_tokens = []
+    if migration_source.exists():
+        text = migration_source.read_text(encoding="utf-8", errors="replace")
+        missing_migration_source_tokens = [token for token in REQUIRED_MIGRATION_SOURCE_TOKENS if token not in text]
+    else:
+        missing_migration_source_tokens = list(REQUIRED_MIGRATION_SOURCE_TOKENS)
+
+    migration_pex = scripts / "SkyrimTogetherVRMigrationXScript.pex"
+    missing_migration_pex_tokens = []
+    if migration_pex.exists():
+        data = migration_pex.read_bytes()
+        missing_migration_pex_tokens = [
+            token for token in REQUIRED_MIGRATION_PEX_TOKENS if token.encode("ascii") not in data
+        ]
+    else:
+        missing_migration_pex_tokens = list(REQUIRED_MIGRATION_PEX_TOKENS)
+
+    migration_alias_source = source_dir / "SkyrimTogetherVRMigrationScript.psc"
+    missing_migration_alias_source_tokens = []
+    if migration_alias_source.exists():
+        text = migration_alias_source.read_text(encoding="utf-8", errors="replace")
+        missing_migration_alias_source_tokens = [
+            token for token in REQUIRED_MIGRATION_ALIAS_SOURCE_TOKENS if token not in text
+        ]
+    else:
+        missing_migration_alias_source_tokens = list(REQUIRED_MIGRATION_ALIAS_SOURCE_TOKENS)
+
+    migration_alias_pex = scripts / "SkyrimTogetherVRMigrationScript.pex"
+    missing_migration_alias_pex_tokens = []
+    if migration_alias_pex.exists():
+        data = migration_alias_pex.read_bytes()
+        missing_migration_alias_pex_tokens = [
+            token for token in REQUIRED_MIGRATION_ALIAS_PEX_TOKENS if token.encode("ascii") not in data
+        ]
+    else:
+        missing_migration_alias_pex_tokens = list(REQUIRED_MIGRATION_ALIAS_PEX_TOKENS)
+
     vr_effect_source = source_dir / "SkyrimTogetherVRConnectionSpellEffect.psc"
     missing_vr_effect_source_tokens = []
     if vr_effect_source.exists():
@@ -390,6 +475,10 @@ def audit_papyrus(package, repo):
         "missing_vr_menu_pex_tokens": missing_vr_menu_pex_tokens,
         "missing_player_alias_source_tokens": missing_player_alias_source_tokens,
         "missing_player_alias_pex_tokens": missing_player_alias_pex_tokens,
+        "missing_migration_source_tokens": missing_migration_source_tokens,
+        "missing_migration_pex_tokens": missing_migration_pex_tokens,
+        "missing_migration_alias_source_tokens": missing_migration_alias_source_tokens,
+        "missing_migration_alias_pex_tokens": missing_migration_alias_pex_tokens,
         "missing_vr_effect_source_tokens": missing_vr_effect_source_tokens,
         "missing_vr_effect_pex_tokens": missing_vr_effect_pex_tokens,
     }
@@ -508,11 +597,16 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
         handle.write(f"- Missing VR connection spell ESP tokens: {len(plugin['missing_vr_menu_tokens'])}\n")
         handle.write(f"- Start Game Enabled quest IDs: {len(plugin['sequence_ids'])}\n")
         handle.write(f"- Generated SEQ asset matches: {'yes' if plugin['sequence_matches'] else 'no'}\n")
+        handle.write(f"- Startup migration quest matches: {'yes' if not plugin['startup_migration_error'] else 'no'}\n")
         handle.write(f"- Missing VR connection native declarations in `SkyrimTogetherUtils.pex`: {missing_utils_pex_count}\n")
         handle.write(f"- Missing VR connection menu source tokens: {len(papyrus['missing_vr_menu_source_tokens'])}\n")
         handle.write(f"- Missing VR connection menu PEX tokens: {len(papyrus['missing_vr_menu_pex_tokens'])}\n")
         handle.write(f"- Missing VR connection grant source tokens: {len(papyrus['missing_player_alias_source_tokens'])}\n")
         handle.write(f"- Missing VR connection grant PEX tokens: {len(papyrus['missing_player_alias_pex_tokens'])}\n")
+        handle.write(f"- Missing migration quest source tokens: {len(papyrus['missing_migration_source_tokens'])}\n")
+        handle.write(f"- Missing migration quest PEX tokens: {len(papyrus['missing_migration_pex_tokens'])}\n")
+        handle.write(f"- Missing migration alias source tokens: {len(papyrus['missing_migration_alias_source_tokens'])}\n")
+        handle.write(f"- Missing migration alias PEX tokens: {len(papyrus['missing_migration_alias_pex_tokens'])}\n")
         handle.write(f"- Missing VR connection spell-effect source tokens: {len(papyrus['missing_vr_effect_source_tokens'])}\n")
         handle.write(f"- Missing VR connection spell-effect PEX tokens: {len(papyrus['missing_vr_effect_pex_tokens'])}\n")
         handle.write(f"- Behavior files: {len(behaviors['vr_files'])}\n")
@@ -553,6 +647,8 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
         handle.write(f"- SEQ asset matches generated quest index: {'yes' if plugin['sequence_matches'] else 'no'}\n")
         if plugin["sequence_error"]:
             handle.write(f"- SEQ generation error: `{plugin['sequence_error']}`\n")
+        if plugin["startup_migration_error"]:
+            handle.write(f"- Startup migration error: `{plugin['startup_migration_error']}`\n")
 
         handle.write("\n## Papyrus\n\n")
         handle.write("- Source files without matching PEX:\n")
@@ -583,6 +679,14 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
         handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_player_alias_source_tokens"]]))
         handle.write("- Missing VR connection grant tokens in `SkyrimTogetherPlayerAliasScript.pex`:\n")
         handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_player_alias_pex_tokens"]]))
+        handle.write("- Missing migration quest source tokens in `SkyrimTogetherVRMigrationXScript.psc`:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_migration_source_tokens"]]))
+        handle.write("- Missing migration quest PEX tokens in `SkyrimTogetherVRMigrationXScript.pex`:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_migration_pex_tokens"]]))
+        handle.write("- Missing migration alias source tokens in `SkyrimTogetherVRMigrationScript.psc`:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_migration_alias_source_tokens"]]))
+        handle.write("- Missing migration alias PEX tokens in `SkyrimTogetherVRMigrationScript.pex`:\n")
+        handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_migration_alias_pex_tokens"]]))
         handle.write("- Missing VR connection spell-effect tokens in `SkyrimTogetherVRConnectionSpellEffect.psc`:\n")
         handle.write(fmt_paths([pathlib.Path(token) for token in papyrus["missing_vr_effect_source_tokens"]]))
         handle.write("- Missing VR connection spell-effect tokens in `SkyrimTogetherVRConnectionSpellEffect.pex`:\n")
@@ -607,6 +711,8 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
             or papyrus["missing_tick_bridge_pex_tokens"]
             or papyrus["missing_vr_menu_pex_tokens"]
             or papyrus["missing_player_alias_pex_tokens"]
+            or papyrus["missing_migration_pex_tokens"]
+            or papyrus["missing_migration_alias_pex_tokens"]
             or papyrus["missing_vr_effect_pex_tokens"]
         )
         if needs_papyrus_rebuild:
@@ -688,12 +794,15 @@ def main():
     print(f"Missing VR connection spell ESP tokens: {len(plugin['missing_vr_menu_tokens'])}")
     print(f"Start Game Enabled quest IDs: {len(plugin['sequence_ids'])}")
     print(f"Generated SEQ asset matches: {'yes' if plugin['sequence_matches'] else 'no'}")
+    print(f"Startup migration quest matches: {'yes' if not plugin['startup_migration_error'] else 'no'}")
     print(f"Missing expected Start Game Enabled quest IDs: {len(plugin['missing_expected_start_quests'])}")
     print(f"Papyrus source files without matching PEX: {len(papyrus['missing_pex'])}")
     print(f"Missing SkyrimTogetherUtils.pex VR native declarations: {len(papyrus['missing_utils_pex_tokens'])}")
     print(f"Missing SkyrimTogetherVRConnectionMenu.psc source tokens: {len(papyrus['missing_vr_menu_source_tokens'])}")
     print(f"Missing SkyrimTogetherVRConnectionMenu.pex tokens: {len(papyrus['missing_vr_menu_pex_tokens'])}")
     print(f"Missing SkyrimTogetherPlayerAliasScript.pex grant tokens: {len(papyrus['missing_player_alias_pex_tokens'])}")
+    print(f"Missing migration quest PEX tokens: {len(papyrus['missing_migration_pex_tokens'])}")
+    print(f"Missing migration alias PEX tokens: {len(papyrus['missing_migration_alias_pex_tokens'])}")
     print(f"Missing SkyrimTogetherVRConnectionSpellEffect.pex tokens: {len(papyrus['missing_vr_effect_pex_tokens'])}")
     print(f"Behavior suffix case issues: {len(behaviors['suffix_case_issues'])}")
     print(f"Behavior SE comparison: {'checked' if behaviors['compare_se'] else 'skipped'}")

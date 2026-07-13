@@ -67,6 +67,7 @@ volatile LONG g_mappingFaulted = 0;
 volatile LONG g_tickCallCount = 0;
 volatile LONG g_taskEnqueueCount = 0;
 volatile LONG g_taskRunCount = 0;
+volatile LONG g_cadenceOwner = 0;
 volatile LONG64 g_lastRateLimitedLogAt = 0;
 const Endpoint* g_endpoint = nullptr;
 
@@ -330,6 +331,28 @@ bool PapyrusTick(StaticFunctionTag*)
     return queued;
 }
 
+bool PapyrusClaimCadence(StaticFunctionTag*, SInt32 aOwner)
+{
+    if (aOwner <= 0 || aOwner > 2)
+    {
+        LogDebug("SkyrimTogetherVRTickBridge: cadence claim rejected reason=invalid_owner");
+        return false;
+    }
+
+    const auto owner = static_cast<LONG>(aOwner);
+    const auto previous = InterlockedCompareExchange(&g_cadenceOwner, owner, 0);
+    if (previous != 0 && previous != owner)
+        return false;
+
+    if (previous == 0)
+    {
+        char message[128]{};
+        _snprintf_s(message, _countof(message), _TRUNCATE, "SkyrimTogetherVRTickBridge: papyrus_cadence_owner=%ld", owner);
+        LogDebug(message);
+    }
+    return true;
+}
+
 bool PapyrusArmOnInit(StaticFunctionTag*)
 {
     LogDebug("SkyrimTogetherVRTickBridge: papyrus_arm=OnInit");
@@ -348,6 +371,8 @@ bool RegisterPapyrusFunctions(VMClassRegistry* apRegistry)
         return false;
 
     apRegistry->RegisterFunction(new NativeFunction0<StaticFunctionTag, bool>("Tick", kPapyrusClass, PapyrusTick, apRegistry));
+    apRegistry->RegisterFunction(
+        new NativeFunction1<StaticFunctionTag, bool, SInt32>("ClaimCadence", kPapyrusClass, PapyrusClaimCadence, apRegistry));
     apRegistry->RegisterFunction(new NativeFunction0<StaticFunctionTag, bool>("ArmOnInit", kPapyrusClass, PapyrusArmOnInit, apRegistry));
     apRegistry->RegisterFunction(
         new NativeFunction0<StaticFunctionTag, bool>("ArmOnPlayerLoadGame", kPapyrusClass, PapyrusArmOnPlayerLoadGame, apRegistry));

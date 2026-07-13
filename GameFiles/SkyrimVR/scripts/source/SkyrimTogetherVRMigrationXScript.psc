@@ -1,14 +1,14 @@
-ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Hidden
+ScriptName SkyrimTogetherVRMigrationXScript extends Quest Hidden
 
 Event OnInit()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(1)
+    If SkyrimTogetherVRTickBridge.ClaimCadence(2)
         SkyrimTogetherVRTickBridge.ArmOnInit()
         VerifyLaunch()
     EndIf
 EndEvent
 
 Function VerifyLaunch()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(1)
+    If SkyrimTogetherVRTickBridge.ClaimCadence(2)
         StartTickBridge()
     EndIf
 EndFunction
@@ -18,7 +18,7 @@ Function StartTickBridge()
 EndFunction
 
 Event OnUpdate()
-    If !SkyrimTogetherVRTickBridge.ClaimCadence(1)
+    If !SkyrimTogetherVRTickBridge.ClaimCadence(2)
         Return
     EndIf
 
