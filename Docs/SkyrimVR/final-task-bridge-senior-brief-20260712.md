@@ -88,3 +88,17 @@ and regressions caused by disabling the old BSScript hook.
 | Unverified supplied SDK root. | Adopted: the build validates bridge-critical SDK source hashes for explicit, environment, cache, and downloaded roots. |
 | Skippable matching PEX. | Adopted: package creation rejects `-SkipPapyrusCompile` when the tick bridge is selected. |
 | 20 Hz retry after a permanent bridge fault. | Adopted: Papyrus falls back to a one-second retry after `Tick()` returns false. |
+
+## Compile-Remediation Review
+
+A follow-up Sol xhigh review was run after the isolated Windows target compiled
+and linked. It found no remaining issue in the narrow legacy SDK shims:
+
+- `StringCache::Ref::Ref()` exactly matches the pinned SDK implementation and
+  executes only after the explicit runtime gate.
+- The inert `UnpackHandle` path is unreachable for the zero-argument static
+  native specialization.
+- The legacy prefix and `/permissive` flags are target-local; `min`/`max` are
+  removed again before bridge-owned code is parsed.
+
+Disposition: approved for the final package build.
