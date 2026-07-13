@@ -37,6 +37,7 @@ REQUIRED_TOKENS = {
         "RUNTIME_VR_VERSION_1_4_15",
         "SKSE_VERSION_RELEASEIDX",
         "IsSupportedRuntime",
+        "#undef max",
         "SkyrimTogetherVRTickBridge",
         "QueueClientUpdate",
         "g_taskInterface->AddTask(task)",

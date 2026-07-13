@@ -10,6 +10,13 @@
 #include <skse64/gamethreads.h>
 #include <skse64_common/skse_version.h>
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 #include <vr_common/VRTickBridge.h>
 
 // The official legacy SKSEVR SDK declares these primitive specializations in
