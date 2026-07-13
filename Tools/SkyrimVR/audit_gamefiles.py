@@ -45,6 +45,8 @@ REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
 REQUIRED_QUEST_IMPORT_TOKENS = (
     "Scriptname Quest Native Hidden",
     "Function RegisterForSingleUpdate(float afInterval) Native",
+    "Event OnInit()",
+    "Event OnUpdate()",
 )
 
 REQUIRED_TICK_BRIDGE_PEX_TOKENS = (
