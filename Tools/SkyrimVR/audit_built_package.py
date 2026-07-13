@@ -69,6 +69,7 @@ GAMEPLAY_REQUIRED_RUNTIME_FILES = (
 REQUIRED_STAGED_FILES = (
     "SkyrimTogetherVR_BuildManifest.json",
     "Data/SkyrimTogether.esp",
+    "Data/Seq/SkyrimTogether.seq",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "Data/scripts/SkyrimTogetherUtils.pex",
@@ -955,6 +956,7 @@ def papyrus_pex_fixture():
     tokens = []
     for token_group in (
         audit_gamefiles.REQUIRED_UTILS_NATIVE_TOKENS,
+        audit_gamefiles.REQUIRED_TICK_BRIDGE_PEX_TOKENS,
         audit_gamefiles.REQUIRED_VR_MENU_PEX_TOKENS,
         audit_gamefiles.REQUIRED_PLAYER_ALIAS_PEX_TOKENS,
         audit_gamefiles.REQUIRED_VR_EFFECT_PEX_TOKENS,

@@ -5,6 +5,7 @@ import pathlib
 import re
 from collections import Counter
 
+import generate_seq
 import vr_paths
 
 EXPECTED_BEHAVIOR_SUFFIXES = (
@@ -133,6 +134,8 @@ REQUIRED_VR_MENU_ESP_TOKENS = (
     b"Opens the Skyrim Together VR connection menu.",
 )
 
+EXPECTED_START_GAME_ENABLED_QUEST_IDS = (0x02003DD0,)
+
 
 def read_u16(data, offset):
     return int.from_bytes(data[offset : offset + 2], "little")
@@ -195,6 +198,7 @@ def extract_ascii_strings(path):
 
 def audit_plugin(package, skyrim_vr):
     plugin = package / "SkyrimTogether.esp"
+    sequence = package / "Seq" / f"{plugin.stem}.seq"
     masters = parse_tes4_masters(plugin) if plugin.exists() else []
     vr_data = skyrim_vr / "Data"
     checked_masters = vr_data.exists()
@@ -210,6 +214,20 @@ def audit_plugin(package, skyrim_vr):
     else:
         missing_vr_menu_tokens = [token.decode("ascii") for token in REQUIRED_VR_MENU_ESP_TOKENS]
 
+    sequence_ids = []
+    sequence_error = None
+    expected_sequence = b""
+    if plugin.exists():
+        try:
+            sequence_ids = list(generate_seq.start_game_enabled_quest_ids(plugin))
+            expected_sequence = generate_seq.sequence_bytes(plugin)
+        except (OSError, generate_seq.PluginFormatError) as exc:
+            sequence_error = str(exc)
+    sequence_actual = sequence.read_bytes() if sequence.exists() and sequence.is_file() else None
+    missing_expected_start_quests = sorted(
+        set(EXPECTED_START_GAME_ENABLED_QUEST_IDS) - set(sequence_ids)
+    )
+
     return {
         "path": plugin,
         "exists": plugin.exists(),
@@ -219,10 +237,17 @@ def audit_plugin(package, skyrim_vr):
         "missing_masters": missing,
         "stale_tokens": stale_tokens,
         "missing_vr_menu_tokens": missing_vr_menu_tokens,
+        "sequence": sequence,
+        "sequence_ids": sequence_ids,
+        "sequence_error": sequence_error,
+        "expected_sequence": expected_sequence,
+        "sequence_actual": sequence_actual,
+        "sequence_matches": sequence_actual == expected_sequence and bool(expected_sequence),
+        "missing_expected_start_quests": missing_expected_start_quests,
     }
 
 
-def audit_papyrus(package):
+def audit_papyrus(package, repo):
     scripts = package / "scripts"
     source_dir = scripts / "source"
     source_files = sorted(source_dir.glob("*.psc")) if source_dir.exists() else []
@@ -270,7 +295,7 @@ def audit_papyrus(package):
     else:
         missing_tick_bridge_pex_tokens = list(REQUIRED_TICK_BRIDGE_PEX_TOKENS)
 
-    quest_import = root / "Tools" / "SkyrimVR" / "PapyrusImports" / "Quest.psc"
+    quest_import = repo / "Tools" / "SkyrimVR" / "PapyrusImports" / "Quest.psc"
     missing_quest_import_tokens = []
     if quest_import.exists():
         text = quest_import.read_text(encoding="utf-8", errors="replace")
@@ -481,6 +506,8 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
         handle.write(f"- PEX files without matching source: {len(papyrus['missing_source'])}\n")
         handle.write(f"- Stale SE Papyrus PEX token hits: {stale_pex_count}\n")
         handle.write(f"- Missing VR connection spell ESP tokens: {len(plugin['missing_vr_menu_tokens'])}\n")
+        handle.write(f"- Start Game Enabled quest IDs: {len(plugin['sequence_ids'])}\n")
+        handle.write(f"- Generated SEQ asset matches: {'yes' if plugin['sequence_matches'] else 'no'}\n")
         handle.write(f"- Missing VR connection native declarations in `SkyrimTogetherUtils.pex`: {missing_utils_pex_count}\n")
         handle.write(f"- Missing VR connection menu source tokens: {len(papyrus['missing_vr_menu_source_tokens'])}\n")
         handle.write(f"- Missing VR connection menu PEX tokens: {len(papyrus['missing_vr_menu_pex_tokens'])}\n")
@@ -514,6 +541,18 @@ def write_report(path, package, skyrim_vr, plugin, papyrus, behaviors):
         handle.write(fmt_paths([pathlib.Path(token) for token in plugin["stale_tokens"]]))
         handle.write("- Missing VR connection menu tokens in plugin bytes:\n")
         handle.write(fmt_paths([pathlib.Path(token) for token in plugin["missing_vr_menu_tokens"]]))
+        handle.write("- Start Game Enabled quest FormIDs:\n")
+        handle.write(fmt_paths([pathlib.Path(f"0x{form_id:08X}") for form_id in plugin["sequence_ids"]]))
+        handle.write("- Missing expected Start Game Enabled quest FormIDs:\n")
+        handle.write(
+            fmt_paths(
+                [pathlib.Path(f"0x{form_id:08X}") for form_id in plugin["missing_expected_start_quests"]]
+            )
+        )
+        handle.write(f"- SEQ asset: `{plugin['sequence']}`\n")
+        handle.write(f"- SEQ asset matches generated quest index: {'yes' if plugin['sequence_matches'] else 'no'}\n")
+        if plugin["sequence_error"]:
+            handle.write(f"- SEQ generation error: `{plugin['sequence_error']}`\n")
 
         handle.write("\n## Papyrus\n\n")
         handle.write("- Source files without matching PEX:\n")
@@ -634,7 +673,7 @@ def main():
     report = (repo / args.report).resolve() if not args.report.is_absolute() else args.report.resolve()
 
     plugin = audit_plugin(package, args.skyrim_vr)
-    papyrus = audit_papyrus(package)
+    papyrus = audit_papyrus(package, repo)
     behaviors = audit_behaviors(repo, package, compare_se=args.compare_se)
     write_report(report, package, args.skyrim_vr, plugin, papyrus, behaviors)
 
@@ -647,6 +686,9 @@ def main():
     print(f"Stale Papyrus PEX token hits: {stale_pex_count}")
     print(f"Missing SKSEVR tick bridge PEX tokens: {len(papyrus['missing_tick_bridge_pex_tokens'])}")
     print(f"Missing VR connection spell ESP tokens: {len(plugin['missing_vr_menu_tokens'])}")
+    print(f"Start Game Enabled quest IDs: {len(plugin['sequence_ids'])}")
+    print(f"Generated SEQ asset matches: {'yes' if plugin['sequence_matches'] else 'no'}")
+    print(f"Missing expected Start Game Enabled quest IDs: {len(plugin['missing_expected_start_quests'])}")
     print(f"Papyrus source files without matching PEX: {len(papyrus['missing_pex'])}")
     print(f"Missing SkyrimTogetherUtils.pex VR native declarations: {len(papyrus['missing_utils_pex_tokens'])}")
     print(f"Missing SkyrimTogetherVRConnectionMenu.psc source tokens: {len(papyrus['missing_vr_menu_source_tokens'])}")

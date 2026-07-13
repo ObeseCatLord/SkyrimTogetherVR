@@ -9,6 +9,7 @@ import vr_paths
 
 REQUIRED_STAGED_FILES = (
     "SkyrimTogether.esp",
+    "Seq/SkyrimTogether.seq",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "scripts/SkyrimTogetherUtils.pex",
