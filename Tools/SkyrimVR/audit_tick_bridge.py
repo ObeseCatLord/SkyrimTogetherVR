@@ -61,7 +61,7 @@ REQUIRED_TOKENS = {
         '"SkyrimTogetherVRTickBridge.psc"',
     ),
     "Code/vr_tick_bridge/xmake.lua": (
-        "add_cxflags(\"/FILegacySksePrefix.h\"",
+        "LegacySksePrefix.h",
         '"/permissive"',
         'add_defines("RUNTIME", "IS_VR", "RUNTIME_VERSION=0x010400F1")',
         '"GameAPI.cpp"',
