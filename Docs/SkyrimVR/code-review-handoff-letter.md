@@ -59,7 +59,7 @@ the port.
   game-file, FUS native DLL, HIGGS, PLANCK, FBT, and handoff audits.
 - The Linux protocol tests passed all 136 assertions in 5 test cases.
 - The Windows gameplay package built from a clean checkout of the exact
-  revision, including the launcher, five bridge DLLs, EarlyLoad, TPProcess,
+  revision, including the launcher, four bridge DLLs, EarlyLoad, TPProcess,
   CEF payload, and eight Papyrus scripts.
 - Package-only and strict post-install audits passed with SKSEVR, VR Address
   Library, VRIK, HIGGS, PLANCK, and FBT present.
