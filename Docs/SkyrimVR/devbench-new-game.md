@@ -6,8 +6,9 @@ without headset input:
 1. waits for DevBench on `127.0.0.1:8921`;
 2. dismisses Skyrim VR calibration when present;
 3. creates or reuses a persistent `ydotoold` keyboard before Proton starts;
-4. focuses Skyrim with `kdotool`, selects New Game, and sends the VR trigger
-   alias to Monado's Qwerty controller;
+4. focuses Skyrim with `kdotool`, selects the top New Game entry with `End`
+   (Skyrim VR's Scaleform list is indexed bottom-to-top), and sends the VR
+   trigger alias to Monado's Qwerty controller;
 5. requests RaceSex completion with `R`, verifies the affirmative dialog, and
    activates it through a held Monado controller trigger;
 5a. while finalizing and waiting to connect, scans for `MessageBoxMenu`; only
@@ -47,6 +48,16 @@ Connection verification intentionally requires `--launch-game`. The driver
 removes inherited `STVR_AUTOCONNECT` and `STVR_PASSWORD` values and launches a
 fresh offline process so an older in-memory connection cannot satisfy the test.
 
+For a simulated headset that cannot deliver the RaceSex finish action, add
+`--allow-finalized-racesex`. This connection-smoke fallback is accepted only
+when DevBench independently sees a loaded, named, raced player already placed
+in `RealmLorkhan`. It leaves the stranded RaceSex presentation open and proves
+network admission only; it does not claim that the unavailable VR naming flow
+completed. If the Papyrus cadence pauses at the post-character renderer
+transition, the fallback pumps the registered native `Tick` through DevBench
+until fresh current-process task sequences, online status, and cell sync are
+observed.
+
 The automation never treats hiding `RaceSex Menu` as successful character
 creation. XRizer cannot display Skyrim VR's SteamVR naming keyboard, so the menu
 can remain stranded after real controller activation. The script closes that
@@ -55,6 +66,10 @@ named/raced player, and the active Skyrim Together plugin.
 
 Synthetic keyboard taps are held for 500 ms. Short taps were intermittently
 missed by Skyrim VR and XRizer even when the correct window had focus.
+
+Task-sequence evidence is scoped to bytes appended after the current launch;
+sequence values restart at 1 in each process even though the bridge log itself
+is append-only.
 
 When `--connect` is supplied, stale command, online-status, and player-cell
 handoff files are removed before launch. A successful run requires newly written

@@ -24,8 +24,7 @@ from collections.abc import Callable
 import vr_paths
 
 
-KEY_HOME = 102
-KEY_DOWN = 108
+KEY_END = 107
 KEY_ENTER = 28
 KEY_R = 19
 KEY_P = 25
@@ -236,19 +235,31 @@ def drain_blocking_message_boxes(
     raise AutomationError(f"timed out draining MessageBoxMenu during {context}")
 
 
-def successful_task_sequences(path: pathlib.Path) -> list[int]:
+def successful_task_sequences(path: pathlib.Path, start_offset: int = 0) -> list[int]:
     if not path.is_file():
         return []
-    text = path.read_text(encoding="utf-8", errors="replace")
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(start_offset if start_offset <= size else 0)
+        text = handle.read().decode("utf-8", errors="replace")
     return [int(match.group(1)) for match in TASK_SEQUENCE_PATTERN.finditer(text)]
 
 
 def wait_for_resumed_cadence(
-    path: pathlib.Path, baseline_sequence: int, timeout: float
+    path: pathlib.Path,
+    baseline_sequence: int,
+    timeout: float,
+    *,
+    start_offset: int = 0,
+    on_wait: Callable[[], None] | None = None,
 ) -> tuple[int, int]:
     def newer_sequences() -> list[int]:
         return sorted(
-            {sequence for sequence in successful_task_sequences(path) if sequence > baseline_sequence}
+            {
+                sequence
+                for sequence in successful_task_sequences(path, start_offset)
+                if sequence > baseline_sequence
+            }
         )
 
     sequences = wait_until(
@@ -256,6 +267,7 @@ def wait_for_resumed_cadence(
         timeout,
         newer_sequences,
         lambda value: len(value) >= 2,
+        on_wait=on_wait,
     )
     return sequences[0], sequences[1]
 
@@ -314,6 +326,14 @@ def main() -> int:
     parser.add_argument("--skyrim-vr", type=pathlib.Path, default=vr_paths.default_skyrim_vr_path())
     parser.add_argument("--connect", metavar="HOST:PORT", help="write one connect command after player finalization")
     parser.add_argument(
+        "--allow-finalized-racesex",
+        action="store_true",
+        help=(
+            "connection-smoke fallback for simulated headsets: accept a still-open "
+            "RaceSex Menu only after Realm placement and named/raced player state are live"
+        ),
+    )
+    parser.add_argument(
         "--require-exterior-grid",
         action="store_true",
         help="after connecting, require an exterior cell and grid sync instead of accepting the current interior cell",
@@ -360,6 +380,9 @@ def main() -> int:
     status_path = handoff_dir / "SkyrimTogetherVR.status"
     player_cell_path = handoff_dir / "SkyrimTogetherVR.playercell"
     tick_bridge_log_path = args.skyrim_vr / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVRTickBridge.log"
+    tick_bridge_log_start_offset = (
+        tick_bridge_log_path.stat().st_size if tick_bridge_log_path.is_file() else 0
+    )
     if args.connect:
         for stale_proof in (command_path, status_path, player_cell_path):
             stale_proof.unlink(missing_ok=True)
@@ -404,8 +427,9 @@ def main() -> int:
 
     if "RaceSex Menu" not in open_menus:
         focus_window(args.window_search)
-        tap_key(args.ydotool, args.ydotool_socket, KEY_HOME)
-        tap_key(args.ydotool, args.ydotool_socket, KEY_DOWN)
+        # Skyrim VR's Scaleform main-menu entries are indexed bottom-to-top:
+        # Home selects Quit, while End selects the top New entry.
+        tap_key(args.ydotool, args.ydotool_socket, KEY_END)
         tap_key(args.ydotool, args.ydotool_socket, KEY_ENTER)
         time.sleep(1.0)
 
@@ -425,33 +449,51 @@ def main() -> int:
         race_state = state
     print(f"RaceSex ready: {race_state.get('openMenus', [])}")
 
-    focus_window(args.window_search)
-    tap_key(args.ydotool, args.ydotool_socket, KEY_R)
+    finalized_racesex_fallback = False
+    if args.allow_finalized_racesex:
+        fallback_scene = post_tool(args.url, "inspect", {"kind": "scene"})
+        fallback_player = post_tool(args.url, "inspect", {"kind": "player"})
+        finalized_racesex_fallback = (
+            fallback_scene.get("playerLoaded") is True
+            and fallback_scene.get("cell", {}).get("editorId") == "RealmLorkhan"
+            and fallback_player.get("playerLoaded") is True
+            and bool(fallback_player.get("name"))
+            and bool(fallback_player.get("race"))
+        )
+        if not finalized_racesex_fallback:
+            raise AutomationError(
+                "--allow-finalized-racesex was requested before Realm/player finalization: "
+                f"scene={fallback_scene}, player={fallback_player}"
+            )
+        print("Using finalized RaceSex connection-smoke fallback; editor presentation remains open")
 
-    wait_until(
-        "RaceSex confirmation",
-        10.0,
-        lambda: menu_state(args.url),
-        lambda value: value.get("messageBoxOpen") is True,
-    )
-    description = post_tool(args.url, "menu", {"action": "describe"})
-    if allowlisted_messagebox_index(description, "racesex_confirmation") is None:
-        raise AutomationError(f"RaceSex confirmation does not default to acceptance: {description}")
-    buttons = [str(button).strip().casefold() for button in description.get("buttons", [])]
+    if not finalized_racesex_fallback:
+        focus_window(args.window_search)
+        tap_key(args.ydotool, args.ydotool_socket, KEY_R)
 
-    # The callback alone dismisses the dialog without committing Skyrim VR's
-    # character workflow. Route a real controller trigger through Monado.
-    focus_window(args.monado_window_search)
-    tap_key(args.ydotool, args.ydotool_socket, KEY_P)
-    focus_window(args.window_search)
-    print(f"Activated RaceSex confirmation through controller input: {description['buttons'][0]}")
+        wait_until(
+            "RaceSex confirmation",
+            10.0,
+            lambda: menu_state(args.url),
+            lambda value: value.get("messageBoxOpen") is True,
+        )
+        description = post_tool(args.url, "menu", {"action": "describe"})
+        if allowlisted_messagebox_index(description, "racesex_confirmation") is None:
+            raise AutomationError(f"RaceSex confirmation does not default to acceptance: {description}")
 
-    wait_until(
-        "RaceSex confirmation dialog to close after controller activation",
-        15.0,
-        lambda: menu_state(args.url),
-        lambda value: value.get("messageBoxOpen") is False,
-    )
+        # The callback alone dismisses the dialog without committing Skyrim VR's
+        # character workflow. Route a real controller trigger through Monado.
+        focus_window(args.monado_window_search)
+        tap_key(args.ydotool, args.ydotool_socket, KEY_P)
+        focus_window(args.window_search)
+        print(f"Activated RaceSex confirmation through controller input: {description['buttons'][0]}")
+
+        wait_until(
+            "RaceSex confirmation dialog to close after controller activation",
+            15.0,
+            lambda: menu_state(args.url),
+            lambda value: value.get("messageBoxOpen") is False,
+        )
 
     scene = wait_until(
         "Realm of Lorkhan player placement",
@@ -497,7 +539,10 @@ def main() -> int:
     # the player and placed them in Realm of Lorkhan. Close it only after those
     # independent finalization checks have passed.
     post_confirm_state = menu_state(args.url)
-    if "RaceSex Menu" in post_confirm_state.get("openMenus", []):
+    if (
+        "RaceSex Menu" in post_confirm_state.get("openMenus", [])
+        and not finalized_racesex_fallback
+    ):
         post_tool(args.url, "menu", {"action": "close", "name": "RaceSex Menu"})
         wait_until(
             "stranded RaceSex presentation to close",
@@ -515,17 +560,40 @@ def main() -> int:
             or post_hide_cell.get("playerFormId") != player_cell.get("playerFormId")
         ):
             raise AutomationError("closing stranded RaceSex presentation changed player readiness")
+    elif finalized_racesex_fallback:
+        print("Leaving finalized RaceSex presentation open for the connection-only smoke test")
 
     print(f"Realm of Lorkhan ready at {scene.get('position')}")
     print(f"Player finalized: {player.get('name')} ({player.get('race')})")
     print("SkyrimTogether.esp is active")
 
     if args.connect:
-        existing_sequences = successful_task_sequences(tick_bridge_log_path)
+        def maintain_connection_cadence() -> None:
+            handle_blocking_message_box(args.url, "connect_wait")
+            if finalized_racesex_fallback:
+                post_tool(
+                    args.url,
+                    "papyrus",
+                    {
+                        "action": "call",
+                        "script": "SkyrimTogetherVRTickBridge",
+                        "function": "Tick",
+                        "args": [],
+                        "timeoutMs": 2000,
+                    },
+                )
+
+        existing_sequences = successful_task_sequences(
+            tick_bridge_log_path, tick_bridge_log_start_offset
+        )
         cadence_baseline = max(existing_sequences, default=0)
         drain_blocking_message_boxes(args.url, "pre-connect")
         resumed_sequences = wait_for_resumed_cadence(
-            tick_bridge_log_path, cadence_baseline, min(args.timeout, 20.0)
+            tick_bridge_log_path,
+            cadence_baseline,
+            min(args.timeout, 20.0),
+            start_offset=tick_bridge_log_start_offset,
+            on_wait=maintain_connection_cadence if finalized_racesex_fallback else None,
         )
         print(
             "Skyrim Together cadence resumed after modal drain: "
@@ -556,7 +624,7 @@ def main() -> int:
             and value.get("playerId") not in {None, "", "0"}
             and value.get("sessionId") == session_id
             and status_int(value, "connectionGeneration") > baseline_generation,
-            on_wait=lambda: handle_blocking_message_box(args.url, "connect_wait"),
+            on_wait=maintain_connection_cadence,
         )
         if status_path.stat().st_mtime_ns < run_started_ns:
             raise AutomationError("online status proof predates this automation run")
@@ -596,7 +664,7 @@ def main() -> int:
             args.timeout,
             lambda: read_status(player_cell_path),
             cell_sync_ready,
-            on_wait=lambda: handle_blocking_message_box(args.url, "connect_wait"),
+            on_wait=maintain_connection_cadence,
         )
         print(f"Skyrim Together online as player {status['playerId']}")
         if args.require_exterior_grid:
