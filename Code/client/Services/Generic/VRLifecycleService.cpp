@@ -3,6 +3,7 @@
 #include <Services/VRLifecycleService.h>
 
 #include <Forms/TESForm.h>
+#include <Forms/TESObjectCELL.h>
 #include <Games/Skyrim/Interface/UI.h>
 #include <Misc/BSFixedString.h>
 #include <PlayerCharacter.h>
