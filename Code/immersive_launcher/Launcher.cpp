@@ -318,6 +318,26 @@ bool HandleArguments(int aArgc, char** aArgv, bool& aAskSelect)
         }
         else if (std::strcmp(aArgv[i], "--no-companion") == 0)
             g_disableCompanionPanel = true;
+        else if (std::strcmp(aArgv[i], "--vm-update-mode") == 0)
+        {
+            if (i + 1 >= aArgc)
+            {
+                SetLastError(ERROR_BAD_ARGUMENTS);
+                Die(L"--vm-update-mode requires off, observe, or active", true);
+                return false;
+            }
+
+            const char* pMode = aArgv[++i];
+            if (std::strcmp(pMode, "off") != 0 && std::strcmp(pMode, "observe") != 0 &&
+                std::strcmp(pMode, "active") != 0)
+            {
+                SetLastError(ERROR_BAD_ARGUMENTS);
+                Die(L"--vm-update-mode requires off, observe, or active", true);
+                return false;
+            }
+
+            SetEnvironmentVariableA("STVR_VM_UPDATE_MODE", pMode);
+        }
 #endif
         else if (std::strcmp(aArgv[i], "--exePath") == 0)
         {

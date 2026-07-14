@@ -269,8 +269,21 @@ REQUIRED_VR_PLAYER_READINESS_TOKENS = {
         "deferring player-derived work",
     ),
     "Code/client/Services/Generic/DiscoveryService.cpp": ("TryGetReadablePlayerForVR",),
-    "Code/client/Services/Generic/PlayerService.cpp": ("TryGetReadablePlayerForVR",),
-    "Code/client/Services/Generic/VRConnectionService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        "TryGetReadablePlayerForVR",
+        "GetBaseFormData",
+        "GetParentCellData",
+    ),
+    "Code/client/Services/Generic/PlayerService.cpp": (
+        "VRLifecycleService",
+        "GetPlayerFormId",
+        "lifecycleEpoch",
+    ),
+    "Code/client/Services/Generic/VRConnectionService.cpp": (
+        "VRLifecycleService",
+        "IsReady()",
+        "waiting_for_gameplay",
+    ),
     "Code/client/Services/Generic/VRMovementService.cpp": ("TryGetReadablePlayerForVR",),
     "Code/client/Services/Generic/VRInventoryService.cpp": ("TryGetReadablePlayerForVR",),
     "Code/client/Services/Generic/VRSaveLoadService.cpp": ("TryGetReadablePlayerForVR",),

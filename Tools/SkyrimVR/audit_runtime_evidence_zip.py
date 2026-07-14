@@ -24,6 +24,7 @@ REQUIRED_ARCHIVE_ENTRIES = (
 REQUIRED_CHECK_IDS = (
     "package_build_manifest",
     "startup_breadcrumbs",
+    "lifecycle_schema",
     "connection_status",
     "local_pose",
     "local_vrik_api",
@@ -377,6 +378,11 @@ def command_self_test() -> int:
             (handoff / collect_runtime_evidence.vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
         write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
+        write(
+            "lifecycle",
+            "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+        )
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"

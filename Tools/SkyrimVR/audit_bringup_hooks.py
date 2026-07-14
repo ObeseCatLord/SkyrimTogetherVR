@@ -129,11 +129,51 @@ REQUIRED_TOKENS = {
         "Installing SkyrimTogetherVR main-loop observer: mainLoop={}",
         "SkyrimTogetherVR main-loop observer reached",
         "SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}",
+        "SkyrimTogetherVR VM-update runtime mode: {}",
+        "Installing opaque SkyrimTogetherVR VM-update observer: target={}",
+        "SkyrimTogetherVR VM-update observer reached: mode={} thread={}",
+        "SkyrimTogetherVR VM-update cadence: call={} mode={} thread={}",
+        "SkyrimTogetherVR::TickBridge::ConsumeUpdatePermit()",
         "s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed)",
         "callCount <= 2 || callCount % 300 == 0",
         "static void InstallVrMainLoopObserver()",
         "TP_HOOK(&MainLoop, HookMainLoop);",
         "void InstallVrMainLoopBringupHooks()",
+    ),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        'constexpr char kStatusFileName[] = "SkyrimTogetherVR.lifecycle"',
+        'static const BSFixedString s_raceSexMenu("RaceSex Menu")',
+        'static const BSFixedString s_loadingMenu("Loading Menu")',
+        'static const BSFixedString s_faderMenu("Fader Menu")',
+        "TryGetReadablePlayerForVR()",
+        "m_loadInvalidated.exchange(false, std::memory_order_acq_rel)",
+        'Suspend("load_event", true)',
+        "m_stableTickCount >= kRequiredStableTicks",
+        "stableFor >= kRequiredStableDuration",
+    ),
+    "Code/client/World.cpp": (
+        "ctx().emplace<VRLifecycleService>(*this)",
+        "lifecycle.Update(cDeltaSeconds)",
+        "HandleLifecycleBoundary()",
+        "if (!lifecycle.IsReady())",
+    ),
+    "Code/client/Services/Generic/VRConnectionService.cpp": (
+        'SetStatus("waiting_for_gameplay")',
+        "lifecycle.GetEpoch() != lifecycleEpoch",
+        "discarded a stale queued connect from lifecycle epoch",
+        'SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline")',
+        'file << "lifecycleState="',
+        'file << "lifecycleEpoch="',
+    ),
+    "Code/client/Services/Generic/TransportService.cpp": (
+        "m_world.ctx().at<VRLifecycleService>().IsReady()",
+        "The stable lifecycle gate owns player/cell readiness",
+    ),
+    "Code/immersive_launcher/Launcher.cpp": (
+        'std::strcmp(aArgv[i], "--vm-update-mode") == 0',
+        'SetEnvironmentVariableA("STVR_VM_UPDATE_MODE", pMode)',
+        'std::strcmp(pMode, "observe")',
+        'std::strcmp(pMode, "active")',
     ),
     "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp": (
         "Installing SkyrimTogetherVR renderer bring-up hook: rendererInit={}",
@@ -151,7 +191,9 @@ REQUIRED_TOKENS = {
         "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
         "Installing SkyrimTogetherVR main-loop observer:",
         "SkyrimTogetherVR main-loop observer reached",
-        "World::Update() is not called from a VR hook",
+        "STVR_VM_UPDATE_MODE",
+        "never executes client or engine work",
+        "SkyrimTogetherVR.lifecycle",
         "Installing SkyrimTogetherVR renderer bring-up hook:",
         "SkyrimTogetherVR renderer init hook reached:",
     ),
@@ -274,18 +316,32 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     vr_block_end = text.find("#else", vr_block_start)
     vr_block = text[vr_block_start:vr_block_end] if vr_block_start >= 0 and vr_block_end >= 0 else ""
 
+    for required_token in (
+        "TVrVmUpdate",
+        "HookVrVmUpdate",
+        "STVR_VM_UPDATE_MODE",
+        "ConsumeUpdatePermit",
+        "VrVmUpdateMode::Observe",
+        "VrVmUpdateMode::Active",
+    ):
+        if required_token not in vr_block:
+            failures.append(f"Code/client/SkyrimVM64.cpp: VR observer block must contain `{required_token}`")
+
     for forbidden_token in (
         "VMContext",
-        "TVMUpdate",
+        "inactive",
         "TVMDestructor",
-        "HookVMUpdate",
         "HookVMDestructor",
-        "TP_HOOK(&VMUpdate",
         "TP_HOOK(&VMDestructor",
-        "g_appInstance->Update()",
     ):
         if forbidden_token in vr_block:
-            failures.append(f"Code/client/SkyrimVM64.cpp: VR observer block must not contain `{forbidden_token}`")
+            failures.append(f"Code/client/SkyrimVM64.cpp: opaque VR observer block must not contain `{forbidden_token}`")
+
+    tick_bridge_path = root / "Code" / "client" / "VRTickBridge.cpp"
+    tick_bridge_text = tick_bridge_path.read_text(encoding="utf-8", errors="replace") if tick_bridge_path.exists() else ""
+    for forbidden_token in ("g_appInstance->Update()", "World::Get().Update()", "TiltedOnlineApp.h"):
+        if forbidden_token in tick_bridge_text:
+            failures.append(f"Code/client/VRTickBridge.cpp: task callback bridge must not contain `{forbidden_token}`")
 
     return failures
 

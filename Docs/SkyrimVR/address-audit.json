@@ -2242,7 +2242,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 66
+          "line": 67
         }
       ],
       "resolvedId": 36544,
@@ -2274,12 +2274,12 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 44
+          "line": 121
         },
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 101
+          "line": 192
         }
       ],
       "resolvedId": 36564,
@@ -3093,7 +3093,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 103
+          "line": 194
         }
       ],
       "resolvedId": 40412,
@@ -3509,7 +3509,12 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 102
+          "line": 135
+        },
+        {
+          "file": "Code/client/SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 193
         }
       ],
       "resolvedId": 53926,
@@ -4335,7 +4340,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 159
+          "line": 161
         }
       ],
       "resolvedId": 380768,

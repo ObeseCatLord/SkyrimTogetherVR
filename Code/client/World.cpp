@@ -33,6 +33,7 @@
 #include <Services/VRGrabService.h>
 #include <Services/VRHiggsService.h>
 #include <Services/VRSaveLoadService.h>
+#include <Services/VRLifecycleService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -163,6 +164,9 @@ World::World()
     , m_lastFrameTime{std::chrono::high_resolution_clock::now()}
 {
     ctx().emplace<ImguiService>();
+#if TP_SKYRIM_VR
+    ctx().emplace<VRLifecycleService>(*this);
+#endif
 #if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
     spdlog::warn("SkyrimTogetherVR remote avatar validation mode: CharacterService is enabled while full gameplay services stay disabled");
@@ -268,6 +272,14 @@ void World::Update() noexcept
     m_lastFrameTime = cNow;
 
     const auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
+
+#if TP_SKYRIM_VR
+    auto& lifecycle = ctx().at<VRLifecycleService>();
+    lifecycle.Update(cDeltaSeconds);
+    ctx().at<VRConnectionService>().HandleLifecycleBoundary();
+    if (!lifecycle.IsReady())
+        return;
+#endif
 
     m_dispatcher.trigger(PreUpdateEvent(cDeltaSeconds));
 

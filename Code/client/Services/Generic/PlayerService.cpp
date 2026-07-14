@@ -1,6 +1,7 @@
 #include <Services/PlayerService.h>
 
 #include <World.h>
+#include <Services/VRLifecycleService.h>
 
 #include <Events/UpdateEvent.h>
 #include <Events/ConnectedEvent.h>
@@ -24,7 +25,6 @@
 #include <Structs/ServerSettings.h>
 
 #include <PlayerCharacter.h>
-#include <VR/VRPlayerReadiness.h>
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESGlobal.h>
 #include <Games/Overrides.h>
@@ -539,15 +539,16 @@ void PlayerService::WriteVrPlayerCellStatusFile() noexcept
     if (!file)
         return;
 
-    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
-    const bool ready = pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
+    const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
+    const bool ready = lifecycle.IsReady();
 
     file << "ready=" << (ready ? "1" : "0") << "\n";
     file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
     file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
     file << "sessionId=" << m_transport.GetSessionId() << "\n";
     file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
-    file << "playerFormId=" << (pPlayer ? pPlayer->GetFormIdData() : 0) << "\n";
+    file << "playerFormId=" << lifecycle.GetPlayerFormId() << "\n";
+    file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
     file << "currentLevel=" << m_cachedVrLevel << "\n";
     file << "cachedLevel=" << m_cachedVrLevel << "\n";
     file << "lastLevelSent=" << m_lastVrLevelSent << "\n";

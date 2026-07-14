@@ -7,7 +7,8 @@
 	url = https://github.com/TiltedPhoques/TiltedUI
 [submodule "Libraries/TiltedConnect"]
 	path = Libraries/TiltedConnect
-	url = https://github.com/TiltedPhoques/TiltedConnect
+	url = https://github.com/ObeseCatLord/TiltedConnect.git
+	branch = stvr-vr-owner-lifecycle
 [submodule "Libraries/TiltedHooks"]
 	path = Libraries/TiltedHooks
 	url = https://github.com/TiltedPhoques/TiltedHooks

@@ -20,6 +20,7 @@
 #include <Services/OverlayService.h>
 #include <Services/ImguiService.h>
 #include <Services/DiscordService.h>
+#include <Services/VRLifecycleService.h>
 
 #include <ScriptExtender.h>
 #include <NvidiaUtil.h>
@@ -126,6 +127,7 @@ bool TiltedOnlineApp::BeginMain()
 bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
+    World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
     SkyrimTogetherVR::TickBridge::Retire();
 #endif
 

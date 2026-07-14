@@ -96,6 +96,10 @@ Current fields:
 state=offline
 online=0
 playerId=0
+sessionId=0
+connectionGeneration=0
+lifecycleState=suspended
+lifecycleEpoch=2
 commandFile=...\Data\SkyrimTogetherReborn\SkyrimTogetherVR.command
 error=optional_error_text
 ```
@@ -103,7 +107,7 @@ error=optional_error_text
 Known states are:
 
 - `offline`
-- `waiting_for_player`
+- `waiting_for_gameplay`
 - `connecting`
 - `online`
 - `disconnecting`
@@ -124,16 +128,27 @@ Tools/SkyrimVR/vr_handoff.py serve
 
 The panel defaults to `http://127.0.0.1:8765/`, refreshes the staged readouts once per second, and writes connect/disconnect commands without touching Skyrim's render or input stack.
 
+The lifecycle gate writes a separate
+`Data/SkyrimTogetherReborn/SkyrimTogetherVR.lifecycle` readout with `state`,
+`ready`, `epoch`, owner thread, stabilization count, player/base/cell form IDs,
+and a suspension reason. A connection command remains pending until this file
+reports `state=ready` and `ready=1`.
+
 ## Autoconnect
 
 The existing environment-variable path remains available:
 
 ```cmd
+set STVR_VM_UPDATE_MODE=active
 set STVR_AUTOCONNECT=127.0.0.1:10578
 set STVR_PASSWORD=optional_password
 ```
 
-Both environment and file commands wait until `PlayerCharacter` and its parent cell are available before connecting. This avoids authenticating from the main menu or early loading screens.
+Both environment and file commands wait for a stable lifecycle epoch after
+RaceSex and loading UI have closed. The default VM-update mode is `observe`, so
+`active` must be selected explicitly after the observer gate has passed.
+Windows users can pass `--vm-update-mode active` directly to
+`SkyrimTogetherVR.exe` instead of setting the environment variable.
 
 ## Deferred Papyrus Natives
 

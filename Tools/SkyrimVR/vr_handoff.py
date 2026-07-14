@@ -23,6 +23,7 @@ COMMAND_FILE = "SkyrimTogetherVR.command"
 CONFIG_FILE = "SkyrimTogetherVR.connection"
 READOUT_FILES = {
     "status": "SkyrimTogetherVR.status",
+    "lifecycle": "SkyrimTogetherVR.lifecycle",
     "pose": "SkyrimTogetherVR.pose",
     "avatar": "SkyrimTogetherVR.avatar",
     "remoteplayers": "SkyrimTogetherVR.remoteplayers",
@@ -44,6 +45,7 @@ READOUT_FILES = {
 
 SUMMARY_FIELDS = {
     "status": ("state", "online", "playerId", "sessionId", "connectionGeneration", "error"),
+    "lifecycle": ("state", "ready", "epoch", "ownerThreadId", "stableTickCount", "playerFormId", "playerBaseFormId", "playerCellFormId", "reason"),
     "pose": ("localPoseAvailable", "local.body.formatVersion", "local.body.valid", "local.body.captureSequence", "local.body.rootGeneration", "remotePoseCount"),
     "avatar": ("ready", "actorTargetsEnabled", "actorSkeletonWritesEnabled", "actorMovementAuthorityEnabled", "remotePlayerCount", "remotePoseMatchCount", "remoteEquipmentMatchCount", "equipmentWeaponDrawQueuedCount", "equipmentMissingFormIdCount", "equipmentMissingActorCount", "sameSpaceCount", "actorTargetSkippedDifferentCellCount", "actorTargetSkippedDifferentWorldSpaceCount", "spellOriginValidCount", "arrowOriginValidCount", "bowAimValidCount", "leftWeaponOffsetValidCount", "rightWeaponOffsetValidCount", "primaryMagicOffsetValidCount", "secondaryMagicOffsetValidCount", "bodyPoseValidCount", "bodyPoseUnsafeCount", "actorTargetAttemptCount", "hmdCopiedCount", "leftHandCopiedCount", "rightHandCopiedCount", "vrikDetectedCount", "vrikInterfaceAvailableCount", "invalidVrikCount", "movementAppliedCount", "invalidTransformCount", "invalidMovementCount"),
     "remoteplayers": ("ready", "online", "trackedPlayerCount", "joinedPlayerCount", "poseMatchedCount", "movementMatchedCount", "equipmentMatchedCount", "activationMatchedCount", "magicMatchedCount", "combatMatchedCount", "projectileMatchedCount", "grabMatchedCount", "higgsMatchedCount", "vrikMatchedCount", "sameCellCount", "sameWorldSpaceCount", "sameSpaceCount", "avatarValidationReadyCount", "higgsAvatarValidationReadyCount"),
@@ -727,7 +729,7 @@ function setNotice(text) {{
 function render(payload) {{
   setNotice(`handoffDir=${{payload.handoffDir}}`);
   summaries.replaceChildren();
-  const order = ["status", "compat", "pose", "avatar", "remoteplayers", "movement", "inventory", "discovery", "playercell", "activation", "magic", "combat", "projectile", "grab", "higgs", "higgsnet", "planck", "saveload"];
+  const order = ["status", "lifecycle", "compat", "pose", "avatar", "remoteplayers", "movement", "inventory", "discovery", "playercell", "activation", "magic", "combat", "projectile", "grab", "higgs", "higgsnet", "planck", "saveload"];
   for (const name of order) {{
     const card = document.createElement("article");
     card.className = "readout";
@@ -1062,6 +1064,7 @@ def command_self_test(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="stvr-handoff-test-") as temp:
         handoff_dir = pathlib.Path(temp)
         status_path = handoff_dir / READOUT_FILES["status"]
+        lifecycle_path = handoff_dir / READOUT_FILES["lifecycle"]
         pose_path = handoff_dir / READOUT_FILES["pose"]
         avatar_path = handoff_dir / READOUT_FILES["avatar"]
         remoteplayers_path = handoff_dir / READOUT_FILES["remoteplayers"]
@@ -1075,6 +1078,11 @@ def command_self_test(args: argparse.Namespace) -> int:
         higgsnet_path = handoff_dir / READOUT_FILES["higgsnet"]
         planck_path = handoff_dir / READOUT_FILES["planck"]
         write_atomic(status_path, "state=online\nonline=1\nplayerId=7\n")
+        write_atomic(
+            lifecycle_path,
+            "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+        )
         write_atomic(
             pose_path,
             "localPoseAvailable=1\n"
@@ -1427,6 +1435,7 @@ def command_self_test(args: argparse.Namespace) -> int:
 
         values = read_readouts(handoff_dir)
         assert values["status"]["state"] == "online"
+        assert values["lifecycle"]["state"] == "ready"
         assert values["avatar"]["actorTargetsEnabled"] == "1"
         assert values["avatar"]["remoteEquipmentMatchCount"] == "1"
         assert values["remoteplayers"]["trackedPlayerCount"] == "1"
@@ -1453,6 +1462,8 @@ def command_self_test(args: argparse.Namespace) -> int:
 
         payload = build_readout_payload(handoff_dir)
         assert payload["readouts"]["status"]["state"] == "online"
+        assert payload["readouts"]["lifecycle"]["epoch"] == "3"
+        assert "[lifecycle]" in payload["summaries"]["lifecycle"]
         assert "[movement]" in payload["summaries"]["movement"]
         assert "[avatar]" in payload["summaries"]["avatar"]
         assert "[remoteplayers]" in payload["summaries"]["remoteplayers"]

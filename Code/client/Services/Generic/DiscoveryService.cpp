@@ -21,6 +21,7 @@
 #include <Events/ConnectionErrorEvent.h>
 
 #include <World.h>
+#include <Services/VRLifecycleService.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <fstream>
@@ -347,6 +348,11 @@ void DiscoveryService::VisitForms() noexcept
 
 void DiscoveryService::OnUpdate(const PreUpdateEvent& acUpdateEvent) noexcept
 {
+#if TP_SKYRIM_VR
+    if (!m_world.ctx().at<VRLifecycleService>().IsReady())
+        return;
+#endif
+
     VisitCell();
     VisitForms();
 
@@ -367,6 +373,11 @@ void DiscoveryService::OnUpdate(const PreUpdateEvent& acUpdateEvent) noexcept
 
 void DiscoveryService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
+#if TP_SKYRIM_VR
+    if (!m_world.ctx().at<VRLifecycleService>().IsReady())
+        return;
+#endif
+
     if constexpr (kVrSkipStrictConnectionEnforcement)
     {
         TP_UNUSED(acEvent);
@@ -391,6 +402,16 @@ void DiscoveryService::OnConnected(const ConnectedEvent& acEvent) noexcept
 BSTEventResult DiscoveryService::OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*)
 {
     spdlog::info("Finished loading, triggering visit cell");
+
+#if TP_SKYRIM_VR
+    ResetCachedCellData();
+    m_interiorCellId = 0;
+    m_pLocation = nullptr;
+    m_forms.clear();
+    m_vrDiscoveryStatusDirty = true;
+    spdlog::info("SkyrimTogetherVR discovery reset caches at load boundary; visit deferred until lifecycle readiness");
+    return BSTEventResult::kOk;
+#endif
 
     if constexpr (!kVrSkipStrictConnectionEnforcement)
     {

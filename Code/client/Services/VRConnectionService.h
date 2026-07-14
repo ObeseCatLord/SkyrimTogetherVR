@@ -19,6 +19,7 @@ struct VRConnectionService
 
     bool RequestConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     bool RequestDisconnect() noexcept;
+    void HandleLifecycleBoundary() noexcept;
     [[nodiscard]] const std::string& GetState() const noexcept { return m_state; }
 
 private:
@@ -61,7 +62,10 @@ private:
     std::string m_state{"offline"};
     std::string m_lastError;
     std::string m_lastCommandContents;
+    std::string m_retainedEndpoint;
+    std::string m_retainedPassword;
     Command m_pendingCommand{};
+    uint64_t m_lastLifecycleEpoch{0};
     bool m_hasPendingCommand{false};
     bool m_connectInFlight{false};
     bool m_envAutoconnectQueued{false};

@@ -24,6 +24,7 @@
 
 #include <ScriptExtender.h>
 #include <Services/DiscordService.h>
+#include <Services/VRLifecycleService.h>
 
 // #include <imgui_internal.h>
 
@@ -76,6 +77,11 @@ TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher)
 
 bool TransportService::Send(const ClientMessage& acMessage) const noexcept
 {
+#if TP_SKYRIM_VR
+    if (!m_world.ctx().at<VRLifecycleService>().IsReady())
+        return false;
+#endif
+
     static thread_local ScratchAllocator s_allocator(1 << 18);
 
     struct ScopedReset
@@ -154,8 +160,8 @@ void TransportService::OnConnected()
     request.DiscordId = m_world.ctx().at<DiscordService>().GetUser().id;
 
 #if TP_SKYRIM_VR
-    // The SKSEVR task executor is not a safe place to call arbitrary game
-    // functions. Cell/grid state is sent immediately after authentication.
+    // The stable lifecycle gate owns player/cell readiness. Cell/grid state is
+    // sent immediately after authentication by the VR player-cell service.
     request.Username = "Skyrim VR Player";
     request.WorldSpaceId = {};
     request.CellId = {};

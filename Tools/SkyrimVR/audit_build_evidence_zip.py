@@ -120,7 +120,9 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
     "source/Code/client/VRTickBridge.cpp": (
         "CreateFileMappingW",
         "EndpointState::Ready",
-        "SKSE task tick dispatched World::Update",
+        "SKSE task callback accepted",
+        "InterlockedExchange(&s_updatePermit, 1)",
+        "ConsumeUpdatePermit",
     ),
     "source/Code/vr_tick_bridge/xmake.lua": (
         "target(\"SkyrimTogetherVRTickBridge\")",

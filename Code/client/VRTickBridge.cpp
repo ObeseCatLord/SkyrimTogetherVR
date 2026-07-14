@@ -5,7 +5,6 @@
 #include <cstring>
 #include <limits>
 
-#include <TiltedOnlineApp.h>
 #include <VR/VRBodyPoseCapture.h>
 #include <vr_common/VRTickBridge.h>
 
@@ -17,19 +16,16 @@
 #define TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE 0
 #endif
 
-extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
-
 namespace SkyrimTogetherVR::TickBridge
 {
 namespace
 {
 HANDLE s_mapping = nullptr;
 Endpoint* s_endpoint = nullptr;
-volatile LONG s_dispatchInProgress = 0;
+volatile LONG s_updatePermit = 0;
 volatile LONG64 s_lastDispatchSequence = 0;
 volatile LONG64 s_lastBodyCaptureSequence = 0;
 volatile LONG s_bodyCaptureInProgress = 0;
-bool s_loggedFirstDispatch = false;
 bool s_loggedFirstCallback = false;
 
 LONG ReadState(const Endpoint& acEndpoint) noexcept
@@ -143,11 +139,21 @@ void Retire() noexcept
     if (s_endpoint)
     {
         WriteState(*s_endpoint, EndpointState::Retired);
+        InterlockedExchange(&s_updatePermit, 0);
 #if TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
         BodyPoseCapture::Retire();
 #endif
         spdlog::info("SkyrimTogetherVR tick bridge endpoint retired before client teardown");
     }
+#endif
+}
+
+bool ConsumeUpdatePermit() noexcept
+{
+#if !TP_SKYRIM_VR
+    return false;
+#else
+    return InterlockedExchange(&s_updatePermit, 0) != 0;
 #endif
 }
 
@@ -181,26 +187,7 @@ std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch, std::uint64_t aSequence, st
         s_loggedFirstCallback = true;
         spdlog::info("SkyrimTogetherVR SKSE task callback accepted: sequence={} thread={}", aSequence, currentThreadId);
     }
-    if (InterlockedCompareExchange(&s_dispatchInProgress, 1, 0) != 0)
-        return static_cast<std::uint32_t>(DispatchResult::Reentrant);
-    if (!g_appInstance)
-    {
-        InterlockedExchange(&s_dispatchInProgress, 0);
-        return static_cast<std::uint32_t>(DispatchResult::MissingClient);
-    }
-
-    const auto start = GetTickCount64();
-    g_appInstance->Update();
-    const auto elapsed = GetTickCount64() - start;
-    InterlockedExchange(&s_dispatchInProgress, 0);
-
-    if (!s_loggedFirstDispatch)
-    {
-        s_loggedFirstDispatch = true;
-        spdlog::info("SkyrimTogetherVR SKSE task tick dispatched World::Update on thread {}", GetCurrentThreadId());
-    }
-    if (elapsed > 10)
-        spdlog::warn("SkyrimTogetherVR SKSE task tick took {} ms", elapsed);
+    InterlockedExchange(&s_updatePermit, 1);
 
     return static_cast<std::uint32_t>(DispatchResult::Success);
 #endif

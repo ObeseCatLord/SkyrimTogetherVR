@@ -394,6 +394,7 @@ def build_runtime_checklist(
 ) -> dict[str, object]:
     checks: list[dict[str, str]] = []
     status = readouts.get("status", {})
+    lifecycle = readouts.get("lifecycle", {})
     pose = readouts.get("pose", {})
     movement = readouts.get("movement", {})
     inventory = readouts.get("inventory", {})
@@ -428,6 +429,15 @@ def build_runtime_checklist(
         "startup/main-loop/render logging",
         log_ok,
         log_detail,
+    )
+    lifecycle_ok, lifecycle_detail = audit_runtime_handoff.lifecycle_schema_detail(lifecycle)
+    add_check(
+        checks,
+        "lifecycle_schema",
+        "5,8",
+        "VR lifecycle owner and readiness",
+        lifecycle_ok,
+        lifecycle_detail,
     )
     add_check(
         checks,
@@ -1295,6 +1305,11 @@ def command_self_test(_: argparse.Namespace) -> int:
 
         write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
         write(
+            "lifecycle",
+            "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+        )
+        write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
             "local.spellOrigin.valid=1\nlocal.spellDestination.valid=1\n"
@@ -1560,6 +1575,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 f"package/{BUILD_MANIFEST_NAME}",
                 "logs/tp_client.log",
                 "handoff/SkyrimTogetherVR.status",
+                "handoff/SkyrimTogetherVR.lifecycle",
                 "handoff/SkyrimTogetherVR.pose",
                 "handoff/SkyrimTogetherVR.avatar",
                 "handoff/SkyrimTogetherVR.remoteplayers",

@@ -16,9 +16,11 @@ without headset input:
    body matches `someplace unknown` and `outside of time and space` and its sole
    non-cancel button is `Begin`; any other modal blocker is reported as a hard
    failure instead of stalling;
-6. waits for Realm of Lorkhan and verifies the finalized player and active
-   `SkyrimTogether.esp`, then requires two stable player/cell snapshots and
-   client `playercell ready=1` before closing any stranded RaceSex UI;
+6. requires `RaceSex Menu` itself to close through Skyrim's normal name and
+   finalization transaction, then waits for Realm of Lorkhan and verifies the
+   finalized player, active `SkyrimTogether.esp`, two stable player/cell
+   snapshots; in `active` mode it additionally requires matching lifecycle and
+   `playercell` readiness from the current process and epoch;
 7. before connecting, requires the dialog to remain closed across two polls and
    observes two newer successful SKSE task sequences; then writes one connection
    command and waits for fresh online status with a nonzero player ID plus the
@@ -41,28 +43,41 @@ input device is ready:
 Tools/SkyrimVR/devbench_new_game.py \
   --launch-game \
   --skyrim-vr "/path/to/SkyrimVR" \
+  --vm-update-mode active \
   --connect incidentalstoat.xyz:26099
 ```
 
 Connection verification intentionally requires `--launch-game`. The driver
 removes inherited `STVR_AUTOCONNECT` and `STVR_PASSWORD` values and launches a
 fresh offline process so an older in-memory connection cannot satisfy the test.
+It also requires `--vm-update-mode active`; the default `observe` mode installs
+the opaque VR VM-update detour for cadence and owner-thread evidence but never
+advances the Skyrim Together client.
 
-For a simulated headset that cannot deliver the RaceSex finish action, add
-`--allow-finalized-racesex`. This connection-smoke fallback is accepted only
-when DevBench independently sees a loaded, named, raced player already placed
-in `RealmLorkhan`. It leaves the stranded RaceSex presentation open and proves
-network admission only; it does not claim that the unavailable VR naming flow
-completed. If the Papyrus cadence pauses at the post-character renderer
-transition, the fallback pumps the registered native `Tick` through DevBench
-until fresh current-process task sequences, online status, and cell sync are
-observed.
+If XRizer cannot present Skyrim VR's naming keyboard, the run fails closed after
+the confirmation dialog. It never hides `RaceSex Menu`, accepts a still-open
+RaceSex presentation as finalized, or manually invokes the native tick to bypass
+the paused VM. Generic `kHide` reproduced an access violation and does not
+perform the engine's character-finalization transaction.
 
-The automation never treats hiding `RaceSex Menu` as successful character
-creation. XRizer cannot display Skyrim VR's SteamVR naming keyboard, so the menu
-can remain stranded after real controller activation. The script closes that
-presentation only after independently proving Realm of Lorkhan placement, a
-named/raced player, and the active Skyrim Together plugin.
+For unattended connection testing, author a deterministic post-character save
+once through the valid vanilla confirmation and naming path using the exact
+packaged load order, then load it by save stem:
+
+```bash
+Tools/SkyrimVR/devbench_new_game.py \
+  --launch-game \
+  --skyrim-vr "/path/to/SkyrimVR" \
+  --load-save "PostCharacterFixture" \
+  --vm-update-mode active \
+  --connect incidentalstoat.xyz:26099
+```
+
+The deterministic save is an automated connection fixture, not a substitute
+for the New Game release gate. Run the same build first with the default
+`--vm-update-mode observe` and no `--connect`; promote to `active` only after
+the observer log proves stable cadence, one owner thread, correct forwarding,
+and clean launch/load/exit behavior.
 
 Synthetic keyboard taps are held for 500 ms. Short taps were intermittently
 missed by Skyrim VR and XRizer even when the correct window had focus.

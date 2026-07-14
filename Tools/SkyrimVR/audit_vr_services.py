@@ -857,6 +857,16 @@ REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
     "Tools/SkyrimVR/devbench_new_game.py": (
         'launch_env.pop("STVR_AUTOCONNECT", None)',
         'launch_env.pop("STVR_PASSWORD", None)',
+        'launch_env["STVR_VM_UPDATE_MODE"] = args.vm_update_mode',
+        'choices=("off", "observe", "active")',
+        'default="observe"',
+        '"--connect requires --vm-update-mode active',
+        '"--load-save"',
+        '"game", {"action": "load", "name": args.load_save}',
+        '"RaceSex Menu" not in value.get("openMenus", [])',
+        '"SkyrimTogetherVR.lifecycle"',
+        '"Skyrim Together stable gameplay lifecycle"',
+        'player_cell.get("lifecycleEpoch") != lifecycle.get("epoch")',
         "--connect verification requires --launch-game",
         'value.get("sessionId") == session_id',
         'value.get("connectionGeneration") == status.get("connectionGeneration")',
@@ -3354,8 +3364,14 @@ REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS = {
         "pPlayer->GetFormIdData()",
     ),
     "Code/client/Services/Generic/VRConnectionService.cpp": (
+        "VRLifecycleService",
+        "IsReady()",
+    ),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        "TryGetReadablePlayerForVR",
         "GetBaseFormData",
         "GetParentCellData",
+        "GetFormIdData",
     ),
     "Code/client/Services/Generic/VRSaveLoadService.cpp": (
         "GetBaseFormData",
@@ -4129,7 +4145,7 @@ def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
         errors.append("Connection-only PlayerService safety must not depend on the player-cell diagnostics flag")
 
     connected = extract_cpp_function(transport_text, "void TransportService::OnConnected()")
-    vr_auth_start = connected.find("#if TP_SKYRIM_VR\n    // The SKSEVR task executor")
+    vr_auth_start = connected.find("#if TP_SKYRIM_VR\n    // The stable lifecycle gate")
     vr_auth_end = connected.find("#else", vr_auth_start)
     if vr_auth_start < 0 or vr_auth_end < 0:
         errors.append("TransportService::OnConnected must contain the dedicated VR authentication branch")

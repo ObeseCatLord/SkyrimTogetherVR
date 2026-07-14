@@ -1,5 +1,10 @@
 # Senior Review Disposition: Post-Character Runtime Follow-up
 
+> Superseded on 2026-07-14 by
+> `startup-lifecycle-senior-disposition-20260714.md`. Live testing reproduced an
+> access violation after generic RaceSex `kHide`; stable player/cell snapshots
+> while RaceSex is open are not proof of a completed engine transaction.
+
 | Recommendation | Disposition | Implementation |
 | --- | --- | --- |
 | Use direct VR singleton ID `517014` with one pointer load. | Adopted | `PlayerCharacter::Get()` selects `517014` only for `TP_SKYRIM_VR`; desktop retains `401069`. The VR services audit requires the exact conditional source shape. |

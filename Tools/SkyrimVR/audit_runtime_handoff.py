@@ -18,15 +18,17 @@ PLANCK_READOUT_NAME = "SkyrimTogetherVR.planck"
 LOG_BREADCRUMBS = (
     "SkyrimTogetherVR runtime flags:",
     "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
-    "Installing SkyrimTogetherVR VM/main-loop bring-up hooks:",
+    "Installing SkyrimTogetherVR main-loop observer:",
+    "SkyrimTogetherVR VM-update runtime mode:",
+    "Installing opaque SkyrimTogetherVR VM-update observer:",
     "SkyrimTogetherVR client startup hook reached",
-    "SkyrimTogetherVR main-loop hook reached",
-    "SkyrimTogetherVR VM update hook reached;",
+    "SkyrimTogetherVR VM-update observer reached:",
     "Installing SkyrimTogetherVR renderer bring-up hook:",
 )
 
 BASE_REQUIRED_HANDOFF_FILES = (
     "status",
+    "lifecycle",
     "discovery",
     "playercell",
     "compat",
@@ -98,6 +100,52 @@ def parse_grid_field(values: dict[str, str], key: str) -> tuple[bool, tuple[int,
         return True, (int(parts[0], 0), int(parts[1], 0))
     except ValueError:
         return False, (0, 0)
+
+
+def lifecycle_schema_detail(values: dict[str, str]) -> tuple[bool, str]:
+    if not values:
+        return False, "missing lifecycle readout"
+
+    errors: list[str] = []
+    state = values.get("state", "")
+    if state not in {"boot", "suspended", "stabilizing", "ready", "teardown"}:
+        errors.append(f"invalid state={state or '<missing>'}")
+
+    ready_raw = values.get("ready", "").strip().lower()
+    if ready_raw not in {"0", "1", "true", "false", "yes", "no"}:
+        errors.append(f"invalid ready={ready_raw or '<missing>'}")
+
+    numeric_values: dict[str, int] = {}
+    for key in (
+        "epoch",
+        "ownerThreadId",
+        "stableTickCount",
+        "playerFormId",
+        "playerBaseFormId",
+        "playerCellFormId",
+    ):
+        valid, value = parse_int_field(values, key)
+        if not valid or value < 0:
+            errors.append(f"invalid {key}={values.get(key, '<missing>')}")
+        else:
+            numeric_values[key] = value
+
+    ready = ready_raw in {"1", "true", "yes"}
+    if ready:
+        if state != "ready":
+            errors.append(f"ready=1 with state={state or '<missing>'}")
+        for key in ("epoch", "ownerThreadId", "playerFormId", "playerBaseFormId", "playerCellFormId"):
+            if numeric_values.get(key, 0) <= 0:
+                errors.append(f"ready lifecycle requires nonzero {key}")
+
+    detail = (
+        f"state={state or '<missing>'} ready={values.get('ready', '<missing>')} "
+        f"epoch={values.get('epoch', '<missing>')} owner={values.get('ownerThreadId', '<missing>')} "
+        f"player={values.get('playerFormId', '<missing>')} cell={values.get('playerCellFormId', '<missing>')}"
+    )
+    if errors:
+        return False, detail + "; " + "; ".join(errors)
+    return True, detail
 
 
 def discovery_schema_detail(values: dict[str, str]) -> tuple[bool, str]:
@@ -467,6 +515,7 @@ def audit_default_runtime(
     readouts: dict[str, dict[str, str]],
 ) -> None:
     status = readouts.get("status", {})
+    lifecycle = readouts.get("lifecycle", {})
     pose = readouts.get("pose", {})
     movement = readouts.get("movement", {})
     inventory = readouts.get("inventory", {})
@@ -476,6 +525,7 @@ def audit_default_runtime(
     compat = readouts.get("compat", {})
     planck = readouts.get("planck", {})
     saveload = readouts.get("saveload", {})
+    lifecycle_ok, lifecycle_detail = lifecycle_schema_detail(lifecycle)
     discovery_ok, discovery_detail = discovery_schema_detail(discovery)
     playercell_ok, playercell_detail = player_cell_schema_detail(playercell)
     physics_compat_installed = get_bool(compat, "vrPhysicsCompatibilityModInstalled")
@@ -512,6 +562,7 @@ def audit_default_runtime(
     )
 
     add_check(results, "connection status", bool(status.get("state")), f"state={status.get('state', '<missing>')}")
+    add_check(results, "lifecycle schema", lifecycle_ok, lifecycle_detail)
     if not args.avatar_sync:
         disabled_policies = {
             key: compat.get(key)
@@ -1038,6 +1089,11 @@ def command_self_test(_: argparse.Namespace) -> int:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
         write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
+        write(
+            "lifecycle",
+            "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+        )
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"

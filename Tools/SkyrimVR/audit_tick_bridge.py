@@ -27,12 +27,13 @@ REQUIRED_TOKENS = {
         "EndpointState::Ready",
         "EndpointState::Retired",
         "s_endpoint->ActivationThreadId = GetCurrentThreadId()",
-        "SkyrimTogetherVR SKSE task tick dispatched World::Update",
+        "SkyrimTogetherVR SKSE task callback accepted",
         "aExecutorThreadId != currentThreadId",
         "InterlockedCompareExchange64(&s_lastDispatchSequence",
         "DispatchResult::InvalidSequence",
-        "g_appInstance->Update()",
-        "InterlockedCompareExchange(&s_dispatchInProgress, 1, 0)",
+        "InterlockedExchange(&s_updatePermit, 1)",
+        "bool ConsumeUpdatePermit() noexcept",
+        "InterlockedExchange(&s_updatePermit, 0)",
         "TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE",
         "BodyPoseCapture::Activate()",
         "BodyPoseCapture::CaptureFromPostHiggs",
@@ -133,6 +134,11 @@ REQUIRED_TOKENS = {
 }
 
 FORBIDDEN_TOKENS = {
+    "Code/client/VRTickBridge.cpp": (
+        "g_appInstance",
+        "World::Update",
+        "TiltedOnlineApp.h",
+    ),
     "Code/vr_tick_bridge/main.cpp": (
         "std::thread",
         "CreateThread",

@@ -12,9 +12,8 @@
 #include <Events/ConnectionErrorEvent.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
-#include <PlayerCharacter.h>
-#include <VR/VRPlayerReadiness.h>
 #include <Services/TransportService.h>
+#include <Services/VRLifecycleService.h>
 #include <World.h>
 
 namespace
@@ -24,10 +23,9 @@ constexpr double kStatusWriteInterval = 1.0;
 constexpr char kCommandFileName[] = "SkyrimTogetherVR.command";
 constexpr char kStatusFileName[] = "SkyrimTogetherVR.status";
 
-bool IsVrPlayerReadyForConnection() noexcept
+bool IsVrPlayerReadyForConnection(World& aWorld) noexcept
 {
-    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
-    return pPlayer && pPlayer->GetBaseFormData() && pPlayer->GetParentCellData();
+    return aWorld.ctx().at<VRLifecycleService>().IsReady();
 }
 
 std::string Trim(std::string aValue)
@@ -77,6 +75,8 @@ VRConnectionService::VRConnectionService(World& aWorld, entt::dispatcher& aDispa
 
     spdlog::info("SkyrimTogetherVR connection handoff command file: {}", m_commandPath.string());
 
+    m_lastLifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
+
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&VRConnectionService::OnUpdate>(this);
     m_connectedConnection = aDispatcher.sink<ConnectedEvent>().connect<&VRConnectionService::OnConnected>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRConnectionService::OnDisconnected>(this);
@@ -114,6 +114,13 @@ void VRConnectionService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRConnectionService::OnConnected(const ConnectedEvent&) noexcept
 {
+    if (!IsVrPlayerReadyForConnection(m_world))
+    {
+        spdlog::warn("SkyrimTogetherVR connection completed outside a ready lifecycle epoch; closing it");
+        m_transport.Close();
+        return;
+    }
+
     m_connectInFlight = false;
     SetStatus("online");
 }
@@ -121,13 +128,16 @@ void VRConnectionService::OnConnected(const ConnectedEvent&) noexcept
 void VRConnectionService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_connectInFlight = false;
-    SetStatus("offline");
+    SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
 }
 
 void VRConnectionService::OnConnectionError(const ConnectionErrorEvent& acEvent) noexcept
 {
     m_connectInFlight = false;
-    SetStatus("error", acEvent.ErrorDetail.c_str());
+    if (m_hasPendingCommand)
+        SetStatus("waiting_for_gameplay");
+    else
+        SetStatus("error", acEvent.ErrorDetail.c_str());
 }
 
 bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept
@@ -156,12 +166,12 @@ bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const st
     command.Endpoint = endpoint;
     command.Password = acPassword;
 
-    if (!IsVrPlayerReadyForConnection())
+    if (!IsVrPlayerReadyForConnection(m_world))
     {
         m_pendingCommand = std::move(command);
         m_hasPendingCommand = true;
-        SetStatus("waiting_for_player");
-        spdlog::info("SkyrimTogetherVR connection request queued until local player and parent cell are available");
+        SetStatus("waiting_for_gameplay");
+        spdlog::info("SkyrimTogetherVR connection request queued until a stable gameplay lifecycle epoch is ready");
         m_commandQueuedThisUpdate = true;
         return true;
     }
@@ -176,6 +186,40 @@ bool VRConnectionService::RequestDisconnect() noexcept
     QueueDisconnect();
     m_commandQueuedThisUpdate = true;
     return true;
+}
+
+void VRConnectionService::HandleLifecycleBoundary() noexcept
+{
+    auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
+    const auto epoch = lifecycle.GetEpoch();
+    if (epoch == m_lastLifecycleEpoch)
+        return;
+
+    m_lastLifecycleEpoch = epoch;
+    m_statusDirty = true;
+    if (lifecycle.IsReady())
+        return;
+
+    if (m_transport.IsOnline() || m_connectInFlight)
+    {
+        if (!m_retainedEndpoint.empty())
+        {
+            m_pendingCommand.Action = CommandAction::Connect;
+            m_pendingCommand.Endpoint = m_retainedEndpoint;
+            m_pendingCommand.Password = m_retainedPassword;
+            m_hasPendingCommand = true;
+        }
+        m_connectInFlight = false;
+        SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+        spdlog::info(
+            "SkyrimTogetherVR lifecycle epoch {} invalidated the connection; reconnectRetained={}", epoch,
+            m_hasPendingCommand);
+        m_transport.Close();
+    }
+    else if (m_hasPendingCommand)
+    {
+        SetStatus("waiting_for_gameplay");
+    }
 }
 
 void VRConnectionService::PollEnvironmentAutoconnect() noexcept
@@ -194,11 +238,11 @@ void VRConnectionService::PollEnvironmentAutoconnect() noexcept
         return;
     }
 
-    if (!IsVrPlayerReadyForConnection())
+    if (!IsVrPlayerReadyForConnection(m_world))
     {
         if (!m_reportedWaitingForPlayer)
         {
-            spdlog::info("SkyrimTogetherVR connection handoff: waiting for local player and parent cell before autoconnect");
+            spdlog::info("SkyrimTogetherVR connection handoff: waiting for a stable gameplay lifecycle epoch before autoconnect");
             m_reportedWaitingForPlayer = true;
         }
         return;
@@ -234,13 +278,13 @@ void VRConnectionService::PollCommandFile() noexcept
         return;
     }
 
-    if (command.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection())
+    if (command.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection(m_world))
     {
         m_pendingCommand = std::move(command);
         m_hasPendingCommand = true;
         m_commandQueuedThisUpdate = true;
-        SetStatus("waiting_for_player");
-        spdlog::info("SkyrimTogetherVR connection handoff queued until local player and parent cell are available");
+        SetStatus("waiting_for_gameplay");
+        spdlog::info("SkyrimTogetherVR connection handoff queued until a stable gameplay lifecycle epoch is ready");
         return;
     }
 
@@ -325,7 +369,7 @@ void VRConnectionService::TryRunPendingCommand() noexcept
     if (!m_hasPendingCommand)
         return;
 
-    if (m_pendingCommand.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection())
+    if (m_pendingCommand.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection(m_world))
         return;
 
     RunCommand(m_pendingCommand);
@@ -363,14 +407,36 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
     }
 
     spdlog::info("SkyrimTogetherVR queueing connection to {}", acEndpoint);
+    m_retainedEndpoint = acEndpoint;
+    m_retainedPassword = acPassword;
     m_connectInFlight = true;
     SetStatus("connecting");
 
-    m_world.GetRunner().Queue([endpoint = acEndpoint, password = acPassword]() {
-        if (!password.empty())
-            World::Get().GetTransport().SetServerPassword(password);
+    const auto lifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
+    m_world.GetRunner().Queue([this, endpoint = acEndpoint, password = acPassword, lifecycleEpoch]() {
+        auto& world = World::Get();
+        const auto& lifecycle = world.ctx().at<VRLifecycleService>();
+        if (!lifecycle.IsReady() || lifecycle.GetEpoch() != lifecycleEpoch)
+        {
+            m_connectInFlight = false;
+            if (!m_retainedEndpoint.empty())
+            {
+                m_pendingCommand.Action = CommandAction::Connect;
+                m_pendingCommand.Endpoint = m_retainedEndpoint;
+                m_pendingCommand.Password = m_retainedPassword;
+                m_hasPendingCommand = true;
+            }
+            SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+            spdlog::info(
+                "SkyrimTogetherVR discarded a stale queued connect from lifecycle epoch {}; current epoch={} state={}",
+                lifecycleEpoch, lifecycle.GetEpoch(), lifecycle.GetStateName());
+            return;
+        }
 
-        World::Get().GetTransport().Connect(endpoint);
+        if (!password.empty())
+            world.GetTransport().SetServerPassword(password);
+
+        world.GetTransport().Connect(endpoint);
     });
 }
 
@@ -379,6 +445,8 @@ void VRConnectionService::QueueDisconnect() noexcept
     spdlog::info("SkyrimTogetherVR queueing disconnect");
     m_hasPendingCommand = false;
     m_pendingCommand = {};
+    m_retainedEndpoint.clear();
+    m_retainedPassword.clear();
     m_connectInFlight = false;
     SetStatus("disconnecting");
     m_world.GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
@@ -425,6 +493,9 @@ void VRConnectionService::WriteStatusFile() noexcept
     file << "playerId=" << m_transport.GetLocalPlayerId() << "\n";
     file << "sessionId=" << m_transport.GetSessionId() << "\n";
     file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
+    const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
+    file << "lifecycleState=" << lifecycle.GetStateName() << "\n";
+    file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
     file << "commandFile=" << m_commandPath.string() << "\n";
     if (!m_lastError.empty())
         file << "error=" << m_lastError << "\n";

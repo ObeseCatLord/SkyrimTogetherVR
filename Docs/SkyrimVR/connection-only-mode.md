@@ -16,17 +16,31 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 
 ## Enabled
 
-- The main-loop address is observed only. `World::Update() is not called from a VR hook`;
-  the task bridge below is its sole default scheduler.
+- The outer main-loop address remains observation-only. It is not a frame
+  scheduler and never calls `World::Update()`.
+- Address-library ID `53926` is installed as an opaque VR VM-update detour when
+  `STVR_VM_UPDATE_MODE` is `observe` or `active`. It never reads the unverified
+  VR `VMContext` layout and always forwards to Skyrim. The default `observe`
+  mode records cadence and one owner thread without advancing the client.
+- In opt-in `active` mode, the VM-update owner consumes at most one coalesced
+  permit from the task bridge and calls `World::Update()`. The SKSE task
+  callback itself never executes client or engine work.
 - `RunnerService` drains queued main-thread work.
 - `SkyrimTogetherVRTickBridge.dll` registers one normal SKSEVR Papyrus native.
   The attached quest uses a 50 ms single-update timer to request one coalesced
-  `SKSETaskInterface` task. Only that task dispatches `World::Update()` after
-  endpoint, epoch, allocation-base, page-protection, and thread checks.
+  `SKSETaskInterface` task. That task validates endpoint, epoch,
+  allocation-base, page-protection, and sequence state, then publishes an
+  atomic permit for the VM-update owner.
   It rejects any runtime other than Skyrim VR 1.4.15 with SKSEVR 2.0.12 (or a
   compatible later release index) because the legacy native-function ABI is
   runtime-address-specific.
-- `TransportService` can poll/authenticate through the verified task path.
+- `VRLifecycleService` gates all client updates behind closed main/RaceSex/load
+  menus and stable player, base, and cell identities. It records a monotonic
+  lifecycle epoch in `SkyrimTogetherVR.lifecycle`; load or player invalidation
+  suspends the client, closes transport, resets discovery, and defers reconnect
+  until the next stable epoch.
+- `TransportService` polls, authenticates, sends, and closes on the latched
+  VM-update owner. Low-level client entry points assert that ownership.
 - `ModSystem` receives server mod mappings.
 - `StringCacheService` receives and clears string-cache state.
 - `DiscordService` is present so authentication can include Discord state when available.
@@ -108,8 +122,13 @@ The first VR smoke test should show these one-time breadcrumbs in `logs/tp_clien
 - `SkyrimTogetherVR main-loop observer reached` and cadence records.
 - `SkyrimTogetherVR tick bridge endpoint prepared` before SKSEVR bootstrap.
 - `SkyrimTogetherVR tick bridge endpoint ready on thread` after client startup.
-- `SkyrimTogetherVR SKSE task tick dispatched World::Update` after the quest
-  timer reaches the SKSEVR task queue.
+- `SkyrimTogetherVR SKSE task callback accepted` after the quest timer reaches
+  the SKSEVR task queue; this proves only that a coalesced VM-update permit was
+  published.
+- `SkyrimTogetherVR VM-update runtime mode: observe` and `SkyrimTogetherVR
+  VM-update observer reached` during the observer gate. An active connection
+  test must instead show mode `active`, a stable owner thread, and
+  `SkyrimTogetherVR lifecycle ready` before `connecting` or `online` status.
 - `SkyrimTogetherVRTickBridge: SKSEVR task and Papyrus bridge registered` in
   the SKSEVR log. A runtime-gate message instead means the installed game or
   SKSEVR version is incompatible and the client must not be tested.
@@ -121,14 +140,19 @@ If the renderer init address does not resolve, the client logs `SkyrimTogetherVR
 ## Test Autoconnect
 
 Because the flat overlay is disabled for VR, connection-only mode has an
-environment-variable handoff path driven by the SKSEVR task bridge:
+environment-variable handoff path consumed by the active VM-update owner:
 
 ```cmd
+set STVR_VM_UPDATE_MODE=active
 set STVR_AUTOCONNECT=127.0.0.1:10578
 set STVR_PASSWORD=optional_password
 ```
 
-`STVR_AUTOCONNECT` is queued only after `PlayerCharacter` and its parent cell are available. This avoids authenticating while still on the main menu or during early game load.
+`STVR_AUTOCONNECT` is queued only after the lifecycle reaches a stable gameplay
+epoch. It remains pending through the main menu, RaceSex, and loading screens.
+On Windows the equivalent launcher form is
+`SkyrimTogetherVR.exe --vm-update-mode active`; `off`, `observe`, and `active`
+are accepted. The same executable supports all three modes.
 
 The task bridge does not register HIGGS callbacks, call HIGGS or PLANCK APIs,
 or intercept controller input. HIGGS and PLANCK remain observation-only
