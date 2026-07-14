@@ -98,7 +98,8 @@ WRITER_REQUIRED = {
         "ctx().emplace<VRRemotePlayerService>(*this, m_dispatcher, m_transport);",
     ),
     "Code/client/xmake.lua": (
-        'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=1")',
+        'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=" .. vr_define_value(remote_player_proxy))',
+        "remote_player_proxy = true",
     ),
 }
 

@@ -7,6 +7,8 @@ REQUIRED_WORLD_TOKENS = (
     "#include <Services/VRInventoryService.h>",
     "TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE",
     "ctx().emplace<VRInventoryService>(*this, m_dispatcher, m_transport);",
+    "#ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE",
+    "#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE",
 )
 
 REQUIRED_MOVEMENT_WORLD_TOKENS = (
@@ -52,35 +54,45 @@ REQUIRED_SAVELOAD_WORLD_TOKENS = (
 )
 
 REQUIRED_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE=1")',
+    "local observation_services = options.observation_services or false",
+    "local pose_service = options.pose_service or false",
+    "local remote_player_proxy = options.remote_player_proxy or false",
+    'add_defines("TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_POSE_SERVICE=" .. vr_define_value(pose_service))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE=" .. vr_define_value(pose_service))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=" .. vr_define_value(remote_player_proxy))',
+    "observation_services = true",
+    "pose_service = true",
+    "remote_player_proxy = true",
 )
 
 REQUIRED_MOVEMENT_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_ACTIVATION_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_MAGIC_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_COMBAT_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_PROJECTILE_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_GRAB_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_SAVELOAD_XMAKE_TOKENS = (
-    'add_defines("TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE=1")',
+    'add_defines("TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
 )
 
 REQUIRED_MOVEMENT_OBSERVER_TOKENS = (
@@ -408,6 +420,10 @@ REQUIRED_POSE_RELAY_TOKENS = {
         "struct VRPoseUpdate",
         "VRPoseNodeData",
         "VRVrikData",
+        "VRBodyPoseData",
+        "IsVRBodyPoseDataSafe",
+        "IsVRPoseUpdateSafe",
+        "HasAnyVRPosePayload",
     ),
     "Code/encoding/Messages/RequestVRPoseUpdate.h": (
         "struct RequestVRPoseUpdate",
@@ -428,8 +444,8 @@ REQUIRED_POSE_RELAY_TOKENS = {
         "OnPlayerLeave",
         "ShouldRelayPose",
         "pose.Sequence == 0",
-        "HasAnyPoseNode(pose)",
-        "IsPoseUpdateSafe(pose)",
+        "HasAnyVRPosePayload(pose)",
+        "IsVRPoseUpdateSafe(pose)",
         "state.HasSequence",
         "GameServer::Get()->GetTick()",
         "now - state.LastRelayTick < kMinPoseRelayIntervalMs",
@@ -455,6 +471,9 @@ REQUIRED_POSE_RELAY_TOKENS = {
         "RequestVRPoseUpdate",
         "NotifyVRPoseUpdate",
         'GIVEN("VRPoseUpdate")',
+        'GIVEN("VRPoseUpdate validation")',
+        "IsVRBodyPoseDataSafe",
+        "IsVRPoseUpdateSafe",
     ),
 }
 
@@ -710,7 +729,7 @@ REQUIRED_REMOTE_PLAYER_PROXY_TOKENS = {
         "ctx().emplace<VRRemotePlayerService>",
     ),
     "Code/client/xmake.lua": (
-        "TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=1",
+        'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=" .. vr_define_value(remote_player_proxy))',
     ),
     "Code/client/Games/PapyrusFunctions.cpp": (
         "SkyrimTogetherVR.remoteplayers",
@@ -769,7 +788,10 @@ FORBIDDEN_REMOTE_PLAYER_PROXY_TOKENS = {
 REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
     "Code/client/Services/Generic/PlayerService.cpp": (
         "SkyrimTogetherVR.playercell",
-        "PlayerService network-only mode: sending cell/grid/level changes only",
+        "PlayerService network-only mode: sending cell/grid changes; level reads are disabled",
+        "constexpr uint16_t kVrFallbackLevel = 1;",
+        "TP_UNUSED(acDeltaTime);",
+        'file << "currentLevel=" << m_cachedVrLevel',
         "WriteVrPlayerCellStatusFile",
         "RunVrPlayerCellStatusWrite",
         "gridCellRequestCount",
@@ -783,9 +805,15 @@ REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
         "lastGrid.playerCell",
         "lastGrid.center",
         "lastGrid.cellCount",
+        "lastGrid.connectionGeneration",
         "lastCell.valid",
         "lastCell.exterior",
+        "lastCell.connectionGeneration",
         "lastCell.currentCoords",
+        "const bool sent = m_transport.Send(request);",
+        "const bool sent = m_transport.Send(message);",
+        "m_lastVrGridConnectionGeneration = m_transport.GetConnectionGeneration();",
+        "m_lastVrCellConnectionGeneration = m_transport.GetConnectionGeneration();",
         "PlayerLevelRequest",
         "ShiftGridCellRequest",
         "EnterExteriorCellRequest",
@@ -799,11 +827,56 @@ REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
         "m_vrInteriorCellRequestCount",
         "m_vrLevelRequestCount",
         "m_vrPlayerCellStatusPath",
+        "m_lastVrGridConnectionGeneration",
+        "m_lastVrCellConnectionGeneration",
+    ),
+    "Code/client/Services/TransportService.h": (
+        "m_localPlayerId = 0",
+        "m_sessionId = 0",
+        "m_connectionGeneration = 0",
+        "GetSessionId",
+        "GetConnectionGeneration",
+    ),
+    "Code/client/Services/Generic/TransportService.cpp": (
+        "m_sessionId =",
+        "m_localPlayerId = 0;",
+        "m_localPlayerId = acMessage.PlayerId;",
+        "++m_connectionGeneration;",
+        'request.Username = "Skyrim VR Player";',
+        "request.WorldSpaceId = {};",
+        "request.CellId = {};",
+        "request.Level = 1;",
+        "request.PlayerTime = TimeModel{};",
+        "if (!pMod || !pMod->IsLoaded())",
+        "authentication_not_queued",
+    ),
+    "Code/client/Services/Generic/VRConnectionService.cpp": (
+        'file << "sessionId=" << m_transport.GetSessionId()',
+        'file << "connectionGeneration=" << m_transport.GetConnectionGeneration()',
+    ),
+    "Tools/SkyrimVR/devbench_new_game.py": (
+        'launch_env.pop("STVR_AUTOCONNECT", None)',
+        'launch_env.pop("STVR_PASSWORD", None)',
+        "--connect verification requires --launch-game",
+        'value.get("sessionId") == session_id',
+        'value.get("connectionGeneration") == status.get("connectionGeneration")',
+        'value.get("lastGrid.connectionGeneration") == status.get("connectionGeneration")',
+        'value.get("lastCell.connectionGeneration") == status.get("connectionGeneration")',
+        'status_int(value, "worldSpaceTranslationFailureCount") == 0',
+        'status_int(value, "lastGrid.cellCount") > 0',
+        'status_int(value, "lastGrid.worldSpace.serverBaseId") > 0',
+        'status_int(value, "lastGrid.playerCell.serverBaseId") > 0',
+        'status_int(value, "lastCell.cell.serverBaseId") > 0',
+        'status_int(value, "lastCell.worldSpace.serverBaseId") > 0',
     ),
     "Code/client/Games/PapyrusFunctions.cpp": (
         "SkyrimTogetherVR.playercell",
         "AppendPlayerCellSummary",
         "AppendPlayerCellTelemetry",
+        "sessionId",
+        "connectionGeneration",
+        "lastGrid.connectionGeneration",
+        "lastCell.connectionGeneration",
         "gridCellRequestCount",
         "exteriorCellRequestCount",
         "interiorCellRequestCount",
@@ -2099,6 +2172,8 @@ REQUIRED_LAYOUT_TOKENS = {
     ),
     "Code/client/Games/Skyrim/Actor.cpp": (
         "pNpc->GetFullNameData().GetFullNameStringData()",
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(TGetLevel, s_getLevel, 36344);",
+        "#else\n    POINTER_SKYRIMSE(TGetLevel, s_getLevel, 37334);",
     ),
     "Code/client/Games/Skyrim/Forms/TESObjectCELL.h": (
         "#include <RuntimeLayout.h>",
@@ -2146,6 +2221,24 @@ REQUIRED_LAYOUT_TOKENS = {
         "static_assert(offsetof(TES, interiorCell) == TES::LocalTESOffsets::InteriorCell);",
         "static_assert(offsetof(TES, activeImageSpaceModifiers) == TES::LocalTESOffsets::ActiveImageSpaceModifiers);",
     ),
+    "Code/client/Games/TES.cpp": (
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(TES*, tes, 516923);",
+        "#else\n    POINTER_SKYRIMSE(TES*, tes, 400441);",
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(ProcessLists*, processLists, 514167);",
+        "#else\n    POINTER_SKYRIMSE(ProcessLists*, processLists, 400315);",
+    ),
+    "Code/client/Games/ModManager.cpp": (
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(ModManager*, modManager, 514141);",
+        "#else\n    POINTER_SKYRIMSE(ModManager*, modManager, 400269);",
+    ),
+    "Code/client/Games/TimeManager.cpp": (
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(TimeData*, s_instance, 514287);",
+        "#else\n    POINTER_SKYRIMSE(TimeData*, s_instance, 400447);",
+    ),
+    "Code/client/Games/INISettingCollection.cpp": (
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(INISettingCollection*, settingCollection, 524557);",
+        "#else\n    POINTER_SKYRIMSE(INISettingCollection*, settingCollection, 411155);",
+    ),
     "Code/client/Services/Generic/DiscoveryService.cpp": (
         "SkyrimTogetherVR.discovery",
         "actorLimit=",
@@ -2161,6 +2254,8 @@ REQUIRED_LAYOUT_TOKENS = {
         "GetCurrentGridYData",
         "GetCenterGridXData",
         "GetCenterGridYData",
+        "kVrSkipActorHandleDiscovery",
+        "!TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
     ),
     "Code/client/Services/Generic/CharacterService.cpp": (
         "GetCenterGridXData",
@@ -2181,6 +2276,8 @@ REQUIRED_LAYOUT_TOKENS = {
         "GetCenterGridXData",
         "GetCenterGridYData",
         "pSkillData->GetSkillData(aSkill).xp",
+        "#if TP_SKYRIM_VR\n    POINTER_SKYRIMSE(PlayerCharacter*, s_character, 517014);",
+        "#else\n    POINTER_SKYRIMSE(PlayerCharacter*, s_character, 401069);",
     ),
     "Code/client/Services/Debug/Views/SkillView.cpp": (
         "pSkills->GetGlobalXpData()",
@@ -3209,6 +3306,11 @@ FORBIDDEN_LAYOUT_TOKENS = {
 }
 
 REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS = {
+    "Code/client/Games/Skyrim/Actor.cpp": (
+        "using TGetLocation = TESForm*(const TESObjectREFR*);",
+        "static VersionDbPtr<TGetLocation> getActorLocation(19385);",
+        "return pGetActorLocation ? pGetActorLocation(this) : nullptr;",
+    ),
     "Code/client/Services/Generic/VRMovementService.cpp": (
         "GetBaseFormData",
         "GetParentCellData",
@@ -3995,6 +4097,68 @@ def audit_vr_papyrus_native_bypass(root: pathlib.Path) -> list[str]:
     return missing
 
 
+def extract_cpp_function(text: str, signature: str) -> str:
+    start = text.find(signature)
+    if start < 0:
+        return ""
+
+    opening_brace = text.find("{", start + len(signature))
+    if opening_brace < 0:
+        return ""
+
+    depth = 0
+    for index in range(opening_brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+
+    return ""
+
+
+def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
+    errors: list[str] = []
+    transport_path = root / "Code/client/Services/Generic/TransportService.cpp"
+    player_path = root / "Code/client/Services/Generic/PlayerService.cpp"
+    transport_text = transport_path.read_text(encoding="utf-8", errors="replace") if transport_path.exists() else ""
+    player_text = player_path.read_text(encoding="utf-8", errors="replace") if player_path.exists() else ""
+
+    if "TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE" in player_text:
+        errors.append("Connection-only PlayerService safety must not depend on the player-cell diagnostics flag")
+
+    connected = extract_cpp_function(transport_text, "void TransportService::OnConnected()")
+    vr_auth_start = connected.find("#if TP_SKYRIM_VR\n    // The SKSEVR task executor")
+    vr_auth_end = connected.find("#else", vr_auth_start)
+    if vr_auth_start < 0 or vr_auth_end < 0:
+        errors.append("TransportService::OnConnected must contain the dedicated VR authentication branch")
+    else:
+        vr_auth = connected[vr_auth_start:vr_auth_end]
+        for token in ("PlayerCharacter::Get", "GetLevel(", "TimeData::Get"):
+            if token in vr_auth:
+                errors.append(f"VR authentication branch must not call `{token}`")
+
+    for signature in (
+        "void PlayerService::RunVrLevelUpdates(const double acDeltaTime) noexcept",
+        "void PlayerService::WriteVrPlayerCellStatusFile() noexcept",
+    ):
+        function = extract_cpp_function(player_text, signature)
+        if not function:
+            errors.append(f"Could not inspect `{signature}`")
+        elif "GetLevel(" in function:
+            errors.append(f"Connection-only function `{signature}` must not call `GetLevel()`")
+
+    update = extract_cpp_function(player_text, "void PlayerService::OnUpdate(const UpdateEvent& acEvent) noexcept")
+    vr_cell_only = update.find("if constexpr (kVrCellOnlyPlayerService)")
+    early_return = update.find("return;", vr_cell_only)
+    desktop_level_update = update.find("RunLevelUpdates();")
+    if vr_cell_only < 0 or early_return < 0 or desktop_level_update < 0 or not (vr_cell_only < early_return < desktop_level_update):
+        errors.append("PlayerService::OnUpdate must return from connection-only VR handling before desktop level polling")
+
+    return errors
+
+
 def fmt_token_map(tokens_by_file: dict[str, list[str]]) -> str:
     if not tokens_by_file:
         return "None.\n"
@@ -4077,6 +4241,7 @@ def main() -> int:
     forbidden_saveload = present_tokens(saveload_text, FORBIDDEN_SAVELOAD_OBSERVER_TOKENS)
     missing_layout, forbidden_layout = audit_layout_tokens(root)
     missing_vr_papyrus_bypass = audit_vr_papyrus_native_bypass(root)
+    vr_connection_only_safety_errors = audit_vr_connection_only_game_call_safety(root)
     missing_vr_commonlib_accessors = audit_required_token_map(root, REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS)
     forbidden_vr_raw_members = audit_forbidden_token_map(root, FORBIDDEN_VR_RAW_MEMBER_TOKENS)
     missing_movement_relay = audit_required_token_map(root, REQUIRED_MOVEMENT_RELAY_TOKENS)
@@ -4170,6 +4335,7 @@ def main() -> int:
         handle.write(f"- CommonLib-informed layout/accessor tokens missing: {missing_layout_count}\n")
         handle.write(f"- Forbidden stale layout tokens present: {forbidden_layout_count}\n")
         handle.write(f"- VR Papyrus native bypass requirements missing: {len(missing_vr_papyrus_bypass)}\n")
+        handle.write(f"- VR connection-only unsafe game-call findings: {len(vr_connection_only_safety_errors)}\n")
         handle.write(f"- VR CommonLib accessor use tokens missing: {missing_vr_commonlib_accessor_count}\n")
         handle.write(f"- Forbidden raw VR game-object member reads present: {forbidden_vr_raw_member_count}\n")
         handle.write(f"- `VRMovementService.h` exists: {'yes' if movement_header_path.exists() else 'no'}\n")
@@ -4287,6 +4453,8 @@ def main() -> int:
         handle.write(fmt_token_map(forbidden_layout))
         handle.write("\n## Missing VR Papyrus Native Bypass Requirements\n\n")
         handle.write(fmt_tokens(missing_vr_papyrus_bypass))
+        handle.write("\n## VR Connection-Only Unsafe Game Calls\n\n")
+        handle.write(fmt_tokens(vr_connection_only_safety_errors))
         handle.write("\n## Missing VR CommonLib Accessor Use Tokens\n\n")
         handle.write(fmt_token_map(missing_vr_commonlib_accessors))
         handle.write("\n## Forbidden Raw VR Game-Object Member Reads\n\n")
@@ -4341,6 +4509,7 @@ def main() -> int:
     print(f"Missing CommonLib-informed layout/accessor tokens: {missing_layout_count}")
     print(f"Forbidden stale layout tokens: {forbidden_layout_count}")
     print(f"Missing VR Papyrus native bypass requirements: {len(missing_vr_papyrus_bypass)}")
+    print(f"VR connection-only unsafe game-call findings: {len(vr_connection_only_safety_errors)}")
     print(f"Missing VR CommonLib accessor use tokens: {missing_vr_commonlib_accessor_count}")
     print(f"Forbidden raw VR game-object member reads: {forbidden_vr_raw_member_count}")
     print(f"VRMovementService.h exists: {movement_header_path.exists()}")
@@ -4410,6 +4579,7 @@ def main() -> int:
         or missing_layout
         or forbidden_layout
         or missing_vr_papyrus_bypass
+        or vr_connection_only_safety_errors
         or missing_vr_commonlib_accessors
         or forbidden_vr_raw_members
         or not movement_header_path.exists()

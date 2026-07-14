@@ -175,7 +175,7 @@ and the external file/environment handoff.
 
 ## VR Papyrus Menu Source
 
-`GameFiles/SkyrimVR/scripts/source/SkyrimTogetherVRConnectionMenu.psc` is a source-level control surface for the ESP spell-effect entry point and any future quest, book, or MCM binding. It provides:
+`GameFiles/SkyrimVR/Scripts/source/SkyrimTogetherVRConnectionMenu.psc` is a source-level control surface for the ESP spell-effect entry point and any future quest, book, or MCM binding. It provides:
 
 - `ShowStatus()`
 - `ShowTelemetry()`

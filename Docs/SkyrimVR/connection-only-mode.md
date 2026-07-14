@@ -4,6 +4,12 @@ The default VR target currently builds with `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
 
 This mode is for bringing up the client transport/session path before actor and gameplay sync are safe in Skyrim VR.
 
+The default target enables only transport, mod mapping, connection handoff,
+discovery, and network-only player cell synchronization. Pose, movement,
+inventory, action observation, HIGGS relay, save/load observation, and the
+remote-player proxy are compiled behind options that are disabled for the
+default target and enabled by the explicit avatar-sync/gameplay targets.
+
 The separate `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets are the opt-in VRIK/HIGGS remote-avatar validation build. They keep staged connection-only mode enabled, add `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1` to instantiate `CharacterService`, and enable `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, while the default `SkyrimTogetherVRClient` target keeps actor mutation disabled.
 
 The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay` targets build `SkyrimTogetherVRGameplay.exe`. That package turns connection-only mode off and enables the normal gameplay service set plus VR relay/remote-avatar services, while still keeping the unvalidated flat-Skyrim hook batch, validated inline patches, and flat overlay disabled by default.
@@ -25,10 +31,10 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 - `StringCacheService` receives and clears string-cache state.
 - `DiscordService` is present so authentication can include Discord state when available.
 - `VRConnectionService` owns environment autoconnect plus a file-based command/status handoff for launcher or future VR overlay integration.
-- `Tools/SkyrimVR/vr_handoff.py` provides a desktop-side bridge and local browser companion panel for that file handoff, so connect/disconnect/status/readout workflows can be driven without the flat overlay or DirectInput hooks. Its `config` command and browser connect action write `SkyrimTogetherVR.connection`, the remembered endpoint/password used by the in-game configured power. Its `players` command and browser `Remote Players` table consolidate remote pose, movement, equipment, activation, magic, combat, projectile, grab, and HIGGS readouts by server player id. The VR launcher can start the packaged companion panel with `--companion`, `--companion-only`, or `STVR_LAUNCH_COMPANION=1`, opens it in the default browser unless `--no-open-browser` is passed through to the wrapper, and passes the selected Skyrim VR install through to the helper.
-- `DiscoveryService` runs in VR observation-only mode, discovering cell/grid/location changes and loaded actor form IDs without enabling actor sync consumers.
+- `Tools/SkyrimVR/vr_handoff.py` provides a desktop-side bridge and local browser companion panel for that file handoff, so connect/disconnect/status/readout workflows can be driven without the flat overlay or DirectInput hooks. Its `config` command and browser connect action write `SkyrimTogetherVR.connection` as the remembered endpoint. The launcher accepts `--no-open-browser` when the panel should stay background-only. Its `players` command consolidates broader avatar-sync/gameplay readouts when those targets are in use; those optional files are not required from the default target.
+- `DiscoveryService` runs in narrow VR observation mode, discovering cell/grid/location changes while actor-handle enumeration remains disabled in the default target.
 - `PlayerService` runs in VR network-only mode, sending cell/grid and level updates while leaving death, difficulty, party, dialogue, and respawn handling disconnected.
-- `PlayerService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.playercell` with readiness, request counters, last grid/cell ids, and level-send state so server-visible player cell/grid/level flow can be validated before actor assignment or spawn is enabled.
+- `PlayerService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.playercell` with process session, accepted-connection generation, readiness, request counters, and last grid/cell IDs so fresh server-visible synchronization can be distinguished from stale files.
 - `SkyrimTogetherUtils.psc` and `SkyrimTogetherVRConnectionMenu.psc/.pex` remain
   staged future UI source, but the default VR target does not register their
   flat-client natives. Do not use the bundled spell/effect as a connection
@@ -43,7 +49,7 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 - VRIK IK sync is mandatory for SkyrimTogetherVR, so the pose stream includes a VRIK lane for detection state, finger curl values, and camera/smoothing offsets sourced from `SkyrimTogetherVRVrikBridge` when its SKSEVR handoff file is available.
 - `VRPoseService` sends `RequestVRPoseUpdate` at 20 Hz after connection and stores incoming `NotifyVRPoseUpdate` payloads by remote player id.
 - `VRPoseService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.pose` as a read-only local/remote pose and VRIK IK handoff for external overlays, launchers, and the required remote-player avatar consumer.
-- `VRRemotePlayerService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.remoteplayers` with remote HMD, left-hand, right-hand, VRIK, movement, same-space, and HIGGS-aware readiness fields so two-client evidence can prove the mandatory IK target lane before actor/avatar mutation is enabled by default.
+- In explicit avatar-sync/gameplay targets, `VRRemotePlayerService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.remoteplayers` with remote HMD, left-hand, right-hand, VRIK, movement, same-space, and HIGGS-aware readiness fields. It is disabled in the default connection-proof target.
 - `VRMovementService` runs in VR observation-only mode, polling local player cell/worldspace, position, rotation, and direction without enabling normal actor movement packets or remote actor movement.
 - `VRMovementService` sends `RequestVRMovementUpdate` snapshots at 20 Hz when connected, stores incoming `NotifyVRMovementUpdate` snapshots by server player id, and keeps the normal actor/entity movement sync path disabled.
 - `VRMovementService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.movement` as a local/remote movement handoff for validation before actor movement sync is enabled.
@@ -170,7 +176,7 @@ The default connection-only client also writes a readout-only remote-player prox
 Data/SkyrimTogetherReborn/SkyrimTogetherVR.remoteplayers
 ```
 
-`VRRemotePlayerService` joins `NotifyPlayerJoined`/`NotifyPlayerCellChanged` identity and cell state with the existing remote pose, VRIK, movement, equipment, activation, magic, combat, projectile, grab, and HIGGS relay maps. It reports tracked player count, matched pose/VRIK/movement/equipment/action-lane/HIGGS counts, same-cell/same-worldspace flags, same-space count, avatar-validation readiness, and HIGGS-aware avatar-validation readiness for the companion `proxy` column and Papyrus telemetry. `avatarReady=yes` means the proxy has remote pose, VRIK, remote movement, and a same-cell or same-worldspace match; `higgsAvatarReady=yes` adds the remote HIGGS relay prerequisite. Otherwise `blocker=` or `higgsBlocker=` identifies the missing prerequisite. Activation, magic, combat, projectile, and grab proxy fields are readout-only lane availability flags; the service does not spawn actors, create marker objects, move scene nodes, equip items, replay HIGGS events, replay gameplay actions, or call PLANCK.
+In the explicit broader targets, `VRRemotePlayerService` joins `NotifyPlayerJoined`/`NotifyPlayerCellChanged` identity and cell state with the existing remote pose, VRIK, movement, equipment, activation, magic, combat, projectile, grab, and HIGGS relay maps. It reports tracked player count, matched pose/VRIK/movement/equipment/action-lane/HIGGS counts, same-cell/same-worldspace flags, same-space count, avatar-validation readiness, and HIGGS-aware avatar-validation readiness for the companion `proxy` column and Papyrus telemetry. `avatarReady=yes` means the proxy has remote pose, VRIK, remote movement, and a same-cell or same-worldspace match; `higgsAvatarReady=yes` adds the remote HIGGS relay prerequisite. Otherwise `blocker=` or `higgsBlocker=` identifies the missing prerequisite. Activation, magic, combat, projectile, and grab proxy fields are readout-only lane availability flags; the service does not spawn actors, create marker objects, move scene nodes, equip items, replay HIGGS events, replay gameplay actions, or call PLANCK.
 
 The pose relay also writes:
 
@@ -289,6 +295,9 @@ The staged save/load lifecycle observer is documented in:
 ```text
 Docs/SkyrimVR/vr-saveload-observation.md
 ```
+
+The compact status includes save/load readiness counters plus raw and server-mapped load cell/worldspace ids.
+Detailed telemetry includes save/load raw/server player/cell/worldspace ids.
 
 ## Papyrus API
 

@@ -26,6 +26,7 @@ SOURCE_AUDITS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SKSEVR task tick bridge", ("Tools/SkyrimVR/audit_tick_bridge.py",)),
     ("VRIK IK lane", ("Tools/SkyrimVR/audit_vrik_ik.py",)),
     ("HIGGS bridge", ("Tools/SkyrimVR/audit_higgs_bridge.py",)),
+    ("SkyrimVR-FBT compatibility", ("Tools/SkyrimVR/audit_fbt_compat.py",)),
     ("HIGGS relay", ("Tools/SkyrimVR/audit_vr_higgs.py",)),
     ("PLANCK compatibility", ("Tools/SkyrimVR/audit_planck_compat.py",)),
     ("FUS native DLL compatibility", ("Tools/SkyrimVR/audit_fus_dll_compat.py",)),

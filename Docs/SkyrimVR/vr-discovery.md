@@ -2,7 +2,10 @@
 
 The VR targets enable the `DiscoveryService` handoff behind `TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE=1`.
 
-In the default connection-only package this is an observation-only stage. It discovers local cell/grid/location changes and currently loaded actor form IDs, but connection-only mode still does not instantiate the normal actor, object, player, or character-sync consumers. In the gameplay package the same handoff file remains enabled while the normal gameplay service set is active, so runtime evidence can still inspect discovery state.
+In the default connection-only package this is a narrow observation stage. It
+discovers local cell/grid/location changes, but actor-handle enumeration is
+disabled until the explicit avatar-sync/gameplay targets. The gameplay package
+keeps the same handoff while normal gameplay services are active.
 
 ## What Runs
 

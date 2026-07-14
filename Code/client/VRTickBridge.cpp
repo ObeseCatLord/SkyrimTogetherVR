@@ -3,12 +3,18 @@
 #include "VRTickBridge.h"
 
 #include <cstring>
+#include <limits>
 
 #include <TiltedOnlineApp.h>
+#include <VR/VRBodyPoseCapture.h>
 #include <vr_common/VRTickBridge.h>
 
 #ifndef TP_SKYRIM_VR
 #define TP_SKYRIM_VR 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+#define TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE 0
 #endif
 
 extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
@@ -20,7 +26,11 @@ namespace
 HANDLE s_mapping = nullptr;
 Endpoint* s_endpoint = nullptr;
 volatile LONG s_dispatchInProgress = 0;
+volatile LONG64 s_lastDispatchSequence = 0;
+volatile LONG64 s_lastBodyCaptureSequence = 0;
+volatile LONG s_bodyCaptureInProgress = 0;
 bool s_loggedFirstDispatch = false;
+bool s_loggedFirstCallback = false;
 
 LONG ReadState(const Endpoint& acEndpoint) noexcept
 {
@@ -64,7 +74,11 @@ bool Initialize() noexcept
 
     const auto imageBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const auto callbackAddress = reinterpret_cast<std::uintptr_t>(&Dispatch);
-    if (!imageBase || callbackAddress < imageBase)
+    std::uintptr_t bodyCaptureCallbackAddress = 0;
+#if TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+    bodyCaptureCallbackAddress = reinterpret_cast<std::uintptr_t>(&CaptureBodyPose);
+#endif
+    if (!imageBase || callbackAddress < imageBase || (bodyCaptureCallbackAddress && bodyCaptureCallbackAddress < imageBase))
     {
         spdlog::critical("SkyrimTogetherVR tick bridge could not derive a launcher-relative callback address");
         UnmapViewOfFile(s_endpoint);
@@ -82,6 +96,7 @@ bool Initialize() noexcept
     s_endpoint->Epoch = MakeEpoch();
     s_endpoint->ImageBase = imageBase;
     s_endpoint->CallbackRva = callbackAddress - imageBase;
+    s_endpoint->BodyCaptureCallbackRva = bodyCaptureCallbackAddress ? bodyCaptureCallbackAddress - imageBase : 0;
     WriteState(*s_endpoint, EndpointState::Prepared);
 
     wchar_t handleText[2 + sizeof(std::uintptr_t) * 2 + 1]{};
@@ -90,6 +105,10 @@ bool Initialize() noexcept
     {
         spdlog::critical("SkyrimTogetherVR tick bridge could not publish its process-local endpoint handle: {}", GetLastError());
         WriteState(*s_endpoint, EndpointState::Faulted);
+        UnmapViewOfFile(s_endpoint);
+        CloseHandle(s_mapping);
+        s_endpoint = nullptr;
+        s_mapping = nullptr;
         return false;
     }
 
@@ -107,9 +126,14 @@ void Activate() noexcept
         return;
     }
 
-    s_endpoint->ReadyThreadId = GetCurrentThreadId();
+#if TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+    if (!BodyPoseCapture::Activate())
+        spdlog::warn("SkyrimTogetherVR body-pose capture names could not be initialized");
+#endif
+
+    s_endpoint->ActivationThreadId = GetCurrentThreadId();
     WriteState(*s_endpoint, EndpointState::Ready);
-    spdlog::info("SkyrimTogetherVR tick bridge endpoint ready on thread {}", s_endpoint->ReadyThreadId);
+    spdlog::info("SkyrimTogetherVR tick bridge endpoint ready on activation thread {}", s_endpoint->ActivationThreadId);
 #endif
 }
 
@@ -119,12 +143,15 @@ void Retire() noexcept
     if (s_endpoint)
     {
         WriteState(*s_endpoint, EndpointState::Retired);
+#if TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+        BodyPoseCapture::Retire();
+#endif
         spdlog::info("SkyrimTogetherVR tick bridge endpoint retired before client teardown");
     }
 #endif
 }
 
-std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch) noexcept
+std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch, std::uint64_t aSequence, std::uint32_t aExecutorThreadId) noexcept
 {
 #if !TP_SKYRIM_VR
     return static_cast<std::uint32_t>(DispatchResult::Inactive);
@@ -133,8 +160,27 @@ std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch) noexcept
         return static_cast<std::uint32_t>(DispatchResult::Inactive);
     if (s_endpoint->Epoch != aEpoch)
         return static_cast<std::uint32_t>(DispatchResult::InvalidEpoch);
-    if (s_endpoint->ReadyThreadId != GetCurrentThreadId())
+    const auto currentThreadId = GetCurrentThreadId();
+    if (aExecutorThreadId == 0 || aExecutorThreadId != currentThreadId)
         return static_cast<std::uint32_t>(DispatchResult::WrongThread);
+    if (aSequence == 0 || aSequence > static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max()))
+    {
+        WriteState(*s_endpoint, EndpointState::Faulted);
+        return static_cast<std::uint32_t>(DispatchResult::InvalidSequence);
+    }
+
+    const auto sequence = static_cast<LONG64>(aSequence);
+    const auto expectedPrevious = sequence - 1;
+    if (InterlockedCompareExchange64(&s_lastDispatchSequence, sequence, expectedPrevious) != expectedPrevious)
+    {
+        WriteState(*s_endpoint, EndpointState::Faulted);
+        return static_cast<std::uint32_t>(DispatchResult::InvalidSequence);
+    }
+    if (!s_loggedFirstCallback)
+    {
+        s_loggedFirstCallback = true;
+        spdlog::info("SkyrimTogetherVR SKSE task callback accepted: sequence={} thread={}", aSequence, currentThreadId);
+    }
     if (InterlockedCompareExchange(&s_dispatchInProgress, 1, 0) != 0)
         return static_cast<std::uint32_t>(DispatchResult::Reentrant);
     if (!g_appInstance)
@@ -157,6 +203,40 @@ std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch) noexcept
         spdlog::warn("SkyrimTogetherVR SKSE task tick took {} ms", elapsed);
 
     return static_cast<std::uint32_t>(DispatchResult::Success);
+#endif
+}
+
+std::uint32_t __cdecl CaptureBodyPose(std::uint64_t aEpoch, std::uint64_t aSequence, std::uint32_t aExecutorThreadId) noexcept
+{
+#if !TP_SKYRIM_VR || !TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+    return static_cast<std::uint32_t>(DispatchResult::Inactive);
+#else
+    if (!s_endpoint || ReadState(*s_endpoint) != static_cast<LONG>(EndpointState::Ready))
+        return static_cast<std::uint32_t>(DispatchResult::Inactive);
+    if (s_endpoint->Epoch != aEpoch)
+        return static_cast<std::uint32_t>(DispatchResult::InvalidEpoch);
+    if (aExecutorThreadId == 0 || aExecutorThreadId != GetCurrentThreadId())
+        return static_cast<std::uint32_t>(DispatchResult::WrongThread);
+    if (aSequence == 0 || aSequence > static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max()))
+        return static_cast<std::uint32_t>(DispatchResult::InvalidSequence);
+
+    const auto sequence = static_cast<LONG64>(aSequence);
+    auto previous = InterlockedCompareExchange64(&s_lastBodyCaptureSequence, 0, 0);
+    while (sequence > previous)
+    {
+        const auto observed = InterlockedCompareExchange64(&s_lastBodyCaptureSequence, sequence, previous);
+        if (observed == previous)
+            break;
+        previous = observed;
+    }
+    if (sequence <= previous)
+        return static_cast<std::uint32_t>(DispatchResult::InvalidSequence);
+    if (InterlockedCompareExchange(&s_bodyCaptureInProgress, 1, 0) != 0)
+        return static_cast<std::uint32_t>(DispatchResult::Reentrant);
+
+    const bool published = BodyPoseCapture::CaptureFromPostHiggs(aSequence);
+    InterlockedExchange(&s_bodyCaptureInProgress, 0);
+    return static_cast<std::uint32_t>(published ? DispatchResult::Success : DispatchResult::Contended);
 #endif
 }
 } // namespace SkyrimTogetherVR::TickBridge

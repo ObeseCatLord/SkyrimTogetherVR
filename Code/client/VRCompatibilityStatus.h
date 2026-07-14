@@ -8,6 +8,8 @@ struct VRCompatibilityStatus
     bool HiggsLoaded{false};
     bool PlanckInstalled{false};
     bool PlanckLoaded{false};
+    bool FbtInstalled{false};
+    bool FbtLoaded{false};
     bool VRPhysicsCompatibilityModInstalled{false};
     bool BringupHooksCompiled{false};
     bool UnvalidatedHooksCompiled{false};
@@ -20,6 +22,8 @@ struct VRCompatibilityStatus
     bool RemoteAvatarSkeletonWrites{false};
     bool DiscoveryService{false};
     bool PlayerCellService{false};
+    bool PoseService{false};
+    bool BodyPoseCapture{false};
     bool MovementObservationService{false};
     bool InventoryObservationService{false};
     bool ActivationObservationService{false};

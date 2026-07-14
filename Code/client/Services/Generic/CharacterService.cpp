@@ -128,6 +128,10 @@ struct RemoteAvatarApplyResult
     bool VrikLeftFingersValid{false};
     bool VrikRightFingersValid{false};
     bool VrikCameraOffsetsValid{false};
+    bool BodyPoseValid{false};
+    bool BodyPoseSafe{false};
+    uint32_t BodyCaptureSequence{0};
+    uint32_t BodyRootGeneration{0};
     bool MovementApplied{false};
     bool HmdFallbackMovementApplied{false};
     uint32_t InvalidTransformCount{0};
@@ -162,6 +166,8 @@ struct RemoteAvatarStatusSnapshot
     uint32_t VrikLeftFingersValidCount{0};
     uint32_t VrikRightFingersValidCount{0};
     uint32_t VrikCameraOffsetsValidCount{0};
+    uint32_t BodyPoseValidCount{0};
+    uint32_t BodyPoseUnsafeCount{0};
     uint32_t MovementAppliedCount{0};
     uint32_t HmdFallbackMovementCount{0};
     uint32_t InvalidTransformCount{0};
@@ -235,6 +241,11 @@ bool IsRemotePoseNodeSafe(const VRPoseNodeData& acPose) noexcept
         return false;
 
     return IsFiniteFloat(acPose.Scale) && acPose.Scale > 0.0f && acPose.Scale <= 10.0f;
+}
+
+bool IsRemoteBodyPoseSafe(const VRBodyPoseData& acBody) noexcept
+{
+    return acBody.Valid && IsVRBodyPoseDataSafe(acBody);
 }
 
 bool IsRemoteFingerCurlSafe(const VRFingerCurlData& acFingers) noexcept
@@ -336,6 +347,8 @@ void WriteRemoteAvatarStatus(const RemoteAvatarStatusSnapshot& acStatus)
     file << "vrikLeftFingersValidCount=" << acStatus.VrikLeftFingersValidCount << "\n";
     file << "vrikRightFingersValidCount=" << acStatus.VrikRightFingersValidCount << "\n";
     file << "vrikCameraOffsetsValidCount=" << acStatus.VrikCameraOffsetsValidCount << "\n";
+    file << "bodyPoseValidCount=" << acStatus.BodyPoseValidCount << "\n";
+    file << "bodyPoseUnsafeCount=" << acStatus.BodyPoseUnsafeCount << "\n";
     file << "movementAppliedCount=" << acStatus.MovementAppliedCount << "\n";
     file << "hmdFallbackMovementCount=" << acStatus.HmdFallbackMovementCount << "\n";
     file << "invalidTransformCount=" << acStatus.InvalidTransformCount << "\n";
@@ -402,6 +415,10 @@ void WriteRemoteAvatarStatus(const RemoteAvatarStatusSnapshot& acStatus)
     file << "last.vrikLeftFingersValid=" << (acStatus.LastApply.VrikLeftFingersValid ? "1" : "0") << "\n";
     file << "last.vrikRightFingersValid=" << (acStatus.LastApply.VrikRightFingersValid ? "1" : "0") << "\n";
     file << "last.vrikCameraOffsetsValid=" << (acStatus.LastApply.VrikCameraOffsetsValid ? "1" : "0") << "\n";
+    file << "last.bodyPoseValid=" << (acStatus.LastApply.BodyPoseValid ? "1" : "0") << "\n";
+    file << "last.bodyPoseSafe=" << (acStatus.LastApply.BodyPoseSafe ? "1" : "0") << "\n";
+    file << "last.bodyCaptureSequence=" << acStatus.LastApply.BodyCaptureSequence << "\n";
+    file << "last.bodyRootGeneration=" << acStatus.LastApply.BodyRootGeneration << "\n";
     file << "last.movementApplied=" << (acStatus.LastApply.MovementApplied ? "1" : "0") << "\n";
     file << "last.hmdFallbackMovementApplied=" << (acStatus.LastApply.HmdFallbackMovementApplied ? "1" : "0") << "\n";
     file << "last.invalidTransformCount=" << acStatus.LastApply.InvalidTransformCount << "\n";
@@ -474,6 +491,10 @@ void ApplyRemoteAvatarPoseToActor(Actor* apActor, const VRPoseUpdate& acPose, Re
     aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
     aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
     aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
+    aResult.BodyPoseValid = acPose.Body.FormatVersion == 1 && acPose.Body.Valid;
+    aResult.BodyPoseSafe = aResult.BodyPoseValid && IsRemoteBodyPoseSafe(acPose.Body);
+    aResult.BodyCaptureSequence = acPose.Body.CaptureSequence;
+    aResult.BodyRootGeneration = acPose.Body.RootGeneration;
 
     if (acPose.Vrik.LeftFingers.Valid && !aResult.VrikLeftFingersValid)
         ++aResult.InvalidVrikCount;
@@ -497,6 +518,10 @@ void ValidateRemoteAvatarPoseForStatus(const VRPoseUpdate& acPose, RemoteAvatarA
     aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
     aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
     aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
+    aResult.BodyPoseValid = acPose.Body.FormatVersion == 1 && acPose.Body.Valid;
+    aResult.BodyPoseSafe = aResult.BodyPoseValid && IsRemoteBodyPoseSafe(acPose.Body);
+    aResult.BodyCaptureSequence = acPose.Body.CaptureSequence;
+    aResult.BodyRootGeneration = acPose.Body.RootGeneration;
 
     if (acPose.Vrik.LeftFingers.Valid && !aResult.VrikLeftFingersValid)
         ++aResult.InvalidVrikCount;
@@ -542,6 +567,10 @@ void AccumulateApplyResult(RemoteAvatarStatusSnapshot& aStatus, const RemoteAvat
         ++aStatus.VrikRightFingersValidCount;
     if (acResult.VrikCameraOffsetsValid)
         ++aStatus.VrikCameraOffsetsValidCount;
+    if (acResult.BodyPoseValid)
+        ++aStatus.BodyPoseValidCount;
+    if (acResult.BodyPoseValid && !acResult.BodyPoseSafe)
+        ++aStatus.BodyPoseUnsafeCount;
     if (acResult.MovementApplied)
         ++aStatus.MovementAppliedCount;
     if (acResult.HmdFallbackMovementApplied)

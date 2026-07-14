@@ -77,13 +77,12 @@ private:
 
     bool m_godmodeStart = false;
     double m_godmodeTimer = 0.0;
-    double m_vrLevelUpdateTimer = 0.0;
     double m_vrPlayerCellStatusTimer = 0.0;
 
     uint32_t m_cachedMainSpellId = 0;
     uint32_t m_cachedSecondarySpellId = 0;
     uint32_t m_cachedPowerId = 0;
-    uint16_t m_cachedVrLevel = 0;
+    uint16_t m_cachedVrLevel = 1;
     uint16_t m_lastVrLevelSent = 0;
     uint32_t m_vrGridCellRequestCount = 0;
     uint32_t m_vrExteriorCellRequestCount = 0;
@@ -92,6 +91,8 @@ private:
     uint32_t m_vrOfflineSkippedRequestCount = 0;
     uint32_t m_vrWorldSpaceTranslationFailureCount = 0;
     uint32_t m_lastVrGridCellCount = 0;
+    uint64_t m_lastVrGridConnectionGeneration = 0;
+    uint64_t m_lastVrCellConnectionGeneration = 0;
     GameId m_lastVrGridWorldSpace{};
     GameId m_lastVrGridPlayerCell{};
     GameId m_lastVrCell{};

@@ -1293,7 +1293,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
-        write("status", "state=online\nonline=1\n")
+        write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
@@ -1339,6 +1339,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             "ready=1\n"
             "online=1\n"
             "localPlayerId=4\n"
+            "sessionId=123\n"
+            "connectionGeneration=1\n"
             "playerFormId=20\n"
             "currentLevel=12\n"
             "cachedLevel=12\n"
@@ -1356,8 +1358,10 @@ def command_self_test(_: argparse.Namespace) -> int:
             "lastGrid.playerCell.serverBaseId=100\n"
             "lastGrid.center=4,-3\n"
             "lastGrid.cellCount=25\n"
+            "lastGrid.connectionGeneration=1\n"
             "lastCell.valid=1\n"
             "lastCell.exterior=1\n"
+            "lastCell.connectionGeneration=1\n"
             "lastCell.cell.serverModId=1\n"
             "lastCell.cell.serverBaseId=100\n"
             "lastCell.worldSpace.serverModId=1\n"
@@ -1437,6 +1441,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "saveLoadPolicy=observation_only\n"
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
+            "posePolicy=observation_only\n"
             "higgsPolicy=observation_only\nplanckPolicy=observation_only\n",
         )
         write(
@@ -1580,7 +1585,13 @@ def command_self_test(_: argparse.Namespace) -> int:
                 return 1
 
         baseline_readouts = {
-            "status": {"state": "online", "online": "1"},
+            "status": {
+                "state": "online",
+                "online": "1",
+                "playerId": "4",
+                "sessionId": "123",
+                "connectionGeneration": "1",
+            },
             "compat": {
                 "ready": "1",
                 "higgs.installed": "1",
@@ -1595,6 +1606,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "remotePlayerProxyPolicy": "readout_only",
                 "discoveryPolicy": "observation_only",
                 "playerCellPolicy": "network_only",
+                "posePolicy": "observation_only",
                 "movementPolicy": "observation_only",
                 "equipmentPolicy": "observation_only",
                 "activationPolicy": "observation_only",
@@ -1643,6 +1655,8 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "ready": "1",
                 "online": "1",
                 "localPlayerId": "4",
+                "sessionId": "123",
+                "connectionGeneration": "1",
                 "playerFormId": "20",
                 "currentLevel": "1",
                 "cachedLevel": "1",
@@ -1660,8 +1674,10 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "lastGrid.playerCell.serverBaseId": "100",
                 "lastGrid.center": "0,0",
                 "lastGrid.cellCount": "25",
+                "lastGrid.connectionGeneration": "1",
                 "lastCell.valid": "1",
                 "lastCell.exterior": "1",
+                "lastCell.connectionGeneration": "1",
                 "lastCell.cell.serverModId": "1",
                 "lastCell.cell.serverBaseId": "100",
                 "lastCell.worldSpace.serverModId": "1",

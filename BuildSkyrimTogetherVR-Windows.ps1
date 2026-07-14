@@ -534,7 +534,7 @@ function Invoke-PapyrusCompile {
     $pythonPrefix = Resolve-PythonCommandPrefix -RequestedPython $Python
     $compilerPath = Resolve-PapyrusCompilerForPreflight -RequestedCompiler $PapyrusCompiler
     $script:ResolvedPapyrusCompiler = $compilerPath
-    $outputDir = Join-Path $GameFilesDir "scripts"
+    $outputDir = Join-Path $GameFilesDir "Scripts"
 
     Invoke-Python -PythonCommandPrefix $pythonPrefix -Arguments @(
         $compileScript,
@@ -836,6 +836,7 @@ if (-not $NoPackage) {
         $staleRootGameFilePaths = @(
             "SkyrimTogether.esp",
             "scripts",
+            "Scripts",
             "meshes",
             "SkyrimTogetherRebornBehaviors"
         )

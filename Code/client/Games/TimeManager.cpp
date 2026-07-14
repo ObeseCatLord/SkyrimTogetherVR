@@ -3,7 +3,11 @@
 
 TimeData* TimeData::Get() noexcept
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(TimeData*, s_instance, 514287);
+#else
     POINTER_SKYRIMSE(TimeData*, s_instance, 400447);
+#endif
     return *(s_instance.Get());
 }
 

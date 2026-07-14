@@ -20,6 +20,7 @@ GAMEPLAY_PACKAGE = pathlib.Path("artifacts/SkyrimTogetherVR/packages/gameplay")
 STALE_ROOT_GAME_FILE_PATHS = (
     pathlib.Path("SkyrimTogether.esp"),
     pathlib.Path("scripts"),
+    pathlib.Path("Scripts"),
     pathlib.Path("meshes"),
     pathlib.Path("SkyrimTogetherRebornBehaviors"),
 )
@@ -69,6 +70,17 @@ def find_stale_target_paths(skyrim_vr: pathlib.Path) -> list[tuple[pathlib.Path,
     return stale_paths
 
 
+def script_directory_variants(skyrim_vr: pathlib.Path) -> list[str]:
+    data_dir = skyrim_vr / "Data"
+    if not data_dir.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in data_dir.iterdir()
+        if entry.is_dir() and entry.name.casefold() == "scripts"
+    )
+
+
 def cleanup_stale_root_files(stale_paths: list[tuple[pathlib.Path, pathlib.Path]], dry_run: bool) -> int:
     cleaned = 0
     for _, path in stale_paths:
@@ -89,7 +101,9 @@ def stale_root_files_block_handoff(
     return bool(stale_paths) and not (install and cleanup_stale)
 
 
-def build_package_audit_command(args: argparse.Namespace) -> list[str]:
+def build_package_audit_command(
+    args: argparse.Namespace, *, verify_installed_papyrus: bool = True
+) -> list[str]:
     command = [
         sys.executable,
         "Tools/SkyrimVR/audit_built_package.py",
@@ -105,6 +119,8 @@ def build_package_audit_command(args: argparse.Namespace) -> list[str]:
 
     if not args.package_only:
         command.append("--require-installed-prerequisites")
+        if not verify_installed_papyrus:
+            command.append("--skip-installed-papyrus-verification")
         if args.require_vrik:
             command.append("--require-vrik")
         if args.require_higgs:
@@ -115,8 +131,12 @@ def build_package_audit_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
-def run_package_audit(root: pathlib.Path, args: argparse.Namespace) -> int:
-    command = build_package_audit_command(args)
+def run_package_audit(
+    root: pathlib.Path, args: argparse.Namespace, *, verify_installed_papyrus: bool = True
+) -> int:
+    command = build_package_audit_command(
+        args, verify_installed_papyrus=verify_installed_papyrus
+    )
     print("> " + " ".join(command))
     result = subprocess.run(command, cwd=root, text=True, check=False)
     return result.returncode
@@ -130,6 +150,7 @@ def write_file(path: pathlib.Path, content: str = "test") -> None:
 def populate_stale_target_tree(skyrim_vr: pathlib.Path) -> None:
     write_file(skyrim_vr / "SkyrimTogether.esp")
     write_file(skyrim_vr / "scripts" / "SkyrimTogetherUtils.pex")
+    write_file(skyrim_vr / "Scripts" / "SkyrimTogetherUtils.pex")
     write_file(skyrim_vr / "meshes" / "SkyrimTogetherVR" / "placeholder.nif")
     write_file(skyrim_vr / "SkyrimTogetherRebornBehaviors" / "placeholder.hkx")
 
@@ -185,12 +206,15 @@ def run_self_test() -> int:
             require_higgs=True,
             require_planck=True,
         )
-        strict_command = build_package_audit_command(command_args)
+        strict_command = build_package_audit_command(
+            command_args, verify_installed_papyrus=False
+        )
         for token in (
             "--require-installed-prerequisites",
             "--require-vrik",
             "--require-higgs",
             "--require-planck",
+            "--skip-installed-papyrus-verification",
         ):
             if token not in strict_command:
                 print(f"Install self-test strict audit command missing {token}.")
@@ -207,6 +231,12 @@ def run_self_test() -> int:
         present_forbidden = sorted(token for token in forbidden_tokens if token in package_only_command)
         if present_forbidden:
             print("Install self-test package-only audit command kept strict prerequisite token(s): " + ", ".join(present_forbidden))
+            return 1
+
+        (skyrim_vr / "Data" / "Scripts").mkdir(parents=True)
+        (skyrim_vr / "Data" / "scripts").mkdir()
+        if script_directory_variants(skyrim_vr) != ["Scripts", "scripts"]:
+            print("Install self-test did not detect a Data/Scripts case-fold collision.")
             return 1
 
     print("Install self-test passed.")
@@ -278,7 +308,9 @@ def main() -> int:
             print("Strict install readiness audit: required VR mod prerequisites: " + ", ".join(required_mods))
 
     if not args.skip_audit:
-        audit_result = run_package_audit(root, args)
+        audit_result = run_package_audit(
+            root, args, verify_installed_papyrus=not args.install
+        )
         if audit_result != 0:
             print("Package audit failed; refusing to install.")
             return audit_result
@@ -307,6 +339,13 @@ def main() -> int:
             print("Refusing to continue while stale root-level staged files are present.")
             print("Run once with --install --cleanup-stale-root-files to remove these old package paths.")
             return 1
+
+    script_variants = script_directory_variants(skyrim_vr)
+    if script_variants and script_variants != ["Scripts"]:
+        print("Refusing to install into a case-folded loose-script collision.")
+        print("script-directories: " + ", ".join(script_variants))
+        print("Merge loose files into Data/Scripts and remove or quarantine the lowercase duplicate first.")
+        return 1
 
     planned_copy = 0
     planned_update = 0
@@ -349,6 +388,15 @@ def main() -> int:
         return 1
     else:
         print("Install completed.")
+
+        if not args.skip_audit:
+            print("Verifying installed Papyrus hashes and prerequisites.")
+            audit_result = run_package_audit(
+                root, args, verify_installed_papyrus=True
+            )
+            if audit_result != 0:
+                print("Post-install package audit failed.")
+                return audit_result
 
     return 0
 

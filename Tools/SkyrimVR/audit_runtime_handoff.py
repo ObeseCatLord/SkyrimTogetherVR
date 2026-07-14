@@ -25,23 +25,12 @@ LOG_BREADCRUMBS = (
     "Installing SkyrimTogetherVR renderer bring-up hook:",
 )
 
-REQUIRED_HANDOFF_FILES = (
+BASE_REQUIRED_HANDOFF_FILES = (
     "status",
-    "pose",
-    "movement",
-    "inventory",
     "discovery",
     "playercell",
-    "activation",
-    "magic",
-    "combat",
-    "projectile",
-    "grab",
     "compat",
     "planck",
-    "higgsnet",
-    "saveload",
-    "remoteplayers",
 )
 
 ACTOR_FORM_ID_PATTERN = re.compile(r"^actor\.(\d+)\.formId$")
@@ -283,6 +272,8 @@ def player_cell_schema_detail(values: dict[str, str]) -> tuple[bool, str]:
 
     int_fields = (
         "localPlayerId",
+        "sessionId",
+        "connectionGeneration",
         "playerFormId",
         "currentLevel",
         "cachedLevel",
@@ -294,6 +285,8 @@ def player_cell_schema_detail(values: dict[str, str]) -> tuple[bool, str]:
         "offlineSkippedRequestCount",
         "worldSpaceTranslationFailureCount",
         "lastGrid.cellCount",
+        "lastGrid.connectionGeneration",
+        "lastCell.connectionGeneration",
     )
     parsed: dict[str, int] = {}
     for key in int_fields:
@@ -338,12 +331,14 @@ def player_cell_schema_detail(values: dict[str, str]) -> tuple[bool, str]:
         errors.append("lastCell is valid but cell request counts are zero")
 
     detail = (
-        "ready={} online={} player={} level={} grid={} exterior={} interior={} levelRequests={} "
+        "ready={} online={} player={} session={} generation={} level={} grid={} exterior={} interior={} levelRequests={} "
         "skipped={} translationFailures={} requestTotal={}"
     ).format(
         values.get("ready", "<missing>"),
         values.get("online", "<missing>"),
         values.get("localPlayerId", "<missing>"),
+        values.get("sessionId", "<missing>"),
+        values.get("connectionGeneration", "<missing>"),
         values.get("currentLevel", "<missing>"),
         values.get("gridCellRequestCount", "<missing>"),
         values.get("exteriorCellRequestCount", "<missing>"),
@@ -424,11 +419,37 @@ def audit_log(results: list[tuple[str, bool, str]], log_path: pathlib.Path, *, s
     )
 
 
-def audit_handoff_files(results: list[tuple[str, bool, str]], handoff_dir: pathlib.Path) -> dict[str, dict[str, str]]:
+def required_handoff_files(args: argparse.Namespace) -> set[str]:
+    required = set(BASE_REQUIRED_HANDOFF_FILES)
+    if args.avatar_sync or args.require_vrik or args.require_remote_player or args.require_vr_pose_context:
+        required.update(("pose", "movement", "inventory", "remoteplayers"))
+    if args.require_higgs_relay:
+        required.add("higgsnet")
+    if args.require_saveload_observer:
+        required.add("saveload")
+    for enabled, name in (
+        (args.require_movement_relay, "movement"),
+        (args.require_equipment_relay, "inventory"),
+        (args.require_activation_relay, "activation"),
+        (args.require_magic_relay, "magic"),
+        (args.require_combat_relay, "combat"),
+        (args.require_projectile_relay, "projectile"),
+        (args.require_grab_relay, "grab"),
+    ):
+        if enabled:
+            required.add(name)
+    return required
+
+
+def audit_handoff_files(
+    args: argparse.Namespace,
+    results: list[tuple[str, bool, str]],
+    handoff_dir: pathlib.Path,
+) -> dict[str, dict[str, str]]:
     add_check(results, "handoff directory", handoff_dir.exists(), str(handoff_dir))
     readouts = vr_handoff.read_readouts(handoff_dir)
 
-    for name in REQUIRED_HANDOFF_FILES:
+    for name in sorted(required_handoff_files(args)):
         path = handoff_dir / vr_handoff.READOUT_FILES[name]
         add_check(results, f"{name} file", path.exists(), str(path))
 
@@ -440,7 +461,11 @@ def audit_avatar_file(results: list[tuple[str, bool, str]], handoff_dir: pathlib
     add_check(results, "avatar file", path.exists(), str(path))
 
 
-def audit_default_runtime(results: list[tuple[str, bool, str]], readouts: dict[str, dict[str, str]]) -> None:
+def audit_default_runtime(
+    args: argparse.Namespace,
+    results: list[tuple[str, bool, str]],
+    readouts: dict[str, dict[str, str]],
+) -> None:
     status = readouts.get("status", {})
     pose = readouts.get("pose", {})
     movement = readouts.get("movement", {})
@@ -462,6 +487,7 @@ def audit_default_runtime(results: list[tuple[str, bool, str]], readouts: dict[s
         "remotePlayerProxyPolicy",
         "discoveryPolicy",
         "playerCellPolicy",
+        "posePolicy",
         "movementPolicy",
         "equipmentPolicy",
         "activationPolicy",
@@ -486,38 +512,39 @@ def audit_default_runtime(results: list[tuple[str, bool, str]], readouts: dict[s
     )
 
     add_check(results, "connection status", bool(status.get("state")), f"state={status.get('state', '<missing>')}")
-    add_check(results, "local pose", get_bool(pose, "localPoseAvailable"), f"localPoseAvailable={pose.get('localPoseAvailable', '<missing>')}")
-    add_check(results, "local HMD node", get_bool(pose, "local.hmd.valid"), f"local.hmd.valid={pose.get('local.hmd.valid', '<missing>')}")
-    add_check(results, "local left hand node", get_bool(pose, "local.leftHand.valid"), f"local.leftHand.valid={pose.get('local.leftHand.valid', '<missing>')}")
-    add_check(results, "local right hand node", get_bool(pose, "local.rightHand.valid"), f"local.rightHand.valid={pose.get('local.rightHand.valid', '<missing>')}")
-    add_check(results, "local movement", get_bool(movement, "localMovementAvailable"), f"localMovementAvailable={movement.get('localMovementAvailable', '<missing>')}")
-    inventory_boundary_ok = (
-        inventory.get("policy") == "equipment_snapshot_only"
-        and inventory.get("fullInventoryTraversal") == "0"
-        and inventory.get("inventoryMutation") == "0"
-        and inventory.get("remoteEquipmentMutation") == "0"
-        and inventory.get("normalInventoryPackets") == "0"
-    )
-    add_check(
-        results,
-        "inventory mutation boundary",
-        inventory_boundary_ok,
-        "policy={} fullTraversal={} inventoryMutation={} remoteEquipmentMutation={} normalInventoryPackets={}".format(
-            inventory.get("policy", "<missing>"),
-            inventory.get("fullInventoryTraversal", "<missing>"),
-            inventory.get("inventoryMutation", "<missing>"),
-            inventory.get("remoteEquipmentMutation", "<missing>"),
-            inventory.get("normalInventoryPackets", "<missing>"),
-        ),
-    )
+    if not args.avatar_sync:
+        disabled_policies = {
+            key: compat.get(key)
+            for key in (
+                "posePolicy",
+                "remotePlayerProxyPolicy",
+                "movementPolicy",
+                "equipmentPolicy",
+                "activationPolicy",
+                "inventoryPolicy",
+                "magicPolicy",
+                "combatPolicy",
+                "projectilePolicy",
+                "grabPolicy",
+                "higgsRelayPolicy",
+                "saveLoadPolicy",
+            )
+        }
+        add_check(
+            results,
+            "default optional service boundary",
+            all(value == "disabled" for value in disabled_policies.values()),
+            " ".join(f"{key}={value or '<missing>'}" for key, value in disabled_policies.items()),
+        )
     add_check(results, "discovery schema", discovery_ok, discovery_detail)
     add_check(results, "player-cell schema", playercell_ok, playercell_detail)
-    add_check(results, "remote-player proxy", get_bool(remoteplayers, "ready"), f"ready={remoteplayers.get('ready', '<missing>')}")
+    if args.avatar_sync or args.require_remote_player:
+        add_check(results, "remote-player proxy", get_bool(remoteplayers, "ready"), f"ready={remoteplayers.get('ready', '<missing>')}")
     add_check(
         results,
         "HIGGS/PLANCK compatibility policy",
         compatibility_ok,
-        "ready={} physicsCompat={} hookMode={} gameplayMode={} avatarPolicy={} proxyPolicy={} discoveryPolicy={} playerCellPolicy={} movementPolicy={} equipmentPolicy={} activationPolicy={} inventoryPolicy={} magicPolicy={} combatPolicy={} projectilePolicy={} grabPolicy={} higgsRelayPolicy={} saveLoadPolicy={} unvalidatedHooks={} suppressed={} higgsPolicy={} planckPolicy={}".format(
+        "ready={} physicsCompat={} hookMode={} gameplayMode={} avatarPolicy={} proxyPolicy={} discoveryPolicy={} playerCellPolicy={} posePolicy={} movementPolicy={} equipmentPolicy={} activationPolicy={} inventoryPolicy={} magicPolicy={} combatPolicy={} projectilePolicy={} grabPolicy={} higgsRelayPolicy={} saveLoadPolicy={} unvalidatedHooks={} suppressed={} higgsPolicy={} planckPolicy={}".format(
             compat.get("ready", "<missing>"),
             compat.get("vrPhysicsCompatibilityModInstalled", "<missing>"),
             compat.get("hookMode", "<missing>"),
@@ -526,6 +553,7 @@ def audit_default_runtime(results: list[tuple[str, bool, str]], readouts: dict[s
             compat.get("remotePlayerProxyPolicy", "<missing>"),
             compat.get("discoveryPolicy", "<missing>"),
             compat.get("playerCellPolicy", "<missing>"),
+            compat.get("posePolicy", "<missing>"),
             compat.get("movementPolicy", "<missing>"),
             compat.get("equipmentPolicy", "<missing>"),
             compat.get("activationPolicy", "<missing>"),
@@ -575,14 +603,37 @@ def audit_default_runtime(results: list[tuple[str, bool, str]], readouts: dict[s
             int(planck_required_by_compat),
         ),
     )
-    add_check(results, "save/load observer", get_bool(saveload, "ready"), saveload_detail(saveload))
+    if args.require_saveload_observer:
+        add_check(results, "save/load observer", get_bool(saveload, "ready"), saveload_detail(saveload))
 
 
-def audit_connection(results: list[tuple[str, bool, str]], readouts: dict[str, dict[str, str]]) -> None:
+def audit_connection(
+    args: argparse.Namespace,
+    results: list[tuple[str, bool, str]],
+    readouts: dict[str, dict[str, str]],
+) -> None:
     status = readouts.get("status", {})
-    pose = readouts.get("pose", {})
-    add_check(results, "connected status", get_bool(status, "online"), f"state={status.get('state', '<missing>')} online={status.get('online', '<missing>')}")
-    add_check(results, "pose stream online", get_bool(pose, "online"), f"online={pose.get('online', '<missing>')}")
+    connected = (
+        get_bool(status, "online")
+        and get_int(status, "playerId") > 0
+        and get_int(status, "sessionId") > 0
+        and get_int(status, "connectionGeneration") > 0
+    )
+    add_check(
+        results,
+        "connected status",
+        connected,
+        "state={} online={} player={} session={} generation={}".format(
+            status.get("state", "<missing>"),
+            status.get("online", "<missing>"),
+            status.get("playerId", "<missing>"),
+            status.get("sessionId", "<missing>"),
+            status.get("connectionGeneration", "<missing>"),
+        ),
+    )
+    if args.avatar_sync:
+        pose = readouts.get("pose", {})
+        add_check(results, "pose stream online", get_bool(pose, "online"), f"online={pose.get('online', '<missing>')}")
 
 
 def audit_vrik(results: list[tuple[str, bool, str]], readouts: dict[str, dict[str, str]], *, require_remote: bool) -> None:
@@ -947,12 +998,12 @@ def run_audit(args: argparse.Namespace) -> int:
     print(f"Client log: {log_path}")
 
     audit_log(results, log_path, skip_log=args.skip_log)
-    readouts = audit_handoff_files(results, handoff_dir)
+    readouts = audit_handoff_files(args, results, handoff_dir)
     if args.avatar_sync:
         audit_avatar_file(results, handoff_dir)
-    audit_default_runtime(results, readouts)
+    audit_default_runtime(args, results, readouts)
     if args.require_connected:
-        audit_connection(results, readouts)
+        audit_connection(args, results, readouts)
     if args.require_vrik:
         audit_vrik(results, readouts, require_remote=args.require_remote_player)
     if args.require_higgs:
@@ -986,7 +1037,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
-        write("status", "state=online\nonline=1\n")
+        write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
@@ -1032,6 +1083,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             "ready=1\n"
             "online=1\n"
             "localPlayerId=4\n"
+            "sessionId=123\n"
+            "connectionGeneration=1\n"
             "playerFormId=20\n"
             "currentLevel=12\n"
             "cachedLevel=12\n"
@@ -1049,8 +1102,10 @@ def command_self_test(_: argparse.Namespace) -> int:
             "lastGrid.playerCell.serverBaseId=100\n"
             "lastGrid.center=4,-3\n"
             "lastGrid.cellCount=25\n"
+            "lastGrid.connectionGeneration=1\n"
             "lastCell.valid=1\n"
             "lastCell.exterior=1\n"
+            "lastCell.connectionGeneration=1\n"
             "lastCell.cell.serverModId=1\n"
             "lastCell.cell.serverBaseId=100\n"
             "lastCell.worldSpace.serverModId=1\n"
@@ -1130,6 +1185,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "saveLoadPolicy=observation_only\n"
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
+            "posePolicy=observation_only\n"
             "higgsPolicy=observation_only\nplanckPolicy=observation_only\n",
         )
         write(
@@ -1203,6 +1259,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             require_weapon_pose=True,
             require_magic_pose=True,
             require_projectile_pose=True,
+            require_vr_pose_context=True,
             require_movement_relay=True,
             require_equipment_relay=True,
             require_activation_relay=True,
@@ -1214,7 +1271,51 @@ def command_self_test(_: argparse.Namespace) -> int:
             require_saveload_observer=True,
             avatar_sync=True,
         )
-        return run_audit(args)
+        broad_result = run_audit(args)
+        if broad_result:
+            return broad_result
+
+        compat_path = handoff / vr_handoff.READOUT_FILES["compat"]
+        compat_values = vr_handoff.read_key_value_file(compat_path)
+        compat_values["remotePlayerProxyPolicy"] = "disabled"
+        for key in (
+            "posePolicy",
+            "movementPolicy",
+            "equipmentPolicy",
+            "activationPolicy",
+            "inventoryPolicy",
+            "magicPolicy",
+            "combatPolicy",
+            "projectilePolicy",
+            "grabPolicy",
+            "higgsRelayPolicy",
+            "saveLoadPolicy",
+        ):
+            compat_values[key] = "disabled"
+        compat_path.write_text(
+            "".join(f"{key}={value}\n" for key, value in compat_values.items()),
+            encoding="utf-8",
+        )
+
+        default_args = argparse.Namespace(**vars(args))
+        default_args.avatar_sync = False
+        default_args.require_vrik = False
+        default_args.require_higgs = False
+        default_args.require_remote_player = False
+        default_args.require_weapon_pose = False
+        default_args.require_magic_pose = False
+        default_args.require_projectile_pose = False
+        default_args.require_vr_pose_context = False
+        default_args.require_movement_relay = False
+        default_args.require_equipment_relay = False
+        default_args.require_activation_relay = False
+        default_args.require_magic_relay = False
+        default_args.require_combat_relay = False
+        default_args.require_projectile_relay = False
+        default_args.require_grab_relay = False
+        default_args.require_higgs_relay = False
+        default_args.require_saveload_observer = False
+        return run_audit(default_args)
 
 
 def main() -> int:

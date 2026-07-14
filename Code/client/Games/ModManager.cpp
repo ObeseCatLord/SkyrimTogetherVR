@@ -6,7 +6,11 @@
 
 ModManager* ModManager::Get() noexcept
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(ModManager*, modManager, 514141);
+#else
     POINTER_SKYRIMSE(ModManager*, modManager, 400269);
+#endif
 
     return *modManager.Get();
 }

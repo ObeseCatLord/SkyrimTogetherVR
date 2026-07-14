@@ -43,21 +43,21 @@ READOUT_FILES = {
 }
 
 SUMMARY_FIELDS = {
-    "status": ("state", "online", "playerId", "error"),
-    "pose": ("localPoseAvailable", "remotePoseCount"),
-    "avatar": ("ready", "actorTargetsEnabled", "actorSkeletonWritesEnabled", "actorMovementAuthorityEnabled", "remotePlayerCount", "remotePoseMatchCount", "remoteEquipmentMatchCount", "equipmentWeaponDrawQueuedCount", "equipmentMissingFormIdCount", "equipmentMissingActorCount", "sameSpaceCount", "actorTargetSkippedDifferentCellCount", "actorTargetSkippedDifferentWorldSpaceCount", "spellOriginValidCount", "arrowOriginValidCount", "bowAimValidCount", "leftWeaponOffsetValidCount", "rightWeaponOffsetValidCount", "primaryMagicOffsetValidCount", "secondaryMagicOffsetValidCount", "actorTargetAttemptCount", "hmdCopiedCount", "leftHandCopiedCount", "rightHandCopiedCount", "vrikDetectedCount", "vrikInterfaceAvailableCount", "invalidVrikCount", "movementAppliedCount", "invalidTransformCount", "invalidMovementCount"),
+    "status": ("state", "online", "playerId", "sessionId", "connectionGeneration", "error"),
+    "pose": ("localPoseAvailable", "local.body.formatVersion", "local.body.valid", "local.body.captureSequence", "local.body.rootGeneration", "remotePoseCount"),
+    "avatar": ("ready", "actorTargetsEnabled", "actorSkeletonWritesEnabled", "actorMovementAuthorityEnabled", "remotePlayerCount", "remotePoseMatchCount", "remoteEquipmentMatchCount", "equipmentWeaponDrawQueuedCount", "equipmentMissingFormIdCount", "equipmentMissingActorCount", "sameSpaceCount", "actorTargetSkippedDifferentCellCount", "actorTargetSkippedDifferentWorldSpaceCount", "spellOriginValidCount", "arrowOriginValidCount", "bowAimValidCount", "leftWeaponOffsetValidCount", "rightWeaponOffsetValidCount", "primaryMagicOffsetValidCount", "secondaryMagicOffsetValidCount", "bodyPoseValidCount", "bodyPoseUnsafeCount", "actorTargetAttemptCount", "hmdCopiedCount", "leftHandCopiedCount", "rightHandCopiedCount", "vrikDetectedCount", "vrikInterfaceAvailableCount", "invalidVrikCount", "movementAppliedCount", "invalidTransformCount", "invalidMovementCount"),
     "remoteplayers": ("ready", "online", "trackedPlayerCount", "joinedPlayerCount", "poseMatchedCount", "movementMatchedCount", "equipmentMatchedCount", "activationMatchedCount", "magicMatchedCount", "combatMatchedCount", "projectileMatchedCount", "grabMatchedCount", "higgsMatchedCount", "vrikMatchedCount", "sameCellCount", "sameWorldSpaceCount", "sameSpaceCount", "avatarValidationReadyCount", "higgsAvatarValidationReadyCount"),
     "movement": ("ready", "localMovementAvailable", "remoteMovementCount"),
     "inventory": ("ready", "policy", "fullInventoryTraversal", "inventoryMutation", "remoteEquipmentMutation", "normalInventoryPackets", "localEquipmentAvailable", "remoteEquipmentCount"),
     "discovery": ("ready", "actorCount", "actorLimit", "currentGrid", "centerGrid", "cachedWorldSpaceFormId", "cachedInteriorCellFormId", "playerCellFormId", "playerWorldSpaceFormId", "locationFormId"),
-    "playercell": ("ready", "online", "localPlayerId", "currentLevel", "gridCellRequestCount", "exteriorCellRequestCount", "interiorCellRequestCount", "levelRequestCount", "offlineSkippedRequestCount", "worldSpaceTranslationFailureCount"),
+    "playercell": ("ready", "online", "localPlayerId", "sessionId", "connectionGeneration", "currentLevel", "gridCellRequestCount", "exteriorCellRequestCount", "interiorCellRequestCount", "levelRequestCount", "offlineSkippedRequestCount", "worldSpaceTranslationFailureCount"),
     "activation": ("localActivationAvailable", "remoteActivationCount"),
     "magic": ("localMagicEffectAvailable", "remoteMagicEffectCount"),
     "combat": ("localCombatHitAvailable", "remoteCombatHitCount"),
     "projectile": ("localProjectileEventAvailable", "remoteProjectileEventCount"),
     "grab": ("localGrabAvailable", "remoteGrabCount"),
-    "compat": ("ready", "higgs.installed", "higgs.loaded", "planck.installed", "planck.loaded", "vrPhysicsCompatibilityModInstalled", "hookMode", "gameplayMode", "remoteAvatarPolicy", "remotePlayerProxyPolicy", "discoveryPolicy", "playerCellPolicy", "movementPolicy", "equipmentPolicy", "activationPolicy", "inventoryPolicy", "magicPolicy", "combatPolicy", "projectilePolicy", "grabPolicy", "higgsRelayPolicy", "saveLoadPolicy", "unvalidatedGameplayHooksSuppressed", "higgsPolicy", "planckPolicy"),
-    "higgs": ("bridge.loaded", "bridge.sequence", "higgs.detected", "higgs.interfaceAvailable", "higgs.callbacksRegistered", "higgs.snapshotAvailable", "higgs.snapshotSequence", "higgs.twoHanding", "recentEventCount"),
+    "compat": ("ready", "higgs.installed", "higgs.loaded", "planck.installed", "planck.loaded", "fbt.installed", "fbt.loaded", "vrPhysicsCompatibilityModInstalled", "hookMode", "gameplayMode", "remoteAvatarPolicy", "remotePlayerProxyPolicy", "discoveryPolicy", "playerCellPolicy", "movementPolicy", "equipmentPolicy", "activationPolicy", "inventoryPolicy", "magicPolicy", "combatPolicy", "projectilePolicy", "grabPolicy", "higgsRelayPolicy", "saveLoadPolicy", "bodyPoseCapturePolicy", "unvalidatedGameplayHooksSuppressed", "higgsPolicy", "planckPolicy", "fbtPolicy"),
+    "higgs": ("bridge.loaded", "bridge.sequence", "higgs.detected", "higgs.interfaceAvailable", "higgs.callbacksRegistered", "higgs.snapshotAvailable", "higgs.snapshotSequence", "higgs.twoHanding", "bodyCapture.endpointFaulted", "bodyCapture.attemptCount", "bodyCapture.successCount", "bodyCapture.lastResult", "recentEventCount"),
     "higgsnet": ("ready", "localHiggsAvailable", "remoteHiggsCount"),
     "planck": ("bridge.loaded", "bridge.sequence", "planck.detected", "planck.interfaceRequestAttempted", "planck.interfaceAvailable", "planck.buildNumber", "planck.currentHitEventAvailable", "planck.currentHitEventObservationOnly", "planck.lastHitDataAvailable", "planck.lastHitDataProbeEnabled", "planck.lastHitDataReason", "planck.lastHitDataBoundary", "planck.policy"),
     "saveload": ("ready", "loadGameObserved", "loadGameCount", "readyAfterLastLoad", "playerCell.serverBaseId", "playerWorldSpace.serverBaseId"),
@@ -245,7 +245,12 @@ def build_remote_players_payload(readouts: dict[str, dict[str, str]]) -> list[di
         hmd = pose_values.get(f"{prefix}.hmd.position", "")
         vrik = pose_values.get(f"{prefix}.vrik.detected")
         vrik_summary = " vrik=detected" if vrik == "1" else " vrik=missing" if vrik == "0" else ""
-        player["pose"] = f"hmd={hmd}{vrik_summary}" if hmd else f"available{vrik_summary}"
+        body = pose_values.get(f"{prefix}.body.valid")
+        body_summary = f" body={bool_summary(body)}" if body is not None else ""
+        body_sequence = pose_values.get(f"{prefix}.body.captureSequence")
+        if body_sequence is not None:
+            body_summary += f" bodySeq={body_sequence}"
+        player["pose"] = f"hmd={hmd}{vrik_summary}{body_summary}" if hmd else f"available{vrik_summary}{body_summary}"
 
     movement_values = readouts.get("movement", {})
     for player_id in collect_remote_ids(movement_values, "remoteMovement"):
@@ -298,6 +303,9 @@ def build_remote_players_payload(readouts: dict[str, dict[str, str]]) -> list[di
         secondary_aim = bool_summary(avatar_values.get("last.secondaryMagicAimValid"))
         invalid_transforms = avatar_values.get("last.invalidTransformCount", "0")
         invalid_movement = bool_summary(avatar_values.get("last.invalidMovement"))
+        body_valid = bool_summary(avatar_values.get("last.bodyPoseValid"))
+        body_safe = bool_summary(avatar_values.get("last.bodyPoseSafe"))
+        body_sequence = avatar_values.get("last.bodyCaptureSequence", "0")
         player["avatar"] = (
             f"targets={actor_targets} skeletonWrites={skeleton_writes} moveAuthority={movement_authority} "
             f"head={head} left={left} right={right} "
@@ -312,7 +320,8 @@ def build_remote_players_payload(readouts: dict[str, dict[str, str]]) -> list[di
             f"equipMissing={equipment_missing_form_count}/{equipment_missing_actor_count} "
             f"spell={spell_origin}/{spell_destination} arrow={arrow_origin}/{arrow_destination} "
             f"bow={bow_aim}/{bow_rotation} weapon={left_weapon}/{right_weapon} "
-            f"magic={primary_magic}/{secondary_magic} aim={primary_aim}/{secondary_aim}"
+            f"magic={primary_magic}/{secondary_magic} aim={primary_aim}/{secondary_aim} "
+            f"body={body_valid}/{body_safe} bodySeq={body_sequence}"
         )
 
     equipment_values = readouts.get("inventory", {})
@@ -407,6 +416,10 @@ def build_higgs_summary(readouts: dict[str, dict[str, str]]) -> dict[str, str]:
         "higgsSnapshot": bool_summary(values.get("higgs.snapshotAvailable")),
         "higgsSnapshotSeq": values.get("higgs.snapshotSequence", "0"),
         "higgsTwoHanding": bool_summary(values.get("higgs.twoHanding")),
+        "bodyCaptureEndpointFaulted": bool_summary(values.get("bodyCapture.endpointFaulted")),
+        "bodyCaptureAttempts": values.get("bodyCapture.attemptCount", "0"),
+        "bodyCaptureSuccesses": values.get("bodyCapture.successCount", "0"),
+        "bodyCaptureLastResult": values.get("bodyCapture.lastResult", "?"),
         "higgsEventCount": values.get("recentEventCount", "0"),
         "higgsRelayReady": bool_summary(net_values.get("ready")),
         "higgsRelayLocal": bool_summary(net_values.get("localHiggsAvailable")),
@@ -446,6 +459,8 @@ def build_compatibility_summary(readouts: dict[str, dict[str, str]]) -> dict[str
         "higgsLoaded": bool_summary(values.get("higgs.loaded")),
         "planckInstalled": bool_summary(values.get("planck.installed")),
         "planckLoaded": bool_summary(values.get("planck.loaded")),
+        "fbtInstalled": bool_summary(values.get("fbt.installed")),
+        "fbtLoaded": bool_summary(values.get("fbt.loaded")),
         "physicsCompat": bool_summary(values.get("vrPhysicsCompatibilityModInstalled")),
         "hookMode": values.get("hookMode", "?"),
         "gameplayMode": values.get("gameplayMode", "?"),
@@ -463,9 +478,11 @@ def build_compatibility_summary(readouts: dict[str, dict[str, str]]) -> dict[str
         "grab": values.get("grabPolicy", "?"),
         "higgsRelay": values.get("higgsRelayPolicy", "?"),
         "saveLoad": values.get("saveLoadPolicy", "?"),
+        "bodyPoseCapture": values.get("bodyPoseCapturePolicy", "?"),
         "unvalidatedSuppressed": bool_summary(values.get("unvalidatedGameplayHooksSuppressed")),
         "higgsPolicy": values.get("higgsPolicy", "?"),
         "planckPolicy": values.get("planckPolicy", "?"),
+        "fbtPolicy": values.get("fbtPolicy", "?"),
     }
 
 
@@ -1061,11 +1078,19 @@ def command_self_test(args: argparse.Namespace) -> int:
         write_atomic(
             pose_path,
             "localPoseAvailable=1\n"
+            "local.body.formatVersion=1\n"
+            "local.body.valid=1\n"
+            "local.body.captureSequence=17\n"
+            "local.body.rootGeneration=2\n"
             "local.vrik.detected=1\n"
             "local.vrik.interfaceAvailable=0\n"
             "remotePoseCount=1\n"
             "remote.7.ageSeconds=0.25\n"
             "remote.7.hmd.position=1,2,3\n"
+            "remote.7.body.formatVersion=1\n"
+            "remote.7.body.valid=1\n"
+            "remote.7.body.captureSequence=16\n"
+            "remote.7.body.rootGeneration=2\n"
             "remote.7.vrik.detected=1\n"
             "remote.7.vrik.interfaceAvailable=1\n",
         )
@@ -1098,6 +1123,8 @@ def command_self_test(args: argparse.Namespace) -> int:
             "vrikDetectedCount=1\n"
             "vrikInterfaceAvailableCount=1\n"
             "invalidVrikCount=0\n"
+            "bodyPoseValidCount=1\n"
+            "bodyPoseUnsafeCount=0\n"
             "movementAppliedCount=0\n"
             "hmdFallbackMovementCount=0\n"
             "invalidTransformCount=0\n"
@@ -1133,6 +1160,10 @@ def command_self_test(args: argparse.Namespace) -> int:
             "last.primaryMagicAimValid=1\n"
             "last.secondaryMagicOffsetValid=0\n"
             "last.secondaryMagicAimValid=0\n"
+            "last.bodyPoseValid=1\n"
+            "last.bodyPoseSafe=1\n"
+            "last.bodyCaptureSequence=16\n"
+            "last.bodyRootGeneration=2\n"
             "lastEquipment.playerId=7\n"
             "lastEquipment.sequence=11\n"
             "lastEquipment.weaponDrawn=1\n"
@@ -1308,6 +1339,8 @@ def command_self_test(args: argparse.Namespace) -> int:
             "higgs.loaded=1\n"
             "planck.installed=1\n"
             "planck.loaded=1\n"
+            "fbt.installed=1\n"
+            "fbt.loaded=1\n"
             "vrPhysicsCompatibilityModInstalled=1\n"
             "unvalidatedHooksCompiled=0\n"
             "unvalidatedGameplayHooksSuppressed=0\n"
@@ -1325,10 +1358,12 @@ def command_self_test(args: argparse.Namespace) -> int:
             "grabPolicy=observation_only\n"
             "higgsRelayPolicy=observation_only\n"
             "saveLoadPolicy=observation_only\n"
+            "bodyPoseCapturePolicy=observation_only\n"
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
             "higgsPolicy=observation_only\n"
-            "planckPolicy=observation_only\n",
+            "planckPolicy=observation_only\n"
+            "fbtPolicy=local_post_higgs_capture_and_network_cache_only\n",
         )
         write_atomic(
             higgs_path,
@@ -1340,6 +1375,10 @@ def command_self_test(args: argparse.Namespace) -> int:
             "higgs.snapshotAvailable=1\n"
             "higgs.snapshotSequence=3\n"
             "higgs.twoHanding=0\n"
+            "bodyCapture.endpointFaulted=0\n"
+            "bodyCapture.attemptCount=20\n"
+            "bodyCapture.successCount=19\n"
+            "bodyCapture.lastResult=0\n"
             "left.valid=0\n"
             "right.valid=0\n"
             "recentEventCount=2\n"
@@ -1419,9 +1458,16 @@ def command_self_test(args: argparse.Namespace) -> int:
         assert "[remoteplayers]" in payload["summaries"]["remoteplayers"]
         assert "[grab]" in payload["summaries"]["grab"]
         assert payload["compatibility"]["planckLoaded"] == "yes"
+        assert payload["compatibility"]["fbtLoaded"] == "yes"
+        assert payload["compatibility"]["bodyPoseCapture"] == "observation_only"
+        assert payload["compatibility"]["fbtPolicy"] == "local_post_higgs_capture_and_network_cache_only"
         assert payload["higgs"]["higgsInterface"] == "yes"
         assert payload["higgs"]["higgsEventCount"] == "2"
         assert payload["higgs"]["higgsRelayRemote"] == "1"
+        assert payload["higgs"]["bodyCaptureEndpointFaulted"] == "no"
+        assert payload["higgs"]["bodyCaptureAttempts"] == "20"
+        assert payload["higgs"]["bodyCaptureSuccesses"] == "19"
+        assert payload["higgs"]["bodyCaptureLastResult"] == "0"
         assert payload["planck"]["planckInterface"] == "yes"
         assert payload["planck"]["planckCurrentHitObservationOnly"] == "yes"
         assert payload["planck"]["planckLastHitProbe"] == "no"
@@ -1448,6 +1494,8 @@ def command_self_test(args: argparse.Namespace) -> int:
         assert "higgsAvatarReady=yes" in remote_players[0]["proxy"]
         assert "higgsBlocker=ready" in remote_players[0]["proxy"]
         assert "hmd=1,2,3" in remote_players[0]["pose"]
+        assert "body=yes" in remote_players[0]["pose"]
+        assert "bodySeq=16" in remote_players[0]["pose"]
         assert "targets=yes" in remote_players[0]["avatar"]
         assert "head=yes" in remote_players[0]["avatar"]
         assert "sameSpace=yes" in remote_players[0]["avatar"]
@@ -1461,6 +1509,7 @@ def command_self_test(args: argparse.Namespace) -> int:
         assert "arrow=yes/yes" in remote_players[0]["avatar"]
         assert "weapon=yes/no" in remote_players[0]["avatar"]
         assert "magic=yes/no" in remote_players[0]["avatar"]
+        assert "body=yes/yes" in remote_players[0]["avatar"]
         assert "vrik=detected" in remote_players[0]["pose"]
         assert "drawn=yes" in remote_players[0]["equipment"]
         assert "planck=yes" in remote_players[0]["combat"]

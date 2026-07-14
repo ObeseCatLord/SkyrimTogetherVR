@@ -91,7 +91,9 @@ volatile LONG g_mappingFaulted = 0;
 volatile LONG g_tickCallCount = 0;
 volatile LONG g_taskEnqueueCount = 0;
 volatile LONG g_taskRunCount = 0;
+volatile LONG g_taskDisposeCount = 0;
 volatile LONG g_cadenceOwner = 0;
+volatile LONG64 g_dispatchSequence = 0;
 volatile LONG64 g_lastRateLimitedLogAt = 0;
 const Endpoint* g_endpoint = nullptr;
 
@@ -153,7 +155,10 @@ void LogDebug(const char* apMessage) noexcept
 
 LONG ReadState(const Endpoint& acEndpoint) noexcept
 {
-    return InterlockedCompareExchange(const_cast<volatile LONG*>(reinterpret_cast<const volatile LONG*>(&acEndpoint.State)), 0, 0);
+    const auto* state = reinterpret_cast<const volatile LONG*>(&acEndpoint.State);
+    const auto value = *state;
+    MemoryBarrier();
+    return value;
 }
 
 bool IsExecutableReadOnlyPage(DWORD aProtection) noexcept
@@ -210,6 +215,10 @@ bool MapEndpoint() noexcept
 
 bool ValidateReadyEndpoint(const Endpoint& acEndpoint, DispatchCallback& arCallback) noexcept
 {
+    const auto state = static_cast<EndpointState>(ReadState(acEndpoint));
+    if (state != EndpointState::Ready)
+        return false;
+
     if (acEndpoint.Magic != SkyrimTogetherVR::TickBridge::kEndpointMagic || acEndpoint.AbiVersion != SkyrimTogetherVR::TickBridge::kEndpointAbiVersion ||
         acEndpoint.StructSize != sizeof(Endpoint) || acEndpoint.PublisherProcessId != GetCurrentProcessId())
     {
@@ -235,9 +244,6 @@ bool ValidateReadyEndpoint(const Endpoint& acEndpoint, DispatchCallback& arCallb
         }
     }
 
-    const auto state = static_cast<EndpointState>(ReadState(acEndpoint));
-    if (state != EndpointState::Ready)
-        return false;
     if (!acEndpoint.ImageBase || !acEndpoint.CallbackRva || acEndpoint.CallbackRva > std::numeric_limits<std::uintptr_t>::max() - acEndpoint.ImageBase)
     {
         LogDebug("SkyrimTogetherVRTickBridge: endpoint callback range is invalid");
@@ -250,13 +256,6 @@ bool ValidateReadyEndpoint(const Endpoint& acEndpoint, DispatchCallback& arCallb
         InterlockedExchange(&g_mappingFaulted, 1);
         return false;
     }
-    if (acEndpoint.ReadyThreadId != GetCurrentThreadId())
-    {
-        if (ShouldWriteRateLimitedLog())
-            LogDebug("SkyrimTogetherVRTickBridge: task rejected reason=ready_thread_mismatch");
-        return false;
-    }
-
     const auto callbackAddress = acEndpoint.ImageBase + acEndpoint.CallbackRva;
     MEMORY_BASIC_INFORMATION memory{};
     if (VirtualQuery(reinterpret_cast<const void*>(callbackAddress), &memory, sizeof(memory)) != sizeof(memory) || memory.State != MEM_COMMIT ||
@@ -277,6 +276,19 @@ public:
     void Run() override
     {
         const auto runCount = InterlockedIncrement(&g_taskRunCount);
+        const auto executorThreadId = GetCurrentThreadId();
+        if (runCount == 1)
+        {
+            char message[160]{};
+            _snprintf_s(
+                message,
+                _countof(message),
+                _TRUNCATE,
+                "SkyrimTogetherVRTickBridge: task_run_entry=%ld thread=%lu",
+                runCount,
+                static_cast<unsigned long>(executorThreadId));
+            LogDebug(message);
+        }
         if (!g_endpoint)
         {
             if (ShouldWriteRateLimitedLog())
@@ -288,7 +300,9 @@ public:
         if (!ValidateReadyEndpoint(*g_endpoint, callback))
             return;
 
-        const auto dispatchResult = static_cast<SkyrimTogetherVR::TickBridge::DispatchResult>(callback(g_endpoint->Epoch));
+        const auto sequence = static_cast<std::uint64_t>(InterlockedIncrement64(&g_dispatchSequence));
+        const auto dispatchResult = static_cast<SkyrimTogetherVR::TickBridge::DispatchResult>(
+            callback(g_endpoint->Epoch, sequence, executorThreadId));
         if (runCount == 1 || dispatchResult != SkyrimTogetherVR::TickBridge::DispatchResult::Success || ShouldWriteRateLimitedLog())
         {
             char message[192]{};
@@ -296,16 +310,30 @@ public:
                 message,
                 _countof(message),
                 _TRUNCATE,
-                "SkyrimTogetherVRTickBridge: task_run=%ld dispatch_result=%u thread=%lu",
+                "SkyrimTogetherVRTickBridge: task_run=%ld sequence=%llu dispatch_result=%u thread=%lu",
                 runCount,
+                static_cast<unsigned long long>(sequence),
                 static_cast<unsigned int>(dispatchResult),
-                static_cast<unsigned long>(GetCurrentThreadId()));
+                static_cast<unsigned long>(executorThreadId));
             LogDebug(message);
         }
     }
 
     void Dispose() override
     {
+        const auto disposeCount = InterlockedIncrement(&g_taskDisposeCount);
+        if (disposeCount == 1)
+        {
+            char message[160]{};
+            _snprintf_s(
+                message,
+                _countof(message),
+                _TRUNCATE,
+                "SkyrimTogetherVRTickBridge: task_dispose=%ld thread=%lu",
+                disposeCount,
+                static_cast<unsigned long>(GetCurrentThreadId()));
+            LogDebug(message);
+        }
         InterlockedExchange(&g_taskQueued, 0);
         delete this;
     }
@@ -412,7 +440,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSk
 
     apInfo->infoVersion = PluginInfo::kInfoVersion;
     apInfo->name = kPluginName;
-    apInfo->version = 1;
+    apInfo->version = 2;
 
     if (!IsSupportedRuntime(apSkse))
     {

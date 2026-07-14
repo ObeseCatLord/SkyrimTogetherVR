@@ -376,7 +376,7 @@ def command_self_test() -> int:
         def write(name: str, contents: str) -> None:
             (handoff / collect_runtime_evidence.vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
-        write("status", "state=online\nonline=1\n")
+        write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
@@ -422,6 +422,8 @@ def command_self_test() -> int:
             "ready=1\n"
             "online=1\n"
             "localPlayerId=4\n"
+            "sessionId=123\n"
+            "connectionGeneration=1\n"
             "playerFormId=20\n"
             "currentLevel=12\n"
             "cachedLevel=12\n"
@@ -439,8 +441,10 @@ def command_self_test() -> int:
             "lastGrid.playerCell.serverBaseId=100\n"
             "lastGrid.center=4,-3\n"
             "lastGrid.cellCount=25\n"
+            "lastGrid.connectionGeneration=1\n"
             "lastCell.valid=1\n"
             "lastCell.exterior=1\n"
+            "lastCell.connectionGeneration=1\n"
             "lastCell.cell.serverModId=1\n"
             "lastCell.cell.serverBaseId=100\n"
             "lastCell.worldSpace.serverModId=1\n"
@@ -520,6 +524,7 @@ def command_self_test() -> int:
             "saveLoadPolicy=observation_only\n"
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
+            "posePolicy=observation_only\n"
             "higgsPolicy=observation_only\nplanckPolicy=observation_only\n",
         )
         write(

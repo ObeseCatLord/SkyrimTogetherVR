@@ -22,6 +22,7 @@ struct VRPoseService
     [[nodiscard]] const VRPlayerPoseSnapshot& GetLastSnapshot() const noexcept { return m_lastSnapshot; }
     [[nodiscard]] bool HasSnapshot() const noexcept { return m_hasSnapshot; }
     [[nodiscard]] const VRVrikData& GetLocalVrikData() const noexcept { return m_localVrik; }
+    [[nodiscard]] const VRBodyPoseData& GetLocalBodyPose() const noexcept { return m_localBodyPose; }
     [[nodiscard]] const TiltedPhoques::Map<uint32_t, VRPoseUpdate>& GetRemotePoses() const noexcept { return m_remotePoses; }
 
 private:
@@ -39,6 +40,7 @@ private:
     std::filesystem::path m_poseStatusPath;
     VRPlayerPoseSnapshot m_lastSnapshot{};
     VRVrikData m_localVrik{};
+    VRBodyPoseData m_localBodyPose{};
     TiltedPhoques::Map<uint32_t, VRPoseUpdate> m_remotePoses{};
     TiltedPhoques::Map<uint32_t, double> m_remotePoseAges{};
     bool m_hasSnapshot{false};

@@ -99,6 +99,10 @@
 #define TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE 0
 #endif
 
+#ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+#define TP_SKYRIM_VR_ENABLE_POSE_SERVICE 0
+#endif
+
 namespace
 {
 #if TP_SKYRIM_VR
@@ -141,7 +145,9 @@ void EmplaceSkyrimVRServices(World& aWorld, entt::dispatcher& aDispatcher, Trans
     aWorld.ctx().emplace<VRSaveLoadService>(aWorld, aDispatcher, aTransport);
 #endif
     aWorld.ctx().emplace<VRConnectionService>(aWorld, aDispatcher, aTransport);
+#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
     aWorld.ctx().emplace<VRPoseService>(aDispatcher, aTransport);
+#endif
 #if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
     spdlog::warn("SkyrimTogetherVR remote-player proxy service is enabled in readout-only mode");
     aWorld.ctx().emplace<VRRemotePlayerService>(aWorld, aDispatcher, aTransport);
@@ -210,7 +216,9 @@ World::World()
     ctx().emplace<DiscordService>(m_dispatcher);
     ctx().emplace<StringCacheService>(m_dispatcher);
     ctx().emplace<VRConnectionService>(*this, m_dispatcher, m_transport);
+#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
     ctx().emplace<VRPoseService>(m_dispatcher, m_transport);
+#endif
 #if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
     spdlog::warn("SkyrimTogetherVR remote-player proxy service is enabled in readout-only mode");
     ctx().emplace<VRRemotePlayerService>(*this, m_dispatcher, m_transport);

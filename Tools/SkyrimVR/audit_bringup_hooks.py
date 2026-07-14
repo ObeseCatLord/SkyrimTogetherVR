@@ -9,16 +9,25 @@ EXPECTED_VR_TARGET_CONFIGS = {
         "connection_only": True,
         "remote_avatar_sync": False,
         "remote_avatar_actor_targets": False,
+        "observation_services": False,
+        "pose_service": False,
+        "remote_player_proxy": False,
     },
     "SkyrimTogetherVRClientAvatarSync": {
         "connection_only": True,
         "remote_avatar_sync": True,
         "remote_avatar_actor_targets": True,
+        "observation_services": True,
+        "pose_service": True,
+        "remote_player_proxy": True,
     },
     "SkyrimTogetherVRGameplayClient": {
         "connection_only": False,
         "remote_avatar_sync": True,
         "remote_avatar_actor_targets": True,
+        "observation_services": True,
+        "pose_service": True,
+        "remote_player_proxy": True,
     },
 }
 
@@ -28,6 +37,9 @@ REQUIRED_VR_BUILD_FUNCTION_TOKENS = (
     "connection_only = true",
     "local remote_avatar_sync = options.remote_avatar_sync or false",
     "local remote_avatar_actor_targets = options.remote_avatar_actor_targets or false",
+    "local observation_services = options.observation_services or false",
+    "local pose_service = options.pose_service or false",
+    "local remote_player_proxy = options.remote_player_proxy or false",
     "local unvalidated_hooks = options.unvalidated_hooks or false",
     "local flat_overlay = options.flat_overlay or false",
     'add_defines("TP_SKYRIM_VR=1")',
@@ -37,6 +49,7 @@ REQUIRED_VR_BUILD_FUNCTION_TOKENS = (
     'add_defines("TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=" .. vr_define_value(connection_only))',
     'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=" .. vr_define_value(remote_avatar_sync))',
     'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=" .. vr_define_value(remote_avatar_actor_targets))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE=" .. vr_define_value(pose_service))',
     'add_defines("TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES=0")',
 )
 
@@ -54,6 +67,11 @@ REQUIRED_VR_OBSERVATION_SERVICE_DEFINES = (
     "TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE",
     "TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE",
 )
+
+ALWAYS_ENABLED_VR_SERVICE_DEFINES = {
+    "TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE",
+    "TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE",
+}
 
 FORBIDDEN_VR_TARGET_OPTIONS = (
     "unvalidated_hooks",
@@ -80,6 +98,19 @@ REQUIRED_TOKENS = {
         "InstallVrMainLoopBringupHooks();",
         "BSGraphics::InstallVrRenderBringupHooks();",
         "SkyrimTogetherVR client startup hook reached",
+    ),
+    "Code/client/VRCompatibilityStatus.h": (
+        "bool PoseService{false};",
+        "bool BodyPoseCapture{false};",
+        "bool FbtInstalled{false};",
+        "bool FbtLoaded{false};",
+    ),
+    "Code/client/VRCompatibilityStatus.cpp": (
+        "TP_SKYRIM_VR_ENABLE_POSE_SERVICE",
+        "status.PoseService = TP_SKYRIM_VR_ENABLE_POSE_SERVICE != 0;",
+        "status.BodyPoseCapture = TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE != 0;",
+        'file << "fbtPolicy=local_post_higgs_capture_and_network_cache_only',
+        'file << "posePolicy=" << GetObservationPolicy(acStatus.PoseService)',
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (
         "g_IsPlanckActive",
@@ -167,6 +198,9 @@ def parse_vr_target_configs(xmake_text: str) -> dict[str, dict[str, bool]]:
             "connection_only": parse_bool_option(options, "connection_only", True),
             "remote_avatar_sync": parse_bool_option(options, "remote_avatar_sync", False),
             "remote_avatar_actor_targets": parse_bool_option(options, "remote_avatar_actor_targets", False),
+            "observation_services": parse_bool_option(options, "observation_services", False),
+            "pose_service": parse_bool_option(options, "pose_service", False),
+            "remote_player_proxy": parse_bool_option(options, "remote_player_proxy", False),
         }
         for forbidden_option in FORBIDDEN_VR_TARGET_OPTIONS:
             if re.search(rf"\b{re.escape(forbidden_option)}\s*=", options):
@@ -184,9 +218,18 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
             failures.append(f"Code/client/xmake.lua: VR build function missing `{token}`")
 
     for define in REQUIRED_VR_OBSERVATION_SERVICE_DEFINES:
-        token = f'add_defines("{define}=1")'
+        if define in ALWAYS_ENABLED_VR_SERVICE_DEFINES:
+            token = f'add_defines("{define}=1")'
+        elif define == "TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE":
+            token = f'add_defines("{define}=" .. vr_define_value(remote_player_proxy))'
+        else:
+            token = f'add_defines("{define}=" .. vr_define_value(observation_services))'
         if token not in text:
             failures.append(f"Code/client/xmake.lua: VR observation define missing `{token}`")
+
+    pose_token = 'add_defines("TP_SKYRIM_VR_ENABLE_POSE_SERVICE=" .. vr_define_value(pose_service))'
+    if pose_token not in text:
+        failures.append(f"Code/client/xmake.lua: VR pose define missing `{pose_token}`")
 
     configs = parse_vr_target_configs(text)
     missing_targets = sorted(set(EXPECTED_VR_TARGET_CONFIGS) - set(configs))
@@ -212,6 +255,9 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
     default_config = configs.get("SkyrimTogetherVRClient", {})
     if default_config.get("remote_avatar_actor_targets"):
         failures.append("Code/client/xmake.lua: default SkyrimTogetherVRClient must not enable actor target mutation")
+    for option in ("observation_services", "pose_service", "remote_player_proxy"):
+        if default_config.get(option):
+            failures.append(f"Code/client/xmake.lua: default SkyrimTogetherVRClient must keep {option}=false")
 
     avatar_config = configs.get("SkyrimTogetherVRClientAvatarSync", {})
     if avatar_config.get("remote_avatar_actor_targets") and not avatar_config.get("remote_avatar_sync"):

@@ -48,7 +48,8 @@ TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher)
     m_connectedConnection = m_dispatcher.sink<ConnectedEvent>().connect<&TransportService::HandleConnected>(this);
     m_disconnectedConnection = m_dispatcher.sink<DisconnectedEvent>().connect<&TransportService::HandleDisconnected>(this);
 
-    m_connected = false;
+    m_sessionId = (static_cast<uint64_t>(GetCurrentProcessId()) << 32) ^
+                  static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 
     auto handlerGenerator = [this](auto& x)
     {
@@ -152,6 +153,15 @@ void TransportService::OnConnected()
     // TODO: think about user opt out
     request.DiscordId = m_world.ctx().at<DiscordService>().GetUser().id;
 
+#if TP_SKYRIM_VR
+    // The SKSEVR task executor is not a safe place to call arbitrary game
+    // functions. Cell/grid state is sent immediately after authentication.
+    request.Username = "Skyrim VR Player";
+    request.WorldSpaceId = {};
+    request.CellId = {};
+    request.Level = 1;
+    request.PlayerTime = TimeModel{};
+#else
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
     if (!pPlayer || !pPlayer->GetBaseFormData() || !pPlayer->GetParentCellData())
         spdlog::warn("Building authentication request before the local player is fully loaded");
@@ -167,6 +177,7 @@ void TransportService::OnConnected()
 
     if (request.Username.empty())
         request.Username = "Skyrim VR Player";
+#endif
 
     auto* const cpModManager = ModManager::Get();
 
@@ -174,7 +185,7 @@ void TransportService::OnConnected()
     {
         for (auto* pMod : cpModManager->mods)
         {
-            if (!pMod->IsLoaded())
+            if (!pMod || !pMod->IsLoaded())
                 continue;
 
             auto& entry = request.UserMods.ModList.emplace_back();
@@ -184,6 +195,9 @@ void TransportService::OnConnected()
         }
     }
 
+#if TP_SKYRIM_VR
+    spdlog::info("SkyrimTogetherVR VR authentication snapshot ready: {} loaded mods, fallback level {}", request.UserMods.ModList.size(), request.Level);
+#else
     auto& modSystem = m_world.GetModSystem();
     if (pPlayer && pPlayer->GetWorldSpace())
         modSystem.GetServerModId(pPlayer->GetWorldSpace()->GetFormIdData(), request.WorldSpaceId);
@@ -202,13 +216,24 @@ void TransportService::OnConnected()
         request.PlayerTime.Month = pGameTime->GetGameMonthData()->GetValueData();
         request.PlayerTime.Day = pGameTime->GetGameDayData()->GetValueData();
     }
+#endif
 
-    Send(request);
+    if (!Send(request))
+    {
+        spdlog::error("SkyrimTogetherVR authentication request was not queued because the transport is no longer connected");
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"authentication_not_queued\"}";
+        m_dispatcher.trigger(errorEvent);
+        return;
+    }
+
+    spdlog::info("SkyrimTogetherVR authentication request queued");
 }
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
     m_connected = false;
+    m_localPlayerId = 0;
 
     spdlog::warn("Disconnected from server {}", aReason);
 
@@ -240,6 +265,8 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     if (acMessage.Type == AR::kAccepted)
     {
         m_connected = true;
+        m_localPlayerId = acMessage.PlayerId;
+        ++m_connectionGeneration;
 
         m_world.SetServerSettings(acMessage.Settings);
 

@@ -7,6 +7,7 @@
 #include <Messages/RequestVRPoseUpdate.h>
 #include <Services/TransportService.h>
 #include <Services/VRPoseService.h>
+#include <VR/VRBodyPoseCapture.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <fstream>
@@ -219,7 +220,11 @@ VRPoseNodeData ToPoseNodeData(const VRPoseTransform& acTransform) noexcept
     return result;
 }
 
-VRPoseUpdate ToPoseUpdate(const VRPlayerPoseSnapshot& acSnapshot, const VRVrikData& acVrik, uint32_t aSequence) noexcept
+VRPoseUpdate ToPoseUpdate(
+    const VRPlayerPoseSnapshot& acSnapshot,
+    const VRBodyPoseData& acBody,
+    const VRVrikData& acVrik,
+    uint32_t aSequence) noexcept
 {
     VRPoseUpdate result{};
     result.Sequence = aSequence;
@@ -238,6 +243,7 @@ VRPoseUpdate ToPoseUpdate(const VRPlayerPoseSnapshot& acSnapshot, const VRVrikDa
     result.PrimaryMagicAim = ToPoseNodeData(acSnapshot.PrimaryMagicAim);
     result.SecondaryMagicOffset = ToPoseNodeData(acSnapshot.SecondaryMagicOffset);
     result.SecondaryMagicAim = ToPoseNodeData(acSnapshot.SecondaryMagicAim);
+    result.Body = acBody;
     result.Vrik = acVrik;
     return result;
 }
@@ -434,6 +440,8 @@ VRPoseService::VRPoseService(entt::dispatcher& aDispatcher, TransportService& aT
 
 void VRPoseService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
+    m_localBodyPose = SkyrimTogetherVR::BodyPoseCapture::CopyLatestFresh();
+
     m_vrikBridgeReadTimer += acEvent.Delta;
     if (!m_vrikBridgeInitialized || m_vrikBridgeReadTimer >= kVrikBridgeReadInterval)
     {
@@ -477,6 +485,8 @@ void VRPoseService::OnVRPoseUpdate(const NotifyVRPoseUpdate& acMessage) noexcept
 {
     if (acMessage.PlayerId == m_transport.GetLocalPlayerId())
         return;
+    if (acMessage.Pose.Sequence == 0 || !HasAnyVRPosePayload(acMessage.Pose) || !IsVRPoseUpdateSafe(acMessage.Pose))
+        return;
 
     const auto existingIt = m_remotePoses.find(acMessage.PlayerId);
     if (existingIt != m_remotePoses.end() && !IsNewerSequence(acMessage.Pose.Sequence, existingIt->second.Sequence))
@@ -513,7 +523,7 @@ void VRPoseService::SendPoseUpdate() noexcept
         return;
 
     RequestVRPoseUpdate request{};
-    request.Pose = ToPoseUpdate(m_lastSnapshot, m_localVrik, ++m_sequence);
+    request.Pose = ToPoseUpdate(m_lastSnapshot, m_localBodyPose, m_localVrik, ++m_sequence);
     m_transport.Send(request);
 }
 
@@ -564,6 +574,17 @@ void VRPoseService::WritePoseStatusFile() noexcept
     file << "localPoseAvailable=" << (m_hasSnapshot ? "1" : "0") << "\n";
     file << "localSequence=" << m_sequence << "\n";
     file << "remotePoseCount=" << m_remotePoses.size() << "\n";
+    file << "local.body.formatVersion=" << m_localBodyPose.FormatVersion << "\n";
+    file << "local.body.valid=" << (m_localBodyPose.Valid ? "1" : "0") << "\n";
+    file << "local.body.captureSequence=" << m_localBodyPose.CaptureSequence << "\n";
+    file << "local.body.rootGeneration=" << m_localBodyPose.RootGeneration << "\n";
+    WriteNode(file, "local.body.pelvis", m_localBodyPose.Pelvis);
+    WriteNode(file, "local.body.leftThigh", m_localBodyPose.LeftThigh);
+    WriteNode(file, "local.body.leftCalf", m_localBodyPose.LeftCalf);
+    WriteNode(file, "local.body.leftFoot", m_localBodyPose.LeftFoot);
+    WriteNode(file, "local.body.rightThigh", m_localBodyPose.RightThigh);
+    WriteNode(file, "local.body.rightCalf", m_localBodyPose.RightCalf);
+    WriteNode(file, "local.body.rightFoot", m_localBodyPose.RightFoot);
     WriteVrikData(file, "local.vrik", m_localVrik);
 
     if (m_hasSnapshot)
@@ -609,6 +630,17 @@ void VRPoseService::WritePoseStatusFile() noexcept
         WriteNode(file, (prefix + ".primaryMagicAim").c_str(), pose.PrimaryMagicAim);
         WriteNode(file, (prefix + ".secondaryMagicOffset").c_str(), pose.SecondaryMagicOffset);
         WriteNode(file, (prefix + ".secondaryMagicAim").c_str(), pose.SecondaryMagicAim);
+        file << prefix << ".body.formatVersion=" << pose.Body.FormatVersion << "\n";
+        file << prefix << ".body.valid=" << (pose.Body.Valid ? "1" : "0") << "\n";
+        file << prefix << ".body.captureSequence=" << pose.Body.CaptureSequence << "\n";
+        file << prefix << ".body.rootGeneration=" << pose.Body.RootGeneration << "\n";
+        WriteNode(file, (prefix + ".body.pelvis").c_str(), pose.Body.Pelvis);
+        WriteNode(file, (prefix + ".body.leftThigh").c_str(), pose.Body.LeftThigh);
+        WriteNode(file, (prefix + ".body.leftCalf").c_str(), pose.Body.LeftCalf);
+        WriteNode(file, (prefix + ".body.leftFoot").c_str(), pose.Body.LeftFoot);
+        WriteNode(file, (prefix + ".body.rightThigh").c_str(), pose.Body.RightThigh);
+        WriteNode(file, (prefix + ".body.rightCalf").c_str(), pose.Body.RightCalf);
+        WriteNode(file, (prefix + ".body.rightFoot").c_str(), pose.Body.RightFoot);
         WriteVrikData(file, (prefix + ".vrik").c_str(), pose.Vrik);
     }
 
@@ -644,13 +676,14 @@ void VRPoseService::LogSnapshot() const noexcept
     }
 
     spdlog::info(
-        "SkyrimTogetherVR pose snapshot: hmd=({}, {}, {}), hand=({}, {}, {}), spellOriginValid={}, arrowOriginValid={}, weaponOffsetValid={}, remotePoseCount={}",
+        "SkyrimTogetherVR pose snapshot: hmd=({}, {}, {}), hand=({}, {}, {}), bodyValid={}, spellOriginValid={}, arrowOriginValid={}, weaponOffsetValid={}, remotePoseCount={}",
         m_lastSnapshot.Hmd.Position.x,
         m_lastSnapshot.Hmd.Position.y,
         m_lastSnapshot.Hmd.Position.z,
         pHand->Position.x,
         pHand->Position.y,
         pHand->Position.z,
+        m_localBodyPose.Valid,
         m_lastSnapshot.SpellOrigin.Valid,
         m_lastSnapshot.ArrowOrigin.Valid,
         m_lastSnapshot.LeftWeaponOffset.Valid || m_lastSnapshot.RightWeaponOffset.Valid,

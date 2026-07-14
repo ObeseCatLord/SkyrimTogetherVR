@@ -40,6 +40,12 @@ REQUIRED_TOKENS = {
         "higgs.interfaceAvailable",
         "higgs.snapshotAvailable",
         "higgs.snapshotSequence",
+        "PublishPostHiggsBodyPose",
+        "BodyCaptureCallback",
+        "BodyCaptureCallbackRva",
+        "bodyCapture.attemptCount",
+        "bodyCapture.successCount",
+        "MapEndpoint();",
     ),
     "Code/higgs_bridge/xmake.lua": (
         'target("SkyrimTogetherVRHiggsBridge")',
@@ -84,6 +90,13 @@ REQUIRED_TOKENS = {
         "audit_higgs_bridge.py",
         "virtual method order",
         "do not query live HIGGS state",
+    ),
+    "Docs/SkyrimVR/fbt-compatibility.md": (
+        "post-VRIK/post-HIGGS",
+        "bodyCapture.successCount",
+        "local.body.valid=1",
+        "relayed, validated again, cached",
+        "not redistributed",
     ),
     "Docs/SkyrimVR/windows-build.md": (
         "SkyrimTogetherVRHiggsBridge",

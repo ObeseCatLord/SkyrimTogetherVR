@@ -66,6 +66,23 @@ VRPoseUpdate BuildPoseUpdate()
     pose.PrimaryMagicAim = BuildPoseNode(220.0f);
     pose.SecondaryMagicOffset = BuildPoseNode(230.0f);
     pose.SecondaryMagicAim = BuildPoseNode(240.0f);
+    pose.Body.FormatVersion = 1;
+    pose.Body.Valid = true;
+    pose.Body.CaptureSequence = 1;
+    pose.Body.RootGeneration = 1;
+    pose.Body.Pelvis = BuildPoseNode(250.0f);
+    pose.Body.LeftThigh = BuildPoseNode(290.0f);
+    pose.Body.LeftCalf = BuildPoseNode(300.0f);
+    pose.Body.LeftFoot = BuildPoseNode(310.0f);
+    pose.Body.RightThigh = BuildPoseNode(320.0f);
+    pose.Body.RightCalf = BuildPoseNode(330.0f);
+    pose.Body.RightFoot = BuildPoseNode(340.0f);
+    pose.Body.LeftThigh.Position = {};
+    pose.Body.LeftCalf.Position = {};
+    pose.Body.LeftFoot.Position = {};
+    pose.Body.RightThigh.Position = {};
+    pose.Body.RightCalf.Position = {};
+    pose.Body.RightFoot.Position = {};
     pose.Vrik.Detected = true;
     pose.Vrik.InterfaceAvailable = true;
     pose.Vrik.LeftFingers.Valid = true;
@@ -84,6 +101,22 @@ VRPoseUpdate BuildPoseUpdate()
     pose.Vrik.CameraOffset = {1.0f, 2.0f, 3.0f};
     pose.Vrik.FinalCameraOffset = {4.0f, 5.0f, 6.0f};
     pose.Vrik.FinalSmoothingOffset = {7.0f, 8.0f, 9.0f};
+    return pose;
+}
+
+VRPoseUpdate BuildPoseUpdateBodyV0()
+{
+    auto pose = BuildPoseUpdate();
+    pose.Body = {};
+    pose.Body.FormatVersion = 0;
+    return pose;
+}
+
+VRPoseUpdate BuildPoseUpdateBodyV1Invalid()
+{
+    auto pose = BuildPoseUpdate();
+    pose.Body = {};
+    pose.Body.FormatVersion = 1;
     return pose;
 }
 
@@ -910,6 +943,10 @@ TEST_CASE("Static structures", "[encoding.static]")
         VRPoseUpdate sendObjects = BuildPoseUpdate();
         VRPoseUpdate recvObjects;
 
+        REQUIRE(HasAnyVRPosePayload(sendObjects));
+        REQUIRE(IsVRBodyPoseDataSafe(sendObjects.Body));
+        REQUIRE(IsVRPoseUpdateSafe(sendObjects));
+
         {
             Buffer buff(1000);
             Buffer::Writer writer(&buff);
@@ -920,6 +957,66 @@ TEST_CASE("Static structures", "[encoding.static]")
             recvObjects.Deserialize(reader);
 
             REQUIRE(sendObjects == recvObjects);
+        }
+    }
+
+    GIVEN("VRPoseUpdate validation")
+    {
+        auto pose = BuildPoseUpdate();
+
+        WHEN("only VRIK state is present")
+        {
+            VRPoseUpdate vrikOnly{};
+            vrikOnly.Sequence = 1;
+            vrikOnly.Vrik.Detected = true;
+            vrikOnly.Vrik.InterfaceAvailable = true;
+
+            THEN("the payload remains relayable and safe")
+            {
+                REQUIRE(HasAnyVRPosePayload(vrikOnly));
+                REQUIRE(IsVRPoseUpdateSafe(vrikOnly));
+            }
+        }
+
+        WHEN("a limb contains translation")
+        {
+            pose.Body.LeftCalf.Position.x = 1.0f;
+            THEN("body validation rejects it")
+            {
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a body basis is left handed")
+        {
+            pose.Body.RightFoot.AxisZ = {0.0f, 0.0f, -1.0f};
+            THEN("body validation rejects it")
+            {
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+            }
+        }
+
+        WHEN("body capture is explicitly stale")
+        {
+            pose.Body = {};
+            pose.Body.FormatVersion = 1;
+            THEN("the zero invalid state is accepted")
+            {
+                REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("the body format is unknown")
+        {
+            pose.Body = {};
+            pose.Body.FormatVersion = 2;
+            THEN("the fixed-order schema fails closed")
+            {
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
         }
     }
 }
@@ -1250,7 +1347,7 @@ TEST_CASE("Packets", "[encoding.packets]")
 
     SECTION("RequestVRPoseUpdate")
     {
-        Buffer buff(1000);
+        Buffer buff(4096);
 
         RequestVRPoseUpdate sendMessage, recvMessage;
         sendMessage.Pose = BuildPoseUpdate();
@@ -1268,9 +1365,67 @@ TEST_CASE("Packets", "[encoding.packets]")
         REQUIRE(sendMessage == recvMessage);
     }
 
+    SECTION("RequestVRPoseUpdate::BodyV0Absent")
+    {
+        Buffer buff(4096);
+
+        RequestVRPoseUpdate sendMessage, recvMessage;
+        sendMessage.Pose = BuildPoseUpdateBodyV0();
+
+        REQUIRE(sendMessage.Pose.Body.FormatVersion == 0);
+        REQUIRE(sendMessage.Pose.Body.Valid == false);
+        REQUIRE(sendMessage.Pose.Body.CaptureSequence == 0);
+        REQUIRE(sendMessage.Pose.Body.RootGeneration == 0);
+        REQUIRE((!sendMessage.Pose.Body.Pelvis.Valid && !sendMessage.Pose.Body.LeftThigh.Valid &&
+                 !sendMessage.Pose.Body.LeftCalf.Valid && !sendMessage.Pose.Body.LeftFoot.Valid &&
+                 !sendMessage.Pose.Body.RightThigh.Valid && !sendMessage.Pose.Body.RightCalf.Valid &&
+                 !sendMessage.Pose.Body.RightFoot.Valid));
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        uint64_t trash;
+        reader.ReadBits(trash, 8); // pop opcode
+
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("RequestVRPoseUpdate::BodyV1Invalid")
+    {
+        Buffer buff(4096);
+
+        RequestVRPoseUpdate sendMessage, recvMessage;
+        sendMessage.Pose = BuildPoseUpdateBodyV1Invalid();
+
+        REQUIRE(sendMessage.Pose.Body.FormatVersion == 1);
+        REQUIRE(sendMessage.Pose.Body.Valid == false);
+        REQUIRE(sendMessage.Pose.Body.CaptureSequence == 0);
+        REQUIRE(sendMessage.Pose.Body.RootGeneration == 0);
+        REQUIRE((!sendMessage.Pose.Body.Pelvis.Valid && !sendMessage.Pose.Body.LeftThigh.Valid &&
+                 !sendMessage.Pose.Body.LeftCalf.Valid && !sendMessage.Pose.Body.LeftFoot.Valid &&
+                 !sendMessage.Pose.Body.RightThigh.Valid && !sendMessage.Pose.Body.RightCalf.Valid &&
+                 !sendMessage.Pose.Body.RightFoot.Valid));
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        uint64_t trash;
+        reader.ReadBits(trash, 8); // pop opcode
+
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
     SECTION("NotifyVRPoseUpdate")
     {
-        Buffer buff(1000);
+        Buffer buff(4096);
 
         NotifyVRPoseUpdate sendMessage, recvMessage;
         sendMessage.PlayerId = 7;

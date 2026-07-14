@@ -72,14 +72,14 @@ REQUIRED_STAGED_FILES = (
     "Data/Seq/SkyrimTogether.seq",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
-    "Data/scripts/SkyrimTogetherUtils.pex",
-    "Data/scripts/SkyrimTogetherVRTickBridge.pex",
-    "Data/scripts/SkyrimTogetherVerifyLaunchScript.pex",
-    "Data/scripts/SkyrimTogetherPlayerAliasScript.pex",
-    "Data/scripts/SkyrimTogetherVRMigrationXScript.pex",
-    "Data/scripts/SkyrimTogetherVRMigrationScript.pex",
-    "Data/scripts/SkyrimTogetherVRConnectionMenu.pex",
-    "Data/scripts/SkyrimTogetherVRConnectionSpellEffect.pex",
+    "Data/Scripts/SkyrimTogetherUtils.pex",
+    "Data/Scripts/SkyrimTogetherVRTickBridge.pex",
+    "Data/Scripts/SkyrimTogetherVerifyLaunchScript.pex",
+    "Data/Scripts/SkyrimTogetherPlayerAliasScript.pex",
+    "Data/Scripts/SkyrimTogetherVRMigrationXScript.pex",
+    "Data/Scripts/SkyrimTogetherVRMigrationScript.pex",
+    "Data/Scripts/SkyrimTogetherVRConnectionMenu.pex",
+    "Data/Scripts/SkyrimTogetherVRConnectionSpellEffect.pex",
     "LaunchSkyrimTogetherVRCompanion.bat",
     "AuditSkyrimTogetherVRRuntime-Windows.bat",
     "AuditSkyrimTogetherVRAvatarSyncRuntime-Windows.bat",
@@ -108,6 +108,7 @@ PACKAGED_PYTHON_HELPERS = (
 FORBIDDEN_PACKAGE_FILES = (
     "SkyrimTogether.esp",
     "scripts",
+    "Scripts",
     "meshes",
     "SkyrimTogetherRebornBehaviors",
     "SkyrimTogetherVR.dll",
@@ -463,9 +464,21 @@ def pex_tokens_for_package_file(relative_path):
 
 
 def audit_packaged_papyrus(package, failures):
-    scripts_dir = package / "Data" / "scripts"
+    data_dir = package / "Data"
+    script_variants = sorted(
+        entry.name
+        for entry in data_dir.iterdir()
+        if entry.is_dir() and entry.name.casefold() == "scripts"
+    ) if data_dir.is_dir() else []
+    if script_variants != ["Scripts"]:
+        failures.append(
+            "package must contain exactly one canonical Data/Scripts directory; found: "
+            + (", ".join(script_variants) if script_variants else "none")
+        )
+
+    scripts_dir = package / "Data" / "Scripts"
     if not scripts_dir.exists() or not scripts_dir.is_dir():
-        failures.append("missing package Papyrus directory: Data/scripts")
+        failures.append("missing package Papyrus directory: Data/Scripts")
         return
 
     for pex_path in sorted(scripts_dir.glob("*.pex")):
@@ -502,6 +515,31 @@ def audit_packaged_papyrus(package, failures):
                 f"packaged Papyrus bytecode is missing VR token(s): {relative_path}: "
                 + ", ".join(missing_tokens)
             )
+
+
+def audit_installed_papyrus(package, skyrim_vr, failures):
+    installed_data = skyrim_vr / "Data"
+    variants = sorted(
+        entry.name
+        for entry in installed_data.iterdir()
+        if entry.is_dir() and entry.name.casefold() == "scripts"
+    ) if installed_data.is_dir() else []
+    if variants != ["Scripts"]:
+        failures.append(
+            "target must contain exactly one canonical Data/Scripts directory; found: "
+            + (", ".join(variants) if variants else "none")
+        )
+        return
+
+    for relative_path in REQUIRED_STAGED_FILES:
+        if not relative_path.startswith("Data/Scripts/") or not relative_path.endswith(".pex"):
+            continue
+        packaged = package / relative_path
+        installed = skyrim_vr / relative_path
+        if not installed.is_file():
+            failures.append(f"target is missing packaged Papyrus file: {relative_path}")
+        elif packaged.is_file() and sha256(installed) != sha256(packaged):
+            failures.append(f"target Papyrus hash mismatch: {relative_path}")
 
 
 def audit_startup_quest_assets(package, skyrim_vr, failures):
@@ -808,6 +846,7 @@ def audit_package(
     dll_only=False,
     gameplay=False,
     require_installed_prerequisites=False,
+    verify_installed_papyrus=True,
     require_vrik=False,
     require_higgs=False,
     require_planck=False,
@@ -858,6 +897,8 @@ def audit_package(
 
     prereq = installed_prerequisites(skyrim_vr)
     if require_installed_prerequisites:
+        if verify_installed_papyrus:
+            audit_installed_papyrus(package, skyrim_vr, failures)
         if not prereq["sksevr"]:
             failures.append("target Skyrim VR install is missing sksevr_1_4_15.dll")
         if not prereq["sksevr_steam_loader"]:
@@ -1093,6 +1134,12 @@ def run_self_test():
 
         write_file(skyrim_vr / "sksevr_1_4_15.dll")
         write_file(skyrim_vr / "Data" / "SKSE" / "Plugins" / "version-1-4-15-0.csv")
+        for relative_path in REQUIRED_STAGED_FILES:
+            if relative_path.startswith("Data/Scripts/") and relative_path.endswith(".pex"):
+                source = default_package / relative_path
+                destination = skyrim_vr / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
         failures, *_ = audit_package(default_package, skyrim_vr, require_installed_prerequisites=True)
         if "target Skyrim VR install is missing sksevr_steam_loader.dll" not in failures:
             print("Package self-test did not require sksevr_steam_loader.dll when strict prerequisites were requested.")
@@ -1105,6 +1152,23 @@ def run_self_test():
             for failure in failures:
                 print(f"- {failure}")
             return 1
+
+        lowercase_scripts = skyrim_vr / "Data" / "scripts"
+        lowercase_scripts.mkdir()
+        failures, *_ = audit_package(default_package, skyrim_vr, require_installed_prerequisites=True)
+        if not any("exactly one canonical Data/Scripts" in failure for failure in failures):
+            print("Package self-test did not reject a target Data/Scripts case-fold collision.")
+            return 1
+        lowercase_scripts.rmdir()
+
+        hash_fixture = skyrim_vr / "Data" / "Scripts" / "SkyrimTogetherUtils.pex"
+        expected_hash_fixture = hash_fixture.read_bytes()
+        hash_fixture.write_bytes(b"tampered")
+        failures, *_ = audit_package(default_package, skyrim_vr, require_installed_prerequisites=True)
+        if "target Papyrus hash mismatch: Data/Scripts/SkyrimTogetherUtils.pex" not in failures:
+            print("Package self-test did not reject a target Papyrus hash mismatch.")
+            return 1
+        hash_fixture.write_bytes(expected_hash_fixture)
 
         eager_cef_package = root / "eager-cef"
         populate_test_package(eager_cef_package)
@@ -1187,11 +1251,11 @@ def run_self_test():
 
         stale_papyrus_package = root / "stale-papyrus"
         populate_test_package(stale_papyrus_package)
-        write_file(stale_papyrus_package / "Data" / "scripts" / "SkyrimTogetherUtils.pex", b"ConnectToSkyrimTogether")
+        write_file(stale_papyrus_package / "Data" / "Scripts" / "SkyrimTogetherUtils.pex", b"ConnectToSkyrimTogether")
         failures, *_ = audit_package(stale_papyrus_package, skyrim_vr)
         if not any(
             failure.startswith(
-                "packaged Papyrus bytecode is missing VR token(s): Data/scripts/SkyrimTogetherUtils.pex:"
+                "packaged Papyrus bytecode is missing VR token(s): Data/Scripts/SkyrimTogetherUtils.pex:"
             )
             and "SetSkyrimTogetherConnectionConfig" in failure
             for failure in failures
@@ -1203,13 +1267,13 @@ def run_self_test():
         stale_se_papyrus_package = root / "stale-se-papyrus"
         populate_test_package(stale_se_papyrus_package)
         write_file(
-            stale_se_papyrus_package / "Data" / "scripts" / "SkyrimTogetherVerifyLaunchScript.pex",
+            stale_se_papyrus_package / "Data" / "Scripts" / "SkyrimTogetherVerifyLaunchScript.pex",
             b"SkyrimTogether.exe",
         )
         failures, *_ = audit_package(stale_se_papyrus_package, skyrim_vr)
         if not any(
             failure.startswith(
-                "packaged Papyrus bytecode has stale SE token(s): Data/scripts/SkyrimTogetherVerifyLaunchScript.pex:"
+                "packaged Papyrus bytecode has stale SE token(s): Data/Scripts/SkyrimTogetherVerifyLaunchScript.pex:"
             )
             for failure in failures
         ):
@@ -1358,6 +1422,11 @@ def main():
         help="fail if the target Skyrim VR install is missing SKSEVR or the public VR Address Library CSV",
     )
     parser.add_argument(
+        "--skip-installed-papyrus-verification",
+        action="store_true",
+        help="check target prerequisites without requiring its existing PEX files to match the package; intended for installer preflight",
+    )
+    parser.add_argument(
         "--require-vrik",
         action="store_true",
         help="fail if the target Skyrim VR install is missing Data/SKSE/Plugins/vrik.dll",
@@ -1391,6 +1460,7 @@ def main():
         dll_only=args.dll_only,
         gameplay=args.gameplay,
         require_installed_prerequisites=args.require_installed_prerequisites,
+        verify_installed_papyrus=not args.skip_installed_papyrus_verification,
         require_vrik=args.require_vrik,
         require_higgs=args.require_higgs,
         require_planck=args.require_planck,

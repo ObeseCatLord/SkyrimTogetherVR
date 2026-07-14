@@ -85,6 +85,31 @@ private:
         return end != value.c_str() && end && *end == '\0';
     }
 
+    void SetOffsetForId(unsigned long long id, unsigned long long offset)
+    {
+        const auto existing = _data.find(id);
+        if (existing != _data.end() && existing->second != offset)
+        {
+            const auto previousOffset = existing->second;
+            const auto reverse = _rdata.find(previousOffset);
+            if (reverse != _rdata.end() && reverse->second == id)
+            {
+                _rdata.erase(reverse);
+                for (const auto& [candidateId, candidateOffset] : _data)
+                {
+                    if (candidateId != id && candidateOffset == previousOffset)
+                    {
+                        _rdata[previousOffset] = candidateId;
+                        break;
+                    }
+                }
+            }
+        }
+
+        _data[id] = offset;
+        _rdata[offset] = id;
+    }
+
     bool LoadCsvOffsetFile(const std::filesystem::path& path)
     {
         std::ifstream file(path);
@@ -109,8 +134,7 @@ private:
             if (!ParseUnsigned(idField, 10, id) || !ParseUnsigned(offsetField, 16, offset))
                 continue;
 
-            _data[id] = offset;
-            _rdata[offset] = id;
+            SetOffsetForId(id, offset);
             loadedAny = true;
         }
 
@@ -142,9 +166,12 @@ private:
                 continue;
 
             const auto mapped = _data.find(seId);
-            if (mapped != _data.end() && _data.find(aeId) == _data.end())
+            if (mapped != _data.end())
             {
-                _data[aeId] = mapped->second;
+                // The generated alias file is authoritative for IDs used by
+                // the AE-oriented client, even when the VR database happens
+                // to use the same numeric ID for a different function.
+                SetOffsetForId(aeId, mapped->second);
             }
         }
     }

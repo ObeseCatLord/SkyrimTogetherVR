@@ -5,7 +5,7 @@ target("TPTests")
     add_includedirs(
         ".", "../encoding")
     add_headerfiles("**.h")
-    add_files("*.cpp")
+    add_files("*.cpp|version_db.cpp")
     add_deps("SkyrimEncoding")
     add_packages(
         "tiltedcore",
@@ -13,3 +13,10 @@ target("TPTests")
         "catch2",
         "mimalloc",
         "glm")
+
+    if is_plat("windows") then
+        add_includedirs("../client")
+        add_defines("TP_SKYRIM_VR=1")
+        add_files("version_db.cpp")
+        add_syslinks("version")
+    end

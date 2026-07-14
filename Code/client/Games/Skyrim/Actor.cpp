@@ -119,7 +119,7 @@ TP_THIS_FUNCTION(TSetPosition, char, Actor, NiPoint3& acPosition);
 TP_THIS_FUNCTION(TActorProcess, char, Actor, float aValue);
 TP_THIS_FUNCTION(TGetCurrentAmmo, TESAmmo*, const Actor);
 
-using TGetLocation = TESForm*(TESForm*);
+using TGetLocation = TESForm*(const TESObjectREFR*);
 static TGetLocation* FUNC_GetActorLocation;
 
 TCharacterConstructor* RealCharacterConstructor;
@@ -170,7 +170,11 @@ void Actor::SetSpeed(float aSpeed) noexcept
 uint16_t Actor::GetLevel() const noexcept
 {
     TP_THIS_FUNCTION(TGetLevel, uint16_t, const Actor);
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(TGetLevel, s_getLevel, 36344);
+#else
     POINTER_SKYRIMSE(TGetLevel, s_getLevel, 37334);
+#endif
     return TiltedPhoques::ThisCall(s_getLevel, this);
 }
 
@@ -602,7 +606,13 @@ TESForm* Actor::GetCurrentLocation()
 {
     // we use the safe function which also
     // checks the form type
+#if TP_SKYRIM_VR
+    static VersionDbPtr<TGetLocation> getActorLocation(19385);
+    auto* const pGetActorLocation = getActorLocation.Get();
+    return pGetActorLocation ? pGetActorLocation(this) : nullptr;
+#else
     return FUNC_GetActorLocation(this);
+#endif
 }
 
 Factions Actor::GetFactions() const noexcept

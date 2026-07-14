@@ -25,7 +25,13 @@ For each valid node, `VRPlayerPoseSnapshot` reads the `NiAVObject::world` transf
 
 ## Runtime Service
 
-`VRPoseService` is instantiated in `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY` mode for bring-up, and is also constructed before `CharacterService` in the staged avatar-sync and gameplay branches so remote player actors can be joined with pose and VRIK context. The avatar-sync validation build keeps `VRConnectionService` active and does not enable the full object/inventory/magic/combat gameplay service set, so it can use the same `STVR_AUTOCONNECT` and `SkyrimTogetherVR.command` file handoff as the safer connection-only build. The gameplay build keeps the same VR relay services active while also constructing the normal gameplay services. `VRMovementService` remains active in those VR branches for same-space and actor-target readiness checks; it does not grant the pose lane a second actor-movement authority. `VRPoseService` subscribes to `UpdateEvent`, captures the latest local player pose snapshot, and logs a compact summary once per second.
+`VRPoseService` is disabled in the default connection-proof target. It is
+constructed before `CharacterService` in the explicit avatar-sync and gameplay
+branches so remote player actors can be joined with pose and VRIK context. The
+avatar-sync validation build keeps `VRConnectionService` active without the
+normal gameplay service set; the gameplay build keeps the relay services while
+also constructing normal gameplay services. `VRMovementService` is active in
+those broader branches for same-space and actor-target readiness checks.
 
 When connected, it sends `RequestVRPoseUpdate` at 20 Hz. The packet contains a shared `VRPoseUpdate` payload with:
 
@@ -37,11 +43,23 @@ When connected, it sends `RequestVRPoseUpdate` at 20 Hz. The packet contains a s
 - bow aim and bow rotation transforms
 - left and right weapon offset transforms
 - primary and secondary magic offset/aim transforms
+- body format 1: pelvis local translation/rotation and left/right thigh, calf, and foot local rotations
+- independent body capture sequence and skeleton-root generation
 - VRIK detection state
 - left and right VRIK finger curl values when the VRIK/HIGGS bridge provides them
 - VRIK camera offset, final camera offset, and final smoothing offset when the VRIK interface provides them
 
-It also subscribes to `NotifyVRPoseUpdate` and stores the latest remote pose by server player id. Duplicate or out-of-order sequence numbers are ignored. Remote poses are cleared immediately on `DisconnectedEvent`, pruned when the client goes offline, removed when `NotifyPlayerLeft` is received, or removed when a pose has not been refreshed for three seconds.
+It also subscribes to `NotifyVRPoseUpdate` and stores the latest remote pose by server player id. Duplicate or out-of-order sequence numbers are ignored, and the client repeats the server's finite/bounds/orthogonality/body-format validation before caching a packet. Remote poses are cleared immediately on `DisconnectedEvent`, pruned when the client goes offline, removed when `NotifyPlayerLeft` is received, or removed when a pose has not been refreshed for three seconds.
+
+`VRPoseUpdate` is a fixed-order protocol structure. Body `FormatVersion` is a nested body-lane validator, not mixed-version wire negotiation. Client and server binaries must come from the same matched build whenever the schema changes.
+
+## SkyrimVR-FBT Body Lane
+
+`SkyrimTogetherVRHiggsBridge` attaches to the process-local callback endpoint before registering its HIGGS callbacks. Its post-VRIK/post-HIGGS callback asks the launcher to capture the current local player body into a nonblocking SRW mailbox. `VRPoseService` reads that mailbox on its normal update, treats samples older than 250 ms as invalid, and sends the body alongside the normal pose.
+
+Body format 1 intentionally omits spine nodes. SkyrimVR-FBT defaults to a world-only lower-spine correction, so the local spine transforms do not faithfully encode the rendered correction. The pelvis carries local translation and rotation; thigh, calf, and foot carry rotation only. Shared server/client validation requires finite, near-unit, orthogonal, right-handed rotation bases, near-one scale, bounded pelvis translation, and near-zero limb translation.
+
+Remote body samples are relay/cache/telemetry only. HIGGS's local-player callback is not a safe per-remote-actor post-animation phase, so no remote body node writes occur in this version. See `fbt-compatibility.md` and `fbt-networking-senior-disposition-20260714.md`.
 
 ## VRIK IK Data Lane
 
@@ -76,6 +94,7 @@ The file is rewritten at 4 Hz and contains:
 - selected local nodes: `local.hmd`, `local.leftHand`, `local.rightHand`, `local.spellOrigin`, `local.arrowOrigin`, `local.bowAim`
 - selected remote nodes by player id: `remote.<playerId>.hmd`, `remote.<playerId>.leftHand`, `remote.<playerId>.rightHand`, `remote.<playerId>.spellOrigin`, `remote.<playerId>.arrowOrigin`, `remote.<playerId>.bowAim`
 - local and remote VRIK state: `.vrik.detected`, `.vrik.interfaceAvailable`, `.vrik.leftFingers`, `.vrik.rightFingers`, and `.vrik.cameraOffsetsValid`
+- local and remote body state: `.body.formatVersion`, `.body.valid`, `.body.captureSequence`, `.body.rootGeneration`, and pelvis/leg nodes
 
 Each node records `.valid`, and valid nodes also record `.position`, `.axisX`, `.axisY`, `.axisZ`, and `.scale`. This is a read-only consumer of the replicated pose stream; it does not create actors, move nodes, or apply animation/physics.
 
@@ -87,7 +106,12 @@ The first in-engine consumer is staged through `RemoteVRPoseComponent` and `Remo
 
 The avatar pose component is a cache copy. `VRPoseService` owns remote pose liveness and clears remote pose entries on disconnect, `NotifyPlayerLeft`, or three seconds without an update. `VRInventoryService` owns the remote equipment map and clears it on player leave or disconnect. When those service maps no longer contain a player id, `CharacterService` removes the corresponding avatar cache component immediately instead of running a second component-local stale timer.
 
-The default connection-only target has a separate readout-only proxy cache, `VRRemotePlayerService`, which writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.remoteplayers`. It tracks `NotifyPlayerJoined`, `NotifyPlayerCellChanged`, and `NotifyPlayerLeft`, then joins those player ids with the remote pose, movement, equipment, action-lane, and HIGGS relay maps. This gives the companion panel and Papyrus telemetry a stable default remote-player row with HMD/left-hand/right-hand pose target availability, pose/movement/equipment/HIGGS availability, same-cell/same-worldspace hints, VRIK avatar readiness, and a separate HIGGS-aware avatar readiness value without creating actors, marker objects, or scene nodes.
+The explicit avatar-sync and gameplay targets have a readout-only proxy cache,
+`VRRemotePlayerService`, which writes
+`Data/SkyrimTogetherReborn/SkyrimTogetherVR.remoteplayers`. It joins server
+player notifications with the enabled relay maps without creating actors,
+marker objects, or scene nodes. The proxy is disabled in the default
+connection-proof target.
 
 The component path is deliberately non-mutating in the default target. `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS` is set to `0` for `SkyrimTogetherVRClient`, so the staged component does not move actors or apply animation during safe bring-up. The explicit `SkyrimTogetherVRClientAvatarSync` target keeps `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1`, adds `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, and sets `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`; the explicit `SkyrimTogetherVRGameplayClient` target uses the same remote-avatar gates with connection-only mode off. In those builds, the guarded branch first runs a same-space guard using the local and remote `VRMovementUpdate` cell/worldspace ids. Direct actor root movement authority is disabled, and direct HMD/hand skeleton writes are gated off by `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES=0`, because writing `NiAVObject::world` from the VM update path is overwritten by the animation/render pipeline. The actor-target pass now records same-space readiness plus remote VRIK detection/API, finger-curl, and camera-offset payload availability without applying unsafe finger-bone transforms. Invalid remote pose or VRIK payload values are counted in the avatar handoff instead of being written into actor roots or scene nodes. The remote equipment lane applies only the drawn/sheath visual cue through the existing delayed weapon-draw helper; equipped forms remain cached context until inventory/equipment mutation is validated.
 
@@ -97,7 +121,7 @@ This still needs two-client runtime validation and likely a proper VRIK/animatio
 
 ## Server Relay
 
-`VRPoseRelayService` subscribes to `PacketEvent<RequestVRPoseUpdate>`, stamps the sender's server player id into `NotifyVRPoseUpdate`, and broadcasts to all other connected players. The relay drops empty pose packets, sequence `0`, non-increasing sequence numbers per server player id, and packets that arrive faster than the intended 20 Hz pose lane. Per-player relay state is cleared on player leave so reconnects do not inherit stale sequence or rate windows.
+`VRPoseRelayService` subscribes to `PacketEvent<RequestVRPoseUpdate>`, stamps the sender's server player id into `NotifyVRPoseUpdate`, and broadcasts to all other connected players. The relay drops empty pose packets, sequence `0`, non-increasing sequence numbers per server player id, malformed transforms/body data, and packets that arrive faster than the intended 20 Hz pose lane. VRIK-only packets count as non-empty. Per-player relay state is cleared on player leave so reconnects do not inherit stale sequence or rate windows.
 
 The relay intentionally does not:
 
@@ -110,6 +134,7 @@ The relay intentionally does not:
 ## Next Steps
 
 - Build and install `SkyrimTogetherVRVrikBridge.dll` on Windows, then validate that SKSEVR loads it and that `SkyrimTogetherVR.vrik` updates while VRIK is installed.
+- Validate FBT locally by proving `bodyCapture.successCount` increases and `local.body.valid=1`, then validate the matched remote body cache with two clients. Keep remote body writes disabled until an actor-specific post-animation hook is proven.
 - Runtime-validate `SkyrimTogetherVRAvatarSync.exe` with two clients, then validate `SkyrimTogetherVRGameplay.exe` with the same pose/avatar evidence plus gameplay relay evidence before adding ghost-hand/ghost-avatar rendering or a proper VRIK/animation integration for remote avatars.
 - Extend similar server-side sequence/rate guards to the staged non-pose gameplay relay lanes before any of those leave observation mode.
 - Keep HIGGS interactions behind a separate bridge for grabs, collisions, and held objects.

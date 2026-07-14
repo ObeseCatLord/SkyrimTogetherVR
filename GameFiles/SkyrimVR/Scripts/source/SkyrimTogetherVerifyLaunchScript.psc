@@ -1,20 +1,20 @@
 ScriptName SkyrimTogetherVerifyLaunchScript extends Quest Hidden
 
 Event OnInit()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(1)
-        SkyrimTogetherVRTickBridge.ArmOnInit()
-        VerifyLaunch()
-    EndIf
+    SkyrimTogetherVRTickBridge.ArmOnInit()
+    RearmCadence("OnInit")
 EndEvent
 
 Function VerifyLaunch()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(1)
-        StartTickBridge()
-    EndIf
+    RearmCadence("VerifyLaunch")
 EndFunction
 
-Function StartTickBridge()
-    RegisterForSingleUpdate(0.05)
+Function RearmCadence(String asReason)
+    If SkyrimTogetherVRTickBridge.ClaimCadence(1)
+        Debug.Trace("SkyrimTogetherVR cadence rearm owner=1 reason=" + asReason)
+        UnregisterForUpdate()
+        RegisterForSingleUpdate(0.05)
+    EndIf
 EndFunction
 
 Event OnUpdate()

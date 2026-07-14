@@ -37,6 +37,10 @@
 #define TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE 0
 #endif
 
+#ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+#define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
+#endif
+
 namespace
 {
 constexpr double kVrDiscoveryStatusWriteInterval = 1.0;
@@ -45,6 +49,8 @@ constexpr char kVrDiscoveryStatusFileName[] = "SkyrimTogetherVR.discovery";
 
 constexpr bool kVrDiscoveryStatusEnabled = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE;
 constexpr bool kVrSkipStrictConnectionEnforcement = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE;
+constexpr bool kVrSkipActorHandleDiscovery =
+    TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY && !TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC;
 
 std::filesystem::path GetHandoffDirectory()
 {
@@ -274,6 +280,18 @@ void DiscoveryService::VisitForms() noexcept
     auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return;
+
+    if constexpr (kVrSkipActorHandleDiscovery)
+    {
+        const auto playerFormId = pPlayer->GetFormIdData();
+        if (m_forms.size() != 1 || !m_forms.count(playerFormId))
+        {
+            m_forms.clear();
+            m_forms.insert(playerFormId);
+            m_vrDiscoveryStatusDirty = true;
+        }
+        return;
+    }
 
     static Set<uint32_t> s_previousForms;
     s_previousForms = m_forms;

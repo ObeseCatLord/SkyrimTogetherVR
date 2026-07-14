@@ -72,7 +72,7 @@ REQUIRED_TOKENS = {
         "Remote Players",
         "HIGGS",
     ),
-    "GameFiles/SkyrimVR/scripts/source/SkyrimTogetherVRConnectionMenu.psc": (
+    "GameFiles/SkyrimVR/Scripts/source/SkyrimTogetherVRConnectionMenu.psc": (
         "ShowStatus",
         "ShowTelemetry",
         "Debug.MessageBox",

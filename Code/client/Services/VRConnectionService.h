@@ -63,6 +63,7 @@ private:
     std::string m_lastCommandContents;
     Command m_pendingCommand{};
     bool m_hasPendingCommand{false};
+    bool m_connectInFlight{false};
     bool m_envAutoconnectQueued{false};
     bool m_commandQueuedThisUpdate{false};
     bool m_reportedMissingEnv{false};

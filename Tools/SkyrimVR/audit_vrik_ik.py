@@ -17,6 +17,9 @@ REQUIRED_TOKENS = {
         "CameraOffsetsValid",
         "FinalSmoothingOffset",
         "VRVrikData Vrik",
+        "VRBodyPoseData Body",
+        "IsVRBodyPoseDataSafe",
+        "IsVRPoseUpdateSafe",
     ),
     "Code/encoding/Structs/VRPoseUpdate.cpp": (
         "VRFingerCurlData::Serialize",
@@ -27,6 +30,8 @@ REQUIRED_TOKENS = {
         "DeserializeVector3(aReader, Position)",
         "Vrik.Serialize(aWriter)",
         "Vrik.Deserialize(aReader)",
+        "IsVRBodyPoseDataSafe",
+        "HasAnyVRPosePayload",
     ),
     "Code/client/Services/Generic/VRPoseService.cpp": (
         "IsVrikInstalled",
@@ -211,7 +216,8 @@ REQUIRED_TOKENS = {
         "kMinPoseRelayIntervalMs",
         "IsNewerSequence",
         "pose.Sequence == 0",
-        "!HasAnyPoseNode(pose)",
+        "!HasAnyVRPosePayload(pose)",
+        "IsVRPoseUpdateSafe(pose)",
         "state.HasSequence",
         "GameServer::Get()->GetTick()",
         "now - state.LastRelayTick < kMinPoseRelayIntervalMs",
@@ -304,6 +310,8 @@ REQUIRED_TOKENS = {
         "actorTargetSkippedDifferentCellCount",
         "non-increasing sequence",
         "20 Hz",
+        "SkyrimVR-FBT Body Lane",
+        "matched build",
     ),
     "Docs/SkyrimVR/porting-status.md": (
         "VRIK",

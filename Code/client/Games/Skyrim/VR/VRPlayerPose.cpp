@@ -42,7 +42,7 @@ bool CaptureLocalPlayerPose(VRPlayerPose& aOut) noexcept
     aOut = {};
 
 #if TP_SKYRIM_VR
-    const PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
+    PlayerCharacter* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
     if (!pPlayer)
         return false;
 

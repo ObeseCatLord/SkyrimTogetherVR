@@ -36,6 +36,8 @@ struct TransportService : Client
     [[nodiscard]] bool IsOnline() const noexcept { return m_connected; }
     void SetServerPassword(const std::string& acPassword) noexcept { m_serverPassword = acPassword; }
     const uint32_t& GetLocalPlayerId() const noexcept { return m_localPlayerId; }
+    [[nodiscard]] uint64_t GetSessionId() const noexcept { return m_sessionId; }
+    [[nodiscard]] uint64_t GetConnectionGeneration() const noexcept { return m_connectionGeneration; }
 
 protected:
     // Event handlers
@@ -50,9 +52,11 @@ protected:
 private:
     World& m_world;
     entt::dispatcher& m_dispatcher;
-    bool m_connected;
+    bool m_connected = false;
     String m_serverPassword{};
-    uint32_t m_localPlayerId;
+    uint32_t m_localPlayerId = 0;
+    uint64_t m_sessionId = 0;
+    uint64_t m_connectionGeneration = 0;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_sendServerMessageConnection;

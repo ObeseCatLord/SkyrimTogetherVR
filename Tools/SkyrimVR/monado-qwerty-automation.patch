@@ -1,0 +1,14 @@
+diff --git a/src/xrt/drivers/qwerty/qwerty_sdl.c b/src/xrt/drivers/qwerty/qwerty_sdl.c
+--- a/src/xrt/drivers/qwerty/qwerty_sdl.c
++++ b/src/xrt/drivers/qwerty/qwerty_sdl.c
+@@
+ 	if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) qwerty_press_trigger(qctrl);
+ 	if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) qwerty_release_trigger(qctrl);
+ 	if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_MIDDLE) qwerty_press_squeeze(qctrl);
+ 	if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_MIDDLE) qwerty_release_squeeze(qctrl);
++	// Deterministic keyboard aliases for Wayland automation, where synthetic
++	// pointer positioning cannot reliably target this SDL debug window.
++	if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_P) qwerty_press_trigger(qctrl);
++	if (event.type == SDL_KEYUP && event.key.keysym.scancode == SDL_SCANCODE_P) qwerty_release_trigger(qctrl);
++	if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_O) qwerty_press_squeeze(qctrl);
++	if (event.type == SDL_KEYUP && event.key.keysym.scancode == SDL_SCANCODE_O) qwerty_release_squeeze(qctrl);

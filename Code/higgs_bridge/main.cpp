@@ -9,12 +9,14 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
 
 #include <vr_common/VRHandoffPath.h>
+#include <vr_common/VRTickBridge.h>
 
 using PluginHandle = std::uint32_t;
 
@@ -215,11 +217,141 @@ std::atomic_bool g_running{false};
 std::atomic_uint32_t g_eventSequence{0};
 std::atomic_uint32_t g_snapshotSequence{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
+std::atomic_uint64_t g_bodyCaptureSequence{0};
+std::atomic_uint64_t g_bodyCaptureAttemptCount{0};
+std::atomic_uint64_t g_bodyCaptureSuccessCount{0};
+std::atomic_uint32_t g_bodyCaptureLastResult{static_cast<std::uint32_t>(SkyrimTogetherVR::TickBridge::DispatchResult::Inactive)};
+std::atomic_bool g_endpointFaulted{false};
 std::thread g_writerThread;
 std::mutex g_eventLock;
 std::deque<HiggsEvent> g_recentEvents;
 std::mutex g_snapshotLock;
 HiggsSnapshot g_latestSnapshot;
+std::atomic<SkyrimTogetherVR::TickBridge::Endpoint*> g_endpoint{nullptr};
+
+LONG ReadEndpointState(const SkyrimTogetherVR::TickBridge::Endpoint& acEndpoint) noexcept
+{
+    return InterlockedCompareExchange(
+        const_cast<volatile LONG*>(reinterpret_cast<const volatile LONG*>(&acEndpoint.State)), 0, 0);
+}
+
+bool IsExecutableReadOnlyPage(DWORD aProtection) noexcept
+{
+    if (aProtection & (PAGE_GUARD | PAGE_NOACCESS))
+        return false;
+
+    const auto baseProtection = aProtection & 0xFFu;
+    return baseProtection == PAGE_EXECUTE || baseProtection == PAGE_EXECUTE_READ;
+}
+
+bool MapEndpoint() noexcept
+{
+    if (g_endpoint.load(std::memory_order_acquire))
+        return true;
+    if (g_endpointFaulted.load(std::memory_order_acquire))
+        return false;
+
+    wchar_t handleText[2 + sizeof(std::uintptr_t) * 2 + 1]{};
+    const auto length = GetEnvironmentVariableW(
+        SkyrimTogetherVR::TickBridge::kMappingHandleEnvironment,
+        handleText,
+        static_cast<DWORD>(_countof(handleText)));
+    if (length == 0 || length >= _countof(handleText))
+        return false;
+
+    wchar_t* pEnd = nullptr;
+    const auto handleValue = _wcstoui64(handleText, &pEnd, 0);
+    if (!handleValue || pEnd == handleText || *pEnd != L'\0')
+    {
+        g_endpointFaulted.store(true, std::memory_order_release);
+        return false;
+    }
+
+    const auto mapping = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(handleValue));
+    auto* const pMapped = static_cast<SkyrimTogetherVR::TickBridge::Endpoint*>(
+        MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(SkyrimTogetherVR::TickBridge::Endpoint)));
+    if (!pMapped)
+    {
+        g_endpointFaulted.store(true, std::memory_order_release);
+        return false;
+    }
+
+    auto* expected = static_cast<SkyrimTogetherVR::TickBridge::Endpoint*>(nullptr);
+    if (!g_endpoint.compare_exchange_strong(expected, pMapped, std::memory_order_release, std::memory_order_acquire))
+        UnmapViewOfFile(pMapped);
+    return true;
+}
+
+bool ResolveBodyCaptureCallback(
+    SkyrimTogetherVR::TickBridge::BodyCaptureCallback& aCallback,
+    std::uint64_t& aEpoch) noexcept
+{
+    using namespace SkyrimTogetherVR::TickBridge;
+
+    aCallback = nullptr;
+    aEpoch = 0;
+    // Endpoint attachment is performed on the SKSE load thread before HIGGS
+    // callbacks are registered. The real-time callback never maps or locks.
+    auto* const pEndpoint = g_endpoint.load(std::memory_order_acquire);
+    if (!pEndpoint)
+        return false;
+    if (ReadEndpointState(*pEndpoint) != static_cast<LONG>(EndpointState::Ready))
+        return false;
+    if (pEndpoint->Magic != kEndpointMagic || pEndpoint->AbiVersion != kEndpointAbiVersion ||
+        pEndpoint->StructSize != sizeof(Endpoint) || pEndpoint->PublisherProcessId != GetCurrentProcessId() ||
+        pEndpoint->Reserved0 != 0)
+    {
+        g_endpointFaulted.store(true, std::memory_order_release);
+        return false;
+    }
+    for (const auto reserved : pEndpoint->Reserved)
+    {
+        if (reserved != 0)
+        {
+            g_endpointFaulted.store(true, std::memory_order_release);
+            return false;
+        }
+    }
+
+    if (!pEndpoint->BodyCaptureCallbackRva)
+        return false;
+    if (!pEndpoint->ImageBase ||
+        pEndpoint->BodyCaptureCallbackRva > std::numeric_limits<std::uintptr_t>::max() - pEndpoint->ImageBase ||
+        pEndpoint->ImageBase != reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)))
+    {
+        g_endpointFaulted.store(true, std::memory_order_release);
+        return false;
+    }
+
+    const auto callbackAddress = pEndpoint->ImageBase + pEndpoint->BodyCaptureCallbackRva;
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(reinterpret_cast<const void*>(callbackAddress), &memory, sizeof(memory)) != sizeof(memory) ||
+        memory.State != MEM_COMMIT || memory.AllocationBase != reinterpret_cast<void*>(pEndpoint->ImageBase) ||
+        !IsExecutableReadOnlyPage(memory.Protect))
+    {
+        g_endpointFaulted.store(true, std::memory_order_release);
+        return false;
+    }
+
+    aCallback = reinterpret_cast<BodyCaptureCallback>(callbackAddress);
+    aEpoch = pEndpoint->Epoch;
+    return true;
+}
+
+void PublishPostHiggsBodyPose() noexcept
+{
+    SkyrimTogetherVR::TickBridge::BodyCaptureCallback callback = nullptr;
+    std::uint64_t epoch = 0;
+    if (!ResolveBodyCaptureCallback(callback, epoch))
+        return;
+
+    const auto sequence = g_bodyCaptureSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_bodyCaptureAttemptCount.fetch_add(1, std::memory_order_relaxed);
+    const auto result = callback(epoch, sequence, GetCurrentThreadId());
+    g_bodyCaptureLastResult.store(result, std::memory_order_release);
+    if (result == static_cast<std::uint32_t>(SkyrimTogetherVR::TickBridge::DispatchResult::Success))
+        g_bodyCaptureSuccessCount.fetch_add(1, std::memory_order_relaxed);
+}
 
 std::filesystem::path GetHandoffPath()
 {
@@ -420,6 +552,7 @@ void CaptureHiggsSnapshot()
 void OnPostVrikPostHiggs()
 {
     CaptureHiggsSnapshot();
+    PublishPostHiggsBodyPose();
 }
 
 void RegisterCallbacks(HiggsPluginAPI::IHiggsInterface001* apHiggs)
@@ -526,6 +659,10 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
     file << "higgs.eventSequence=" << g_eventSequence.load(std::memory_order_acquire) << "\n";
     file << "higgs.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
     file << "higgs.snapshotSequence=" << snapshot.Sequence << "\n";
+    file << "bodyCapture.endpointFaulted=" << (g_endpointFaulted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
+    file << "bodyCapture.attemptCount=" << g_bodyCaptureAttemptCount.load(std::memory_order_acquire) << "\n";
+    file << "bodyCapture.successCount=" << g_bodyCaptureSuccessCount.load(std::memory_order_acquire) << "\n";
+    file << "bodyCapture.lastResult=" << g_bodyCaptureLastResult.load(std::memory_order_acquire) << "\n";
 
     if (aLoaded && pHiggs && snapshotAvailable)
     {
@@ -623,6 +760,7 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
 
     if (apMessage->type == kSkseMessagePostLoad || apMessage->type == kSkseMessagePostPostLoad)
     {
+        MapEndpoint();
         RequestHiggsInterface();
         StartWriter();
     }
@@ -661,6 +799,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
     if (!g_messaging || !g_messaging->RegisterListener)
         return false;
 
+    MapEndpoint();
     g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
     StartWriter();
     return true;

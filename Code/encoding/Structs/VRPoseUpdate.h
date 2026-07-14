@@ -55,6 +55,27 @@ struct VRVrikData
     glm::vec3 FinalSmoothingOffset{};
 };
 
+struct VRBodyPoseData
+{
+    bool operator==(const VRBodyPoseData& acRhs) const noexcept;
+    bool operator!=(const VRBodyPoseData& acRhs) const noexcept;
+
+    void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
+    void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
+
+    uint32_t FormatVersion{0};
+    bool Valid{false};
+    uint32_t CaptureSequence{0};
+    uint32_t RootGeneration{0};
+    VRPoseNodeData Pelvis{};
+    VRPoseNodeData LeftThigh{};
+    VRPoseNodeData LeftCalf{};
+    VRPoseNodeData LeftFoot{};
+    VRPoseNodeData RightThigh{};
+    VRPoseNodeData RightCalf{};
+    VRPoseNodeData RightFoot{};
+};
+
 struct VRPoseUpdate
 {
     bool operator==(const VRPoseUpdate& acRhs) const noexcept;
@@ -79,5 +100,13 @@ struct VRPoseUpdate
     VRPoseNodeData PrimaryMagicAim{};
     VRPoseNodeData SecondaryMagicOffset{};
     VRPoseNodeData SecondaryMagicAim{};
+    VRBodyPoseData Body{};
     VRVrikData Vrik{};
 };
+
+// Wire ingress validation shared by the server relay and client cache. These
+// functions do not provide mixed-build negotiation; client and server builds
+// must still use the same fixed-order VRPoseUpdate schema.
+bool IsVRBodyPoseDataSafe(const VRBodyPoseData& acBody) noexcept;
+bool IsVRPoseUpdateSafe(const VRPoseUpdate& acPose) noexcept;
+bool HasAnyVRPosePayload(const VRPoseUpdate& acPose) noexcept;

@@ -205,7 +205,7 @@ Default package should contain:
 - `TPProcess.exe`
 - `SkyrimTogetherVR_BuildManifest.json`
 - `Data\SkyrimTogether.esp`
-- VR Papyrus scripts under `Data\scripts`
+- VR Papyrus scripts under `Data\Scripts`
 - `Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`

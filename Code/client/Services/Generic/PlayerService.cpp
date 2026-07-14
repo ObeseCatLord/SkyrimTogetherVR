@@ -52,9 +52,9 @@
 
 namespace
 {
-constexpr bool kVrCellOnlyPlayerService =
-    TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE;
+constexpr bool kVrCellOnlyPlayerService = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY;
 constexpr bool kVrPlayerCellStatusEnabled = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE;
+constexpr uint16_t kVrFallbackLevel = 1;
 constexpr double kVrPlayerCellStatusWriteInterval = 1.0;
 constexpr char kVrPlayerCellStatusFileName[] = "SkyrimTogetherVR.playercell";
 
@@ -90,7 +90,7 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, Trans
 
     if constexpr (kVrCellOnlyPlayerService)
     {
-        spdlog::info("SkyrimTogetherVR PlayerService network-only mode: sending cell/grid/level changes only");
+        spdlog::info("SkyrimTogetherVR PlayerService network-only mode: sending cell/grid changes; level reads are disabled");
         m_updateConnection = m_dispatcher.sink<UpdateEvent>().connect<&PlayerService::OnUpdate>(this);
         m_gridCellChangeConnection = m_dispatcher.sink<GridCellChangeEvent>().connect<&PlayerService::OnGridCellChangeEvent>(this);
         m_cellChangeConnection = m_dispatcher.sink<CellChangeEvent>().connect<&PlayerService::OnCellChangeEvent>(this);
@@ -202,15 +202,23 @@ void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) no
         request.CenterCoords = acEvent.CenterCoords;
         request.Cells = acEvent.Cells;
 
-        m_transport.Send(request);
+        const bool sent = m_transport.Send(request);
 
         if constexpr (kVrPlayerCellStatusEnabled)
         {
+            if (!sent)
+            {
+                ++m_vrOfflineSkippedRequestCount;
+                m_vrPlayerCellStatusDirty = true;
+                return;
+            }
+
             ++m_vrGridCellRequestCount;
             m_lastVrGridWorldSpace = request.WorldSpaceId;
             m_lastVrGridPlayerCell = request.PlayerCell;
             m_lastVrGridCenterCoords = request.CenterCoords;
             m_lastVrGridCellCount = static_cast<uint32_t>(request.Cells.size());
+            m_lastVrGridConnectionGeneration = m_transport.GetConnectionGeneration();
             m_hasVrGridCellRequest = true;
             m_vrPlayerCellStatusDirty = true;
         }
@@ -241,15 +249,23 @@ void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
         message.WorldSpaceId = acEvent.WorldSpaceId;
         message.CurrentCoords = acEvent.CurrentCoords;
 
-        m_transport.Send(message);
+        const bool sent = m_transport.Send(message);
 
         if constexpr (kVrPlayerCellStatusEnabled)
         {
+            if (!sent)
+            {
+                ++m_vrOfflineSkippedRequestCount;
+                m_vrPlayerCellStatusDirty = true;
+                return;
+            }
+
             ++m_vrExteriorCellRequestCount;
             m_lastVrCell = message.CellId;
             m_lastVrCellWorldSpace = message.WorldSpaceId;
             m_lastVrCellCurrentCoords = message.CurrentCoords;
             m_lastVrCellWasExterior = true;
+            m_lastVrCellConnectionGeneration = m_transport.GetConnectionGeneration();
             m_hasVrCellRequest = true;
             m_vrPlayerCellStatusDirty = true;
         }
@@ -259,15 +275,23 @@ void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
         EnterInteriorCellRequest message;
         message.CellId = acEvent.CellId;
 
-        m_transport.Send(message);
+        const bool sent = m_transport.Send(message);
 
         if constexpr (kVrPlayerCellStatusEnabled)
         {
+            if (!sent)
+            {
+                ++m_vrOfflineSkippedRequestCount;
+                m_vrPlayerCellStatusDirty = true;
+                return;
+            }
+
             ++m_vrInteriorCellRequestCount;
             m_lastVrCell = message.CellId;
             m_lastVrCellWorldSpace = GameId{};
             m_lastVrCellCurrentCoords = GridCellCoords{};
             m_lastVrCellWasExterior = false;
+            m_lastVrCellConnectionGeneration = m_transport.GetConnectionGeneration();
             m_hasVrCellRequest = true;
             m_vrPlayerCellStatusDirty = true;
         }
@@ -486,37 +510,8 @@ void PlayerService::RunLevelUpdates() noexcept
 
 void PlayerService::RunVrLevelUpdates(const double acDeltaTime) noexcept
 {
-    if (!m_transport.IsOnline())
-        return;
-
-    m_vrLevelUpdateTimer += acDeltaTime;
-    if (m_vrLevelUpdateTimer < 1.0)
-        return;
-
-    m_vrLevelUpdateTimer = 0.0;
-
-    const auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
-    if (!pPlayer)
-        return;
-
-    const uint16_t level = pPlayer->GetLevel();
-    if (m_cachedVrLevel == 0)
-    {
-        m_cachedVrLevel = level;
-        return;
-    }
-
-    if (level == m_cachedVrLevel)
-        return;
-
-    PlayerLevelRequest request{};
-    request.NewLevel = level;
-    m_transport.Send(request);
-
-    m_cachedVrLevel = level;
-    m_lastVrLevelSent = level;
-    ++m_vrLevelRequestCount;
-    m_vrPlayerCellStatusDirty = true;
+    TP_UNUSED(acDeltaTime);
+    m_cachedVrLevel = kVrFallbackLevel;
 }
 
 void PlayerService::RunVrPlayerCellStatusWrite(const double acDeltaTime) noexcept
@@ -550,8 +545,10 @@ void PlayerService::WriteVrPlayerCellStatusFile() noexcept
     file << "ready=" << (ready ? "1" : "0") << "\n";
     file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
     file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
+    file << "sessionId=" << m_transport.GetSessionId() << "\n";
+    file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
     file << "playerFormId=" << (pPlayer ? pPlayer->GetFormIdData() : 0) << "\n";
-    file << "currentLevel=" << (pPlayer ? pPlayer->GetLevel() : 0) << "\n";
+    file << "currentLevel=" << m_cachedVrLevel << "\n";
     file << "cachedLevel=" << m_cachedVrLevel << "\n";
     file << "lastLevelSent=" << m_lastVrLevelSent << "\n";
     file << "gridCellRequestCount=" << m_vrGridCellRequestCount << "\n";
@@ -565,8 +562,10 @@ void PlayerService::WriteVrPlayerCellStatusFile() noexcept
     WriteGameId(file, "lastGrid.playerCell", m_lastVrGridPlayerCell);
     WriteGridCoords(file, "lastGrid.center", m_lastVrGridCenterCoords);
     file << "lastGrid.cellCount=" << m_lastVrGridCellCount << "\n";
+    file << "lastGrid.connectionGeneration=" << m_lastVrGridConnectionGeneration << "\n";
     file << "lastCell.valid=" << (m_hasVrCellRequest ? "1" : "0") << "\n";
     file << "lastCell.exterior=" << (m_lastVrCellWasExterior ? "1" : "0") << "\n";
+    file << "lastCell.connectionGeneration=" << m_lastVrCellConnectionGeneration << "\n";
     WriteGameId(file, "lastCell.cell", m_lastVrCell);
     WriteGameId(file, "lastCell.worldSpace", m_lastVrCellWorldSpace);
     WriteGridCoords(file, "lastCell.currentCoords", m_lastVrCellCurrentCoords);

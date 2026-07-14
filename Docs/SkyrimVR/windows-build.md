@@ -114,7 +114,7 @@ Each package build still updates `artifacts\SkyrimTogetherVR\releasedbg` for com
 
 The build-and-audit wrapper does not install files and does not launch Skyrim. By default it audits only the package tree. Add `--skyrim-vr` and `--require-prerequisites` when the Windows environment can see the target Skyrim VR install and you want the package audit to require SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK before handoff. Instead of `--skyrim-vr`, `--require-prerequisites` can use `SKYRIMVR_PATH` or `STVR_SKYRIM_VR`; without one of those explicit paths it fails before building. `BuildAuditCollectSkyrimTogetherVR-Windows.bat` wraps the matching build-and-audit command, then runs `CollectSkyrimTogetherVRBuildEvidence-Windows.bat`, then audits the newest evidence zip with `AuditSkyrimTogetherVRBuildEvidence-Windows.bat`. If the build or package audit fails, it still collects evidence and exits with the original failure code.
 
-Pass PowerShell build options after `--`. The build-and-audit wrappers preserve each forwarded argument as a separate quoted token, so paths with spaces such as `-- -Xmake "C:\Program Files\xmake\xmake.exe"` are forwarded intact. Before a final package handoff, pass `-- -PapyrusCompiler "C:\Path\To\Caprica.exe"` or set `CAPRICA`; this regenerates the VR-specific `Data\scripts\*.pex` files before packaging. `--preflight-only` checks Python, Caprica, source, SDK, and output paths without compiling targets. When `-Mode release` or `-Mode debug` is forwarded after `--`, the wrapper audits and collects evidence from the matching `artifacts\SkyrimTogetherVR\<mode>` package instead of always reading `releasedbg`.
+Pass PowerShell build options after `--`. The build-and-audit wrappers preserve each forwarded argument as a separate quoted token, so paths with spaces such as `-- -Xmake "C:\Program Files\xmake\xmake.exe"` are forwarded intact. Before a final package handoff, pass `-- -PapyrusCompiler "C:\Path\To\Caprica.exe"` or set `CAPRICA`; this regenerates the VR-specific `Data\Scripts\*.pex` files before packaging. `--preflight-only` checks Python, Caprica, source, SDK, and output paths without compiling targets. When `-Mode release` or `-Mode debug` is forwarded after `--`, the wrapper audits and collects evidence from the matching `artifacts\SkyrimTogetherVR\<mode>` package instead of always reading `releasedbg`.
 
 After any Windows build attempt, successful or failed, collect a no-build handoff archive with:
 
@@ -247,12 +247,12 @@ libcef.dll and the complete CEF 141.0.11 runtime/resource tree
 EarlyLoad.dll
 TPProcess.exe
 Data\SkyrimTogether.esp
-Data\scripts\SkyrimTogetherUtils.pex
-Data\scripts\SkyrimTogetherVerifyLaunchScript.pex
-Data\scripts\SkyrimTogetherPlayerAliasScript.pex
-Data\scripts\SkyrimTogetherVRTickBridge.pex
-Data\scripts\SkyrimTogetherVRConnectionMenu.pex
-Data\scripts\SkyrimTogetherVRConnectionSpellEffect.pex
+Data\Scripts\SkyrimTogetherUtils.pex
+Data\Scripts\SkyrimTogetherVerifyLaunchScript.pex
+Data\Scripts\SkyrimTogetherPlayerAliasScript.pex
+Data\Scripts\SkyrimTogetherVRTickBridge.pex
+Data\Scripts\SkyrimTogetherVRConnectionMenu.pex
+Data\Scripts\SkyrimTogetherVRConnectionSpellEffect.pex
 Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll
@@ -275,6 +275,12 @@ Tools\SkyrimVR\audit_runtime_handoff.py
 Tools\SkyrimVR\collect_runtime_evidence.py
 Tools\SkyrimVR\audit_runtime_evidence_zip.py
 ```
+
+`Data\Scripts` is intentionally capitalized. Proton/Linux treats a sibling
+`Data\scripts` directory as a different tree, while Skyrim VR opens the canonical
+capitalized path; the package audit rejects either lowercase-only staging or both
+variants together. The packaged `SkyrimTogether.esp` must also retain TES4 HEDR
+version `1.70`. Skyrim VR silently omits the `1.71` desktop header variant.
 
 The avatar-sync package substitutes `SkyrimTogetherVRAvatarSync.exe`; the gameplay package substitutes `SkyrimTogetherVRGameplay.exe`.
 

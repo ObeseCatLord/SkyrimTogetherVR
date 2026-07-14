@@ -4,7 +4,11 @@
 
 INISettingCollection* INISettingCollection::Get() noexcept
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(INISettingCollection*, settingCollection, 524557);
+#else
     POINTER_SKYRIMSE(INISettingCollection*, settingCollection, 411155);
+#endif
 
     return *settingCollection.Get();
 }

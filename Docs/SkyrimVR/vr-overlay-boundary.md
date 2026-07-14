@@ -4,7 +4,11 @@ SkyrimTogetherVR does not use the normal Skyrim Together flat CEF/D3D11 overlay 
 
 ## Default Boundary
 
-The default SkyrimTogetherVR target builds in Connection-only mode. That mode keeps transport, session, staged VR telemetry, VRIK pose relay, and the VR-safe control surfaces active, but it does not instantiate `OverlayService`, `InputService`, `DebugService`, `RenderSystemD3D11`, or `BehaviorVar` patching from the normal desktop client path.
+The default SkyrimTogetherVR target builds in Connection-only mode. That mode
+keeps transport, session, discovery, player-cell synchronization, and the
+file-based control surface active. Pose and gameplay observation relays are
+reserved for explicit broader targets. It does not instantiate `OverlayService`,
+`InputService`, `DebugService`, `RenderSystemD3D11`, or `BehaviorVar` patching.
 
 The old flat CEF/D3D11 overlay path depends on desktop swap-chain and Win32 input assumptions. Those assumptions are not validated for Skyrim VR, SteamVR compositor presentation, VRIK/HIGGS/PLANCK input ownership, or VR menu behavior, so they stay outside the default build until a real VR overlay path is designed and checked against VR runtime behavior.
 

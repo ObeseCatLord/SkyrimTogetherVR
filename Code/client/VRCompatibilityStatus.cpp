@@ -48,6 +48,14 @@
 #define TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE 0
 #endif
 
+#ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+#define TP_SKYRIM_VR_ENABLE_POSE_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
+#define TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE 0
+#endif
+
 #ifndef TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
 #define TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE 0
 #endif
@@ -224,6 +232,8 @@ VRCompatibilityStatus BuildVRCompatibilityStatus(
     status.HiggsLoaded = aHiggsLoaded;
     status.PlanckInstalled = IsSksePluginInstalled(acGamePath, {L"activeragdoll.dll"});
     status.PlanckLoaded = aPlanckLoaded;
+    status.FbtInstalled = IsSksePluginInstalled(acGamePath, {L"SkyrimVR-FBT.dll"});
+    status.FbtLoaded = GetModuleHandleW(L"SkyrimVR-FBT.dll") != nullptr;
     status.VRPhysicsCompatibilityModInstalled = status.HiggsInstalled || status.PlanckInstalled || status.HiggsLoaded || status.PlanckLoaded;
     status.BringupHooksCompiled = TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS != 0;
     status.UnvalidatedHooksCompiled = TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS != 0;
@@ -236,6 +246,8 @@ VRCompatibilityStatus BuildVRCompatibilityStatus(
     status.RemoteAvatarSkeletonWrites = TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES != 0;
     status.DiscoveryService = TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE != 0;
     status.PlayerCellService = TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE != 0;
+    status.PoseService = TP_SKYRIM_VR_ENABLE_POSE_SERVICE != 0;
+    status.BodyPoseCapture = TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE != 0;
     status.MovementObservationService = TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE != 0;
     status.InventoryObservationService = TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE != 0;
     status.ActivationObservationService = TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE != 0;
@@ -267,6 +279,8 @@ void WriteVRCompatibilityStatusFile(
     file << "higgs.loaded=" << BoolValue(acStatus.HiggsLoaded) << "\n";
     file << "planck.installed=" << BoolValue(acStatus.PlanckInstalled) << "\n";
     file << "planck.loaded=" << BoolValue(acStatus.PlanckLoaded) << "\n";
+    file << "fbt.installed=" << BoolValue(acStatus.FbtInstalled) << "\n";
+    file << "fbt.loaded=" << BoolValue(acStatus.FbtLoaded) << "\n";
     file << "vrPhysicsCompatibilityModInstalled=" << BoolValue(acStatus.VRPhysicsCompatibilityModInstalled) << "\n";
     file << "bringupHooksCompiled=" << BoolValue(acStatus.BringupHooksCompiled) << "\n";
     file << "unvalidatedHooksCompiled=" << BoolValue(acStatus.UnvalidatedHooksCompiled) << "\n";
@@ -282,6 +296,8 @@ void WriteVRCompatibilityStatusFile(
     file << "remoteAvatarPolicy=" << GetRemoteAvatarPolicy(acStatus) << "\n";
     file << "discoveryPolicy=" << GetObservationPolicy(acStatus.DiscoveryService) << "\n";
     file << "playerCellPolicy=" << GetPlayerCellPolicy(acStatus) << "\n";
+    file << "posePolicy=" << GetObservationPolicy(acStatus.PoseService) << "\n";
+    file << "bodyPoseCapturePolicy=" << GetObservationPolicy(acStatus.BodyPoseCapture) << "\n";
     file << "remotePlayerProxyPolicy=" << GetRemotePlayerProxyPolicy(acStatus) << "\n";
     file << "movementPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.MovementObservationService) << "\n";
     file << "equipmentPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.InventoryObservationService) << "\n";
@@ -295,4 +311,5 @@ void WriteVRCompatibilityStatusFile(
     file << "saveLoadPolicy=" << GetObservationPolicy(acStatus.SaveLoadObservationService) << "\n";
     file << "higgsPolicy=observation_only\n";
     file << "planckPolicy=observation_only\n";
+    file << "fbtPolicy=local_post_higgs_capture_and_network_cache_only\n";
 }

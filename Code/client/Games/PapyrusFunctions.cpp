@@ -827,6 +827,8 @@ void AppendPlayerCellSummary(std::string& aOut)
     aOut += GetValue(values, "ready");
     aOut += " online=";
     aOut += GetValue(values, "online");
+    aOut += " generation=";
+    aOut += GetValue(values, "connectionGeneration");
     aOut += " grid=";
     aOut += GetValue(values, "gridCellRequestCount");
     aOut += " exterior=";
@@ -854,6 +856,10 @@ void AppendPlayerCellTelemetry(std::string& aOut)
     aOut += GetValue(values, "online");
     aOut += " playerId=";
     aOut += GetValue(values, "localPlayerId");
+    aOut += " session=";
+    aOut += GetValue(values, "sessionId");
+    aOut += " generation=";
+    aOut += GetValue(values, "connectionGeneration");
     aOut += " form=";
     aOut += GetValue(values, "playerFormId");
     aOut += "\nlevel current=";
@@ -888,10 +894,14 @@ void AppendPlayerCellTelemetry(std::string& aOut)
     aOut += GetValue(values, "lastGrid.center");
     aOut += " count=";
     aOut += GetValue(values, "lastGrid.cellCount");
+    aOut += " generation=";
+    aOut += GetValue(values, "lastGrid.connectionGeneration");
     aOut += "\nlastCell valid=";
     aOut += GetValue(values, "lastCell.valid");
     aOut += " exterior=";
     aOut += GetValue(values, "lastCell.exterior");
+    aOut += " generation=";
+    aOut += GetValue(values, "lastCell.connectionGeneration");
     aOut += " cell=";
     aOut += GetValue(values, "lastCell.cell.serverModId");
     aOut += ":";

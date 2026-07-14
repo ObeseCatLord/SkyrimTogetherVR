@@ -24,7 +24,9 @@ STALE_PEX_TOKENS = (
 )
 
 REQUIRED_VERIFY_SOURCE_TOKENS = (
-    "StartTickBridge",
+    "RearmCadence",
+    "UnregisterForUpdate()",
+    "cadence rearm owner=1 reason=",
     "RegisterForSingleUpdate(0.05)",
     "Event OnUpdate()",
     "If !SkyrimTogetherVRTickBridge.ClaimCadence(1)",
@@ -50,6 +52,7 @@ REQUIRED_TICK_BRIDGE_SOURCE_TOKENS = (
 REQUIRED_QUEST_IMPORT_TOKENS = (
     "Scriptname Quest Native Hidden",
     "Function RegisterForSingleUpdate(float afInterval) Native",
+    "Function UnregisterForUpdate() Native",
     "Event OnInit()",
     "Event OnUpdate()",
 )
@@ -95,8 +98,10 @@ REQUIRED_VR_MENU_SOURCE_TOKENS = (
 
 REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS = (
     "OnPlayerLoadGame",
+    "OnCellAttach",
+    "OnLocationChange",
     "ArmOnPlayerLoadGame",
-    "VerifyLaunch",
+    "RearmCadence",
 )
 
 REQUIRED_PLAYER_ALIAS_PEX_TOKENS = REQUIRED_PLAYER_ALIAS_SOURCE_TOKENS
@@ -106,6 +111,9 @@ REQUIRED_MIGRATION_SOURCE_TOKENS = (
     "SkyrimTogetherVRTickBridge.ClaimCadence(2)",
     "If !SkyrimTogetherVRTickBridge.ClaimCadence(2)",
     "SkyrimTogetherVRTickBridge.ArmOnInit()",
+    "RearmCadence",
+    "UnregisterForUpdate()",
+    "cadence rearm owner=2 reason=",
     "RegisterForSingleUpdate(0.05)",
     "Event OnUpdate()",
     "SkyrimTogetherVRTickBridge.Tick()",
@@ -115,6 +123,8 @@ REQUIRED_MIGRATION_PEX_TOKENS = (
     "SkyrimTogetherVRMigrationXScript",
     "ClaimCadence",
     "ArmOnInit",
+    "RearmCadence",
+    "UnregisterForUpdate",
     "Tick",
 )
 
@@ -122,8 +132,10 @@ REQUIRED_MIGRATION_ALIAS_SOURCE_TOKENS = (
     "ScriptName SkyrimTogetherVRMigrationScript extends ReferenceAlias",
     "SkyrimTogetherVRMigrationXScript Property VerifyLaunchScript Auto",
     "OnPlayerLoadGame",
+    "OnCellAttach",
+    "OnLocationChange",
     "ArmOnPlayerLoadGame",
-    "VerifyLaunch",
+    "RearmCadence",
 )
 
 REQUIRED_MIGRATION_ALIAS_PEX_TOKENS = (
@@ -131,8 +143,10 @@ REQUIRED_MIGRATION_ALIAS_PEX_TOKENS = (
     # Caprica serializes the property script type with a lowercase first byte.
     "skyrimTogetherVRMigrationXScript",
     "OnPlayerLoadGame",
+    "OnCellAttach",
+    "OnLocationChange",
     "ArmOnPlayerLoadGame",
-    "VerifyLaunch",
+    "RearmCadence",
 )
 
 REQUIRED_VR_MENU_PEX_TOKENS = (
@@ -296,7 +310,7 @@ def audit_plugin(package, skyrim_vr):
 
 
 def audit_papyrus(package, repo):
-    scripts = package / "scripts"
+    scripts = package / "Scripts"
     source_dir = scripts / "source"
     source_files = sorted(source_dir.glob("*.psc")) if source_dir.exists() else []
     pex_files = sorted(scripts.glob("*.pex")) if scripts.exists() else []

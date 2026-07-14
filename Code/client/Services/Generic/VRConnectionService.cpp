@@ -114,16 +114,19 @@ void VRConnectionService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRConnectionService::OnConnected(const ConnectedEvent&) noexcept
 {
+    m_connectInFlight = false;
     SetStatus("online");
 }
 
 void VRConnectionService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
+    m_connectInFlight = false;
     SetStatus("offline");
 }
 
 void VRConnectionService::OnConnectionError(const ConnectionErrorEvent& acEvent) noexcept
 {
+    m_connectInFlight = false;
     SetStatus("error", acEvent.ErrorDetail.c_str());
 }
 
@@ -139,6 +142,12 @@ bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const st
     if (m_transport.IsOnline())
     {
         SetStatus("online");
+        return false;
+    }
+    if (m_connectInFlight)
+    {
+        spdlog::info("SkyrimTogetherVR connection request ignored because a connection is already in flight");
+        SetStatus("connecting");
         return false;
     }
 
@@ -342,11 +351,19 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
     if (m_transport.IsOnline())
     {
         spdlog::warn("SkyrimTogetherVR connection request ignored because the client is already online");
+        m_connectInFlight = false;
         SetStatus("online");
+        return;
+    }
+    if (m_connectInFlight)
+    {
+        spdlog::info("SkyrimTogetherVR connection request ignored because a connection is already in flight");
+        SetStatus("connecting");
         return;
     }
 
     spdlog::info("SkyrimTogetherVR queueing connection to {}", acEndpoint);
+    m_connectInFlight = true;
     SetStatus("connecting");
 
     m_world.GetRunner().Queue([endpoint = acEndpoint, password = acPassword]() {
@@ -362,6 +379,7 @@ void VRConnectionService::QueueDisconnect() noexcept
     spdlog::info("SkyrimTogetherVR queueing disconnect");
     m_hasPendingCommand = false;
     m_pendingCommand = {};
+    m_connectInFlight = false;
     SetStatus("disconnecting");
     m_world.GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
 }
@@ -405,6 +423,8 @@ void VRConnectionService::WriteStatusFile() noexcept
     file << "state=" << m_state << "\n";
     file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
     file << "playerId=" << m_transport.GetLocalPlayerId() << "\n";
+    file << "sessionId=" << m_transport.GetSessionId() << "\n";
+    file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
     file << "commandFile=" << m_commandPath.string() << "\n";
     if (!m_lastError.empty())
         file << "error=" << m_lastError << "\n";

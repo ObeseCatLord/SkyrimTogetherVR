@@ -1,9 +1,9 @@
 {
   "generatedBy": "Tools/SkyrimVR/audit_addresses.py",
   "inputs": {
-    "refsRoot": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\_refs\\skyrim_vr_address_library",
-    "releaseCsv": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\_refs\\VRAddressLibraryRelease\\SKSE\\Plugins\\version-1-4-15-0.csv",
-    "runtimeCsvDir": "\\\\host.lan\\Data\\Documents\\SkyrimModding\\SkyrimTogetherVR\\GameFiles\\SkyrimVR\\Data\\SKSE\\Plugins"
+    "refsRoot": "/home/obesecatlord/Documents/SkyrimModding/_refs/skyrim_vr_address_library",
+    "releaseCsv": "/home/obesecatlord/Documents/SkyrimModding/_refs/VRAddressLibraryRelease/SKSE/Plugins/version-1-4-15-0.csv",
+    "runtimeCsvDir": "/home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR/GameFiles/SkyrimVR/Data/SKSE/Plugins"
   },
   "missingNonRtti": [],
   "missingRtti": [
@@ -12,7 +12,7 @@
       "id": 392386,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 299
         }
@@ -23,7 +23,7 @@
       "id": 392387,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 301
         }
@@ -34,7 +34,7 @@
       "id": 392388,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 303
         }
@@ -45,7 +45,7 @@
       "id": 392389,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 305
         }
@@ -56,7 +56,7 @@
       "id": 392390,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 307
         }
@@ -67,7 +67,7 @@
       "id": 392391,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 309
         }
@@ -78,7 +78,7 @@
       "id": 392392,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 311
         }
@@ -89,7 +89,7 @@
       "id": 392393,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 313
         }
@@ -100,7 +100,7 @@
       "id": 392394,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 315
         }
@@ -111,7 +111,7 @@
       "id": 392395,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 317
         }
@@ -122,7 +122,7 @@
       "id": 392396,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 319
         }
@@ -133,7 +133,7 @@
       "id": 392397,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 321
         }
@@ -144,7 +144,7 @@
       "id": 392466,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 457
         }
@@ -155,7 +155,7 @@
       "id": 392467,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 459
         }
@@ -166,7 +166,7 @@
       "id": 392468,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 461
         }
@@ -177,7 +177,7 @@
       "id": 392469,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 463
         }
@@ -188,7 +188,7 @@
       "id": 392470,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 465
         }
@@ -199,7 +199,7 @@
       "id": 392471,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 467
         }
@@ -210,7 +210,7 @@
       "id": 392520,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 545
         }
@@ -221,7 +221,7 @@
       "id": 392522,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 547
         }
@@ -232,7 +232,7 @@
       "id": 392523,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 549
         }
@@ -243,7 +243,7 @@
       "id": 392584,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 625
         }
@@ -254,7 +254,7 @@
       "id": 392585,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 627
         }
@@ -265,7 +265,7 @@
       "id": 392586,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 629
         }
@@ -276,7 +276,7 @@
       "id": 392587,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 631
         }
@@ -287,7 +287,7 @@
       "id": 392588,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 633
         }
@@ -298,7 +298,7 @@
       "id": 392589,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 635
         }
@@ -309,7 +309,7 @@
       "id": 392590,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 637
         }
@@ -320,7 +320,7 @@
       "id": 392592,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 639
         }
@@ -331,7 +331,7 @@
       "id": 392593,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 641
         }
@@ -342,7 +342,7 @@
       "id": 392597,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 643
         }
@@ -353,7 +353,7 @@
       "id": 392600,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 645
         }
@@ -364,7 +364,7 @@
       "id": 392601,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 647
         }
@@ -375,7 +375,7 @@
       "id": 392607,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 649
         }
@@ -386,7 +386,7 @@
       "id": 392609,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 651
         }
@@ -397,7 +397,7 @@
       "id": 392612,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 653
         }
@@ -408,7 +408,7 @@
       "id": 392613,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 655
         }
@@ -419,7 +419,7 @@
       "id": 392614,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 657
         }
@@ -430,7 +430,7 @@
       "id": 392615,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 659
         }
@@ -441,7 +441,7 @@
       "id": 392616,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 661
         }
@@ -452,7 +452,7 @@
       "id": 393061,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 1031
         }
@@ -463,7 +463,7 @@
       "id": 393081,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 1045
         }
@@ -474,7 +474,7 @@
       "id": 395324,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 2389
         }
@@ -485,7 +485,7 @@
       "id": 397427,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 2875
         }
@@ -496,7 +496,7 @@
       "id": 397436,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 2877
         }
@@ -507,7 +507,7 @@
       "id": 397515,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 3009
         }
@@ -518,7 +518,7 @@
       "id": 397516,
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\RTTI.cpp",
+          "file": "Code/client/Games/Skyrim/RTTI.cpp",
           "isRtti": true,
           "line": 3011
         }
@@ -528,13 +528,13 @@
   "missingRttiUsedByCast": [],
   "nonRttiResolutionSources": {
     "addrlib": 181,
-    "release": 49,
+    "release": 57,
     "sse_vr": 43
   },
   "resolutionSources": {
     "addrlib": 181,
     "missing": 47,
-    "release": 50,
+    "release": 58,
     "sse_vr": 2802
   },
   "resolvedNonRtti": [
@@ -544,7 +544,7 @@
       "offset": "0x1150c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\DefaultStringManager.cpp",
+          "file": "Code/client/Games/Skyrim/DefaultStringManager.cpp",
           "isRtti": false,
           "line": 9
         }
@@ -560,7 +560,7 @@
       "offset": "0x126270",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 115
         }
@@ -576,7 +576,7 @@
       "offset": "0x1266a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 129
         }
@@ -592,7 +592,7 @@
       "offset": "0x126ab0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 107
         }
@@ -608,7 +608,7 @@
       "offset": "0x126c00",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 100
         }
@@ -624,9 +624,9 @@
       "offset": "0x129a30",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 220
+          "line": 247
         }
       ],
       "resolvedId": 11660,
@@ -640,7 +640,7 @@
       "offset": "0x132240",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 122
         }
@@ -656,7 +656,7 @@
       "offset": "0x136c30",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 143
         }
@@ -672,7 +672,7 @@
       "offset": "0x973530",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraDataList.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraDataList.cpp",
           "isRtti": false,
           "line": 136
         }
@@ -688,7 +688,7 @@
       "offset": "0x147240",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\Lock.cpp",
+          "file": "Code/client/Games/Misc/Lock.cpp",
           "isRtti": false,
           "line": 6
         }
@@ -704,7 +704,7 @@
       "offset": "0x17da20",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 153
         }
@@ -720,9 +720,9 @@
       "offset": "0x185ed0",
       "references": [
         {
-          "file": "Code\\client\\Games\\ModManager.cpp",
+          "file": "Code/client/Games/ModManager.cpp",
           "isRtti": false,
-          "line": 68
+          "line": 72
         }
       ],
       "resolvedId": 13718,
@@ -736,9 +736,9 @@
       "offset": "0x17cc30",
       "references": [
         {
-          "file": "Code\\client\\Games\\ModManager.cpp",
+          "file": "Code/client/Games/ModManager.cpp",
           "isRtti": false,
-          "line": 76
+          "line": 80
         }
       ],
       "resolvedId": 13625,
@@ -752,7 +752,7 @@
       "offset": "0x1876a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 13
         }
@@ -768,7 +768,7 @@
       "offset": "0x1077c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\DefaultObjectManager.cpp",
+          "file": "Code/client/Games/Skyrim/DefaultObjectManager.cpp",
           "isRtti": false,
           "line": 9
         }
@@ -784,7 +784,7 @@
       "offset": "0x1964c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
           "line": 42
         }
@@ -800,7 +800,7 @@
       "offset": "0x19f140",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESNPC.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESNPC.cpp",
           "isRtti": false,
           "line": 19
         }
@@ -816,7 +816,7 @@
       "offset": "0xd90670",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Components\\TESContainer.cpp",
+          "file": "Code/client/Games/Skyrim/Components/TESContainer.cpp",
           "isRtti": false,
           "line": 7
         }
@@ -832,7 +832,7 @@
       "offset": "0x1a3f60",
       "references": [
         {
-          "file": "Code\\client\\Games\\Forms.cpp",
+          "file": "Code/client/Games/Forms.cpp",
           "isRtti": false,
           "line": 15
         }
@@ -848,7 +848,7 @@
       "offset": "0x7366a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSRandom\\BSRandom.cpp",
+          "file": "Code/client/Games/Skyrim/BSRandom/BSRandom.cpp",
           "isRtti": false,
           "line": 20
         }
@@ -864,7 +864,7 @@
       "offset": "0x1b8350",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Components\\TESTexture.cpp",
+          "file": "Code/client/Games/Skyrim/Components/TESTexture.cpp",
           "isRtti": false,
           "line": 9
         }
@@ -880,7 +880,7 @@
       "offset": "0x1bb6a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 376
         }
@@ -896,7 +896,7 @@
       "offset": "0x1bb820",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 407
         }
@@ -912,7 +912,7 @@
       "offset": "0x1e7740",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraContainerChanges.cpp",
           "isRtti": false,
           "line": 28
         }
@@ -928,7 +928,7 @@
       "offset": "0x1e99e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 414
         }
@@ -944,7 +944,7 @@
       "offset": "0x209130",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraContainerChanges.cpp",
           "isRtti": false,
           "line": 85
         }
@@ -960,7 +960,7 @@
       "offset": "0x209fe0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraContainerChanges.cpp",
           "isRtti": false,
           "line": 10
         }
@@ -976,7 +976,7 @@
       "offset": "0x20a010",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\ExtraData\\ExtraContainerChanges.cpp",
+          "file": "Code/client/Games/Skyrim/ExtraData/ExtraContainerChanges.cpp",
           "isRtti": false,
           "line": 19
         }
@@ -992,7 +992,7 @@
       "offset": "0x22fce0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 110
         }
@@ -1008,7 +1008,7 @@
       "offset": "0x275180",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 84
         }
@@ -1024,7 +1024,7 @@
       "offset": "0x277910",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\NetImmerse\\ImageSpaceModifierInstance.h",
+          "file": "Code/client/Games/Skyrim/NetImmerse/ImageSpaceModifierInstance.h",
           "isRtti": false,
           "line": 24
         }
@@ -1040,7 +1040,7 @@
       "offset": "0x25e3c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\ImageSpaceModifierInstanceForm.h",
+          "file": "Code/client/Games/Skyrim/Forms/ImageSpaceModifierInstanceForm.h",
           "isRtti": false,
           "line": 12
         }
@@ -1056,7 +1056,7 @@
       "offset": "0x294070",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESObjectCELL.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESObjectCELL.cpp",
           "isRtti": false,
           "line": 32
         }
@@ -1072,7 +1072,7 @@
       "offset": "0x2a8160",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
           "line": 32
         }
@@ -1083,12 +1083,28 @@
       "translation": "direct"
     },
     {
+      "id": 19385,
+      "name": "",
+      "offset": "0x2aabf0",
+      "references": [
+        {
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
+          "isRtti": false,
+          "line": 610
+        }
+      ],
+      "resolvedId": 19385,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
       "id": 19512,
       "name": "",
       "offset": "0x11772d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1115
         }
@@ -1104,7 +1120,7 @@
       "offset": "0x2b3ed0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1121
         }
@@ -1120,7 +1136,7 @@
       "offset": "0x33a760",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 434
         }
@@ -1136,7 +1152,7 @@
       "offset": "0x2b4840",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1120
         }
@@ -1152,9 +1168,9 @@
       "offset": "0x2a5710",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1312
+          "line": 1349
         }
       ],
       "resolvedId": 19315,
@@ -1168,7 +1184,7 @@
       "offset": "0x2b7bb0",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 77
         }
@@ -1184,7 +1200,7 @@
       "offset": "0x2a7d80",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1116
         }
@@ -1200,7 +1216,7 @@
       "offset": "0x2a7e40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1117
         }
@@ -1216,7 +1232,7 @@
       "offset": "0x2a7f00",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1118
         }
@@ -1232,9 +1248,9 @@
       "offset": "0x2a8010",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1305
+          "line": 1342
         }
       ],
       "resolvedId": 19363,
@@ -1248,7 +1264,7 @@
       "offset": "0x2b8310",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1119
         }
@@ -1264,7 +1280,7 @@
       "offset": "0x2a9890",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 920
         }
@@ -1280,9 +1296,9 @@
       "offset": "0x2aabf0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1310
+          "line": 1347
         }
       ],
       "resolvedId": 19385,
@@ -1296,7 +1312,7 @@
       "offset": "0x2b9860",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 123
         }
@@ -1312,7 +1328,7 @@
       "offset": "0x2bed70",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 36
         }
@@ -1328,7 +1344,7 @@
       "offset": "0x2cdcc0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 385
         }
@@ -1344,7 +1360,7 @@
       "offset": "0x2cde80",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 377
         }
@@ -1360,7 +1376,7 @@
       "offset": "0x2d6460",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESWorldSpace.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESWorldSpace.cpp",
           "isRtti": false,
           "line": 6
         }
@@ -1376,7 +1392,7 @@
       "offset": "0x3067f0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "file": "Code/client/Games/Skyrim/Camera/PlayerCamera.cpp",
           "isRtti": false,
           "line": 15
         }
@@ -1392,7 +1408,7 @@
       "offset": "0x307c90",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 244
         }
@@ -1408,7 +1424,7 @@
       "offset": "0x342f50",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 43
         }
@@ -1424,7 +1440,7 @@
       "offset": "0x38aa50",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 255
         }
@@ -1440,7 +1456,7 @@
       "offset": "0x39d3a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 69
         }
@@ -1456,7 +1472,7 @@
       "offset": "0x37fc30",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 36
         }
@@ -1472,7 +1488,7 @@
       "offset": "0x3802b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 87
         }
@@ -1488,7 +1504,7 @@
       "offset": "0x39e690",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 96
         }
@@ -1504,7 +1520,7 @@
       "offset": "0x388110",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\TESQuest.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
           "isRtti": false,
           "line": 10
         }
@@ -1520,7 +1536,7 @@
       "offset": "0x3c1a20",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 93
         }
@@ -1536,7 +1552,7 @@
       "offset": "0x368350",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 91
         }
@@ -1552,7 +1568,7 @@
       "offset": "0x3e1790",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 41
         }
@@ -1568,7 +1584,7 @@
       "offset": "0x375ad0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 92
         }
@@ -1584,7 +1600,7 @@
       "offset": "0x3e17c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Sky\\Sky.cpp",
+          "file": "Code/client/Games/Skyrim/Sky/Sky.cpp",
           "isRtti": false,
           "line": 33
         }
@@ -1600,7 +1616,7 @@
       "offset": "0x3edce0",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 56
         }
@@ -1616,7 +1632,7 @@
       "offset": "0x4002f0",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 64
         }
@@ -1632,9 +1648,9 @@
       "offset": "0x4066d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 348
+          "line": 352
         }
       ],
       "resolvedId": 27244,
@@ -1648,7 +1664,7 @@
       "offset": "0x52cf30",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 338
         }
@@ -1664,7 +1680,7 @@
       "offset": "0x8cd200",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 375
         }
@@ -1680,7 +1696,7 @@
       "offset": "0xcace00",
       "references": [
         {
-          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "file": "Code/client/Games/IAnimationGraphManagerHolder.cpp",
           "isRtti": false,
           "line": 34
         }
@@ -1696,7 +1712,7 @@
       "offset": "0x500950",
       "references": [
         {
-          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "file": "Code/client/Games/IAnimationGraphManagerHolder.cpp",
           "isRtti": false,
           "line": 26
         }
@@ -1712,7 +1728,7 @@
       "offset": "0x500970",
       "references": [
         {
-          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "file": "Code/client/Games/IAnimationGraphManagerHolder.cpp",
           "isRtti": false,
           "line": 18
         }
@@ -1728,7 +1744,7 @@
       "offset": "0x500990",
       "references": [
         {
-          "file": "Code\\client\\Games\\IAnimationGraphManagerHolder.cpp",
+          "file": "Code/client/Games/IAnimationGraphManagerHolder.cpp",
           "isRtti": false,
           "line": 10
         }
@@ -1744,7 +1760,7 @@
       "offset": "0x118f590",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "file": "Code/client/Games/Skyrim/Combat/CombatController.cpp",
           "isRtti": false,
           "line": 76
         }
@@ -1760,7 +1776,7 @@
       "offset": "0x118f5e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "file": "Code/client/Games/Skyrim/Combat/CombatController.cpp",
           "isRtti": false,
           "line": 84
         }
@@ -1776,7 +1792,7 @@
       "offset": "0x5402d0",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 97
         }
@@ -1792,7 +1808,7 @@
       "offset": "0x510b20",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "file": "Code/client/Games/Skyrim/Combat/CombatController.cpp",
           "isRtti": false,
           "line": 11
         }
@@ -1808,7 +1824,7 @@
       "offset": "0x5410a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Combat\\CombatController.cpp",
+          "file": "Code/client/Games/Skyrim/Combat/CombatController.cpp",
           "isRtti": false,
           "line": 8
         }
@@ -1824,7 +1840,7 @@
       "offset": "0x50a4a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 243
         }
@@ -1840,7 +1856,7 @@
       "offset": "0x5681b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\ActorMagicCaster.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/ActorMagicCaster.cpp",
           "isRtti": false,
           "line": 73
         }
@@ -1856,7 +1872,7 @@
       "offset": "0x546260",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\ActorMagicCaster.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/ActorMagicCaster.cpp",
           "isRtti": false,
           "line": 72
         }
@@ -1872,7 +1888,7 @@
       "offset": "0x571420",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Effects\\InvisibilityEffect.cpp",
+          "file": "Code/client/Games/Skyrim/Effects/InvisibilityEffect.cpp",
           "isRtti": false,
           "line": 29
         }
@@ -1888,7 +1904,7 @@
       "offset": "0x572930",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicCaster.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicCaster.cpp",
           "isRtti": false,
           "line": 7
         }
@@ -1904,7 +1920,7 @@
       "offset": "0x572c50",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicCaster.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicCaster.cpp",
           "isRtti": false,
           "line": 16
         }
@@ -1920,7 +1936,7 @@
       "offset": "0x572ee0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 242
         }
@@ -1936,7 +1952,7 @@
       "offset": "0x5754d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Projectiles\\Projectile.cpp",
+          "file": "Code/client/Games/Skyrim/Projectiles/Projectile.cpp",
           "isRtti": false,
           "line": 125
         }
@@ -1952,7 +1968,7 @@
       "offset": "0x579df0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 41
         }
@@ -1968,7 +1984,7 @@
       "offset": "0x57aea0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 241
         }
@@ -1984,7 +2000,7 @@
       "offset": "0x5579c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 240
         }
@@ -2000,7 +2016,7 @@
       "offset": "0x57b000",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 80
         }
@@ -2016,7 +2032,7 @@
       "offset": "0x598b30",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Effects\\SummonCreatureEffect.h",
+          "file": "Code/client/Games/Skyrim/Effects/SummonCreatureEffect.h",
           "isRtti": false,
           "line": 30
         }
@@ -2032,9 +2048,9 @@
       "offset": "0x59e490",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1314
+          "line": 1351
         }
       ],
       "resolvedId": 35086,
@@ -2048,7 +2064,7 @@
       "offset": "0x5a6da0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\MenuTopicManager.cpp",
+          "file": "Code/client/Games/Misc/MenuTopicManager.cpp",
           "isRtti": false,
           "line": 40
         }
@@ -2064,7 +2080,7 @@
       "offset": "0x5b2360",
       "references": [
         {
-          "file": "Code\\client\\Games\\Forms.cpp",
+          "file": "Code/client/Games/Forms.cpp",
           "isRtti": false,
           "line": 104
         }
@@ -2080,7 +2096,7 @@
       "offset": "0x5ce330",
       "references": [
         {
-          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "file": "Code/client/Games/SaveLoad.cpp",
           "isRtti": false,
           "line": 50
         }
@@ -2096,7 +2112,7 @@
       "offset": "0x5ce550",
       "references": [
         {
-          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "file": "Code/client/Games/SaveLoad.cpp",
           "isRtti": false,
           "line": 120
         }
@@ -2112,7 +2128,7 @@
       "offset": "0x5a0b00",
       "references": [
         {
-          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "file": "Code/client/Games/SaveLoad.cpp",
           "isRtti": false,
           "line": 20
         }
@@ -2128,7 +2144,7 @@
       "offset": "0x5a0ff0",
       "references": [
         {
-          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "file": "Code/client/Games/SaveLoad.cpp",
           "isRtti": false,
           "line": 122
         }
@@ -2144,7 +2160,7 @@
       "offset": "0x5d2fb0",
       "references": [
         {
-          "file": "Code\\client\\Games\\SaveLoad.cpp",
+          "file": "Code/client/Games/SaveLoad.cpp",
           "isRtti": false,
           "line": 121
         }
@@ -2160,7 +2176,7 @@
       "offset": "0x5d4fc0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\EnchantmentItem.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/EnchantmentItem.cpp",
           "isRtti": false,
           "line": 11
         }
@@ -2176,7 +2192,7 @@
       "offset": "0x5d5000",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Forms\\EnchantmentItem.cpp",
+          "file": "Code/client/Games/Skyrim/Forms/EnchantmentItem.cpp",
           "isRtti": false,
           "line": 13
         }
@@ -2192,9 +2208,9 @@
       "offset": "0x5db010",
       "references": [
         {
-          "file": "Code\\client\\Games\\TimeManager.cpp",
+          "file": "Code/client/Games/TimeManager.cpp",
           "isRtti": false,
-          "line": 25
+          "line": 29
         }
       ],
       "resolvedId": 36291,
@@ -2203,14 +2219,30 @@
       "translation": "direct"
     },
     {
+      "id": 36344,
+      "name": "",
+      "offset": "0x5de910",
+      "references": [
+        {
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
+          "isRtti": false,
+          "line": 174
+        }
+      ],
+      "resolvedId": 36344,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
       "id": 36544,
       "name": "",
       "offset": "0x5f2410",
       "references": [
         {
-          "file": "Code\\client\\TiltedOnlineApp.cpp",
+          "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 64
+          "line": 66
         }
       ],
       "resolvedId": 36544,
@@ -2224,7 +2256,7 @@
       "offset": "0x5f2a60",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 140
         }
@@ -2240,9 +2272,14 @@
       "offset": "0x5f4770",
       "references": [
         {
-          "file": "Code\\client\\SkyrimVM64.cpp",
+          "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 120
+          "line": 44
+        },
+        {
+          "file": "Code/client/SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 101
         }
       ],
       "resolvedId": 36564,
@@ -2256,7 +2293,7 @@
       "offset": "0x61e640",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 337
         }
@@ -2272,9 +2309,9 @@
       "offset": "0x61f300",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1309
+          "line": 1346
         }
       ],
       "resolvedId": 37175,
@@ -2288,9 +2325,9 @@
       "offset": "0x61fa68",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1324
+          "line": 1361
         }
       ],
       "resolvedId": 37198,
@@ -2304,9 +2341,9 @@
       "offset": "0x621900",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1311
+          "line": 1348
         }
       ],
       "resolvedId": 37313,
@@ -2320,9 +2357,9 @@
       "offset": "0x562c10",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 150
+          "line": 176
         }
       ],
       "resolvedId": 37334,
@@ -2336,9 +2373,9 @@
       "offset": "0x622250",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1313
+          "line": 1350
         }
       ],
       "resolvedId": 37335,
@@ -2352,9 +2389,9 @@
       "offset": "0x6226a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1304
+          "line": 1341
         }
       ],
       "resolvedId": 37356,
@@ -2368,9 +2405,9 @@
       "offset": "0x6277b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1315
+          "line": 1352
         }
       ],
       "resolvedId": 37448,
@@ -2384,7 +2421,7 @@
       "offset": "0x6295d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 370
         }
@@ -2400,9 +2437,9 @@
       "offset": "0x629e60",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1317
+          "line": 1354
         }
       ],
       "resolvedId": 37521,
@@ -2416,9 +2453,9 @@
       "offset": "0x62a180",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1316
+          "line": 1353
         }
       ],
       "resolvedId": 37525,
@@ -2432,9 +2469,9 @@
       "offset": "0x62a340",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 707
+          "line": 744
         }
       ],
       "resolvedId": 37527,
@@ -2448,9 +2485,9 @@
       "offset": "0x62b510",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1323
+          "line": 1360
         }
       ],
       "resolvedId": 37542,
@@ -2464,12 +2501,12 @@
       "offset": "0x62c830",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1325
+          "line": 1362
         },
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 111
         }
@@ -2485,9 +2522,9 @@
       "offset": "0x633400",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 796
+          "line": 833
         }
       ],
       "resolvedId": 37677,
@@ -2501,12 +2538,12 @@
       "offset": "0x634d90",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 385
+          "line": 412
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\Magic\\MagicTarget.cpp",
+          "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
           "isRtti": false,
           "line": 245
         }
@@ -2522,9 +2559,9 @@
       "offset": "0x635220",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 804
+          "line": 841
         }
       ],
       "resolvedId": 37717,
@@ -2538,7 +2575,7 @@
       "offset": "0x637a90",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 51
         }
@@ -2554,9 +2591,9 @@
       "offset": "0x63f330",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1321
+          "line": 1358
         }
       ],
       "resolvedId": 37905,
@@ -2570,9 +2607,9 @@
       "offset": "0x612420",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1322
+          "line": 1359
         }
       ],
       "resolvedId": 36950,
@@ -2586,9 +2623,9 @@
       "offset": "0x664750",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 312
+          "line": 339
         }
       ],
       "resolvedId": 38533,
@@ -2602,9 +2639,9 @@
       "offset": "0x6385f0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1306
+          "line": 1343
         }
       ],
       "resolvedId": 37772,
@@ -2618,9 +2655,9 @@
       "offset": "0x63ab50",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 453
+          "line": 480
         }
       ],
       "resolvedId": 37808,
@@ -2634,7 +2671,7 @@
       "offset": "0x688ec0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 220
         }
@@ -2650,7 +2687,7 @@
       "offset": "0x688f00",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 244
         }
@@ -2666,7 +2703,7 @@
       "offset": "0x640cb0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 264
         }
@@ -2682,7 +2719,7 @@
       "offset": "0x689290",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 284
         }
@@ -2698,7 +2735,7 @@
       "offset": "0x6411a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 232
         }
@@ -2714,12 +2751,12 @@
       "offset": "0x6898c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 254
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 274
         }
@@ -2735,7 +2772,7 @@
       "offset": "0x68a550",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 476
         }
@@ -2751,7 +2788,7 @@
       "offset": "0x68a570",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 474
         }
@@ -2767,7 +2804,7 @@
       "offset": "0x68a5b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 478
         }
@@ -2783,7 +2820,7 @@
       "offset": "0x68a7f0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 477
         }
@@ -2799,7 +2836,7 @@
       "offset": "0x68a910",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 475
         }
@@ -2815,7 +2852,7 @@
       "offset": "0x68aab0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 479
         }
@@ -2831,7 +2868,7 @@
       "offset": "0x68ae90",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 187
         }
@@ -2847,12 +2884,12 @@
       "offset": "0x68aef0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 286
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 336
         }
@@ -2868,12 +2905,12 @@
       "offset": "0x68af10",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 112
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 287
         }
@@ -2889,7 +2926,7 @@
       "offset": "0x68afe0",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 141
         }
@@ -2905,7 +2942,7 @@
       "offset": "0x68b6d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\ActorState.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/ActorState.cpp",
           "isRtti": false,
           "line": 6
         }
@@ -2921,7 +2958,7 @@
       "offset": "0x68e580",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 335
         }
@@ -2937,12 +2974,12 @@
       "offset": "0x68e7b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 111
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 30
         }
@@ -2958,7 +2995,7 @@
       "offset": "0x69a110",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 140
         }
@@ -2974,9 +3011,9 @@
       "offset": "0x6d96f0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1320
+          "line": 1357
         }
       ],
       "resolvedId": 39643,
@@ -2990,7 +3027,7 @@
       "offset": "0x6e7dc0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\AIProcess.cpp",
+          "file": "Code/client/Games/Skyrim/AI/AIProcess.cpp",
           "isRtti": false,
           "line": 6
         }
@@ -3006,9 +3043,9 @@
       "offset": "0x6f75d0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1307
+          "line": 1344
         }
       ],
       "resolvedId": 40245,
@@ -3022,9 +3059,9 @@
       "offset": "0x6f8310",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1308
+          "line": 1345
         }
       ],
       "resolvedId": 40246,
@@ -3038,9 +3075,9 @@
       "offset": "0x69c710",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 169
+          "line": 196
         }
       ],
       "resolvedId": 39181,
@@ -3054,9 +3091,9 @@
       "offset": "0x707340",
       "references": [
         {
-          "file": "Code\\client\\SkyrimVM64.cpp",
+          "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 122
+          "line": 103
         }
       ],
       "resolvedId": 40412,
@@ -3070,9 +3107,9 @@
       "offset": "0x709970",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1318
+          "line": 1355
         }
       ],
       "resolvedId": 40454,
@@ -3086,9 +3123,9 @@
       "offset": "0x70b030",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 347
+          "line": 351
         }
       ],
       "resolvedId": 40488,
@@ -3102,9 +3139,9 @@
       "offset": "0x70ca10",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 345
+          "line": 349
         }
       ],
       "resolvedId": 40533,
@@ -3118,9 +3155,9 @@
       "offset": "0x70cbb0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 349
+          "line": 353
         }
       ],
       "resolvedId": 40535,
@@ -3134,9 +3171,9 @@
       "offset": "0x70cd40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 350
+          "line": 354
         }
       ],
       "resolvedId": 40536,
@@ -3150,7 +3187,7 @@
       "offset": "0x72c0a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
           "isRtti": false,
           "line": 13
         }
@@ -3166,9 +3203,9 @@
       "offset": "0x767a40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Actor.cpp",
+          "file": "Code/client/Games/Skyrim/Actor.cpp",
           "isRtti": false,
-          "line": 1319
+          "line": 1356
         }
       ],
       "resolvedId": 42704,
@@ -3182,7 +3219,7 @@
       "offset": "0x7b5cf0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Projectiles\\Projectile.cpp",
+          "file": "Code/client/Games/Skyrim/Projectiles/Projectile.cpp",
           "isRtti": false,
           "line": 118
         }
@@ -3198,7 +3235,7 @@
       "offset": "0x818380",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 44
         }
@@ -3214,7 +3251,7 @@
       "offset": "0x830da0",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 70
         }
@@ -3230,7 +3267,7 @@
       "offset": "0x8367c0",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 104
         }
@@ -3246,7 +3283,7 @@
       "offset": "0x876550",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "file": "Code/client/Games/Skyrim/Camera/PlayerCamera.cpp",
           "isRtti": false,
           "line": 37
         }
@@ -3262,7 +3299,7 @@
       "offset": "0x876610",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "file": "Code/client/Games/Skyrim/Camera/PlayerCamera.cpp",
           "isRtti": false,
           "line": 44
         }
@@ -3278,7 +3315,7 @@
       "offset": "0x8c6080",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 142
         }
@@ -3294,7 +3331,7 @@
       "offset": "0x6a9080",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 147
         }
@@ -3310,7 +3347,7 @@
       "offset": "0x8c23e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\LoadingScreen.cpp",
+          "file": "Code/client/Games/Skyrim/LoadingScreen.cpp",
           "isRtti": false,
           "line": 49
         }
@@ -3326,7 +3363,7 @@
       "offset": "0x933d40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\SkillsMenu.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/Menus/SkillsMenu.cpp",
           "isRtti": false,
           "line": 13
         }
@@ -3342,7 +3379,7 @@
       "offset": "0x933ea0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\SkillsMenu.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/Menus/SkillsMenu.cpp",
           "isRtti": false,
           "line": 23
         }
@@ -3358,7 +3395,7 @@
       "offset": "0x93b1e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "file": "Code/client/Games/Misc/SubtitleManager.cpp",
           "isRtti": false,
           "line": 46
         }
@@ -3374,7 +3411,7 @@
       "offset": "0x93b250",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "file": "Code/client/Games/Misc/SubtitleManager.cpp",
           "isRtti": false,
           "line": 28
         }
@@ -3390,7 +3427,7 @@
       "offset": "0x94a280",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 81
         }
@@ -3406,7 +3443,7 @@
       "offset": "0x94a3b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 905
         }
@@ -3422,7 +3459,7 @@
       "offset": "0x94ff10",
       "references": [
         {
-          "file": "Code\\client\\Utils.cpp",
+          "file": "Code/client/Utils.cpp",
           "isRtti": false,
           "line": 35
         }
@@ -3438,7 +3475,7 @@
       "offset": "0x95c430",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\MapMenu.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/Menus/MapMenu.cpp",
           "isRtti": false,
           "line": 12
         }
@@ -3454,7 +3491,7 @@
       "offset": "0x95aa60",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.cpp",
           "isRtti": false,
           "line": 113
         }
@@ -3470,9 +3507,9 @@
       "offset": "0x9869d0",
       "references": [
         {
-          "file": "Code\\client\\SkyrimVM64.cpp",
+          "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 121
+          "line": 102
         }
       ],
       "resolvedId": 53926,
@@ -3486,7 +3523,7 @@
       "offset": "0x99b180",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
           "line": 12
         }
@@ -3502,7 +3539,7 @@
       "offset": "0x97bd00",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Events\\EventDispacther.cpp",
+          "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
           "line": 22
         }
@@ -3518,9 +3555,9 @@
       "offset": "0x9c8200",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 346
+          "line": 350
         }
       ],
       "resolvedId": 55497,
@@ -3534,9 +3571,9 @@
       "offset": "0x9baf10",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Misc/BSScript.cpp",
           "isRtti": false,
-          "line": 164
+          "line": 178
         }
       ],
       "resolvedId": 55141,
@@ -3550,7 +3587,7 @@
       "offset": "0x9d02a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1123
         }
@@ -3566,7 +3603,7 @@
       "offset": "0x9d0320",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 1122
         }
@@ -3582,7 +3619,7 @@
       "offset": "0xa01aa0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 356
         }
@@ -3598,7 +3635,7 @@
       "offset": "0xa10880",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 82
         }
@@ -3614,7 +3651,7 @@
       "offset": "0xa24e40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "file": "Code/client/Games/Skyrim/BSSystem/BSThread.cpp",
           "isRtti": false,
           "line": 90
         }
@@ -3630,7 +3667,7 @@
       "offset": "0xb135e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 44
         }
@@ -3646,7 +3683,7 @@
       "offset": "0xa9a480",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 119
         }
@@ -3662,7 +3699,7 @@
       "offset": "0xa7b730",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 96
         }
@@ -3678,7 +3715,7 @@
       "offset": "0xaa6570",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 128
         }
@@ -3694,7 +3731,7 @@
       "offset": "0xb57580",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 240
         }
@@ -3710,7 +3747,7 @@
       "offset": "0xb0d770",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 227
         }
@@ -3726,7 +3763,7 @@
       "offset": "0xb5f9a0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 207
         }
@@ -3742,12 +3779,12 @@
       "offset": "0xc3d0e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Memory.cpp",
+          "file": "Code/client/Games/Memory.cpp",
           "isRtti": false,
           "line": 72
         },
         {
-          "file": "Code\\client\\Games\\Memory.cpp",
+          "file": "Code/client/Games/Memory.cpp",
           "isRtti": false,
           "line": 136
         }
@@ -3763,7 +3800,7 @@
       "offset": "0xc3d3e0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Memory.cpp",
+          "file": "Code/client/Games/Memory.cpp",
           "isRtti": false,
           "line": 138
         }
@@ -3779,7 +3816,7 @@
       "offset": "0xc7ee60",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 165
         }
@@ -3795,7 +3832,7 @@
       "offset": "0xc80600",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "file": "Code/client/Games/Skyrim/BSSystem/BSThread.cpp",
           "isRtti": false,
           "line": 79
         }
@@ -3811,7 +3848,7 @@
       "offset": "0xc80ce0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSRandom\\BSRandom.cpp",
+          "file": "Code/client/Games/Skyrim/BSRandom/BSRandom.cpp",
           "isRtti": false,
           "line": 17
         }
@@ -3827,7 +3864,7 @@
       "offset": "0xc8c310",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
           "isRtti": false,
           "line": 31
         }
@@ -3843,7 +3880,7 @@
       "offset": "0xc8eb40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSInput\\BSInputDeviceManager.cpp",
+          "file": "Code/client/Games/Skyrim/BSInput/BSInputDeviceManager.cpp",
           "isRtti": false,
           "line": 20
         }
@@ -3859,7 +3896,7 @@
       "offset": "0x14f6920",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
           "line": 120
         }
@@ -3875,7 +3912,7 @@
       "offset": "0x13cb98b",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSThread.cpp",
+          "file": "Code/client/Games/Skyrim/BSSystem/BSThread.cpp",
           "isRtti": false,
           "line": 85
         }
@@ -3891,7 +3928,7 @@
       "offset": "0xc6db20",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSFixedString.cpp",
           "isRtti": false,
           "line": 14
         }
@@ -3907,7 +3944,7 @@
       "offset": "0xe10dd0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSFixedString.cpp",
           "isRtti": false,
           "line": 28
         }
@@ -3923,7 +3960,7 @@
       "offset": "0xc6edb0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSFixedString.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSFixedString.cpp",
           "isRtti": false,
           "line": 37
         }
@@ -3939,7 +3976,7 @@
       "offset": "0xcb8000",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSSystem\\BSTaskletManager.cpp",
+          "file": "Code/client/Games/Skyrim/BSSystem/BSTaskletManager.cpp",
           "isRtti": false,
           "line": 34
         }
@@ -3955,7 +3992,7 @@
       "offset": "0xcf2050",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\NetImmerse\\NiCamera.cpp",
+          "file": "Code/client/Games/Skyrim/NetImmerse/NiCamera.cpp",
           "isRtti": false,
           "line": 23
         }
@@ -3971,7 +4008,7 @@
       "offset": "0xcfcfb0",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 62
         }
@@ -3987,7 +4024,7 @@
       "offset": "0xe41490",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 25
         }
@@ -4003,12 +4040,12 @@
       "offset": "0xe43380",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
           "line": 97
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
           "line": 114
         }
@@ -4024,7 +4061,7 @@
       "offset": "0xe44b40",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\BSGraphics\\BSGraphicsRenderer.cpp",
+          "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
           "line": 129
         }
@@ -4040,7 +4077,7 @@
       "offset": "0xdbf9b0",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 63
         }
@@ -4056,7 +4093,7 @@
       "offset": "0xf916c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 30
         }
@@ -4072,7 +4109,7 @@
       "offset": "0xf92bc0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 133
         }
@@ -4088,7 +4125,7 @@
       "offset": "0xf93250",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 38
         }
@@ -4104,7 +4141,7 @@
       "offset": "0x126bbd0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.cpp",
           "isRtti": false,
           "line": 18
         }
@@ -4120,7 +4157,7 @@
       "offset": "0x13bc0b1",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.cpp",
           "isRtti": false,
           "line": 35
         }
@@ -4136,9 +4173,9 @@
       "offset": "0x13bc2da",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Misc/BSScript.cpp",
           "isRtti": false,
-          "line": 176
+          "line": 192
         }
       ],
       "resolvedId": 104359,
@@ -4152,7 +4189,7 @@
       "offset": "0x129a6c0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.h",
           "isRtti": false,
           "line": 124
         }
@@ -4168,7 +4205,7 @@
       "offset": "0x129a720",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.h",
           "isRtti": false,
           "line": 131
         }
@@ -4184,7 +4221,7 @@
       "offset": "0x13bcd88",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.cpp",
           "isRtti": false,
           "line": 206
         }
@@ -4200,7 +4237,7 @@
       "offset": "0x13bccfe",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.h",
           "isRtti": false,
           "line": 295
         }
@@ -4216,7 +4253,7 @@
       "offset": "0x13bcdbb",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.h",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.h",
           "isRtti": false,
           "line": 288
         }
@@ -4232,9 +4269,9 @@
       "offset": "0x13bd2a6",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Misc/BSScript.cpp",
           "isRtti": false,
-          "line": 175
+          "line": 191
         }
       ],
       "resolvedId": 104788,
@@ -4248,9 +4285,9 @@
       "offset": "0x13be40c",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Misc/BSScript.cpp",
           "isRtti": false,
-          "line": 178
+          "line": 194
         }
       ],
       "resolvedId": 105220,
@@ -4264,7 +4301,7 @@
       "offset": "0x15bf5d8",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 171
         }
@@ -4280,7 +4317,7 @@
       "offset": "0x1b6d5f8",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 44
         }
@@ -4296,9 +4333,9 @@
       "offset": "0x1baa654",
       "references": [
         {
-          "file": "Code\\client\\TiltedOnlineApp.cpp",
+          "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 131
+          "line": 159
         }
       ],
       "resolvedId": 380768,
@@ -4312,7 +4349,7 @@
       "offset": "0x1bae534",
       "references": [
         {
-          "file": "Code\\client\\Games\\References.cpp",
+          "file": "Code/client/Games/References.cpp",
           "isRtti": false,
           "line": 38
         }
@@ -4328,7 +4365,7 @@
       "offset": "0x1bb3870",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 57
         }
@@ -4344,7 +4381,7 @@
       "offset": "0x1bb38f4",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 63
         }
@@ -4360,7 +4397,7 @@
       "offset": "0x1c395b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Memory.cpp",
+          "file": "Code/client/Games/Memory.cpp",
           "isRtti": false,
           "line": 15
         }
@@ -4376,9 +4413,9 @@
       "offset": "0x1c39a18",
       "references": [
         {
-          "file": "Code\\client\\Games\\ModManager.cpp",
+          "file": "Code/client/Games/ModManager.cpp",
           "isRtti": false,
-          "line": 9
+          "line": 12
         }
       ],
       "resolvedId": 400269,
@@ -4392,7 +4429,7 @@
       "offset": "0x1c39c68",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\TESObjectREFR.cpp",
+          "file": "Code/client/Games/Skyrim/TESObjectREFR.cpp",
           "isRtti": false,
           "line": 133
         }
@@ -4408,9 +4445,9 @@
       "offset": "0x1f831b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\TES.cpp",
+          "file": "Code/client/Games/TES.cpp",
           "isRtti": false,
-          "line": 14
+          "line": 21
         }
       ],
       "resolvedId": 514167,
@@ -4424,7 +4461,7 @@
       "offset": "0x1c39cc8",
       "references": [
         {
-          "file": "Code\\client\\Games\\BGSCreatedObjectManager.cpp",
+          "file": "Code/client/Games/BGSCreatedObjectManager.cpp",
           "isRtti": false,
           "line": 5
         }
@@ -4440,7 +4477,7 @@
       "offset": "0x1c39d20",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\UI.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
           "line": 20
         }
@@ -4456,9 +4493,9 @@
       "offset": "0x1c3a320",
       "references": [
         {
-          "file": "Code\\client\\Games\\TES.cpp",
+          "file": "Code/client/Games/TES.cpp",
           "isRtti": false,
-          "line": 7
+          "line": 10
         }
       ],
       "resolvedId": 400441,
@@ -4472,7 +4509,7 @@
       "offset": "0x1c3a33c",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\SubtitleManager.cpp",
+          "file": "Code/client/Games/Misc/SubtitleManager.cpp",
           "isRtti": false,
           "line": 13
         }
@@ -4488,9 +4525,9 @@
       "offset": "0x1c3a370",
       "references": [
         {
-          "file": "Code\\client\\Games\\TimeManager.cpp",
+          "file": "Code/client/Games/TimeManager.cpp",
           "isRtti": false,
-          "line": 6
+          "line": 9
         }
       ],
       "resolvedId": 400447,
@@ -4504,7 +4541,7 @@
       "offset": "0x1c3a518",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\GameVM.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/GameVM.cpp",
           "isRtti": false,
           "line": 7
         }
@@ -4520,7 +4557,7 @@
       "offset": "0x1f88b40",
       "references": [
         {
-          "file": "Code\\client\\Games\\FormFactory.cpp",
+          "file": "Code/client/Games/FormFactory.cpp",
           "isRtti": false,
           "line": 10
         }
@@ -4536,7 +4573,7 @@
       "offset": "0x1c3ad98",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\EquipManager.cpp",
+          "file": "Code/client/Games/Skyrim/EquipManager.cpp",
           "isRtti": false,
           "line": 212
         }
@@ -4552,7 +4589,7 @@
       "offset": "0x1c3b738",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Camera\\PlayerCamera.cpp",
+          "file": "Code/client/Games/Skyrim/Camera/PlayerCamera.cpp",
           "isRtti": false,
           "line": 8
         }
@@ -4568,7 +4605,7 @@
       "offset": "0x1c3bd10",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
           "isRtti": false,
           "line": 24
         }
@@ -4584,7 +4621,7 @@
       "offset": "0x1c3bd18",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\Movement\\PlayerControls.cpp",
+          "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
           "isRtti": false,
           "line": 6
         }
@@ -4600,9 +4637,9 @@
       "offset": "0x1c3cbd8",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 45
+          "line": 48
         }
       ],
       "resolvedId": 401069,
@@ -4616,7 +4653,7 @@
       "offset": "0x2fc4878",
       "references": [
         {
-          "file": "Code\\client\\Games\\Misc\\MenuTopicManager.cpp",
+          "file": "Code/client/Games/Misc/MenuTopicManager.cpp",
           "isRtti": false,
           "line": 10
         }
@@ -4632,12 +4669,12 @@
       "offset": "0x1c3cdc0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 341
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 378
         }
@@ -4653,7 +4690,7 @@
       "offset": "0x1c3d784",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\MenuControls.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/MenuControls.cpp",
           "isRtti": false,
           "line": 11
         }
@@ -4669,7 +4706,7 @@
       "offset": "0x1c47da4",
       "references": [
         {
-          "file": "Code\\client\\Games\\Forms.cpp",
+          "file": "Code/client/Games/Forms.cpp",
           "isRtti": false,
           "line": 106
         }
@@ -4685,12 +4722,12 @@
       "offset": "0x1c494b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 113
         },
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 32
         }
@@ -4706,7 +4743,7 @@
       "offset": "0x1c494bc",
       "references": [
         {
-          "file": "Code\\client\\Games\\Animation.cpp",
+          "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
           "line": 70
         }
@@ -4722,7 +4759,7 @@
       "offset": "0x1c494c8",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 340
         }
@@ -4738,7 +4775,7 @@
       "offset": "0x2ffd778",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\WeatherManager.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/WeatherManager.cpp",
           "isRtti": false,
           "line": 7
         }
@@ -4754,7 +4791,7 @@
       "offset": "0x1c4bde0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AnimationExperiments.cpp",
+          "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
           "isRtti": false,
           "line": 379
         }
@@ -4770,7 +4807,7 @@
       "offset": "0x1c4d1b0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\AI\\AITimer.h",
+          "file": "Code/client/Games/Skyrim/AI/AITimer.h",
           "isRtti": false,
           "line": 7
         }
@@ -4786,9 +4823,9 @@
       "offset": "0x1c4d910",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\PlayerCharacter.cpp",
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 139
+          "line": 143
         }
       ],
       "resolvedId": 404238,
@@ -4802,7 +4839,7 @@
       "offset": "0x1c53d48",
       "references": [
         {
-          "file": "Code\\client\\Services\\Debug\\Views\\CombatView.cpp",
+          "file": "Code/client/Services/Debug/Views/CombatView.cpp",
           "isRtti": false,
           "line": 90
         }
@@ -4818,7 +4855,7 @@
       "offset": "0x1c58540",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\HUDMenuUtils.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/Menus/HUDMenuUtils.cpp",
           "isRtti": false,
           "line": 22
         }
@@ -4834,7 +4871,7 @@
       "offset": "0x1c587d8",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Interface\\Menus\\HUDMenuUtils.cpp",
+          "file": "Code/client/Games/Skyrim/Interface/Menus/HUDMenuUtils.cpp",
           "isRtti": false,
           "line": 23
         }
@@ -4850,7 +4887,7 @@
       "offset": "0x316ad98",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Camera\\TESCamera.cpp",
+          "file": "Code/client/Games/Skyrim/Camera/TESCamera.cpp",
           "isRtti": false,
           "line": 8
         }
@@ -4866,9 +4903,9 @@
       "offset": "0x1c75e00",
       "references": [
         {
-          "file": "Code\\client\\Games\\INISettingCollection.cpp",
+          "file": "Code/client/Games/INISettingCollection.cpp",
           "isRtti": false,
-          "line": 7
+          "line": 10
         }
       ],
       "resolvedId": 411155,
@@ -4882,7 +4919,7 @@
       "offset": "0x1c77af0",
       "references": [
         {
-          "file": "Code\\client\\Games\\Renderer.cpp",
+          "file": "Code/client/Games/Renderer.cpp",
           "isRtti": false,
           "line": 21
         }
@@ -4898,7 +4935,7 @@
       "offset": "0x1c77b18",
       "references": [
         {
-          "file": "Code\\client\\Games\\Renderer.cpp",
+          "file": "Code/client/Games/Renderer.cpp",
           "isRtti": false,
           "line": 28
         }
@@ -4914,7 +4951,7 @@
       "offset": "0x3181700",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 65
         }
@@ -4930,7 +4967,7 @@
       "offset": "0x1c8d5e8",
       "references": [
         {
-          "file": "Code\\client\\Games\\Skyrim\\Misc\\BSScript.cpp",
+          "file": "Code/client/Games/Skyrim/Misc/BSScript.cpp",
           "isRtti": false,
           "line": 119
         }
@@ -4946,7 +4983,7 @@
       "offset": "0x1c8f6c0",
       "references": [
         {
-          "file": "Code\\client\\Systems\\FaceGenSystem.cpp",
+          "file": "Code/client/Systems/FaceGenSystem.cpp",
           "isRtti": false,
           "line": 61
         }
@@ -4954,6 +4991,102 @@
       "resolvedId": 414675,
       "source": "sse_vr",
       "status": "exact_sse_vr",
+      "translation": "direct"
+    },
+    {
+      "id": 514141,
+      "name": "",
+      "offset": "0x1f82ad8",
+      "references": [
+        {
+          "file": "Code/client/Games/ModManager.cpp",
+          "isRtti": false,
+          "line": 10
+        }
+      ],
+      "resolvedId": 514141,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 514167,
+      "name": "",
+      "offset": "0x1f831b0",
+      "references": [
+        {
+          "file": "Code/client/Games/TES.cpp",
+          "isRtti": false,
+          "line": 19
+        }
+      ],
+      "resolvedId": 514167,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 514287,
+      "name": "",
+      "offset": "0x1f85108",
+      "references": [
+        {
+          "file": "Code/client/Games/TimeManager.cpp",
+          "isRtti": false,
+          "line": 7
+        }
+      ],
+      "resolvedId": 514287,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 516923,
+      "name": "",
+      "offset": "0x2feb6f8",
+      "references": [
+        {
+          "file": "Code/client/Games/TES.cpp",
+          "isRtti": false,
+          "line": 8
+        }
+      ],
+      "resolvedId": 516923,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 517014,
+      "name": "",
+      "offset": "0x2feb9f0",
+      "references": [
+        {
+          "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
+          "isRtti": false,
+          "line": 46
+        }
+      ],
+      "resolvedId": 517014,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
+      "id": 524557,
+      "name": "",
+      "offset": "0x3175fe0",
+      "references": [
+        {
+          "file": "Code/client/Games/INISettingCollection.cpp",
+          "isRtti": false,
+          "line": 8
+        }
+      ],
+      "resolvedId": 524557,
+      "source": "release",
+      "status": "release",
       "translation": "direct"
     }
   ],
@@ -4972,8 +5105,8 @@
     "missingIdsIncludingRtti": 47,
     "missingNonRttiIds": 0,
     "missingRttiIdsUsedByCast": 0,
-    "uniqueAddressIds": 3080,
-    "uniqueNonRttiAddressIds": 273,
+    "uniqueAddressIds": 3088,
+    "uniqueNonRttiAddressIds": 281,
     "uniqueRttiAddressIds": 2807
   }
 }

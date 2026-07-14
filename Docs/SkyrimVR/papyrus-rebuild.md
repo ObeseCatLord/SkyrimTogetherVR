@@ -37,7 +37,7 @@ The wrapper uses:
 - `Tools/SkyrimVR/PapyrusImports/*.psc` compile-only stubs
 - a temporary source directory containing only the VR scripts that need rebuilding
 
-The compile-only import stubs are not package files and should not be copied into `GameFiles/SkyrimVR/scripts`.
+The compile-only import stubs are not package files and should not be copied into `GameFiles/SkyrimVR/Scripts`.
 
 ## Source Notes
 
@@ -59,12 +59,12 @@ The compile-only `Quest`, `ReferenceAlias`, and `ActiveMagicEffect` stubs includ
 The Skyrim Special Edition Creation Kit compiler should also work once installed. The expected command shape is:
 
 ```cmd
-PapyrusCompiler.exe SkyrimTogetherVerifyLaunchScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
-PapyrusCompiler.exe SkyrimTogetherPlayerAliasScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
-PapyrusCompiler.exe SkyrimTogetherVRTickBridge.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
-PapyrusCompiler.exe SkyrimTogetherUtils.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
-PapyrusCompiler.exe SkyrimTogetherVRConnectionMenu.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
-PapyrusCompiler.exe SkyrimTogetherVRConnectionSpellEffect.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\scripts"
+PapyrusCompiler.exe SkyrimTogetherVerifyLaunchScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
+PapyrusCompiler.exe SkyrimTogetherPlayerAliasScript.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
+PapyrusCompiler.exe SkyrimTogetherVRTickBridge.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
+PapyrusCompiler.exe SkyrimTogetherUtils.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
+PapyrusCompiler.exe SkyrimTogetherVRConnectionMenu.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
+PapyrusCompiler.exe SkyrimTogetherVRConnectionSpellEffect.psc -f=TESV_Papyrus_Flags.flg -i="<repo>\GameFiles\SkyrimVR\Scripts\source;<SkyrimSE>\Data\Scripts\Source" -o="<repo>\GameFiles\SkyrimVR\Scripts"
 ```
 
 Depending on the Creation Kit install, the Skyrim header path may be `Data\Scripts\Source`, `Data\Source\Scripts`, or an extracted `Scripts.zip` directory.

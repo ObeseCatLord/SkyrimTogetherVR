@@ -1,20 +1,20 @@
 ScriptName SkyrimTogetherVRMigrationXScript extends Quest Hidden
 
 Event OnInit()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(2)
-        SkyrimTogetherVRTickBridge.ArmOnInit()
-        VerifyLaunch()
-    EndIf
+    SkyrimTogetherVRTickBridge.ArmOnInit()
+    RearmCadence("OnInit")
 EndEvent
 
 Function VerifyLaunch()
-    If SkyrimTogetherVRTickBridge.ClaimCadence(2)
-        StartTickBridge()
-    EndIf
+    RearmCadence("VerifyLaunch")
 EndFunction
 
-Function StartTickBridge()
-    RegisterForSingleUpdate(0.05)
+Function RearmCadence(String asReason)
+    If SkyrimTogetherVRTickBridge.ClaimCadence(2)
+        Debug.Trace("SkyrimTogetherVR cadence rearm owner=2 reason=" + asReason)
+        UnregisterForUpdate()
+        RegisterForSingleUpdate(0.05)
+    EndIf
 EndFunction
 
 Event OnUpdate()

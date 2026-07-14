@@ -42,7 +42,11 @@ static TRemoveWaypoint* RealRemoveWaypoint = nullptr;
 
 PlayerCharacter* PlayerCharacter::Get() noexcept
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(PlayerCharacter*, s_character, 517014);
+#else
     POINTER_SKYRIMSE(PlayerCharacter*, s_character, 401069);
+#endif
 
     return *s_character.Get();
 }

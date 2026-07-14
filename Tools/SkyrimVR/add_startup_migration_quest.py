@@ -26,6 +26,8 @@ MIGRATION_QUEST_SCRIPT = b"SkyrimTogetherVRMigrationXScript"
 SOURCE_ALIAS_SCRIPT = b"SkyrimTogetherPlayerAliasScript"
 MIGRATION_ALIAS_SCRIPT = b"SkyrimTogetherVRMigrationScript"
 START_GAME_ENABLED_RUN_ONCE_FLAGS = 0x0111
+VR_HEADER_VERSION = 1.70
+VR_HEADER_VERSION_BYTES = struct.pack("<f", VR_HEADER_VERSION)
 RECORD_HEADER_SIZE = 24
 GROUP_HEADER_SIZE = 24
 
@@ -98,6 +100,31 @@ def iter_subrecord_offsets(payload):
         raise MigrationError("XXXX subrecord without a following subrecord")
 
 
+def tes4_header_version_offset(data):
+    if len(data) < RECORD_HEADER_SIZE or data[:4] != b"TES4":
+        raise MigrationError("input is not a TES4 plugin")
+    header_size = read_u32(data, 4)
+    header_end = RECORD_HEADER_SIZE + header_size
+    if header_end > len(data):
+        raise MigrationError("TES4 header record is truncated")
+    header_payload = data[RECORD_HEADER_SIZE:header_end]
+    for signature, start, end in iter_subrecord_offsets(header_payload):
+        if signature == b"HEDR":
+            if end - start < 4:
+                raise MigrationError("TES4 HEDR subrecord is truncated")
+            return RECORD_HEADER_SIZE + start
+    raise MigrationError("TES4 HEDR subrecord is missing")
+
+
+def normalize_vr_header_version(data):
+    version_offset = tes4_header_version_offset(data)
+    if data[version_offset : version_offset + 4] == VR_HEADER_VERSION_BYTES:
+        return bytes(data), False
+    result = bytearray(data)
+    result[version_offset : version_offset + 4] = VR_HEADER_VERSION_BYTES
+    return bytes(result), True
+
+
 def find_quest(data, form_id):
     for start, end, signature, record_form_id, parents in iter_records(data):
         if signature == b"QUST" and record_form_id == form_id:
@@ -135,6 +162,12 @@ def verify_plugin(plugin):
     data = pathlib.Path(plugin).read_bytes()
     if len(data) < RECORD_HEADER_SIZE or data[:4] != b"TES4":
         raise MigrationError(f"{plugin} is not a TES4 plugin")
+    version_offset = tes4_header_version_offset(data)
+    if data[version_offset : version_offset + 4] != VR_HEADER_VERSION_BYTES:
+        actual = struct.unpack_from("<f", data, version_offset)[0]
+        raise MigrationError(
+            f"TES4 header version {actual:.2f} is not Skyrim VR-compatible {VR_HEADER_VERSION:.2f}"
+        )
     validate_record(
         data,
         find_quest(data, SOURCE_FORM_ID),
@@ -173,9 +206,10 @@ def replace_exact_same_size(data, source, target, label):
 
 
 def add_migration_quest(data):
+    data, header_changed = normalize_vr_header_version(data)
     if find_quest(data, MIGRATION_FORM_ID) is not None:
         verify_plugin_bytes(data)
-        return data, False
+        return data, header_changed
 
     source = find_quest(data, SOURCE_FORM_ID)
     validate_record(

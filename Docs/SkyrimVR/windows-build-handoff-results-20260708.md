@@ -33,6 +33,49 @@ The current Skyrim VR install contains the VRIK, HIGGS, and PLANCK DLLs, but not
 
 This does not invalidate the built packages. It does mean that a strict readiness audit or runtime validation should wait until the actual VRIK, HIGGS, and PLANCK mod archives are installed into the target Skyrim VR directory.
 
+### Release Build and Install Attempt
+
+On July 11, 2026, the requested release build completed successfully with:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --default-only --compile-papyrus -- -Mode release
+```
+
+The resulting `packages\default` manifest reports `windows`, `x64`, `release`, `papyrusCompiled: true`, and `stagedGameFiles: true`. Its package audit completed with zero package failures. Build log: `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-20260711-185721.log`.
+
+The requested install command was then attempted against `\\host.lan\Data\FasterGames\SteamLibrary\steamapps\common\SkyrimVR`. It exited before copying files because the strict installer preflight requires the four missing VRIK/HIGGS/PLANCK scripts listed above. No Skyrim VR files were changed by this attempt. Install log: `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-install-20260711-190206.log`.
+
+Install the required mod scripts first, then rerun the same `InstallSkyrimTogetherVR-Windows.bat ... --install` command. The installer exposes `--no-require-vrik`, `--no-require-higgs`, and `--no-require-planck`, but those guards were intentionally not bypassed for this handoff.
+
+### Final Release Rebuild, Verification, and Install
+
+The July 11 default-release handoff build was run again with:
+
+```bat
+PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --default-only -- -Mode release
+VerifySkyrimTogetherVRWindowsPackages-Windows.bat --skyrim-vr "\\host.lan\Data\FasterGames\SteamLibrary\steamapps\common\SkyrimVR"
+InstallSkyrimTogetherVR-Windows.bat --skyrim-vr "\\host.lan\Data\FasterGames\SteamLibrary\steamapps\common\SkyrimVR" --install
+```
+
+The handoff wrapper returned success but its nested packager encountered a `Copy-Item` error while copying the CEF `locales` directory to `packages\default`, leaving a 228-file snapshot instead of the complete 482-file release staging directory. The wrapper permitted that nested command failure while collecting build evidence, so a successful handoff exit code alone was not sufficient evidence that the installable snapshot was complete.
+
+`VerifySkyrimTogetherVRWindowsPackages-Windows.bat` also returned success while its log contained unrelated broad-readiness failures for the inline patch guard, gameplay observation-service audit, and an older gameplay package snapshot. The strict default-package audit was run separately after repackaging and is the verification result used for the install. The verifier should propagate these reported failures through its process exit code, or clearly scope them by requested package flavor.
+
+The default packager was rerun directly in release mode. The retry produced the full 482-file snapshot and a strict built-package audit passed with zero failures, including the installed VRIK/HIGGS/PLANCK prerequisite checks. The installer then completed successfully: one file was new, four were updated, and 477 were already identical. SHA-256 comparisons confirm that the installed `SkyrimTogetherVR.exe`, `EarlyLoad.dll`, `TPProcess.exe`, and all three bridge DLLs match the final package.
+
+Relevant logs:
+
+- `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-rebuild-20260711-202203.log`
+- `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-repackage-20260711-202203.log`
+- `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-verify-20260711-202203.log`
+- `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-install-retry-20260711-202203.log`
+
+### Subsequent Default Release Rebuild
+
+The default release handoff was rebuilt again on July 11, 2026. The resulting `packages\default` snapshot is complete at 482 files and includes both `SkyrimTogetherVR.exe` and `libcef.dll`, so the earlier CEF snapshot-copy problem did not recur. Build log: `C:\Users\obesecatlord\Desktop\SkyrimTogetherVR-BuildLogs\stvr-default-release-rebuild-20260711-215140.log`.
+
+The strict package audit at that time reported the target Skyrim VR install missing the external VRIK, HIGGS, and PLANCK `.pex` scripts again. This is a target-runtime prerequisite change, not a package-build failure. No installation was performed during this rebuild; reinstall or runtime validation should first restore those mod scripts.
+
 This note summarizes the Windows build artifacts found in this repository after the Windows build handoff. It is intended to travel with the review handoff zip so the next agent can see what has already been built and what still needs validation.
 
 ## Built Package Snapshots

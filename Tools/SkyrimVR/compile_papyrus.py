@@ -114,8 +114,8 @@ def main() -> int:
     args = parser.parse_args()
 
     root = repo_root()
-    source_dir = root / "GameFiles" / "SkyrimVR" / "scripts" / "source"
-    output_dir = (args.output or (root / "GameFiles" / "SkyrimVR" / "scripts")).resolve()
+    source_dir = root / "GameFiles" / "SkyrimVR" / "Scripts" / "source"
+    output_dir = (args.output or (root / "GameFiles" / "SkyrimVR" / "Scripts")).resolve()
     flags_file = root / "Tools" / "SkyrimVR" / "TESV_Papyrus_Flags.flg"
     import_dir = root / "Tools" / "SkyrimVR" / "PapyrusImports"
 
