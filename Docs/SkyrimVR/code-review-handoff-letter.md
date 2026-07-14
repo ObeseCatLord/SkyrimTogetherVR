@@ -1,108 +1,109 @@
-# SkyrimTogetherVR Code Review Handoff Letter
+# SkyrimTogetherVR Code Review Handoff
 
-Date: July 12, 2026
+Date: July 14, 2026
 
-This package is a source-review handoff for the SkyrimTogether VR port. The goal is to port Tilted Online / Skyrim Together Reborn to Skyrim VR as a separate VR-only repository and build target. Skyrim SE support is intentionally out of scope for this fork. The target runtime is Skyrim VR with SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK compatibility.
+This handoff covers the Skyrim VR port of Tilted Online / Skyrim Together
+Reborn. The port is VR-only and targets Skyrim VR 1.4.15 with SKSEVR, the VR
+Address Library, VRIK, HIGGS, PLANCK, and optional SkyrimVR-FBT.
 
-## Goal
+## Review Baseline
 
-The requested end state is a SkyrimTogetherVR package that can be built on Windows/MSVC or through a Windows toolchain under Wine, installed into Skyrim VR, and tested in-game. Mandatory VR functionality includes VRIK IK pose replication so remote players can see each other's HMD, hands, weapon/spell/projectile origins, and VRIK-derived body/hand state. The port should keep dangerous flat-Skyrim gameplay hooks disabled until each hook and layout has been validated against Skyrim VR.
+- Source revision: `99d1e1d10f85347f0df37d4199ca90c671cb9bcc`
+- Branch: `main`
+- Upstream comparison branch: `original-skyrim-together`
+- Windows package: clean `releasedbg` gameplay build from the exact revision
+- Server: Linux ARM64 Docker image built from the exact revision
+- Protocol rule: client and server must use the same revision; the extended VR
+  pose schema does not negotiate with an older Skyrim Together server
 
-## Approach Taken
+## Port Approach
 
-The port has been structured as a staged VR bring-up rather than a direct enablement of all Skyrim Together gameplay systems:
+The port keeps the original client/server architecture and adds VR-specific
+boundaries instead of translating every desktop offset at runtime:
 
-- Added separate SkyrimTogetherVR xmake targets and launcher modes for default connection-only, avatar-sync validation, gameplay validation, and DLL-only bridge builds.
-- Added SKSEVR-aware loading and a launcher path-rerouting path that can start the VR client without relying on `StartSKSE` as the primary user entry point.
-- Added VR Address Library support and AE-to-SE-to-VR address translation/audit data, including generated address audit reports.
-- Added a CommonLibSSE-NG-informed runtime layout layer in `Code/client/Games/Skyrim/RuntimeLayout.h`, then routed staged actor/object/player/menu/inventory/projectile access through semantic accessors instead of raw shifted SE member reads where practical.
-- Disabled dangerous gameplay hooks by default. The default package is connection-only and writes telemetry/readout files rather than mutating remote actors or objects.
-- Added startup/main-loop/VM/render logging hooks for initial VR bring-up.
-- Added file-based VR handoff under `Data/SkyrimTogetherReborn`, plus a desktop/browser companion control surface to replace the flat CEF/D3D overlay for initial VR testing.
-- Added staged VR network lanes for pose, movement, equipment, activation, magic, combat, projectile, grab, HIGGS state, PLANCK compatibility, player-cell status, and save/load telemetry.
-- Added VRIK, HIGGS, and PLANCK SKSEVR bridge DLL targets. VRIK sync is mandatory; HIGGS and PLANCK remain observation-only until ownership, physics mutation, and ABI boundaries are validated.
-- Added Windows handoff scripts for build, package audit, build evidence collection, install dry-run, runtime evidence collection, and final evidence audit.
+- SKSEVR loading and a VR launcher path start the normal client lifecycle.
+- VR Address Library IDs and audited overrides resolve Skyrim VR code sites.
+- Semantic runtime-layout accessors isolate verified VR structure differences.
+- VRIK, HIGGS, PLANCK, tick, and early-load bridge DLLs provide narrow process
+  boundaries where the original flat client cannot own VR plugin callbacks.
+- A file-backed companion interface replaces the desktop-only in-game overlay
+  for connection and diagnostics.
+- VR movement, pose, equipment, activation, magic, combat, projectile, grab,
+  HIGGS, PLANCK, save/load, and player-cell data use explicit validated lanes.
+- Startup and gameplay mutations remain fail-closed where VR ownership or an
+  address has not been proven.
 
-## Current State
+## Full-Body Tracking
 
-This is not a release-ready runtime package yet. It is ready for code review and a fresh Windows/MSVC build from the current source revision.
+The current revision adds a versioned `VRBodyPoseData` payload for pelvis and
+leg state. HIGGS captures the final local player skeleton in its
+post-VRIK/post-HIGGS callback, after SkyrimVR-FBT has run in the installed
+plugin order. Capture is nonblocking, stale after 250 ms, and validated on
+both client and server ingress.
 
-Important constraints:
+Remote body data is relayed, cached, and exposed in runtime evidence. It is
+not yet written to remote pelvis or leg bones. Applying those transforms
+requires an actor-specific post-animation ownership point that does not race
+VRIK or PLANCK. This is a deliberate safety boundary, not a claim of rendered
+remote FBT. Head, hands, VRIK state, and existing avatar pose paths remain
+independent when FBT is unavailable.
 
-- The last installed default package was built from commit `6e04eb9e`; it was launched under UMU/GE-Proton and SKSEVR successfully loaded PLANCK, HIGGS, and the three SkyrimTogetherVR bridge DLLs. It then stalled exactly at `checking plugin ... VRIK.dll`, before reaching the mapped game entry point.
-- The target install was upgraded from a partial VRIK 0.8.2 deployment to a complete local VRIK 0.8.5 payload, including its DLL, ESP, scripts, settings, gestures, and mesh assets. The stall remained, so it is not attributed to missing VRIK files.
-- Current source replaces same-thread SKSEVR loading with a TLS-prepared helper thread and a strict pre-game barrier. It also logs the bootstrap phases, guards the 10,772-byte Skyrim VR TLS template against the 28,384-byte launcher reserve, and terminates a timed-out bootstrap safely. No built package includes this change yet.
-- A Windows gameplay package was built on July 8, but it predates the current source revision and must not be treated as a current build or reinstalled as one.
-- A Linux Wine/MSVC experiment reached the compiler and CMake, but failed before a complete client package due to PowerShell execution and xmake package-link environment failures. It produced no deployable artifacts.
-- The current source revision still needs a clean Windows/MSVC build, package audit, and install dry-run.
-- Skyrim VR was launched for bootstrap diagnostics, but no successful in-game session has yet been reached with SkyrimTogetherVR.
-- Runtime gameplay validation has not happened.
-- Gameplay hooks and inline patches remain intentionally gated unless explicit validation targets/configuration are used.
-- The local worktree contains many uncommitted and untracked files that are part of the VR port. Review the packaged source tree as the authoritative handoff state, not only `git status`.
+The supplied SkyrimVR-FBT source archive has no redistribution license. It is
+included only in this private review package and must not be published. The
+repository records only the interoperability profile and behavior needed by
+the port.
+
+## Verification Completed
+
+- All 27 no-launch readiness gates passed, including address, inline-patch,
+  game-file, FUS native DLL, HIGGS, PLANCK, FBT, and handoff audits.
+- The Linux protocol tests passed all 136 assertions in 5 test cases.
+- The Windows gameplay package built from a clean checkout of the exact
+  revision, including the launcher, five bridge DLLs, EarlyLoad, TPProcess,
+  CEF payload, and eight Papyrus scripts.
+- Package-only and strict post-install audits passed with SKSEVR, VR Address
+  Library, VRIK, HIGGS, PLANCK, and FBT present.
+- The gameplay package is installed in the local Skyrim VR directory.
+- The matching server image was built and deployed separately; see
+  `final-build-deployment-20260714.md` for its final container evidence.
+
+No game was launched as part of these checks. Runtime acceptance remains the
+user's VR test.
 
 ## Review Priorities
 
-Please focus review on these areas first:
+1. Validate the fixed-order VR pose wire change and the matched-revision
+   deployment requirement.
+2. Review `VRBodyPoseData` validation, sequence handling, mailbox lifetime,
+   and the tick/HIGGS endpoint ABI version 3 boundary.
+3. Verify the local skeleton capture ordering against the supplied FBT source,
+   installed VRIK build, and HIGGS callback implementation.
+4. Review the remaining remote-avatar ownership boundary before adding any
+   pelvis or leg writes.
+5. Recheck translated Address Library aliases and every enabled gameplay hook
+   against Skyrim VR 1.4.15.
+6. Confirm PLANCK remains authoritative for active ragdolls and HIGGS remains
+   authoritative for local held-object physics.
 
-- Windows/MSVC build correctness for all VR targets, especially untracked VR source files and xmake target graph integration.
-- `RuntimeLayout.h` offsets and semantic accessors against CommonLibSSE-NG VR headers.
-- Remaining raw member access to `TESObjectREFR`, `Actor`, `PlayerCharacter`, `TESObjectCELL`, inventory, magic, combat, and save/load structures.
-- SKSEVR loader behavior and launcher path handling, especially `STVR_GAME_PATH` propagation into the client and bridge DLL handoff paths.
-- The helper-thread SKSEVR bootstrap in `Code/immersive_launcher/Launcher.cpp` and its mapped TLS transfer in `Code/immersive_launcher/loader/ExeLoader.cpp`. The next build must prove VRIK loads successfully rather than merely proving that SKSEVR was found.
-- VR Address Library translation/audit data and whether generated helper CSVs match the target Skyrim VR runtime.
-- VRIK/HIGGS/PLANCK bridge boundaries. HIGGS and PLANCK should remain observation-only unless the review validates safe mutating APIs and ownership rules.
-- Avatar-sync validation target behavior. The current remote avatar application path is deliberately narrow and should be treated as provisional until two-client VR evidence confirms it.
-- Inline patch manifest and disassembly evidence. Do not enable inline patches broadly until every target site has been validated against the protected Skyrim VR executable image.
-- Package scripts and install dry-run behavior. The package should stage files under the Skyrim VR root and `Data`, not stale root-level mod folders.
+## Runtime Acceptance
 
-## Local Binary Policy
+The first matched-client run should establish:
 
-The review package intentionally does not include `SkyrimVR.exe` or the installed game binaries. Those files are proprietary game content and should not be redistributed by default. Instead, the package includes metadata and SHA-256 hashes for the local Skyrim VR executable and SKSEVR loader DLLs so a reviewer working on the same machine can locate and verify the local install.
+- client connection and assignment without bootstrap or first-tick crashes;
+- VRIK/HIGGS/PLANCK bridges loaded with no endpoint fault;
+- increasing local HMD/hand pose sequence;
+- increasing FBT body capture attempts and successes when FBT is loaded;
+- `local.body.valid=1` with an increasing body sequence;
+- increasing remote body sequence with two matched clients;
+- no invalid transform, stale payload, or wrong-owner writes in evidence.
 
-Expected local paths:
+Use the installed companion and packaged evidence collectors after the user
+has run Skyrim VR. Do not infer runtime success from build or deployment
+success alone.
 
-- Skyrim VR: `/home/obesecatlord/FasterGames/SteamLibrary/steamapps/common/SkyrimVR`
-- Skyrim SE reference install: `/home/obesecatlord/LargeGames/SteamLibrary/steamapps/common/Skyrim Special Edition`
-- Reference sources: `/home/obesecatlord/Documents/SkyrimModding/_refs`
-- FUS mod list: `/home/obesecatlord/Games/FUS/mods`
+## Sensitive And Proprietary Material
 
-## Before Building
-
-Before treating this as ready for in-game testing, the next agent should:
-
-- Review the current dirty worktree and package contents.
-- Make any obvious source fixes found during review.
-- Run the Windows handoff preflight on a Windows/MSVC machine.
-- Build all handoff packages.
-- Run the built-package readiness checks against the real Skyrim VR install with SKSEVR, VR Address Library, VRIK, HIGGS, and PLANCK present.
-- Run install dry-runs before copying files into Skyrim VR.
-
-The required next Windows build for the bootstrap correction is:
-
-```bat
-BuildAndAuditSkyrimTogetherVR-Windows.bat
-```
-
-After that package succeeds, the broader handoff command is:
-
-```bat
-PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
-```
-
-Then verify snapshots:
-
-```bat
-VerifySkyrimTogetherVRWindowsPackages-Windows.bat --include-fus --planck-archive "C:\Downloads\PLANCK.zip" --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR"
-```
-
-Only after those pass should a package be installed and launched in Skyrim VR.
-
-## Runtime Test Order
-
-Use this runtime order:
-
-1. Default package: connection, startup logging, VRIK/HIGGS/PLANCK installed-state readouts, local pose, command/status handoff.
-2. Avatar-sync package: two clients, remote player proxy, VRIK IK state, HMD/hand pose, weapon/magic/projectile pose context, HIGGS-aware avatar readiness.
-3. Gameplay package: deliberate one-lane validation for movement, equipment, activation, magic, combat, projectile, grab, HIGGS, PLANCK, and save/load.
-
-Runtime evidence should be collected with the packaged `CollectSkyrimTogetherVREvidence-Windows.bat`, `CollectSkyrimTogetherVRAvatarSyncEvidence-Windows.bat`, and `CollectSkyrimTogetherVRGameplayEvidence-Windows.bat` wrappers after the user runs Skyrim VR.
+The private archive may contain locally supplied third-party archives and a
+local `SkyrimVR.exe` solely for binary comparison. Do not redistribute them.
+The archive excludes SSH keys, server passwords/configuration, Codex telemetry,
+shell histories, and raw session logs.
