@@ -204,6 +204,37 @@ def audit_higgs_snapshot_lifecycle(root: pathlib.Path) -> list[str]:
     return []
 
 
+def audit_read_only_endpoint_access(root: pathlib.Path) -> list[str]:
+    bridge_path = root / BRIDGE_HIGGS_INTERFACE
+    if not bridge_path.exists():
+        return [f"HIGGS bridge source is missing: {bridge_path}"]
+
+    text = bridge_path.read_text(encoding="utf-8", errors="replace")
+    read_state = extract_function_block(text, "ReadEndpointState")
+    map_endpoint = extract_function_block(text, "MapEndpoint")
+    failures: list[str] = []
+
+    if not read_state:
+        failures.append("could not extract HIGGS ReadEndpointState body")
+    else:
+        for token in ("acEndpoint.State", "MemoryBarrier()"):
+            if token not in read_state:
+                failures.append(f"HIGGS ReadEndpointState is missing `{token}`")
+        for token in ("Interlocked", "atomic_ref", "const_cast"):
+            if token in read_state:
+                failures.append(f"HIGGS ReadEndpointState must not use `{token}` on the read-only endpoint view")
+
+    if not map_endpoint:
+        failures.append("could not extract HIGGS MapEndpoint body")
+    else:
+        if "FILE_MAP_READ" not in map_endpoint:
+            failures.append("HIGGS MapEndpoint must retain a read-only endpoint view")
+        if "FILE_MAP_WRITE" in map_endpoint:
+            failures.append("HIGGS MapEndpoint must not request write access")
+
+    return failures
+
+
 def audit_higgs_interface_abi(root: pathlib.Path) -> tuple[list[str], int]:
     failures: list[str] = []
     upstream_path = (root / UPSTREAM_HIGGS_INTERFACE).resolve()
@@ -262,6 +293,7 @@ def main() -> int:
     abi_failures, abi_method_count = audit_higgs_interface_abi(root)
     failures.extend(abi_failures)
     failures.extend(audit_higgs_snapshot_lifecycle(root))
+    failures.extend(audit_read_only_endpoint_access(root))
 
     print(f"Audited HIGGS bridge files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_CALL_TOKENS))}")
     print(f"Audited IHiggsInterface001 virtual methods: {abi_method_count}")

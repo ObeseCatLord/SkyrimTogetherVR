@@ -231,8 +231,9 @@ std::atomic<SkyrimTogetherVR::TickBridge::Endpoint*> g_endpoint{nullptr};
 
 LONG ReadEndpointState(const SkyrimTogetherVR::TickBridge::Endpoint& acEndpoint) noexcept
 {
-    return InterlockedCompareExchange(
-        const_cast<volatile LONG*>(reinterpret_cast<const volatile LONG*>(&acEndpoint.State)), 0, 0);
+    const auto value = acEndpoint.State;
+    MemoryBarrier();
+    return static_cast<LONG>(value);
 }
 
 bool IsExecutableReadOnlyPage(DWORD aProtection) noexcept
