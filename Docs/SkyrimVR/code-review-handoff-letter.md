@@ -8,13 +8,15 @@ Address Library, VRIK, HIGGS, PLANCK, and optional SkyrimVR-FBT.
 
 ## Review Baseline
 
-- Source revision: `99d1e1d10f85347f0df37d4199ca90c671cb9bcc`
+- Review source head: `15fd7280` plus this handoff metadata update
+- Built client revision: `220bc4bca709bf1fa208984d1fd4b2b5b773210a`
 - Branch: `main`
 - Upstream comparison branch: `original-skyrim-together`
-- Windows package: clean `releasedbg` gameplay build from the exact revision
-- Server: Linux ARM64 Docker image built from the exact revision
-- Protocol rule: client and server must use the same revision; the extended VR
-  pose schema does not negotiate with an older Skyrim Together server
+- Windows package: clean `releasedbg` default build from the built client revision
+- Server: Linux ARM64 Docker image built from compatible revision `99d1e1d1`
+- Protocol rule: the extended VR pose schema does not negotiate with an older
+  Skyrim Together server. The client changes after `99d1e1d1` do not change
+  `Code/server`, `Code/encoding`, or the VR wire schema.
 
 ## Port Approach
 
@@ -32,6 +34,9 @@ boundaries instead of translating every desktop offset at runtime:
   HIGGS, PLANCK, save/load, and player-cell data use explicit validated lanes.
 - Startup and gameplay mutations remain fail-closed where VR ownership or an
   address has not been proven.
+- A VM-owner lifecycle gate now keeps transport and gameplay updates suspended
+  through the main menu, character creation, loading, and unstable player/cell
+  transitions. See `startup-lifecycle-final-build-20260714.md`.
 
 ## Full-Body Tracking
 
@@ -58,22 +63,24 @@ the port.
 - All 27 no-launch readiness gates passed, including address, inline-patch,
   game-file, FUS native DLL, HIGGS, PLANCK, FBT, and handoff audits.
 - The Linux protocol tests passed all 136 assertions in 5 test cases.
-- The Windows gameplay package built from a clean checkout of the exact
+- The Windows default package built from a clean checkout of the built client
   revision, including the launcher, four bridge DLLs, EarlyLoad, TPProcess,
-  CEF payload, and eight Papyrus scripts.
+  CEF payload, and eight regenerated Papyrus scripts.
 - Package-only and strict post-install audits passed with SKSEVR, VR Address
   Library, VRIK, HIGGS, PLANCK, and FBT present.
 - The gameplay package is installed in the local Skyrim VR directory.
-- The matching server image was built and deployed separately; see
-  `final-build-deployment-20260714.md` for its final container evidence.
+- The compatible server image was built and deployed separately; see
+  `final-build-deployment-20260714.md` for its container evidence and
+  `startup-lifecycle-final-build-20260714.md` for the client compatibility
+  statement.
 
 No game was launched as part of these checks. Runtime acceptance remains the
 user's VR test.
 
 ## Review Priorities
 
-1. Validate the fixed-order VR pose wire change and the matched-revision
-   deployment requirement.
+1. Validate the fixed-order VR pose wire change and the client/server wire
+   compatibility statement.
 2. Review `VRBodyPoseData` validation, sequence handling, mailbox lifetime,
    and the tick/HIGGS endpoint ABI version 3 boundary.
 3. Verify the local skeleton capture ordering against the supplied FBT source,
@@ -84,12 +91,16 @@ user's VR test.
    against Skyrim VR 1.4.15.
 6. Confirm PLANCK remains authoritative for active ragdolls and HIGGS remains
    authoritative for local held-object physics.
+7. Review VM-update callback ownership, lifecycle epoch invalidation, retained
+   reconnect state, and TiltedConnect owner-thread enforcement.
 
 ## Runtime Acceptance
 
 The first matched-client run should establish:
 
 - client connection and assignment without bootstrap or first-tick crashes;
+- lifecycle transition to `ready` only after a stable post-character player
+  and cell, with one VM-update owner thread;
 - VRIK/HIGGS/PLANCK bridges loaded with no endpoint fault;
 - increasing local HMD/hand pose sequence;
 - increasing FBT body capture attempts and successes when FBT is loaded;
