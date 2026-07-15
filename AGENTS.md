@@ -12,7 +12,9 @@ Tools/SkyrimVR/build_winboat_gameplay.sh
 The helper refuses a dirty Linux worktree or a commit that is not reachable
 from `github/main`. It uses the private `winboat-ssh` channel, fetches the
 matching commit in WinBoat, creates a fresh detached Windows worktree, syncs
-all pinned submodules recursively, and runs:
+all pinned submodules recursively, and runs the command below. Before creating
+the new worktree it removes prior generated WinBoat build worktrees so the VM
+disk cannot grow by several gigabytes per iteration.
 
 ```bat
 BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
@@ -39,6 +41,22 @@ STVR_WINBOAT_REPO='C:\Users\name\Documents\Codex\SkyrimTogetherVR' \
 WINBOAT_POWERSHELL=/path/to/winboat-powershell \
 Tools/SkyrimVR/build_winboat_gameplay.sh <commit>
 ```
+
+## Build Storage Cleanup
+
+The checked-in cleanup command only targets generated Skyrim Together build
+worktrees, this repository's package artifacts, and explicitly requested
+rebuildable caches:
+
+```bash
+Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 7 --trim
+```
+
+`Tools/SkyrimVR/install_build_cleanup_timer.sh` installs and enables a user
+systemd timer that runs the seven-day cleanup weekly. It skips WinBoat cleanup
+without failing when the VM is offline. Do not expand the cleanup patterns to
+game installs, source checkouts, model caches, handoff archives, Docker
+containers, or unrelated application data.
 
 ## Runtime Safety
 
