@@ -12,8 +12,17 @@ From a clean clone with submodules initialized:
 ```bash
 git clone --recursive https://github.com/ObeseCatLord/SkyrimTogetherVR.git
 cd SkyrimTogetherVR
-docker build -t skyrim-together-vr-server:stvr-v0.1.0-alpha.1 .
+Tools/SkyrimVR/server/build_server_image.sh \
+  skyrim-together-vr-server:stvr-v0.1.0-alpha.1
 ```
+
+The helper requires a clean source tree. It uses the Dockerfile's xmake cache
+mounts when BuildKit/buildx is available. On older Docker hosts without the
+buildx component, it creates a temporary deployment-only Dockerfile that omits
+only those optional cache mounts and runs the same xmake build. The tracked
+Dockerfile and source tree are not modified. The Dockerfile builds the
+`SkyrimTogetherServer` target explicitly; unrelated Linux test targets are not
+part of the runtime image build.
 
 Create persistent directories and start with the provided Compose example:
 

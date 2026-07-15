@@ -51,10 +51,16 @@ calling-convention proof. The capability remains absent. `NotifyAnimationGraph`
 may later be offered as a clearly labeled visual fallback, but it is not full
 Skyrim Together action parity.
 
+## Completed Build Gates
+
+- clean WinBoat gameplay build at `d201a3f8`;
+- 571 `TPTests` assertions in 33 test cases;
+- 503-file gameplay package plus paired evidence audits with zero failures and
+  zero evidence warnings;
+- independent Linux package/evidence validation and exact client deployment.
+
 ## Remaining Gates
 
-- clean audited WinBoat gameplay build and complete TPTests;
-- source/package/evidence audits with ABI-v2 artifacts;
 - two-client runtime proof of retained-handle exterior/interior transfer,
   locomotion graph application, deliberate stale-tick rejection, and zero ring
   drops/rejections;

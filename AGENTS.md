@@ -52,6 +52,20 @@ WINBOAT_POWERSHELL=/path/to/winboat-powershell \
 Tools/SkyrimVR/build_winboat_gameplay.sh <commit>
 ```
 
+## One-Command Server Build
+
+Build the Linux server image from a clean checkout with initialized submodules:
+
+```bash
+Tools/SkyrimVR/server/build_server_image.sh skyrim-together-vr-server:<tag>
+```
+
+The helper uses BuildKit cache mounts when buildx is available and automatically
+falls back to a temporary cacheless Dockerfile on older hosts. It does not
+modify the tracked Dockerfile, start a container, or stop the running server.
+Use `Docs/SkyrimVR/server-deployment.md` for the one-container deployment and
+verification procedure.
+
 ## Build Storage Cleanup
 
 The checked-in cleanup command only targets generated Skyrim Together build

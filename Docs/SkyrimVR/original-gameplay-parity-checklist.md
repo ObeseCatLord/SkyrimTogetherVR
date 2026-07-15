@@ -61,8 +61,11 @@ passes.
 - [x] Source: complete named humanoid animation graph variable snapshots in both
   directions, with bounded five-chunk assembly, finite-value validation,
   supersession recovery, preimage rollback, and per-avatar quarantine.
-- [ ] Build: compile bridge ABI v2, run TPTests, and audit the exact Windows
-  gameplay package and evidence bundle.
+- [x] Build: bridge ABI v2 commit `d201a3f8` compiled on WinBoat; Windows
+  `TPTests` passed 571 assertions in 33 cases, the 503-file gameplay package
+  passed its package audit, and the paired evidence archive passed with zero
+  warnings or failures. See
+  `windows-gameplay-build-result-20260715-movement-animation.md`.
 - [ ] Port exact graph-event/action replay after `ActorMediator` targets and
   global pointer shapes are semantically and ABI verified for Skyrim VR.
 - [ ] Port draw/sheath, idle, jump, sneak, sprint, swim, ragdoll, and furniture
@@ -209,10 +212,10 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Commit and build the movement/animation graph ABI-v2 slice once on WinBoat;
-   retain and audit the exact package and build-evidence archive.
-2. Deploy the exact client and matching server artifacts without launching
-   Skyrim, then run the Phase 0 plus movement/graph two-client acceptance matrix.
+1. Complete and document the exact client plus matching-server no-launch
+   deployment, then retain it in the private local-agent handoff.
+2. Run the Phase 0 plus movement/graph two-client acceptance matrix against
+   that exact deployment.
 3. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
    in retained runtime evidence before adding another mutation domain.
 4. Semantically verify and implement exact animation/action replay, then proceed
