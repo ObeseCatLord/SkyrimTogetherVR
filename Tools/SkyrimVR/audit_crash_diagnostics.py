@@ -131,7 +131,7 @@ def main() -> int:
             root,
             root / "Code" / "immersive_launcher" / "stubs" / "FileMapping.cpp",
             (
-                "IsModuleBasenameMatch",
+                "IsExactBareModuleNameMatch",
                 "WideCharToMultiByte(CP_ACP",
                 "TP_GetModuleFileNameW(aModule, pBuffer, aBufferSize)",
             ),
@@ -165,7 +165,7 @@ def main() -> int:
             root,
             root / "Code" / "immersive_launcher" / "Launcher.cpp",
             (
-                "if (!RunTiltedInit(LC->gamePath, LC->Version))",
+        "if (!RunTiltedInit(LC->gamePath, runtimeVersion.Major, runtimeVersion.Minor, runtimeVersion.Revision, runtimeVersion.Build))",
                 "could not install its VR hook set",
             ),
         )

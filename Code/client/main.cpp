@@ -8,6 +8,10 @@
 #include <Commctrl.h>
 #include <Windows.h>
 
+#include <array>
+#include <cstdint>
+#include <cstring>
+
 #include <base/dialogues/win/TaskDialog.h>
 
 #include "immersive_launcher/stubs/DllBlocklist.h"
@@ -87,9 +91,11 @@ static void InstallVrBringupHooks()
 static void ShowAddressLibraryError(const wchar_t* apGamePath)
 {
 #if TP_SKYRIM_VR
+    const auto& error = VersionDb::Get().GetLastError();
+    const std::wstring wideError(error.begin(), error.end());
     auto errorDetail = fmt::format(
-        L"Looking for VR Address Library and SkyrimTogetherVR helper CSVs here: {}\\Data\\SKSE\\Plugins",
-        apGamePath);
+        L"Looking for VR Address Library and SkyrimTogetherVR helper CSVs here: {}\\Data\\SKSE\\Plugins\n\nReason: {}",
+        apGamePath, wideError.empty() ? L"unspecified address-loader failure" : wideError.c_str());
 
     Base::TaskDialog dia(
         g_SharedWindowIcon,
@@ -125,16 +131,99 @@ static void ShowAddressLibraryError(const wchar_t* apGamePath)
     exit(4);
 }
 
-bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVersion)
+#if TP_SKYRIM_VR
+namespace
 {
-    if (!VersionDb::Get().Load(acGamePath, aExeVersion))
+struct VrHookContract
+{
+    unsigned long long Id;
+    unsigned long long Rva;
+    const uint8_t* ExpectedBytes;
+    size_t ExpectedSize;
+    const char* Name;
+};
+
+bool IsExecutableProtection(DWORD aProtection) noexcept
+{
+    if ((aProtection & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        return false;
+
+    const auto baseProtection = aProtection & 0xFF;
+    return baseProtection == PAGE_EXECUTE_READ || baseProtection == PAGE_EXECUTE_READWRITE || baseProtection == PAGE_EXECUTE_WRITECOPY;
+}
+
+bool ValidateVrHookContract(const VrHookContract& acContract) noexcept
+{
+    unsigned long long resolvedRva = 0;
+    if (!VersionDb::Get().FindOffsetById(acContract.Id, resolvedRva) || resolvedRva != acContract.Rva)
     {
+        spdlog::critical(
+            "SkyrimTogetherVR rejected {} address ID {}: expected RVA 0x{:X}, resolved RVA 0x{:X}", acContract.Name, acContract.Id, acContract.Rva, resolvedRva);
+        return false;
+    }
+
+    const auto* pTarget = static_cast<const uint8_t*>(VersionDb::Get().FindAddressById(acContract.Id));
+    MEMORY_BASIC_INFORMATION memory{};
+    if (!pTarget || VirtualQuery(pTarget, &memory, sizeof(memory)) != sizeof(memory) || memory.State != MEM_COMMIT || !IsExecutableProtection(memory.Protect))
+    {
+        spdlog::critical("SkyrimTogetherVR rejected {} address ID {}: target is not committed executable memory", acContract.Name, acContract.Id);
+        return false;
+    }
+
+    const auto regionEnd = reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+    const auto targetEnd = reinterpret_cast<uintptr_t>(pTarget) + acContract.ExpectedSize;
+    if (targetEnd < reinterpret_cast<uintptr_t>(pTarget) || targetEnd > regionEnd || std::memcmp(pTarget, acContract.ExpectedBytes, acContract.ExpectedSize) != 0)
+    {
+        spdlog::critical("SkyrimTogetherVR rejected {} address ID {}: Skyrim VR 1.4.15 prologue mismatch", acContract.Name, acContract.Id);
+        return false;
+    }
+
+    spdlog::info("Validated Skyrim VR hook target {}: id={} rva=0x{:X}", acContract.Name, acContract.Id, acContract.Rva);
+    return true;
+}
+
+bool ValidateVrDefaultHookContracts() noexcept
+{
+    static constexpr std::array<uint8_t, 16> s_winMainBytes{
+        0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0x0D, 0x1D, 0x75, 0xA3, 0x02, 0x4C, 0x89, 0x05, 0x1E, 0x75};
+    static constexpr std::array<uint8_t, 16> s_mainDrawBytes{
+        0x48, 0x8B, 0xC4, 0x89, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41};
+
+    const VrHookContract contracts[]{
+        {35545, 0x5B4290, s_winMainBytes.data(), s_winMainBytes.size(), "WinMain"},
+        {35560, 0x5B9330, s_mainDrawBytes.data(), s_mainDrawBytes.size(), "Main::Draw"},
+    };
+
+    for (const auto& contract : contracts)
+    {
+        if (!ValidateVrHookContract(contract))
+            return false;
+    }
+    return true;
+}
+} // namespace
+#endif
+
+bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMinor, int aRevision, int aBuild)
+{
+    try
+    {
+        g_appInstance = std::make_unique<TiltedOnlineApp>();
+    }
+    catch (...)
+    {
+        OutputDebugStringA("SkyrimTogetherVR: failed to initialize bootstrap logging.\n");
+        return false;
+    }
+
+    spdlog::info("Loading Skyrim address data for runtime {}.{}.{}.{} from {}", aMajor, aMinor, aRevision, aBuild, acGamePath.string());
+    if (!VersionDb::Get().Load(acGamePath, aMajor, aMinor, aRevision, aBuild))
+    {
+        spdlog::critical("SkyrimTogetherVR address loading failed: {}", VersionDb::Get().GetLastError());
         ShowAddressLibraryError(acGamePath.c_str());
     }
 
     // VersionDb::Get().DumpToTextFile(R"(S:\Work\Tilted\fallout\_addresslib.txt)");
-
-    g_appInstance = std::make_unique<TiltedOnlineApp>();
 
     spdlog::info("Loaded Skyrim address data for runtime {} with {} entries", VersionDb::Get().GetLoadedVersionString(), VersionDb::Get().GetOffsetMap().size());
 
@@ -145,6 +234,9 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
 #endif
 
 #if TP_SKYRIM_VR
+    if (!ValidateVrDefaultHookContracts())
+        return false;
+
     if (!InstallVrWinMainLifecycleHook())
         return false;
 
@@ -246,9 +338,6 @@ void RunTiltedEnd() noexcept
         spdlog::critical("SkyrimTogetherVR WinMain lifecycle shutdown ran on thread {}; owner is {}", currentThreadId, ownerThreadId);
     spdlog::info("SkyrimTogetherVR WinMain lifecycle shutdown hook reached on thread {}", currentThreadId);
 #endif
-
-    if (!s_appStarted.load(std::memory_order_acquire))
-        return;
 
     try
     {

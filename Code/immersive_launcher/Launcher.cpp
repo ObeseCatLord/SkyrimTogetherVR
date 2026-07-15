@@ -31,7 +31,7 @@
 // These symbols are defined within the client code skyrimtogetherclient
 extern bool InstallStartHook();
 extern void RunTiltedApp();
-extern bool RunTiltedInit(const std::filesystem::path& acGamePath, const TiltedPhoques::String& aExeVersion);
+extern bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMinor, int aRevision, int aBuild);
 
 // Defined in EarlyLoad.dll
 bool __declspec(dllimport) EarlyInstallSucceeded();
@@ -247,7 +247,8 @@ int StartUp(int argc, char** argv)
     loader::InstallPathRouting(LC->gamePath);
     steam::Load(LC->gamePath);
 
-    if (!LoadProgram(*LC))
+    RuntimeVersion runtimeVersion{};
+    if (!LoadProgram(*LC, runtimeVersion))
         return 3;
 
     if (!InstallStartHook())
@@ -258,7 +259,7 @@ int StartUp(int argc, char** argv)
     }
     // Initialize all hooks before calling game init
     // TiltedPhoques::Initializer::RunAll();
-    if (!RunTiltedInit(LC->gamePath, LC->Version))
+    if (!RunTiltedInit(LC->gamePath, runtimeVersion.Major, runtimeVersion.Minor, runtimeVersion.Revision, runtimeVersion.Build))
     {
         SetLastError(ERROR_DLL_INIT_FAILED);
         Die(L"SkyrimTogetherVR could not install its VR hook set. Check tp_client.log for MinHook failures.", true);
@@ -282,14 +283,15 @@ int StartUp(int argc, char** argv)
     return 0;
 }
 
-bool LoadProgram(LaunchContext& LC)
+bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)
 {
     auto content = TiltedPhoques::LoadFile(LC.exePath);
     if (content.empty())
         DIE_NOW(L"Failed to mount game executable");
 
-    LC.Version = QueryFileVersion(LC.exePath.c_str());
-    if (LC.Version.empty())
+    // Preserve only fixed-width version fields across manual PE mapping. The
+    // mapped image can replace process-global CRT state used by heap strings.
+    if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))
         DIE_NOW(L"Failed to query game version");
     LC.SetLoaded();
 

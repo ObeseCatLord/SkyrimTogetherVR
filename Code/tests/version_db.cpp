@@ -83,6 +83,9 @@ TEST_CASE("VR address aliases override colliding raw IDs", "[version-db][skyrim-
     WriteTextFile(
         pluginPath / "SkyrimTogetherVR_AE_to_SE.csv", "sseid,aeid\n"
                                                       "19362,19789\n");
+    WriteTextFile(
+        pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", "id,offset,source,status,name\n"
+                                                            "30000,300000,test,verified,Unrelated\n");
 
     VersionDb database;
     REQUIRE(database.Load(game.Path, 1, 4, 15, 0));
@@ -131,4 +134,61 @@ TEST_CASE("VR project overlays apply after binary address libraries", "[version-
     REQUIRE_FALSE(database.FindIdByOffset(0x111000, id));
     REQUIRE_FALSE(database.FindIdByOffset(0x222000, id));
     REQUIRE(database.FindIdByOffset(0x1F83200, id));
+}
+
+TEST_CASE("VR explicit project overrides outrank generated aliases", "[version-db][skyrim-vr]")
+{
+    TemporaryGameDirectory game;
+    const auto pluginPath = game.Path / "Data" / "SKSE" / "Plugins";
+
+    WriteTextFile(
+        pluginPath / "version-1-4-15-0.csv", "id,offset\n"
+                                             "19362,2a7f00\n"
+                                             "19789,2b7de0\n");
+    WriteTextFile(
+        pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", "id,offset,source,status,name\n"
+                                                            "19789,3c0000,test,verified,ExplicitTarget\n");
+    WriteTextFile(
+        pluginPath / "SkyrimTogetherVR_AE_to_SE.csv", "sseid,aeid\n"
+                                                      "19362,19789\n");
+
+    VersionDb database;
+    REQUIRE(database.Load(game.Path, 1, 4, 15, 0));
+
+    unsigned long long offset = 0;
+    REQUIRE(database.FindOffsetById(19362, offset));
+    REQUIRE(offset == 0x2A7F00);
+    REQUIRE(database.FindOffsetById(19789, offset));
+    REQUIRE(offset == 0x3C0000);
+}
+
+TEST_CASE("VR address loading rejects missing required project overlays", "[version-db][skyrim-vr]")
+{
+    TemporaryGameDirectory game;
+    const auto pluginPath = game.Path / "Data" / "SKSE" / "Plugins";
+    WriteTextFile(pluginPath / "version-1-4-15-0.csv", "id,offset\n35545,5b4290\n");
+
+    VersionDb database;
+    REQUIRE_FALSE(database.Load(game.Path, 1, 4, 15, 0));
+    REQUIRE(database.GetOffsetMap().empty());
+    REQUIRE(database.GetLastError().find("SkyrimTogetherVR_AddressOverrides.csv") != std::string::npos);
+}
+
+TEST_CASE("VR binary address loading rejects truncated entries", "[version-db][skyrim-vr]")
+{
+    TemporaryGameDirectory game;
+    const auto pluginPath = game.Path / "Data" / "SKSE" / "Plugins";
+    const auto binaryPath = pluginPath / "versionlib-1-4-15-0.bin";
+
+    WriteBinaryAddressLibrary(binaryPath, {{35545, 0x5B4290}});
+    std::filesystem::resize_file(binaryPath, std::filesystem::file_size(binaryPath) - 4);
+    WriteTextFile(
+        pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", "id,offset,source,status,name\n"
+                                                            "35545,5b4290,test,verified,WinMain\n");
+    WriteTextFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv", "sseid,aeid\n35545,35545\n");
+
+    VersionDb database;
+    REQUIRE_FALSE(database.Load(game.Path, 1, 4, 15, 0));
+    REQUIRE(database.GetOffsetMap().empty());
+    REQUIRE(database.GetLastError().find("Truncated") != std::string::npos);
 }

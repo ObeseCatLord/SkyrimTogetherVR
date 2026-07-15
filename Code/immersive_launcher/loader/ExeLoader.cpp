@@ -220,17 +220,27 @@ size_t ExeLoader::GetMappedTlsSlotCapacity() noexcept
     return ::GetMappedTlsSlotCapacity();
 }
 
-void ExeLoader::LoadExceptionTable(IMAGE_NT_HEADERS* apNtHeader)
+bool ExeLoader::LoadExceptionTable(IMAGE_NT_HEADERS* apNtHeader)
 {
     IMAGE_DATA_DIRECTORY* exceptionDirectory = &apNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    if (!exceptionDirectory->VirtualAddress || !exceptionDirectory->Size || exceptionDirectory->Size % sizeof(RUNTIME_FUNCTION) != 0)
+    {
+        SetLastError(ERROR_BAD_EXE_FORMAT);
+        return false;
+    }
 
     RUNTIME_FUNCTION* functionList = GetTargetRVA<RUNTIME_FUNCTION>(exceptionDirectory->VirtualAddress);
     DWORD entryCount = exceptionDirectory->Size / sizeof(RUNTIME_FUNCTION);
+    if (!entryCount)
+    {
+        SetLastError(ERROR_BAD_EXE_FORMAT);
+        return false;
+    }
 
-    // has no use - inverted function tables get used instead from Ldr; we have no influence on those
     if (!RtlAddFunctionTable(functionList, entryCount, (DWORD64)GetModuleHandle(nullptr)))
     {
-        Die(L"Setting exception handlers failed.", false);
+        SetLastError(ERROR_INVALID_FUNCTION);
+        return false;
     }
 
     // replace the function table stored for debugger purposes (though we just added it above)
@@ -265,6 +275,8 @@ void ExeLoader::LoadExceptionTable(IMAGE_NT_HEADERS* apNtHeader)
             }
         }
     }
+
+    return true;
 }
 
 uint32_t ExeLoader::Rva2Offset(uint32_t aRva) noexcept
@@ -349,7 +361,8 @@ bool ExeLoader::Load(const uint8_t* apProgramBuffer)
 
     LoadImports(ntHeader);
 #if defined(_M_AMD64)
-    LoadExceptionTable(ntHeader);
+    if (!LoadExceptionTable(ntHeader))
+        return false;
     LoadTLS(ntHeader, sourceNtHeader);
 #endif
 

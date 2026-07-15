@@ -356,6 +356,7 @@ def validate_runtime_csvs(alias_path, override_path, release):
     failures = []
     alias_rows = []
     override_rows = []
+    override_offsets = {}
 
     with alias_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -426,11 +427,25 @@ def validate_runtime_csvs(alias_path, override_path, release):
                 failures.append(f"{override_path}:{index}: rows are not sorted by id")
             previous_id = address_id
             override_rows.append(address_id)
+            if offset is not None:
+                override_offsets[address_id] = offset
 
     if len(override_rows) < MIN_ADDRESS_OVERRIDE_DATA_ROWS:
         failures.append(
             f"{override_path}: expected at least {MIN_ADDRESS_OVERRIDE_DATA_ROWS} data rows, found {len(override_rows)}"
         )
+
+    for se_id, ae_id in alias_rows:
+        source_offset = override_offsets.get(se_id, release.get(se_id))
+        if source_offset is None:
+            failures.append(f"{alias_path}: alias source {se_id} is absent from the base database and project overrides")
+            continue
+        target_override = override_offsets.get(ae_id)
+        if target_override is not None and target_override != source_offset:
+            failures.append(
+                f"{alias_path}: alias {se_id}->{ae_id} resolves to 0x{source_offset:x}, "
+                f"but explicit target override is 0x{target_override:x}"
+            )
 
     return failures, len(alias_rows), len(override_rows)
 

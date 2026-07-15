@@ -43,7 +43,11 @@ struct World : entt::registry
     [[nodiscard]] uint64_t GetTick() const noexcept;
 
     [[nodiscard]] static bool Create() noexcept;
+    [[nodiscard]] static bool Exists() noexcept;
     [[nodiscard]] static World& Get() noexcept;
+    static void Destroy() noexcept;
+
+    void Shutdown() noexcept;
 
 private:
     entt::dispatcher m_dispatcher;
@@ -53,4 +57,5 @@ private:
     ServerSettings m_serverSettings{};
 
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
+    bool m_shutdown{false};
 };

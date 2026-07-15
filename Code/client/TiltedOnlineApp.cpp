@@ -137,12 +137,17 @@ bool TiltedOnlineApp::BeginMain()
 bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
-    World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
+    if (World::Exists())
+        World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
 #endif
 
     UninstallHooks();
+    World::Destroy();
     if (m_pDevice)
+    {
         m_pDevice->Release();
+        m_pDevice = nullptr;
+    }
 
     return true;
 }

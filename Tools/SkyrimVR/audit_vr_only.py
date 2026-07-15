@@ -66,7 +66,9 @@ REQUIRED_TOKENS = {
         "GetMappedTlsSlotCapacity()",
         "kScriptExtenderBootstrapTimeout",
         "TerminateProcess(GetCurrentProcess(), 5)",
-        "if (!RunTiltedInit(LC->gamePath, LC->Version))",
+        "if (!RunTiltedInit(LC->gamePath, runtimeVersion.Major, runtimeVersion.Minor, runtimeVersion.Revision, runtimeVersion.Build))",
+        "if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))",
+        "RuntimeVersion runtimeVersion{};",
         "LC->gameMain();",
     ),
     "Code/immersive_launcher/loader/ExeLoader.cpp": (
@@ -74,6 +76,8 @@ REQUIRED_TOKENS = {
         "g_mappedTlsTemplate",
         "g_mappedTlsTemplateSize",
         "g_mappedTlsTemplateSize > GetMappedTlsSlotCapacity()",
+        "if (!LoadExceptionTable(ntHeader))",
+        "if (!RtlAddFunctionTable",
     ),
     "Code/immersive_launcher/loader/TlsMemory.cpp": (
         "GetMappedTlsSlotCapacity",
@@ -83,6 +87,13 @@ REQUIRED_TOKENS = {
         "pre-entry SKSEVR bootstrap was not attempted",
         "WasScriptExtenderLoadAttempted()",
         "GetScriptExtenderLoadResult()",
+        "World::Destroy();",
+    ),
+    "Code/client/VersionDb.h": (
+        "TryRead",
+        "Missing required address file:",
+        "Address alias source ID",
+        "GetLastError() const",
     ),
     "Code/client/Services/Generic/TransportService.cpp": (
         'request.Username = "Skyrim VR Player";',
@@ -90,7 +101,7 @@ REQUIRED_TOKENS = {
     "Code/immersive_launcher/stubs/FileMapping.cpp": (
         'GetModuleHandle("SkyrimVR.exe")',
         "SKSEVR's runtime lookup can ask for the executable module by name",
-        "IsModuleBasenameMatch(lpModuleName, pTarget)",
+        "IsExactBareModuleNameMatch(lpModuleName, pTarget)",
         "WideCharToMultiByte(CP_ACP",
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (
@@ -148,6 +159,7 @@ FORBIDDEN_TOKENS = {
         "skse64",
         "std::wcsncmp(TARGET_NAME L\".exe\"",
         "aBufferSize * sizeof(wchar_t)",
+        "IsModuleBasenameMatch",
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (
         "SKYRIM TOGETHER REBORN marker",
@@ -181,7 +193,7 @@ def main() -> int:
             failures.append(f"{relative_path}: forbidden non-VR tokens present: {', '.join(present)}")
 
     launcher_text = read_text(root, "Code/immersive_launcher/Launcher.cpp")
-    address_init = launcher_text.find("if (!RunTiltedInit(LC->gamePath, LC->Version))")
+    address_init = launcher_text.find("if (!RunTiltedInit(LC->gamePath, runtimeVersion.Major, runtimeVersion.Minor, runtimeVersion.Revision, runtimeVersion.Build))")
     skse_bootstrap = launcher_text.find("if (!BootstrapScriptExtenderOnLoaderThread())")
     game_entry = launcher_text.find("LC->gameMain();")
     if not (0 <= address_init < skse_bootstrap < game_entry):

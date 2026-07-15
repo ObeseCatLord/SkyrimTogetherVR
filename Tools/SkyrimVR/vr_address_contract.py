@@ -28,12 +28,14 @@ VALIDATED_COMMONLIB_VR_ALIASES = {
 VALIDATED_VR_ADDRESS_OVERRIDES = {
     35545: {
         "offset": 0x5B4290,
+        "prologue": "48 83 ec 28 48 89 0d 1d 75 a3 02 4c 89 05 1e 75",
         "source": "database",
         "status": "exact_vr_database",
         "name": "WinMain",
     },
     35560: {
         "offset": 0x5B9330,
+        "prologue": "48 8b c4 89 50 10 55 56 57 41 54 41 55 41 56 41",
         "source": "database",
         "status": "exact_vr_database",
         "name": "Main::Draw",

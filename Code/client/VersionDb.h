@@ -5,10 +5,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdio.h>
 #include <string>
+#include <utility>
 
 #pragma comment(lib, "version.lib")
 
@@ -31,13 +33,26 @@ private:
     int _ver[4];
     std::string _verStr;
     std::string _moduleName;
+    std::string _lastError;
     unsigned long long _base;
 
-    template <typename T> static T read(std::ifstream& file)
+    template <typename T> static bool TryRead(std::ifstream& file, T& value)
     {
-        T v;
-        file.read((char*)&v, sizeof(T));
-        return v;
+        return static_cast<bool>(file.read(reinterpret_cast<char*>(&value), sizeof(T)));
+    }
+
+    bool Fail(std::string error)
+    {
+        _data.clear();
+        _rdata.clear();
+        _vrProjectOverrideIds.clear();
+        for (int& versionPart : _ver)
+            versionPart = 0;
+        _verStr.clear();
+        _moduleName.clear();
+        _base = 0;
+        _lastError = std::move(error);
+        return false;
     }
 
     static void* ToPointer(unsigned long long v) { return (void*)v; }
@@ -112,16 +127,19 @@ private:
         _rdata[offset] = id;
     }
 
-    bool LoadCsvOffsetFile(const std::filesystem::path& path, std::set<unsigned long long>* apLoadedIds = nullptr)
+    bool LoadCsvOffsetFile(const std::filesystem::path& path, bool aAllowVersionMetadata, std::set<unsigned long long>* apLoadedIds = nullptr)
     {
         std::ifstream file(path);
         if (!file.good())
-            return false;
+            return Fail("Missing required address file: " + path.string());
 
         std::string line;
         bool loadedAny = false;
+        size_t lineNumber = 0;
+        std::map<unsigned long long, unsigned long long> fileEntries;
         while (std::getline(file, line))
         {
+            ++lineNumber;
             StripBomAndLineEnding(line);
             if (line.empty())
                 continue;
@@ -129,12 +147,24 @@ private:
             std::string idField;
             std::string offsetField;
             if (!SplitFirstTwoCsvFields(line, idField, offsetField))
-                continue;
+                return Fail("Malformed address row in " + path.string() + " at line " + std::to_string(lineNumber));
 
             unsigned long long id = 0;
             unsigned long long offset = 0;
             if (!ParseUnsigned(idField, 10, id) || !ParseUnsigned(offsetField, 16, offset))
-                continue;
+            {
+                if (lineNumber == 1 || (aAllowVersionMetadata && lineNumber == 2 && offsetField.find('.') != std::string::npos))
+                    continue;
+                return Fail("Malformed address row in " + path.string() + " at line " + std::to_string(lineNumber));
+            }
+
+            const auto [existing, inserted] = fileEntries.emplace(id, offset);
+            if (!inserted)
+            {
+                if (existing->second == offset)
+                    continue;
+                return Fail("Conflicting duplicate address ID " + std::to_string(id) + " in " + path.string());
+            }
 
             SetOffsetForId(id, offset);
             if (apLoadedIds)
@@ -142,14 +172,19 @@ private:
             loadedAny = true;
         }
 
-        return loadedAny;
+        if (!file.eof() && file.fail())
+            return Fail("Failed while reading address file: " + path.string());
+        if (!loadedAny)
+            return Fail("Address file contains no usable rows: " + path.string());
+        return true;
     }
 
 #if TP_SKYRIM_VR
     bool ApplyVrProjectAddressFiles(const std::filesystem::path& acGamePath)
     {
         const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
-        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", &_vrProjectOverrideIds);
+        if (!LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", false, &_vrProjectOverrideIds))
+            return false;
         return ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
     }
 
@@ -157,11 +192,15 @@ private:
     {
         std::ifstream file(path);
         if (!file.good())
-            return true;
+            return Fail("Missing required address alias file: " + path.string());
 
         std::string line;
+        size_t lineNumber = 0;
+        bool loadedAny = false;
+        std::map<unsigned long long, unsigned long long> aliasTargets;
         while (std::getline(file, line))
         {
+            ++lineNumber;
             StripBomAndLineEnding(line);
             if (line.empty())
                 continue;
@@ -169,30 +208,43 @@ private:
             std::string seIdField;
             std::string aeIdField;
             if (!SplitFirstTwoCsvFields(line, seIdField, aeIdField))
-                continue;
+                return Fail("Malformed address alias row in " + path.string() + " at line " + std::to_string(lineNumber));
 
             unsigned long long seId = 0;
             unsigned long long aeId = 0;
             if (!ParseUnsigned(seIdField, 10, seId) || !ParseUnsigned(aeIdField, 10, aeId))
-                continue;
+            {
+                if (lineNumber == 1)
+                    continue;
+                return Fail("Malformed address alias row in " + path.string() + " at line " + std::to_string(lineNumber));
+            }
 
             const auto mapped = _data.find(seId);
-            if (mapped != _data.end())
-            {
-                const auto existingTarget = _data.find(aeId);
-                if (_vrProjectOverrideIds.contains(aeId) && existingTarget != _data.end() && existingTarget->second != mapped->second)
-                {
-                    OutputDebugStringA("SkyrimTogetherVR: address alias conflicts with an explicit project override.\n");
-                    return false;
-                }
+            if (mapped == _data.end())
+                return Fail("Address alias source ID " + std::to_string(seId) + " is absent from the loaded VR database");
 
-                // The generated alias file is authoritative for IDs used by
-                // the AE-oriented client, even when the VR database happens
-                // to use the same numeric ID for a different function.
-                SetOffsetForId(aeId, mapped->second);
+            const auto [existingAlias, inserted] = aliasTargets.emplace(aeId, mapped->second);
+            if (!inserted && existingAlias->second != mapped->second)
+                return Fail("Conflicting aliases target address ID " + std::to_string(aeId));
+
+            if (_vrProjectOverrideIds.contains(aeId))
+            {
+                // Explicit hand-authored project corrections are authoritative.
+                // Package audits report differing generated aliases.
+                loadedAny = true;
+                continue;
             }
+
+            // Generated aliases are authoritative over coincidentally equal raw
+            // VR numeric IDs used by unrelated functions.
+            SetOffsetForId(aeId, mapped->second);
+            loadedAny = true;
         }
 
+        if (!file.eof() && file.fail())
+            return Fail("Failed while reading address alias file: " + path.string());
+        if (!loadedAny)
+            return Fail("Address alias file contains no usable rows: " + path.string());
         return true;
     }
 
@@ -202,7 +254,7 @@ private:
         _snprintf_s(fileName, 256, "version-%d-%d-%d-%d.csv", major, minor, revision, build);
 
         const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
-        if (!LoadCsvOffsetFile(pluginPath / fileName))
+        if (!LoadCsvOffsetFile(pluginPath / fileName, true))
             return false;
 
         for (int i = 0; i < 4; i++)
@@ -232,6 +284,7 @@ private:
 public:
     const std::string& GetModuleName() const { return _moduleName; }
     const std::string& GetLoadedVersionString() const { return _verStr; }
+    const std::string& GetLastError() const { return _lastError; }
 
     const std::map<unsigned long long, unsigned long long>& GetOffsetMap() const { return _data; }
 
@@ -345,6 +398,7 @@ public:
             _ver[i] = 0;
         _verStr = std::string();
         _moduleName = std::string();
+        _lastError = std::string();
         _base = 0;
     }
 
@@ -354,7 +408,8 @@ public:
 
         if (!ParseVersionFromString(acExeVersion.c_str(), major, minor, revision, build))
         {
-            return false;
+            Clear();
+            return Fail("Executable version text is invalid: " + std::string(acExeVersion.c_str()));
         }
 
         return Load(acGamePath, major, minor, revision, build);
@@ -364,26 +419,38 @@ public:
     {
         Clear();
 
+#if TP_SKYRIM_VR
+        if (major != 1 || minor != 4 || revision != 15 || build != 0)
+            return Fail(
+                "Unsupported Skyrim VR runtime " + std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(revision) + "." +
+                std::to_string(build));
+#endif
+
         char fileName[256];
         _snprintf_s(fileName, 256, "versionlib-%d-%d-%d-%d.bin", major, minor, revision, build);
 
-        std::ifstream file(acGamePath / "Data" / "SKSE" / "Plugins" / fileName, std::ios::binary);
+        const auto binaryPath = acGamePath / "Data" / "SKSE" / "Plugins" / fileName;
+        std::ifstream file(binaryPath, std::ios::binary);
         if (!file.good())
         {
 #if TP_SKYRIM_VR
             return LoadVrCsvAddressLibrary(acGamePath, major, minor, revision, build);
 #else
-            return false;
+            return Fail("Missing address library: " + binaryPath.string());
 #endif
         }
 
-        int format = read<int>(file);
-
-        if (format != 2)
-            return false;
+        int format = 0;
+        if (!TryRead(file, format) || format != 2)
+            return Fail("Invalid or truncated address-library header: " + binaryPath.string());
 
         for (int i = 0; i < 4; i++)
-            _ver[i] = read<int>(file);
+        {
+            if (!TryRead(file, _ver[i]))
+                return Fail("Truncated address-library runtime version: " + binaryPath.string());
+        }
+        if (_ver[0] != major || _ver[1] != minor || _ver[2] != revision || _ver[3] != build)
+            return Fail("Address-library runtime version does not match the executable: " + binaryPath.string());
 
         {
             char verName[64];
@@ -391,28 +458,29 @@ public:
             _verStr = verName;
         }
 
-        int tnLen = read<int>(file);
+        int tnLen = 0;
+        if (!TryRead(file, tnLen) || tnLen <= 0 || tnLen >= 0x10000)
+            return Fail("Invalid address-library module-name length: " + binaryPath.string());
 
-        if (tnLen < 0 || tnLen >= 0x10000)
-            return false;
-
-        if (tnLen > 0)
-        {
-            char* tnbuf = (char*)malloc(tnLen + 1);
-            file.read(tnbuf, tnLen);
-            tnbuf[tnLen] = '\0';
-            _moduleName = tnbuf;
-            free(tnbuf);
-        }
+        _moduleName.resize(static_cast<size_t>(tnLen));
+        if (!file.read(_moduleName.data(), tnLen))
+            return Fail("Truncated address-library module name: " + binaryPath.string());
+#if TP_SKYRIM_VR
+        if (_stricmp(_moduleName.c_str(), "SkyrimVR.exe") != 0)
+            return Fail("Address library targets the wrong executable module: " + _moduleName);
+#endif
 
         {
             HMODULE handle = GetModuleHandleA(NULL);
             _base = (unsigned long long)handle;
         }
 
-        int ptrSize = read<int>(file);
-
-        int addrCount = read<int>(file);
+        int ptrSize = 0;
+        int addrCount = 0;
+        if (!TryRead(file, ptrSize) || (ptrSize != 4 && ptrSize != 8))
+            return Fail("Invalid address-library pointer size: " + binaryPath.string());
+        if (!TryRead(file, addrCount) || addrCount <= 0 || addrCount > 2000000)
+            return Fail("Invalid address-library entry count: " + binaryPath.string());
 
         unsigned char type, low, high;
         unsigned char b1, b2;
@@ -422,82 +490,112 @@ public:
         unsigned long long pvid = 0;
         unsigned long long poffset = 0;
         unsigned long long tpoffset;
+        const auto checkedAdd = [](unsigned long long left, unsigned long long right, unsigned long long& result)
+        {
+            if (left > std::numeric_limits<unsigned long long>::max() - right)
+                return false;
+            result = left + right;
+            return true;
+        };
+        const auto checkedSubtract = [](unsigned long long left, unsigned long long right, unsigned long long& result)
+        {
+            if (left < right)
+                return false;
+            result = left - right;
+            return true;
+        };
         for (int i = 0; i < addrCount; i++)
         {
-            type = read<unsigned char>(file);
+            if (!TryRead(file, type))
+                return Fail("Truncated address-library entry " + std::to_string(i) + ": " + binaryPath.string());
             low = type & 0xF;
             high = type >> 4;
 
             switch (low)
             {
-            case 0: q1 = read<unsigned long long>(file); break;
-            case 1: q1 = pvid + 1; break;
+            case 0:
+                if (!TryRead(file, q1))
+                    return Fail("Truncated address ID at entry " + std::to_string(i));
+                break;
+            case 1:
+                if (!checkedAdd(pvid, 1, q1))
+                    return Fail("Address ID overflow at entry " + std::to_string(i));
+                break;
             case 2:
-                b1 = read<unsigned char>(file);
-                q1 = pvid + b1;
+                if (!TryRead(file, b1) || !checkedAdd(pvid, b1, q1))
+                    return Fail("Invalid address ID delta at entry " + std::to_string(i));
                 break;
             case 3:
-                b1 = read<unsigned char>(file);
-                q1 = pvid - b1;
+                if (!TryRead(file, b1) || !checkedSubtract(pvid, b1, q1))
+                    return Fail("Invalid address ID delta at entry " + std::to_string(i));
                 break;
             case 4:
-                w1 = read<unsigned short>(file);
-                q1 = pvid + w1;
+                if (!TryRead(file, w1) || !checkedAdd(pvid, w1, q1))
+                    return Fail("Invalid address ID delta at entry " + std::to_string(i));
                 break;
             case 5:
-                w1 = read<unsigned short>(file);
-                q1 = pvid - w1;
+                if (!TryRead(file, w1) || !checkedSubtract(pvid, w1, q1))
+                    return Fail("Invalid address ID delta at entry " + std::to_string(i));
                 break;
             case 6:
-                w1 = read<unsigned short>(file);
+                if (!TryRead(file, w1))
+                    return Fail("Truncated address ID at entry " + std::to_string(i));
                 q1 = w1;
                 break;
             case 7:
-                d1 = read<unsigned int>(file);
+                if (!TryRead(file, d1))
+                    return Fail("Truncated address ID at entry " + std::to_string(i));
                 q1 = d1;
                 break;
-            default:
-            {
-                Clear();
-                return false;
-            }
+            default: return Fail("Invalid address ID encoding at entry " + std::to_string(i));
             }
 
             tpoffset = (high & 8) != 0 ? (poffset / (unsigned long long)ptrSize) : poffset;
 
             switch (high & 7)
             {
-            case 0: q2 = read<unsigned long long>(file); break;
-            case 1: q2 = tpoffset + 1; break;
+            case 0:
+                if (!TryRead(file, q2))
+                    return Fail("Truncated address offset at entry " + std::to_string(i));
+                break;
+            case 1:
+                if (!checkedAdd(tpoffset, 1, q2))
+                    return Fail("Address offset overflow at entry " + std::to_string(i));
+                break;
             case 2:
-                b2 = read<unsigned char>(file);
-                q2 = tpoffset + b2;
+                if (!TryRead(file, b2) || !checkedAdd(tpoffset, b2, q2))
+                    return Fail("Invalid address offset delta at entry " + std::to_string(i));
                 break;
             case 3:
-                b2 = read<unsigned char>(file);
-                q2 = tpoffset - b2;
+                if (!TryRead(file, b2) || !checkedSubtract(tpoffset, b2, q2))
+                    return Fail("Invalid address offset delta at entry " + std::to_string(i));
                 break;
             case 4:
-                w2 = read<unsigned short>(file);
-                q2 = tpoffset + w2;
+                if (!TryRead(file, w2) || !checkedAdd(tpoffset, w2, q2))
+                    return Fail("Invalid address offset delta at entry " + std::to_string(i));
                 break;
             case 5:
-                w2 = read<unsigned short>(file);
-                q2 = tpoffset - w2;
+                if (!TryRead(file, w2) || !checkedSubtract(tpoffset, w2, q2))
+                    return Fail("Invalid address offset delta at entry " + std::to_string(i));
                 break;
             case 6:
-                w2 = read<unsigned short>(file);
+                if (!TryRead(file, w2))
+                    return Fail("Truncated address offset at entry " + std::to_string(i));
                 q2 = w2;
                 break;
             case 7:
-                d2 = read<unsigned int>(file);
+                if (!TryRead(file, d2))
+                    return Fail("Truncated address offset at entry " + std::to_string(i));
                 q2 = d2;
                 break;
-            default: throw std::exception();
             }
 
             if ((high & 8) != 0)
+            {
+                if (q2 > std::numeric_limits<unsigned long long>::max() / static_cast<unsigned long long>(ptrSize))
+                    return Fail("Address offset multiplication overflow at entry " + std::to_string(i));
                 q2 *= (unsigned long long)ptrSize;
+            }
 
             SetOffsetForId(q1, q2);
 
@@ -508,10 +606,11 @@ public:
 #if TP_SKYRIM_VR
         // Project corrections must be authoritative regardless of whether the
         // base VR Address Library is distributed as CSV or versionlib binary.
-        ApplyVrProjectAddressFiles(acGamePath);
+        if (!ApplyVrProjectAddressFiles(acGamePath))
+            return false;
 #endif
 
-        return true;
+        return !_data.empty() || Fail("Address library contains no entries: " + binaryPath.string());
     }
 
     bool DumpToTextFile(const std::string& path)

@@ -263,7 +263,132 @@ World::World()
 #endif
 }
 
-World::~World() = default;
+World::~World()
+{
+    Shutdown();
+}
+
+void World::Shutdown() noexcept
+{
+    if (m_shutdown)
+        return;
+    m_shutdown = true;
+
+#if TP_SKYRIM_VR
+    if (auto* pLifecycle = ctx().find<VRLifecycleService>())
+        pLifecycle->BeginTeardown();
+#endif
+
+    // Deliver the final disconnect while subscribers and the dispatcher still
+    // exist, then destroy context services before their referenced members.
+    m_transport.Close();
+
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+#if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+    ctx().erase<CharacterService>();
+    ctx().erase<PartyService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
+    ctx().erase<VRRemotePlayerService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+    ctx().erase<VRPoseService>();
+#endif
+    ctx().erase<VRConnectionService>();
+    ctx().erase<StringCacheService>();
+    ctx().erase<DiscordService>();
+#if TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE
+    ctx().erase<VRSaveLoadService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
+    ctx().erase<VRHiggsService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE
+    ctx().erase<VRGrabService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
+    ctx().erase<VRProjectileService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
+    ctx().erase<VRCombatService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
+    ctx().erase<VRMagicService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
+    ctx().erase<VRActivationService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
+    ctx().erase<VRInventoryService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+    ctx().erase<VRMovementService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE
+    ctx().erase<PlayerService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE
+    ctx().erase<DiscoveryService>();
+#endif
+#else
+    ctx().erase<MapService>();
+    ctx().erase<WeatherService>();
+    ctx().erase<CombatService>();
+    ctx().erase<StringCacheService>();
+    ctx().erase<PlayerService>();
+    ctx().erase<CommandService>();
+    ctx().erase<MagicService>();
+    ctx().erase<InventoryService>();
+    ctx().erase<ActorValueService>();
+    ctx().erase<PartyService>();
+    ctx().erase<QuestService>();
+    ctx().erase<CalendarService>();
+    ctx().erase<ObjectService>();
+    ctx().erase<DiscordService>();
+    ctx().erase<PapyrusService>();
+    ctx().erase<DebugService>();
+    ctx().erase<CharacterService>();
+#if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
+    ctx().erase<VRRemotePlayerService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+    ctx().erase<VRPoseService>();
+#endif
+    ctx().erase<VRConnectionService>();
+#if TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE
+    ctx().erase<VRSaveLoadService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
+    ctx().erase<VRHiggsService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE
+    ctx().erase<VRGrabService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
+    ctx().erase<VRProjectileService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
+    ctx().erase<VRCombatService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
+    ctx().erase<VRMagicService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
+    ctx().erase<VRActivationService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
+    ctx().erase<VRInventoryService>();
+#endif
+#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+    ctx().erase<VRMovementService>();
+#endif
+    ctx().erase<InputService>();
+    ctx().erase<OverlayService>();
+    ctx().erase<DiscoveryService>();
+#endif
+    ctx().erase<VRLifecycleService>();
+    ctx().erase<ImguiService>();
+}
 
 void World::Update() noexcept
 {
@@ -332,7 +457,21 @@ bool World::Create() noexcept
     return false;
 }
 
+bool World::Exists() noexcept
+{
+    return entt::locator<World>::has_value();
+}
+
 World& World::Get() noexcept
 {
     return entt::locator<World>::value();
+}
+
+void World::Destroy() noexcept
+{
+    if (!entt::locator<World>::has_value())
+        return;
+
+    entt::locator<World>::value().Shutdown();
+    entt::locator<World>::reset();
 }

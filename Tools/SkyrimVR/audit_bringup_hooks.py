@@ -108,6 +108,10 @@ REQUIRED_TOKENS = {
         "g_appInstance->EndMain();",
         "SkyrimTogetherVR client startup hook reached",
         "SkyrimTogetherVR::TickBridge::Retire();",
+        "ValidateVrDefaultHookContracts",
+        "Skyrim VR 1.4.15 prologue mismatch",
+        "0x5B4290",
+        "0x5B9330",
     ),
     "Code/client/VRCompatibilityStatus.h": (
         "bool PoseService{false};",
@@ -136,6 +140,7 @@ REQUIRED_TOKENS = {
         "PLANCK SKSE plugin is loaded; active-ragdoll compatibility guard is active",
         "POINTER_SKYRIMSE(void, winMain, 35545);",
         "connection-only mode: Discord SDK callbacks are disabled",
+        "World::Destroy();",
     ),
     "Code/client/SkyrimVM64.cpp": (
         "Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw={}",
@@ -172,6 +177,8 @@ REQUIRED_TOKENS = {
         "kMaximumUpdateDeltaSeconds = 0.25",
         "std::clamp(cDeltaSeconds, 0.0, kMaximumUpdateDeltaSeconds)",
         "SkyrimTogetherVR could not construct the client world:",
+        "m_transport.Close();",
+        "entt::locator<World>::reset();",
     ),
     "Code/client/Services/Generic/VRConnectionService.cpp": (
         'SetStatus("waiting_for_gameplay")',

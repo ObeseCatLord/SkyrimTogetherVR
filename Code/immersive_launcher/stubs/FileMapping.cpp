@@ -230,70 +230,48 @@ bool IsLocalModulePath(HMODULE aHmod)
     return buf.find(s_OverridePath) != std::wstring::npos;
 }
 
-bool IsModuleBasenameMatch(const wchar_t* lpModuleName, size_t aModuleNameLength, const wchar_t* lpExpectedBasename)
+bool IsExactBareModuleNameMatch(const wchar_t* apModuleName, size_t aModuleNameLength, const wchar_t* apExpectedName)
 {
-    if (!lpModuleName || !lpExpectedBasename || aModuleNameLength == 0)
+    if (!apModuleName || !apExpectedName || aModuleNameLength == 0)
         return false;
 
-    const auto expectedLength = std::wcslen(lpExpectedBasename);
-    if (aModuleNameLength < expectedLength)
+    const auto expectedLength = std::wcslen(apExpectedName);
+    if (aModuleNameLength != expectedLength)
         return false;
 
-    auto* p = lpModuleName + aModuleNameLength;
-    while (p != lpModuleName)
+    for (size_t index = 0; index < aModuleNameLength; ++index)
     {
-        --p;
-        if (*p == L'\\' || *p == L'/')
-        {
-            ++p;
-            break;
-        }
+        if (apModuleName[index] == L'\\' || apModuleName[index] == L'/')
+            return false;
     }
 
-    const auto basenameLength = (lpModuleName + aModuleNameLength) - p;
-    return basenameLength == expectedLength && _wcsnicmp(p, lpExpectedBasename, expectedLength) == 0;
+    return _wcsnicmp(apModuleName, apExpectedName, expectedLength) == 0;
 }
 
-bool IsModuleBasenameMatch(LPCWSTR lpModuleName, const wchar_t* lpExpectedBasename)
+bool IsExactBareModuleNameMatch(LPCWSTR apModuleName, LPCWSTR apExpectedName)
 {
-    if (!lpModuleName || !lpExpectedBasename)
+    if (!apModuleName || !apExpectedName)
         return false;
-    return IsModuleBasenameMatch(lpModuleName, std::wcslen(lpModuleName), lpExpectedBasename);
+    return IsExactBareModuleNameMatch(apModuleName, std::wcslen(apModuleName), apExpectedName);
 }
 
-bool IsModuleBasenameMatch(LPCSTR lpModuleName, const char* lpExpectedBasename)
+bool IsExactBareModuleNameMatch(LPCSTR apModuleName, LPCSTR apExpectedName)
 {
-    if (!lpModuleName || !lpExpectedBasename)
+    if (!apModuleName || !apExpectedName)
         return false;
 
-    const auto expectedLength = std::strlen(lpExpectedBasename);
-    const auto fullLength = std::strlen(lpModuleName);
-
-    if (fullLength < expectedLength)
+    if (std::strchr(apModuleName, '\\') != nullptr || std::strchr(apModuleName, '/') != nullptr)
         return false;
-
-    auto* p = lpModuleName + fullLength;
-    while (p != lpModuleName)
-    {
-        --p;
-        if (*p == '\\' || *p == '/')
-        {
-            ++p;
-            break;
-        }
-    }
-
-    const auto basenameLength = (lpModuleName + fullLength) - p;
-    return basenameLength == expectedLength && _stricmp(p, lpExpectedBasename) == 0;
+    return _stricmp(apModuleName, apExpectedName) == 0;
 }
 
-bool IsModuleBasenameMatch(const UNICODE_STRING* apDllName)
+bool IsExactBareModuleNameMatch(const UNICODE_STRING* apDllName)
 {
     if (!apDllName || !apDllName->Buffer || apDllName->Length <= 0)
         return false;
 
     constexpr auto pTarget = TARGET_NAME L".exe";
-    return IsModuleBasenameMatch(apDllName->Buffer, apDllName->Length / sizeof(wchar_t), pTarget);
+    return IsExactBareModuleNameMatch(apDllName->Buffer, apDllName->Length / sizeof(wchar_t), pTarget);
 }
 
 // Some mods do GetModuleHandle("SkyrimVR.exe") for some reason instead of GetModuleHandle(nullptr).
@@ -301,7 +279,7 @@ HMODULE WINAPI TP_GetModuleHandleW(LPCWSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME L".exe";
 
-    if (lpModuleName && IsModuleBasenameMatch(lpModuleName, pTarget))
+    if (IsExactBareModuleNameMatch(lpModuleName, pTarget))
         lpModuleName = nullptr;
     return RealGetModuleHandleW(lpModuleName);
 }
@@ -311,7 +289,7 @@ HMODULE WINAPI TP_GetModuleHandleA(LPCSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME_A ".exe";
 
-    if (lpModuleName && IsModuleBasenameMatch(lpModuleName, pTarget))
+    if (IsExactBareModuleNameMatch(lpModuleName, pTarget))
         lpModuleName = nullptr;
     return RealGetModuleHandleA(lpModuleName);
 }
@@ -322,7 +300,7 @@ NTSTATUS WINAPI TP_LdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUN
     // no need to check for nullptr here, this is handeled by the higher level GetModuleHandle function.
     TP_EMPTY_HOOK_PLACEHOLDER;
 
-    if (IsModuleBasenameMatch(DllName))
+    if (IsExactBareModuleNameMatch(DllName))
     {
         *DllHandle = NtInternal::ThePeb()->pImageBase;
         return 0; // success
@@ -333,7 +311,7 @@ NTSTATUS WINAPI TP_LdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUN
 
 NTSTATUS WINAPI TP_LdrGetDllHandleEx(ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, UNICODE_STRING* DllName, PVOID* DllHandle)
 {
-    if (IsModuleBasenameMatch(DllName))
+    if (IsExactBareModuleNameMatch(DllName))
     {
         *DllHandle = NtInternal::ThePeb()->pImageBase;
         return 0; // success
@@ -379,7 +357,12 @@ DWORD WINAPI TP_GetModuleFileNameW(HMODULE aModule, LPWSTR alpFilename, DWORD aS
         if (copyLen > 0)
             std::memcpy(alpFilename, aExePath.c_str(), copyLen * sizeof(wchar_t));
         alpFilename[copyLen] = L'\0';
-        return exePathLen < static_cast<size_t>(aSize) ? static_cast<DWORD>(exePathLen) : aSize;
+        if (exePathLen >= static_cast<size_t>(aSize))
+        {
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return aSize;
+        }
+        return static_cast<DWORD>(exePathLen);
     }
 
     return RealGetModuleFileNameW(aModule, alpFilename, aSize);
@@ -410,6 +393,11 @@ DWORD WINAPI TP_GetModuleFileNameA(HMODULE aModule, char* alpFileName, DWORD aBu
     ScopedOSHeapItem wideBuffer((static_cast<size_t>(aBufferSize) + 1) * sizeof(wchar_t));
 
     wchar_t* pBuffer = static_cast<wchar_t*>(wideBuffer.m_pBlock);
+    if (!pBuffer)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
 
     // Under MO2, there's a bug caused when calling RealGetModuleFileNameW on XAudio2_7.dll,
     // it crashes in usvfs. This only happens during the thread shutdown paths 
@@ -437,13 +425,23 @@ DWORD WINAPI TP_GetModuleFileNameA(HMODULE aModule, char* alpFileName, DWORD aBu
         if (ansiLengthWithNull > 0)
         {
             const auto ansiLength = static_cast<DWORD>(ansiLengthWithNull - 1);
-            return (truncatedByWidePath || wideLength != static_cast<size_t>(result)) ? aBufferSize : ansiLength;
+            if (truncatedByWidePath || wideLength != static_cast<size_t>(result))
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return aBufferSize;
+            }
+            return ansiLength;
         }
 
         if (wideLength == 0)
         {
             alpFileName[0] = '\0';
-            return truncatedByWidePath ? aBufferSize : 0;
+            if (truncatedByWidePath)
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return aBufferSize;
+            }
+            return 0;
         }
 
         --wideLength;

@@ -12,7 +12,7 @@ import tempfile
 
 import audit_gamefiles
 import vr_paths
-from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS, VALIDATED_VR_ADDRESS_OVERRIDES
+from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS, VALIDATED_COMMONLIB_VR_ALIASES, VALIDATED_VR_ADDRESS_OVERRIDES
 
 BRIDGE_RUNTIME_FILES = (
     "EarlyLoad.dll",
@@ -271,6 +271,46 @@ def audit_vr_address_overrides(path, failures):
         wanted = (expected["offset"], expected["source"], expected["status"], expected["name"])
         if actual != wanted:
             failures.append(f"built package VR address override {address_id} is {actual!r}, expected {wanted!r}")
+
+
+def audit_vr_address_overlay_contract(plugin_dir, failures):
+    base = {}
+    overrides = {}
+    aliases = []
+    try:
+        base_path = plugin_dir / "version-1-4-15-0.csv"
+        if base_path.exists():
+            with base_path.open(newline="", encoding="utf-8-sig") as handle:
+                for row in csv.DictReader(handle):
+                    try:
+                        base[int(row.get("id", ""), 10)] = int(row.get("offset", ""), 16)
+                    except ValueError:
+                        continue
+        with (plugin_dir / "SkyrimTogetherVR_AddressOverrides.csv").open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                overrides[int(row.get("id", ""), 10)] = int(row.get("offset", ""), 16)
+        with (plugin_dir / "SkyrimTogetherVR_AE_to_SE.csv").open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                aliases.append((int(row.get("sseid", ""), 10), int(row.get("aeid", ""), 10)))
+    except (OSError, TypeError, ValueError) as error:
+        failures.append(f"could not validate built address overlay contract: {error}")
+        return
+
+    merged = dict(base)
+    merged.update(overrides)
+    for source_id, target_id in aliases:
+        source_offset = merged.get(source_id)
+        if source_offset is None:
+            # The base VR Address Library is an installed prerequisite rather
+            # than a package artifact, so package-only audits cannot resolve
+            # every generated source ID.
+            continue
+        target_override = overrides.get(target_id)
+        if target_override is not None and target_override != source_offset:
+            failures.append(
+                f"built address alias {source_id}->{target_id} resolves to 0x{source_offset:x}, "
+                f"but explicit target override is 0x{target_override:x}"
+            )
 
 
 def pe_machine(path):
@@ -940,6 +980,7 @@ def audit_package(
     audit_vr_address_overrides(
         package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv", failures
     )
+    audit_vr_address_overlay_contract(package / "Data" / "SKSE" / "Plugins", failures)
 
     if dll_only:
         mode_forbidden_files = DLL_ONLY_FORBIDDEN_RUNTIME_FILES
@@ -1088,6 +1129,13 @@ def write_csv(path):
         rows.extend(
             f"{address_id},{metadata['offset']:x},{metadata['source']},{metadata['status']},{metadata['name']}"
             for address_id, metadata in sorted(VALIDATED_VR_ADDRESS_OVERRIDES.items())
+        )
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    elif path.name == "version-1-4-15-0.csv":
+        rows = ["id,offset", "14005,0.230.0"]
+        rows.extend(
+            f"{metadata['vr_id']},{metadata['offset']:x}"
+            for _desktop_id, metadata in sorted(VALIDATED_COMMONLIB_VR_ALIASES.items())
         )
         path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     else:
