@@ -35,9 +35,9 @@ private:
     struct RemoteAvatar
     {
         std::uint32_t PlayerId{0};
-        GameplayBridge::AdapterHandle Handle{0};
-        GameplayBridge::RootTransform CurrentRoot{};
-        GameplayBridge::RootTransform TargetRoot{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle Handle{0};
+        SkyrimTogetherVR::GameplayBridge::RootTransform CurrentRoot{};
+        SkyrimTogetherVR::GameplayBridge::RootTransform TargetRoot{};
         bool HasTarget{false};
         bool CreatePending{false};
         bool DestroyPending{false};
@@ -54,9 +54,9 @@ private:
     void OnRemoveCharacter(const NotifyRemoveCharacter& acMessage) noexcept;
 
     void ConsumeBridgeEvents() noexcept;
-    void HandleBridgeLifecycle(const GameplayBridge::EventRecord& acEvent) noexcept;
-    void HandleBridgeLocalPlayerState(const GameplayBridge::EventRecord& acEvent) noexcept;
-    void HandleBridgeRemoteAvatarState(const GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeLifecycle(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeLocalPlayerState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeRemoteAvatarState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
 
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
@@ -72,13 +72,14 @@ private:
     [[nodiscard]] bool HasAvatarCapabilities() const noexcept;
     [[nodiscard]] bool CanSubmitAvatarCommands() noexcept;
     [[nodiscard]] bool BuildLocalLocation(struct GameId& arCellId, struct GameId& arWorldspaceId) const noexcept;
-    [[nodiscard]] bool BuildCommand(GameplayBridge::CommandKind aKind, std::uint32_t aServerId, GameplayBridge::CommandRecord& arCommand) const noexcept;
+    [[nodiscard]] bool BuildCommand(SkyrimTogetherVR::GameplayBridge::CommandKind aKind, std::uint32_t aServerId,
+                                    SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
     [[nodiscard]] static std::uint64_t ToBridgeEntityId(std::uint32_t aServerId) noexcept;
     [[nodiscard]] static std::uint32_t ToBridgeEntityGeneration(std::uint32_t aServerId) noexcept;
 
     World& m_world;
     TransportService& m_transport;
-    GameplayBridge::LocalPlayerStatePayload m_localSnapshot{};
+    SkyrimTogetherVR::GameplayBridge::LocalPlayerStatePayload m_localSnapshot{};
     std::unordered_map<std::uint32_t, RemoteAvatar> m_remoteAvatars{};
     std::uint32_t m_localPlayerId{0};
     std::uint32_t m_localServerId{0};

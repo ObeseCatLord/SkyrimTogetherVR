@@ -22,6 +22,8 @@
 #include <fstream>
 #include <limits>
 
+namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
+
 #ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS
 #define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS 0
 #endif
