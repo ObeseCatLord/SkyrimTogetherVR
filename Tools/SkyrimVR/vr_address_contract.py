@@ -23,6 +23,29 @@ VALIDATED_COMMONLIB_VR_ALIASES = {
     411348: {"vr_id": 524729, "offset": 0x317E798, "name": "RendererData::D3D11Device"},
 }
 
+# Curated function targets whose Skyrim VR ABI and executable RVA have been
+# independently established. These rows override generated translations.
+VALIDATED_VR_ADDRESS_OVERRIDES = {
+    35545: {
+        "offset": 0x5B4290,
+        "source": "database",
+        "status": "exact_vr_database",
+        "name": "WinMain",
+    },
+    35560: {
+        "offset": 0x5B9330,
+        "source": "database",
+        "status": "exact_vr_database",
+        "name": "Main::Draw",
+    },
+    53926: {
+        "offset": 0x12765B0,
+        "source": "commonlib_vtable",
+        "status": "exact_vr_vtable",
+        "name": "BSScript::Internal::VirtualMachine::Update",
+    },
+}
+
 REQUIRED_VR_ADDRESS_ALIAS_ROWS = frozenset(
     (metadata["vr_id"], desktop_id)
     for desktop_id, metadata in VALIDATED_COMMONLIB_VR_ALIASES.items()

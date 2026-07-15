@@ -264,7 +264,7 @@ def log_breadcrumb_detail(log_path: pathlib.Path, skip_log: bool) -> tuple[bool,
     missing = [token for token in audit_runtime_handoff.LOG_BREADCRUMBS if token not in text]
     if missing:
         return False, "missing: " + ", ".join(missing)
-    return True, "all startup/main-loop/render breadcrumbs present"
+    return True, "all startup/update-owner/render breadcrumbs present"
 
 
 def load_json_file(path: pathlib.Path) -> tuple[dict[str, object], str]:
@@ -426,7 +426,7 @@ def build_runtime_checklist(
         checks,
         "startup_breadcrumbs",
         "5",
-        "startup/main-loop/render logging",
+        "startup/update-owner/render logging",
         log_ok,
         log_detail,
     )
@@ -1298,7 +1298,12 @@ def command_self_test(_: argparse.Namespace) -> int:
         out_dir = root / "out"
         handoff.mkdir(parents=True)
         log.parent.mkdir(parents=True)
-        log.write_text("\n".join(audit_runtime_handoff.LOG_BREADCRUMBS) + "\n", encoding="utf-8")
+        log.write_text(
+            "\n".join(audit_runtime_handoff.LOG_BREADCRUMBS)
+            + "\nSkyrimTogetherVR VR update-owner runtime mode: active"
+            + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
+            encoding="utf-8",
+        )
 
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")

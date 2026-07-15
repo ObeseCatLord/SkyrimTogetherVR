@@ -90,7 +90,7 @@ void VRLifecycleService::Update(double aDelta) noexcept
     {
         m_ownerThreadId = threadId;
         m_statusDirty = true;
-        spdlog::info("SkyrimTogetherVR lifecycle latched VM-update owner thread {}", threadId);
+        spdlog::info("SkyrimTogetherVR lifecycle latched update owner thread {}", threadId);
     }
     else if (m_ownerThreadId != threadId)
     {

@@ -372,7 +372,12 @@ def command_self_test() -> int:
         out_dir = root / "out"
         handoff.mkdir(parents=True)
         log.parent.mkdir(parents=True)
-        log.write_text("\n".join(collect_runtime_evidence.audit_runtime_handoff.LOG_BREADCRUMBS) + "\n", encoding="utf-8")
+        log.write_text(
+            "\n".join(collect_runtime_evidence.audit_runtime_handoff.LOG_BREADCRUMBS)
+            + "\nSkyrimTogetherVR VR update-owner runtime mode: active"
+            + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
+            encoding="utf-8",
+        )
 
         def write(name: str, contents: str) -> None:
             (handoff / collect_runtime_evidence.vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")

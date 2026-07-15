@@ -33,9 +33,13 @@ REQUIRED_TOKENS = {
         "aExecutorThreadId != currentThreadId",
         "InterlockedCompareExchange64(&s_lastDispatchSequence",
         "DispatchResult::InvalidSequence",
-        "InterlockedExchange(&s_updatePermit, 1)",
-        "bool ConsumeUpdatePermit() noexcept",
-        "InterlockedExchange(&s_updatePermit, 0)",
+        "InterlockedExchange64(&s_pendingDispatchSequence, sequence)",
+        "bool TryConsumeUpdatePermit(std::uint64_t& arSequence) noexcept",
+        "InterlockedExchange64(&s_pendingDispatchSequence, 0)",
+        "Diagnostics GetDiagnostics() noexcept",
+        "void RecordOwnerHeartbeat() noexcept",
+        "void RecordOwnerUpdateCompleted(std::uint64_t aSequence) noexcept",
+        "SkyrimTogetherVR update owner starved:",
         "TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE",
         "BodyPoseCapture::Activate()",
         "BodyPoseCapture::CaptureFromPostHiggs",
@@ -87,6 +91,17 @@ REQUIRED_TOKENS = {
         "NPC Pelvis [Pelv]",
         "NPC L Thigh [LThg]",
         "NPC R Foot [Rft ]",
+    ),
+    "Code/client/TiltedOnlineApp.cpp": (
+        "SkyrimTogetherVR::TickBridge::Retire();",
+        "World::Get().ctx().at<VRLifecycleService>().BeginTeardown();",
+    ),
+    "Code/client/main.cpp": (
+        "static int __stdcall HookVrWinMain",
+        "~ShutdownGuard() { RunTiltedEnd(); }",
+        "TP_HOOK(&s_vrWinMain, HookVrWinMain);",
+        "void RunTiltedEnd() noexcept",
+        "g_appInstance->EndMain();",
     ),
     "GameFiles/SkyrimVR/Scripts/source/SkyrimTogetherVerifyLaunchScript.psc": (
         "RearmCadence",
@@ -181,6 +196,22 @@ def main() -> int:
         for token in tokens:
             if token in text:
                 failures.append(f"{relative_path}: forbidden `{token}`")
+
+    teardown_path = root / "Code" / "client" / "TiltedOnlineApp.cpp"
+    teardown_text = teardown_path.read_text(encoding="utf-8", errors="replace") if teardown_path.exists() else ""
+    retire_index = teardown_text.find("SkyrimTogetherVR::TickBridge::Retire();")
+    lifecycle_index = teardown_text.find("World::Get().ctx().at<VRLifecycleService>().BeginTeardown();")
+    if retire_index < 0 or lifecycle_index < 0 or retire_index >= lifecycle_index:
+        failures.append("Code/client/TiltedOnlineApp.cpp: tick bridge must retire before VR lifecycle teardown")
+
+    client_main = (root / "Code" / "client" / "main.cpp").read_text(encoding="utf-8", errors="replace")
+    hook_start = client_main.find("static int __stdcall HookVrWinMain")
+    hook_end = client_main.find("static bool InstallVrWinMainLifecycleHook", hook_start)
+    hook_body = client_main[hook_start:hook_end] if hook_start >= 0 and hook_end >= 0 else ""
+    end_start = client_main.find("void RunTiltedEnd() noexcept")
+    end_body = client_main[end_start:] if end_start >= 0 else ""
+    if "~ShutdownGuard() { RunTiltedEnd(); }" not in hook_body or "g_appInstance->EndMain();" not in end_body:
+        failures.append("Code/client/main.cpp: mapped VR WinMain must reach idempotent client teardown")
 
     print(f"Audited SKSEVR tick bridge files: {len(REQUIRED_TOKENS)}")
     print(f"SKSEVR tick bridge audit failures: {len(failures)}")

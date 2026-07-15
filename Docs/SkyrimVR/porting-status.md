@@ -16,19 +16,28 @@ This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together
 The default package is a connection-only VR bring-up build. A normal SKSEVR
 Papyrus native requests a coalesced one-shot `SKSETaskInterface` task from the
 quest's 50 ms timer. That task validates a process-local launcher endpoint and
-publishes one atomic permit; it never calls the client. An opaque detour at VR
-address-library ID `53926` is the only supported client owner. It defaults to
-`STVR_VM_UPDATE_MODE=observe`, which records cadence and thread identity while
-always forwarding to Skyrim. `active` mode consumes permits and calls
-`World::Update()` on that owner. The inherited VM destructor detour remains
-disabled, the VR VM context is never dereferenced, and the outer main-loop hook
-is observation-only.
+publishes one atomic permit; it never calls the client. Exact Skyrim VR
+`Main::Draw` address-library ID `35560` at RVA `0x5B9330` is the only candidate
+client owner. It defaults to `STVR_VM_UPDATE_MODE=observe`, which records
+cadence, thread, depth, gaps, and original-call duration while always forwarding
+to Skyrim. `active` mode lets only an outermost activation-thread draw consume a
+permit and call `World::Update()` under a single-entry guard. The inherited VM
+destructor and outer main-loop detours remain disabled. The opaque VM update
+detour at ID `53926` is forwarding telemetry only and never dereferences the VR
+VM context or calls the client.
 
 For Skyrim VR 1.4.15, project-local ID `53926` maps to RVA `0x12765B0` with the
 `void (this, float)` ABI. This is `BSScript::Internal::VirtualMachine::Update`
 virtual slot 4, derived from CommonLibSSE-NG's VR vtable at RVA `0x18E2148` and
 the corresponding executable vtable entry. The earlier `0x9869D0` override was
 incorrect and is rejected by `audit_bringup_hooks.py`.
+ID `35560` is independently pinned to the VR Address Library database signature
+`void Main::Draw(Main*, uint32_t, bool)` and is rejected if its RVA or
+provenance changes.
+Exact VR WinMain ID `35545` is pinned to RVA `0x5B4290`; the immersive launcher
+wraps that inner function so `EndMain()` and endpoint retirement run before the
+mapped CRT exit path. The wrapper is idempotent with the existing startup IAT
+callback and leaves detours/mappings resident until process exit.
 
 The default target installs no flat-client BSScript native-binding,
 registration, or signature detours. As a result, `SkyrimTogetherUtils` and the
@@ -101,7 +110,7 @@ supersedes them.
   - applies `SkyrimTogetherVR_AE_to_SE.csv`
 - Added a conservative VR bring-up mode:
   - launcher startup hook is still committed
-  - startup/main-loop/render-init bring-up hooks are installed when `TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1`
+  - startup/update-owner/render-init bring-up hooks are installed when `TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1`
   - Skyrim gameplay hooks are skipped unless `TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=1`
   - flat-SE byte-level inline patches require `TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES`, a per-site `TP_SKYRIM_VR_INLINE_PATCH_*` flag, and a per-site `*_VR_RESOLVED` gate before they can compile into VR
   - all inline patch site flags and all `*_VR_RESOLVED` gates default to `0`, so unresolved SE addends cannot be enabled by setting only the broad/per-site inline-patch flags; these patches stay disabled in the default VR target even if the broader gameplay hook batch is enabled later for testing
@@ -122,18 +131,18 @@ supersedes them.
   - address database load count
   - runtime flag summary for connection-only, bring-up hook, unvalidated hook, and validated inline-patch state
   - client startup hook
-  - resolved main-loop observer address
-  - main-loop observer cadence
+  - resolved Main::Draw owner address
+  - Main::Draw owner cadence, depth, gap, original duration, and permit sequence
   - resolved renderer-init hook address
   - renderer-init hook
   - initial VR HMD/hand/spell/arrow node pointer capture
-- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining the first-run startup, main-loop observer, and render-init breadcrumbs.
+- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining the first-run startup, Main::Draw owner observer, and render-init breadcrumbs.
 - `Tools/SkyrimVR/audit_bringup_hooks.py` also parses the effective VR client target configuration in `Code/client/xmake.lua`, so `SkyrimTogetherVRClient` must stay connection-only with unvalidated gameplay hooks, validated inline patches, and remote avatar actor targets disabled; `SkyrimTogetherVRClientAvatarSync` and `SkyrimTogetherVRGameplayClient` may enable the guarded remote-avatar actor-target validation path, and they still keep the dangerous hook gates disabled.
 - Added VR connection-only mode:
   - `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1` on the VR target
-  - uses one opaque address-library ID `53926` VM-update detour as the verified
-    owner; the SKSEVR task bridge only publishes coalesced permits and the outer
-    main-loop hook remains observation-only
+  - uses exact address-library ID `35560` `Main::Draw` as the candidate owner;
+    the SKSEVR task bridge only publishes coalesced permits, ID `53926` remains
+    forwarding telemetry only, and the outer main-loop hook is not installed
   - selects `off`, `observe`, or `active` at runtime with
     `STVR_VM_UPDATE_MODE`, defaulting to `observe` so a new binary cannot run
     client work before its VM cadence and owner are proven
@@ -572,7 +581,7 @@ Current result:
 - `Tools/SkyrimVR/audit_bringup_hooks.py` confirms the default VR target keeps
   the VM destructor hook, dangerous inline patches, and remote avatar actor
   targets disabled while preserving the opaque runtime-selectable VM observer,
-  first-run startup, main-loop observer, render-init breadcrumbs, and the
+  first-run startup, Main::Draw observer, render-init breadcrumbs, and the
   explicit avatar-sync-only target configuration.
 - `SkyrimTogetherVRTickBridge` is a standalone SKSEVR plugin with normal
   Papyrus registration and one-shot task dispatch. It validates a process-local

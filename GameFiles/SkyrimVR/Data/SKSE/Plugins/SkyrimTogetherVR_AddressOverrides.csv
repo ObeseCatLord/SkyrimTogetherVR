@@ -76,6 +76,8 @@ id,offset,source,status,name
 35157,05a0ff0,addrlib,addrlib,
 35269,05a6da0,addrlib,addrlib,
 35503,05b2360,addrlib,addrlib,
+35545,05b4290,database,exact_vr_database,WinMain
+35560,05b9330,database,exact_vr_database,Main::Draw
 35993,05ce330,addrlib,addrlib,
 36000,05ce550,addrlib,addrlib,
 36048,05d2fb0,addrlib,addrlib,

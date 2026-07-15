@@ -271,9 +271,11 @@ void World::Update() noexcept
     const auto cDelta = cNow - m_lastFrameTime;
     m_lastFrameTime = cNow;
 
-    const auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
+    auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
 
 #if TP_SKYRIM_VR
+    constexpr double kMaximumUpdateDeltaSeconds = 0.25;
+    cDeltaSeconds = std::clamp(cDeltaSeconds, 0.0, kMaximumUpdateDeltaSeconds);
     auto& lifecycle = ctx().at<VRLifecycleService>();
     lifecycle.Update(cDeltaSeconds);
     ctx().at<VRConnectionService>().HandleLifecycleBoundary();

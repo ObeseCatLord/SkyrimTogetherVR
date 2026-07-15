@@ -22,11 +22,19 @@ namespace
 {
 HANDLE s_mapping = nullptr;
 Endpoint* s_endpoint = nullptr;
-volatile LONG s_updatePermit = 0;
-volatile LONG64 s_lastDispatchSequence = 0;
-volatile LONG64 s_lastBodyCaptureSequence = 0;
+alignas(8) volatile LONG64 s_lastDispatchSequence = 0;
+alignas(8) volatile LONG64 s_pendingDispatchSequence = 0;
+alignas(8) volatile LONG64 s_lastConsumedSequence = 0;
+alignas(8) volatile LONG64 s_permitPendingSinceMs = 0;
+alignas(8) volatile LONG64 s_ownerHeartbeatMs = 0;
+alignas(8) volatile LONG64 s_ownerUpdateCompletedMs = 0;
+alignas(8) volatile LONG64 s_lastStarvationWarningMs = 0;
+alignas(8) volatile LONG64 s_lastBodyCaptureSequence = 0;
 volatile LONG s_bodyCaptureInProgress = 0;
-bool s_loggedFirstCallback = false;
+volatile LONG s_loggedFirstCallback = 0;
+
+constexpr std::uint64_t kOwnerStarvationWarningMs = 5000;
+constexpr std::uint64_t kOwnerStarvationLogIntervalMs = 10000;
 
 LONG ReadState(const Endpoint& acEndpoint) noexcept
 {
@@ -36,6 +44,16 @@ LONG ReadState(const Endpoint& acEndpoint) noexcept
 void WriteState(Endpoint& arEndpoint, EndpointState aState) noexcept
 {
     InterlockedExchange(reinterpret_cast<volatile LONG*>(&arEndpoint.State), static_cast<LONG>(aState));
+}
+
+std::uint64_t ReadCounter(volatile LONG64& arCounter) noexcept
+{
+    return static_cast<std::uint64_t>(InterlockedCompareExchange64(&arCounter, 0, 0));
+}
+
+void WriteCounter(volatile LONG64& arCounter, std::uint64_t aValue) noexcept
+{
+    InterlockedExchange64(&arCounter, static_cast<LONG64>(aValue));
 }
 
 std::uint64_t MakeEpoch() noexcept
@@ -85,6 +103,13 @@ bool Initialize() noexcept
     }
 
     std::memset(s_endpoint, 0, sizeof(*s_endpoint));
+    WriteCounter(s_lastDispatchSequence, 0);
+    WriteCounter(s_pendingDispatchSequence, 0);
+    WriteCounter(s_lastConsumedSequence, 0);
+    WriteCounter(s_permitPendingSinceMs, 0);
+    WriteCounter(s_ownerHeartbeatMs, 0);
+    WriteCounter(s_ownerUpdateCompletedMs, 0);
+    WriteCounter(s_lastStarvationWarningMs, 0);
     s_endpoint->Magic = kEndpointMagic;
     s_endpoint->AbiVersion = kEndpointAbiVersion;
     s_endpoint->StructSize = static_cast<std::uint16_t>(sizeof(Endpoint));
@@ -128,6 +153,7 @@ void Activate() noexcept
 #endif
 
     s_endpoint->ActivationThreadId = GetCurrentThreadId();
+    WriteCounter(s_ownerHeartbeatMs, GetTickCount64());
     WriteState(*s_endpoint, EndpointState::Ready);
     spdlog::info("SkyrimTogetherVR tick bridge endpoint ready on activation thread {}", s_endpoint->ActivationThreadId);
 #endif
@@ -139,7 +165,8 @@ void Retire() noexcept
     if (s_endpoint)
     {
         WriteState(*s_endpoint, EndpointState::Retired);
-        InterlockedExchange(&s_updatePermit, 0);
+        WriteCounter(s_pendingDispatchSequence, 0);
+        WriteCounter(s_permitPendingSinceMs, 0);
 #if TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE
         BodyPoseCapture::Retire();
 #endif
@@ -160,12 +187,62 @@ std::uint32_t GetActivationThreadId() noexcept
 #endif
 }
 
-bool ConsumeUpdatePermit() noexcept
+Diagnostics GetDiagnostics() noexcept
 {
+#if !TP_SKYRIM_VR
+    return {};
+#else
+    Diagnostics diagnostics{};
+    if (!s_endpoint)
+        return diagnostics;
+
+    diagnostics.Ready = ReadState(*s_endpoint) == static_cast<LONG>(EndpointState::Ready);
+    diagnostics.ActivationThreadId = diagnostics.Ready ? s_endpoint->ActivationThreadId : 0;
+    diagnostics.ProducedSequence = ReadCounter(s_lastDispatchSequence);
+    diagnostics.ConsumedSequence = ReadCounter(s_lastConsumedSequence);
+    diagnostics.PermitPendingSinceMs = ReadCounter(s_permitPendingSinceMs);
+    diagnostics.OwnerHeartbeatMs = ReadCounter(s_ownerHeartbeatMs);
+    diagnostics.OwnerUpdateCompletedMs = ReadCounter(s_ownerUpdateCompletedMs);
+    diagnostics.PermitPending = ReadCounter(s_pendingDispatchSequence) != 0;
+    return diagnostics;
+#endif
+}
+
+void RecordOwnerHeartbeat() noexcept
+{
+#if TP_SKYRIM_VR
+    if (s_endpoint && ReadState(*s_endpoint) == static_cast<LONG>(EndpointState::Ready))
+        WriteCounter(s_ownerHeartbeatMs, GetTickCount64());
+#endif
+}
+
+void RecordOwnerUpdateCompleted(std::uint64_t aSequence) noexcept
+{
+#if TP_SKYRIM_VR
+    WriteCounter(s_lastConsumedSequence, aSequence);
+    WriteCounter(s_ownerUpdateCompletedMs, GetTickCount64());
+#else
+    (void)aSequence;
+#endif
+}
+
+bool TryConsumeUpdatePermit(std::uint64_t& arSequence) noexcept
+{
+    arSequence = 0;
 #if !TP_SKYRIM_VR
     return false;
 #else
-    return InterlockedExchange(&s_updatePermit, 0) != 0;
+    if (!s_endpoint || ReadState(*s_endpoint) != static_cast<LONG>(EndpointState::Ready))
+        return false;
+
+    const auto sequence = InterlockedExchange64(&s_pendingDispatchSequence, 0);
+    if (sequence <= 0)
+        return false;
+
+    arSequence = static_cast<std::uint64_t>(sequence);
+    if (ReadCounter(s_pendingDispatchSequence) == 0)
+        WriteCounter(s_permitPendingSinceMs, 0);
+    return true;
 #endif
 }
 
@@ -194,12 +271,35 @@ std::uint32_t __cdecl Dispatch(std::uint64_t aEpoch, std::uint64_t aSequence, st
         WriteState(*s_endpoint, EndpointState::Faulted);
         return static_cast<std::uint32_t>(DispatchResult::InvalidSequence);
     }
-    if (!s_loggedFirstCallback)
+    if (InterlockedCompareExchange(&s_loggedFirstCallback, 1, 0) == 0)
     {
-        s_loggedFirstCallback = true;
         spdlog::info("SkyrimTogetherVR SKSE task callback accepted: sequence={} thread={}", aSequence, currentThreadId);
     }
-    InterlockedExchange(&s_updatePermit, 1);
+    const auto now = GetTickCount64();
+    const auto previousPending = InterlockedExchange64(&s_pendingDispatchSequence, sequence);
+    if (previousPending == 0)
+        InterlockedCompareExchange64(&s_permitPendingSinceMs, static_cast<LONG64>(now), 0);
+
+    const auto ownerHeartbeat = ReadCounter(s_ownerHeartbeatMs);
+    const auto ownerAge = ownerHeartbeat > 0 && now >= ownerHeartbeat ? now - ownerHeartbeat : 0;
+    if (ownerHeartbeat > 0 && ownerAge >= kOwnerStarvationWarningMs)
+    {
+        const auto lastWarning = ReadCounter(s_lastStarvationWarningMs);
+        if (now >= lastWarning + kOwnerStarvationLogIntervalMs &&
+            InterlockedCompareExchange64(&s_lastStarvationWarningMs, static_cast<LONG64>(now), static_cast<LONG64>(lastWarning)) ==
+                static_cast<LONG64>(lastWarning))
+        {
+            const auto pendingSince = ReadCounter(s_permitPendingSinceMs);
+            const auto pendingAge = pendingSince > 0 && now >= pendingSince ? now - pendingSince : 0;
+            spdlog::warn(
+                "SkyrimTogetherVR update owner starved: ownerAgeMs={} pendingAgeMs={} producedSequence={} consumedSequence={} activationThread={}",
+                ownerAge,
+                pendingAge,
+                aSequence,
+                ReadCounter(s_lastConsumedSequence),
+                s_endpoint->ActivationThreadId);
+        }
+    }
 
     return static_cast<std::uint32_t>(DispatchResult::Success);
 #endif

@@ -8,25 +8,12 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-from vr_address_contract import VALIDATED_COMMONLIB_VR_ALIASES
+from vr_address_contract import VALIDATED_COMMONLIB_VR_ALIASES, VALIDATED_VR_ADDRESS_OVERRIDES
 
 BASE = 0x140000000
 MIN_AE_TO_SE_DATA_ROWS = 50
 MIN_ADDRESS_OVERRIDE_DATA_ROWS = 2800
 VALID_OVERRIDE_SOURCES = {"database", "addrlib", "sse_vr", "commonlib_vtable"}
-
-# Curated mappings take precedence over generated address-library translations.
-# ID 53926 is project-local on VR: CommonLibSSE-NG's Skyrim VR VM vtable at
-# RVA 0x18E2148 identifies slot 4 as VirtualMachine::Update(float), and the
-# executable vtable entry points to RVA 0x12765B0.
-VALIDATED_VR_OVERRIDES = {
-    53926: {
-        "offset": 0x12765B0,
-        "source": "commonlib_vtable",
-        "status": "exact_vr_vtable",
-        "name": "BSScript::Internal::VirtualMachine::Update",
-    },
-}
 
 POINTER_RE = re.compile(
     r"POINTER_SKYRIMSE(?:_LEGACY)?\s*\([^,\n]+,\s*[^,\n]+,\s*(\d+)"
@@ -247,6 +234,18 @@ def find_missing_rtti_cast_refs(repo, missing_rtti_ids):
 
 
 def resolve_id(address_id, ae_to_se, release, database, addrlib, offsets_1597, sse_vr):
+    if address_id in VALIDATED_VR_ADDRESS_OVERRIDES:
+        row = VALIDATED_VR_ADDRESS_OVERRIDES[address_id]
+        return {
+            "id": address_id,
+            "resolved_id": address_id,
+            "translation": "direct",
+            "source": row["source"],
+            "offset": row["offset"],
+            "status": row["status"],
+            "name": row["name"],
+        }
+
     candidates = []
     se_id = ae_to_se.get(address_id)
     if se_id is not None:
@@ -258,18 +257,6 @@ def resolve_id(address_id, ae_to_se, release, database, addrlib, offsets_1597, s
         if candidate in seen:
             continue
         seen.add(candidate)
-
-        if candidate in VALIDATED_VR_OVERRIDES:
-            row = VALIDATED_VR_OVERRIDES[candidate]
-            return {
-                "id": address_id,
-                "resolved_id": candidate,
-                "translation": translation,
-                "source": row["source"],
-                "offset": row["offset"],
-                "status": row["status"],
-                "name": row["name"],
-            }
 
         if candidate in release:
             return {

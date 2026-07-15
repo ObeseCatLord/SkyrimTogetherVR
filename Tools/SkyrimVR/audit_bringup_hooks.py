@@ -6,6 +6,10 @@ import sys
 
 VR_VM_UPDATE_ADDRESS_ID = "53926"
 VR_VM_UPDATE_RVA = "12765b0"
+VR_MAIN_DRAW_ADDRESS_ID = "35560"
+VR_MAIN_DRAW_RVA = "5b9330"
+VR_WIN_MAIN_ADDRESS_ID = "35545"
+VR_WIN_MAIN_RVA = "5b4290"
 
 
 EXPECTED_VR_TARGET_CONFIGS = {
@@ -92,7 +96,7 @@ REQUIRED_TOKENS = {
     ),
     "Code/client/main.cpp": (
         "SkyrimTogetherVR runtime flags: connectionOnly={}, bringupHooks={}, unvalidatedHooks={}, validatedInlinePatches={}",
-        "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
+        "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
         "SkyrimTogetherVR bring-up hooks are disabled at compile time",
         "SkyrimTogetherVR bring-up mode: skipping unvalidated Skyrim gameplay hooks",
         "BuildVRCompatibilityStatus",
@@ -101,6 +105,10 @@ REQUIRED_TOKENS = {
         "HIGGS or PLANCK is installed; refusing to install unvalidated SkyrimTogetherVR gameplay hooks",
         "InstallVrMainLoopBringupHooks();",
         "BSGraphics::InstallVrRenderBringupHooks();",
+        "Installing SkyrimTogetherVR WinMain lifecycle hook:",
+        "TP_HOOK(&s_vrWinMain, HookVrWinMain);",
+        "~ShutdownGuard() { RunTiltedEnd(); }",
+        "g_appInstance->EndMain();",
         "SkyrimTogetherVR client startup hook reached",
     ),
     "Code/client/VRCompatibilityStatus.h": (
@@ -128,21 +136,21 @@ REQUIRED_TOKENS = {
     "Code/client/TiltedOnlineApp.cpp": (
         "stubs::g_IsPlanckActive",
         "PLANCK SKSE plugin is loaded; active-ragdoll compatibility guard is active",
+        "POINTER_SKYRIMSE(void, winMain, 35545);",
     ),
     "Code/client/SkyrimVM64.cpp": (
-        "Installing SkyrimTogetherVR main-loop observer: mainLoop={}",
-        "SkyrimTogetherVR main-loop observer reached",
-        "SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}",
-        "SkyrimTogetherVR VM-update runtime mode: {}",
+        "Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw={}",
+        "SkyrimTogetherVR Main::Draw observer reached:",
+        "SkyrimTogetherVR Main::Draw cadence:",
+        "SkyrimTogetherVR VR update-owner runtime mode: {}",
         "Installing opaque SkyrimTogetherVR VM-update observer: target={}",
-        "SkyrimTogetherVR VM-update owner reached: mode={} thread={}",
-        "SkyrimTogetherVR VM-update owner cadence: call={} mode={} thread={}",
-        "SkyrimTogetherVR VM-update worker call ignored: call={} mode={} thread={} owner={}",
-        "SkyrimTogetherVR::TickBridge::ConsumeUpdatePermit()",
-        "s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed)",
-        "callCount <= 2 || callCount % 300 == 0",
-        "static void InstallVrMainLoopObserver()",
-        "TP_HOOK(&MainLoop, HookMainLoop);",
+        "SkyrimTogetherVR VM-update worker observed:",
+        "SkyrimTogetherVR::TickBridge::TryConsumeUpdatePermit(sequence)",
+        "s_clientUpdateInProgress.test_and_set(std::memory_order_acquire)",
+        "SkyrimTogetherVR::TickBridge::RecordOwnerHeartbeat()",
+        "SkyrimTogetherVR::TickBridge::RecordOwnerUpdateCompleted(sequence)",
+        "static void InstallVrMainDrawObserver()",
+        "TP_HOOK(&MainDraw, HookMainDraw);",
         "void InstallVrMainLoopBringupHooks()",
     ),
     "Code/client/Services/Generic/VRLifecycleService.cpp": (
@@ -161,6 +169,8 @@ REQUIRED_TOKENS = {
         "lifecycle.Update(cDeltaSeconds)",
         "HandleLifecycleBoundary()",
         "if (!lifecycle.IsReady())",
+        "kMaximumUpdateDeltaSeconds = 0.25",
+        "std::clamp(cDeltaSeconds, 0.0, kMaximumUpdateDeltaSeconds)",
     ),
     "Code/client/Services/Generic/VRConnectionService.cpp": (
         'SetStatus("waiting_for_gameplay")',
@@ -193,9 +203,9 @@ REQUIRED_TOKENS = {
         "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=0",
         "Expected First-Run Log Breadcrumbs",
         "SkyrimTogetherVR runtime flags:",
-        "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
-        "Installing SkyrimTogetherVR main-loop observer:",
-        "SkyrimTogetherVR main-loop observer reached",
+        "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
+        "Installing SkyrimTogetherVR Main::Draw owner observer:",
+        "SkyrimTogetherVR Main::Draw observer reached:",
         "STVR_VM_UPDATE_MODE",
         "never executes client or engine work",
         "SkyrimTogetherVR.lifecycle",
@@ -206,7 +216,7 @@ REQUIRED_TOKENS = {
         "runtime flag summary",
         "effective VR client target configuration",
         "explicit avatar-sync-only target configuration",
-        "resolved main-loop observer address",
+        "resolved Main::Draw owner address",
         "resolved renderer-init hook address",
         "Tools/SkyrimVR/audit_bringup_hooks.py",
     ),
@@ -313,7 +323,7 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
     return failures
 
 
-def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
+def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
     path = root / "Code" / "client" / "SkyrimVM64.cpp"
     text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
     failures: list[str] = []
@@ -322,15 +332,23 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     vr_block = text[vr_block_start:vr_block_end] if vr_block_start >= 0 and vr_block_end >= 0 else ""
 
     for required_token in (
+        "TP_THIS_FUNCTION(TMainDraw, void, Main, std::uint32_t, bool);",
+        "void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen)",
+        "POINTER_SKYRIMSE(TMainDraw, cMainDraw, 35560);",
         "TP_THIS_FUNCTION(TVrVmUpdate, void, VrVmUpdateContext, float);",
         "void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)",
         "TVrVmUpdate",
         "HookVrVmUpdate",
         "STVR_VM_UPDATE_MODE",
-        "ConsumeUpdatePermit",
+        "TryConsumeUpdatePermit",
         "GetActivationThreadId",
-        "VrVmUpdateMode::Observe",
-        "VrVmUpdateMode::Active",
+        "VrUpdateMode::Observe",
+        "VrUpdateMode::Active",
+        "TiltedPhoques::ThisCall(MainDraw, apThis, aUnk, aMainMenuOpen);",
+        "TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);",
+        "s_clientUpdateInProgress.test_and_set",
+        "beforeConsume.Ready",
+        "beforeUpdate.Ready",
     ):
         if required_token not in vr_block:
             failures.append(f"Code/client/SkyrimVM64.cpp: VR observer block must contain `{required_token}`")
@@ -345,9 +363,21 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
         "TVMDestructor",
         "HookVMDestructor",
         "TP_HOOK(&VMDestructor",
+        "POINTER_SKYRIMSE(TMainLoop",
+        "TP_HOOK(&MainLoop",
+        "HookMainLoop",
+        "36564",
+        "::ConsumeUpdatePermit()",
     ):
         if forbidden_token in vr_block:
             failures.append(f"Code/client/SkyrimVM64.cpp: opaque VR observer block must not contain `{forbidden_token}`")
+
+    vm_hook_start = vr_block.find("void TP_MAKE_THISCALL(HookVrVmUpdate")
+    vm_hook_end = vr_block.find("void TP_MAKE_THISCALL(HookMainDraw", vm_hook_start)
+    vm_hook = vr_block[vm_hook_start:vm_hook_end] if vm_hook_start >= 0 and vm_hook_end >= 0 else ""
+    for forbidden_token in ("g_appInstance->Update()", "TryConsumeUpdatePermit", "RecordOwnerHeartbeat"):
+        if forbidden_token in vm_hook:
+            failures.append(f"Code/client/SkyrimVM64.cpp: forwarding VM observer must not contain `{forbidden_token}`")
 
     tick_bridge_path = root / "Code" / "client" / "VRTickBridge.cpp"
     tick_bridge_text = tick_bridge_path.read_text(encoding="utf-8", errors="replace") if tick_bridge_path.exists() else ""
@@ -358,35 +388,47 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     return failures
 
 
-def audit_vr_vm_update_address(root: pathlib.Path) -> list[str]:
+def audit_vr_owner_addresses(root: pathlib.Path) -> list[str]:
     path = root / "GameFiles" / "SkyrimVR" / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv"
     failures: list[str] = []
-    rows = []
+    rows: dict[str, list[tuple[int, list[str]]]] = {
+        VR_VM_UPDATE_ADDRESS_ID: [],
+        VR_MAIN_DRAW_ADDRESS_ID: [],
+        VR_WIN_MAIN_ADDRESS_ID: [],
+    }
     if path.exists():
         for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
             columns = [column.strip() for column in raw_line.split(",")]
-            if columns and columns[0] == VR_VM_UPDATE_ADDRESS_ID:
-                rows.append((line_number, columns))
+            if columns and columns[0] in rows:
+                rows[columns[0]].append((line_number, columns))
 
-    if len(rows) != 1:
-        failures.append(f"{path.relative_to(root)}: expected exactly one address ID {VR_VM_UPDATE_ADDRESS_ID} row, found {len(rows)}")
-        return failures
-
-    line_number, columns = rows[0]
-    actual_rva = columns[1].lower().removeprefix("0x") if len(columns) > 1 else ""
-    if actual_rva != VR_VM_UPDATE_RVA:
-        failures.append(
-            f"{path.relative_to(root)}:{line_number}: address ID {VR_VM_UPDATE_ADDRESS_ID} must map to Skyrim VR "
-            f"VirtualMachine::Update RVA 0x{VR_VM_UPDATE_RVA}, found 0x{actual_rva or 'missing'}"
-        )
-
-    expected_provenance = ("commonlib_vtable", "exact_vr_vtable")
-    actual_provenance = tuple(columns[2:4]) if len(columns) >= 4 else ()
-    if actual_provenance != expected_provenance:
-        failures.append(
-            f"{path.relative_to(root)}:{line_number}: address ID {VR_VM_UPDATE_ADDRESS_ID} must record provenance "
-            f"{expected_provenance}, found {actual_provenance}"
-        )
+    expected = {
+        VR_VM_UPDATE_ADDRESS_ID: (VR_VM_UPDATE_RVA, ("commonlib_vtable", "exact_vr_vtable"), "VirtualMachine::Update"),
+        VR_MAIN_DRAW_ADDRESS_ID: (VR_MAIN_DRAW_RVA, ("database", "exact_vr_database"), "Main::Draw"),
+        VR_WIN_MAIN_ADDRESS_ID: (VR_WIN_MAIN_RVA, ("database", "exact_vr_database"), "WinMain"),
+    }
+    for address_id, (expected_rva, expected_provenance, target_name) in expected.items():
+        matches = rows[address_id]
+        if len(matches) != 1:
+            failures.append(f"{path.relative_to(root)}: expected exactly one address ID {address_id} row, found {len(matches)}")
+            continue
+        line_number, columns = matches[0]
+        actual_rva_text = columns[1].lower().removeprefix("0x") if len(columns) > 1 else ""
+        try:
+            actual_rva = int(actual_rva_text, 16)
+        except ValueError:
+            actual_rva = -1
+        if actual_rva != int(expected_rva, 16):
+            failures.append(
+                f"{path.relative_to(root)}:{line_number}: address ID {address_id} must map to Skyrim VR "
+                f"{target_name} RVA 0x{expected_rva}, found 0x{actual_rva_text or 'missing'}"
+            )
+        actual_provenance = tuple(columns[2:4]) if len(columns) >= 4 else ()
+        if actual_provenance != expected_provenance:
+            failures.append(
+                f"{path.relative_to(root)}:{line_number}: address ID {address_id} must record provenance "
+                f"{expected_provenance}, found {actual_provenance}"
+            )
 
     return failures
 
@@ -396,9 +438,9 @@ def main():
     failures = []
     structural_failures = audit_vr_target_configs(root)
     failures.extend(structural_failures)
-    observer_failures = audit_vr_main_loop_observer(root)
+    observer_failures = audit_vr_update_owner(root)
     failures.extend(observer_failures)
-    vm_address_failures = audit_vr_vm_update_address(root)
+    vm_address_failures = audit_vr_owner_addresses(root)
     failures.extend(vm_address_failures)
 
     for relative_path, tokens in REQUIRED_TOKENS.items():
@@ -417,8 +459,8 @@ def main():
 
     print(f"Audited bring-up files: {len(REQUIRED_TOKENS)}")
     print(f"VR target config failures: {len(structural_failures)}")
-    print(f"VR main-loop observer failures: {len(observer_failures)}")
-    print(f"VR VM-update address failures: {len(vm_address_failures)}")
+    print(f"VR update-owner failures: {len(observer_failures)}")
+    print(f"VR owner address failures: {len(vm_address_failures)}")
     print(f"Bring-up hook audit failures: {len(failures)}")
     for failure in failures:
         print(f"- {failure}")

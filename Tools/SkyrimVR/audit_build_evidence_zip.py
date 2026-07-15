@@ -121,8 +121,9 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
         "CreateFileMappingW",
         "EndpointState::Ready",
         "SKSE task callback accepted",
-        "InterlockedExchange(&s_updatePermit, 1)",
-        "ConsumeUpdatePermit",
+        "InterlockedExchange64(&s_pendingDispatchSequence, sequence)",
+        "TryConsumeUpdatePermit",
+        "update owner starved",
     ),
     "source/Code/vr_tick_bridge/xmake.lua": (
         "target(\"SkyrimTogetherVRTickBridge\")",

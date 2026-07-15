@@ -12,7 +12,7 @@ import tempfile
 
 import audit_gamefiles
 import vr_paths
-from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS
+from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS, VALIDATED_VR_ADDRESS_OVERRIDES
 
 BRIDGE_RUNTIME_FILES = (
     "EarlyLoad.dll",
@@ -240,6 +240,37 @@ def audit_vr_address_aliases(path, failures):
 
     for vr_id, desktop_id in sorted(REQUIRED_VR_ADDRESS_ALIAS_ROWS - rows):
         failures.append(f"built package is missing required VR address alias {vr_id},{desktop_id}")
+
+
+def audit_vr_address_overrides(path, failures):
+    if not path.exists():
+        return
+
+    rows = {}
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                address_id = int(row.get("id", ""), 10)
+                if address_id in rows:
+                    failures.append(f"built package has duplicate VR address override {address_id}")
+                rows[address_id] = row
+    except (OSError, TypeError, ValueError) as error:
+        failures.append(f"invalid SkyrimTogetherVR_AddressOverrides.csv: {error}")
+        return
+
+    for address_id, expected in sorted(VALIDATED_VR_ADDRESS_OVERRIDES.items()):
+        row = rows.get(address_id)
+        if row is None:
+            failures.append(f"built package is missing required VR address override {address_id}")
+            continue
+        try:
+            offset = int(row.get("offset", ""), 16)
+        except ValueError:
+            offset = -1
+        actual = (offset, row.get("source", ""), row.get("status", ""), row.get("name", ""))
+        wanted = (expected["offset"], expected["source"], expected["status"], expected["name"])
+        if actual != wanted:
+            failures.append(f"built package VR address override {address_id} is {actual!r}, expected {wanted!r}")
 
 
 def pe_machine(path):
@@ -906,6 +937,9 @@ def audit_package(
     audit_vr_address_aliases(
         package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv", failures
     )
+    audit_vr_address_overrides(
+        package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv", failures
+    )
 
     if dll_only:
         mode_forbidden_files = DLL_ONLY_FORBIDDEN_RUNTIME_FILES
@@ -1050,7 +1084,12 @@ def write_csv(path):
         rows.extend(f"{vr_id},{desktop_id}" for vr_id, desktop_id in sorted(REQUIRED_VR_ADDRESS_ALIAS_ROWS))
         path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     elif path.name == "SkyrimTogetherVR_AddressOverrides.csv":
-        path.write_text("id,offset,source,status,name\n1,2,database,self_test,fixture\n", encoding="utf-8")
+        rows = ["id,offset,source,status,name"]
+        rows.extend(
+            f"{address_id},{metadata['offset']:x},{metadata['source']},{metadata['status']},{metadata['name']}"
+            for address_id, metadata in sorted(VALIDATED_VR_ADDRESS_OVERRIDES.items())
+        )
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     else:
         path.write_text("id,address\n1,2\n", encoding="utf-8")
 

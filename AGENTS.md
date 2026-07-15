@@ -88,7 +88,7 @@ launcher explicitly disables OpenComposite because it breaks the keyboard and
 SteamVR overlays. SteamVR normally provides the overlay keyboard transaction
 that XRizer must emulate for this Monado test path.
 
-## VM Update Owner
+## VR Update Owner
 
 Skyrim VR 1.4.15 address ID `53926` is a project-local alias for
 `BSScript::Internal::VirtualMachine::Update(float)`. Its verified RVA is
@@ -109,19 +109,22 @@ objdump -h "$SKYRIMVR/SkyrimVR.exe"
 od -An -v -tx8 -j $((0x18e0b68)) -N 8 "$SKYRIMVR/SkyrimVR.exe"
 ```
 
-The expected slot value is `00000001412765b0`. Do not enable `active` mode for
-an executable whose section layout, vtable entry, or version differs.
+The expected slot value is `00000001412765b0`. This VM target is forwarding
+telemetry only. Do not enable `active` mode for an executable whose section
+layout, vtable entry, or version differs.
 
 In `active` mode, the SKSE task bridge publishes only an atomic permit. The
-verified VM-update owner consumes that permit and calls the client once; task
-callbacks must never call `World::Update()` directly. The owner is the Windows
-thread recorded by `TickBridge::Activate()` immediately before the endpoint is
-published `Ready`, not the first caller of `VirtualMachine::Update`. Skyrim VR
-can invoke that virtual function from startup workers before settling onto the
-main thread. Worker calls must be logged, ignored by the client, and forwarded
-to Skyrim without consuming a permit. A viable connection run must log
-`SkyrimTogetherVR VM-update owner reached`, advance lifecycle from `boot`, and
-retain the activation thread as owner.
+exact `Main::Draw` target at address ID `35560`, RVA `0x5B9330`, consumes that
+permit and calls the client once; task and VM callbacks must never call
+`World::Update()` directly. The owner is the Windows thread recorded by
+`TickBridge::Activate()` immediately before the endpoint is published `Ready`.
+Only an outermost draw on that thread may dispatch, under the atomic reentrancy
+guard, after the original draw returns. Worker VM calls are logged and forwarded
+without consuming a permit. A viable observer run must log recurring
+`SkyrimTogetherVR Main::Draw owner cadence` with owner-thread equality and no
+reentrancy. A viable active connection run must additionally log
+`SkyrimTogetherVR Main::Draw client update completed`, advance lifecycle from
+`boot`, and retain the activation thread as owner.
 
 Do not use Monado `O` for RaceSex Done under the simple-controller profile.
 `O` changes the Qwerty WMR squeeze input, but XRizer's simple-controller legacy
@@ -151,6 +154,8 @@ process:
 - `SkyrimTogether.esp` active;
 - lifecycle `state=ready`, `ready=1`, nonzero epoch/owner/player/cell;
 - online status with nonzero local player ID and a newer cell request;
-- matching server-side admission while exactly one server container is running.
+- matching server-side admission while exactly one server container is running;
+- after a normal exit, `SkyrimTogetherVR WinMain lifecycle shutdown hook reached`
+  with no owner mismatch, starvation, reentrancy, or new crash dump.
 
 Use `Tools/SkyrimVR/audit_runtime_handoff.py` for the local post-run audit.

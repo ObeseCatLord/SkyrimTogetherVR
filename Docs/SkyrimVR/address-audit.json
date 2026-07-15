@@ -529,12 +529,14 @@
   "nonRttiResolutionSources": {
     "addrlib": 180,
     "commonlib_vtable": 1,
+    "database": 2,
     "release": 74,
     "sse_vr": 27
   },
   "resolutionSources": {
     "addrlib": 180,
     "commonlib_vtable": 1,
+    "database": 2,
     "missing": 47,
     "release": 75,
     "sse_vr": 2786
@@ -2093,6 +2095,38 @@
       "translation": "direct"
     },
     {
+      "id": 35545,
+      "name": "WinMain",
+      "offset": "0x5b4290",
+      "references": [
+        {
+          "file": "Code/client/TiltedOnlineApp.cpp",
+          "isRtti": false,
+          "line": 68
+        }
+      ],
+      "resolvedId": 35545,
+      "source": "database",
+      "status": "exact_vr_database",
+      "translation": "direct"
+    },
+    {
+      "id": 35560,
+      "name": "Main::Draw",
+      "offset": "0x5b9330",
+      "references": [
+        {
+          "file": "Code/client/SkyrimVM64.cpp",
+          "isRtti": false,
+          "line": 229
+        }
+      ],
+      "resolvedId": 35560,
+      "source": "database",
+      "status": "exact_vr_database",
+      "translation": "direct"
+    },
+    {
       "id": 35993,
       "name": "",
       "offset": "0x5ce330",
@@ -2244,7 +2278,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 67
+          "line": 70
         }
       ],
       "resolvedId": 36544,
@@ -2276,12 +2310,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 132
-        },
-        {
-          "file": "Code/client/SkyrimVM64.cpp",
-          "isRtti": false,
-          "line": 203
+          "line": 300
         }
       ],
       "resolvedId": 36564,
@@ -3095,7 +3124,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 205
+          "line": 302
         }
       ],
       "resolvedId": 40412,
@@ -3511,12 +3540,12 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 146
+          "line": 238
         },
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 204
+          "line": 301
         }
       ],
       "resolvedId": 53926,
@@ -4342,7 +4371,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 161
+          "line": 165
         }
       ],
       "resolvedId": 380768,
@@ -5114,7 +5143,7 @@
     }
   ],
   "runtimeHelperCsvs": {
-    "addressOverrideDataRows": 2967,
+    "addressOverrideDataRows": 2969,
     "addressOverrides": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "aeToSe": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "aeToSeDataRows": 77,
@@ -5122,14 +5151,14 @@
   },
   "schema": "skyrim_together_vr_address_audit_v1",
   "summary": {
-    "addressOverrideHelperCsvRows": 2967,
+    "addressOverrideHelperCsvRows": 2969,
     "aeToSeHelperCsvRows": 77,
     "helperCsvValidationFailures": 0,
     "missingIdsIncludingRtti": 47,
     "missingNonRttiIds": 0,
     "missingRttiIdsUsedByCast": 0,
-    "uniqueAddressIds": 3089,
-    "uniqueNonRttiAddressIds": 282,
+    "uniqueAddressIds": 3091,
+    "uniqueNonRttiAddressIds": 284,
     "uniqueRttiAddressIds": 2807
   }
 }

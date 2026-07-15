@@ -64,7 +64,11 @@ TiltedOnlineApp::~TiltedOnlineApp() = default;
 
 void* TiltedOnlineApp::GetMainAddress() const
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(void, winMain, 35545);
+#else
     POINTER_SKYRIMSE(void, winMain, 36544);
+#endif
 
     return winMain.GetPtr();
 }
@@ -127,8 +131,8 @@ bool TiltedOnlineApp::BeginMain()
 bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
-    World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
     SkyrimTogetherVR::TickBridge::Retire();
+    World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
 #endif
 
     UninstallHooks();

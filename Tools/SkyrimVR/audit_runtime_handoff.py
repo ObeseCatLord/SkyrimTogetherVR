@@ -17,13 +17,15 @@ PLANCK_READOUT_NAME = "SkyrimTogetherVR.planck"
 
 LOG_BREADCRUMBS = (
     "SkyrimTogetherVR runtime flags:",
-    "Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks",
-    "Installing SkyrimTogetherVR main-loop observer:",
-    "SkyrimTogetherVR VM-update runtime mode:",
+    "Installing SkyrimTogetherVR WinMain lifecycle hook:",
+    "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
+    "Installing SkyrimTogetherVR Main::Draw owner observer:",
+    "SkyrimTogetherVR VR update-owner runtime mode:",
     "Installing opaque SkyrimTogetherVR VM-update observer:",
     "SkyrimTogetherVR client startup hook reached",
-    "SkyrimTogetherVR VM-update observer reached:",
+    "SkyrimTogetherVR Main::Draw observer reached:",
     "Installing SkyrimTogetherVR renderer bring-up hook:",
+    "SkyrimTogetherVR WinMain lifecycle shutdown hook reached",
 )
 
 BASE_REQUIRED_HANDOFF_FILES = (
@@ -458,12 +460,36 @@ def audit_log(results: list[tuple[str, bool, str]], log_path: pathlib.Path, *, s
         return
 
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    missing = [token for token in LOG_BREADCRUMBS if token not in text]
+    session_start = text.rfind("SkyrimTogetherVR runtime flags:")
+    session_text = text[session_start:] if session_start >= 0 else text
+    missing = [token for token in LOG_BREADCRUMBS if token not in session_text]
     add_check(
         results,
         "client log breadcrumbs",
         not missing,
         "all expected breadcrumbs present" if not missing else "missing: " + ", ".join(missing),
+    )
+    modes = re.findall(r"SkyrimTogetherVR VR update-owner runtime mode: (off|observe|active)", session_text)
+    latest_mode = modes[-1] if modes else "missing"
+    add_check(results, "update-owner mode", latest_mode == "active", f"latestMode={latest_mode}")
+    add_check(
+        results,
+        "update-owner dispatch",
+        latest_mode != "active" or "SkyrimTogetherVR Main::Draw client update completed:" in session_text,
+        "active mode completed at least one owner update" if latest_mode == "active" else f"latestMode={latest_mode}",
+    )
+    unsafe_markers = (
+        "SkyrimTogetherVR rejected a reentrant Main::Draw client update",
+        "SkyrimTogetherVR update owner starved:",
+        "SkyrimTogetherVR Main::Draw owner mismatch:",
+        "SkyrimTogetherVR WinMain lifecycle shutdown ran on thread",
+    )
+    observed_unsafe = [marker for marker in unsafe_markers if marker in session_text]
+    add_check(
+        results,
+        "update-owner safety",
+        not observed_unsafe,
+        "no starvation, reentrancy, or owner mismatch" if not observed_unsafe else "observed: " + ", ".join(observed_unsafe),
     )
 
 
@@ -1083,7 +1109,12 @@ def command_self_test(_: argparse.Namespace) -> int:
         log = game / DEFAULT_LOG_RELATIVE
         handoff.mkdir(parents=True)
         log.parent.mkdir(parents=True)
-        log.write_text("\n".join(LOG_BREADCRUMBS) + "\n", encoding="utf-8")
+        log.write_text(
+            "\n".join(LOG_BREADCRUMBS)
+            + "\nSkyrimTogetherVR VR update-owner runtime mode: active"
+            + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
+            encoding="utf-8",
+        )
 
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")

@@ -33,6 +33,42 @@
 #endif
 
 std::unique_ptr<TiltedOnlineApp> g_appInstance{nullptr};
+static std::atomic_bool s_appStartAttempted{false};
+static std::atomic_bool s_appStarted{false};
+static std::atomic_bool s_appEndAttempted{false};
+
+void RunTiltedApp();
+void RunTiltedEnd() noexcept;
+
+#if TP_SKYRIM_VR
+using TVrWinMain = int(__stdcall*)(HINSTANCE, HINSTANCE, LPSTR, int);
+static TVrWinMain s_vrWinMain = nullptr;
+
+static int __stdcall HookVrWinMain(HINSTANCE aInstance, HINSTANCE aPreviousInstance, LPSTR apCommandLine, int aShowCommand)
+{
+    RunTiltedApp();
+    struct ShutdownGuard
+    {
+        ~ShutdownGuard() { RunTiltedEnd(); }
+    } shutdownGuard;
+
+    return s_vrWinMain(aInstance, aPreviousInstance, apCommandLine, aShowCommand);
+}
+
+static bool InstallVrWinMainLifecycleHook() noexcept
+{
+    s_vrWinMain = reinterpret_cast<TVrWinMain>(g_appInstance->GetMainAddress());
+    if (!s_vrWinMain)
+    {
+        spdlog::critical("SkyrimTogetherVR could not resolve the required VR WinMain lifecycle target");
+        return false;
+    }
+
+    spdlog::info("Installing SkyrimTogetherVR WinMain lifecycle hook: winMain={}", fmt::ptr(s_vrWinMain));
+    TP_HOOK(&s_vrWinMain, HookVrWinMain);
+    return true;
+}
+#endif
 
 extern HICON g_SharedWindowIcon;
 extern void InstallVrMainLoopBringupHooks();
@@ -45,7 +81,7 @@ void InstallVrRenderBringupHooks();
 static void InstallVrBringupHooks()
 {
 #if TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS
-    spdlog::info("Installing SkyrimTogetherVR startup/main-loop/render bring-up hooks");
+    spdlog::info("Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks");
     InstallVrMainLoopBringupHooks();
     BSGraphics::InstallVrRenderBringupHooks();
 #else
@@ -115,6 +151,9 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     g_appInstance = std::make_unique<TiltedOnlineApp>();
 
 #if TP_SKYRIM_VR
+    if (!InstallVrWinMainLifecycleHook())
+        return false;
+
     if (!SkyrimTogetherVR::TickBridge::Initialize())
     {
         spdlog::critical("SkyrimTogetherVR could not initialize the required SKSEVR task endpoint");
@@ -167,9 +206,45 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
 
 void RunTiltedApp()
 {
+    if (!g_appInstance)
+        return;
+    if (s_appStartAttempted.exchange(true, std::memory_order_acq_rel))
+        return;
+
 #if TP_SKYRIM_VR
     spdlog::info("SkyrimTogetherVR client startup hook reached");
 #endif
 
-    g_appInstance->BeginMain();
+    const bool started = g_appInstance->BeginMain();
+    s_appStarted.store(started, std::memory_order_release);
+    if (!started)
+        spdlog::critical("SkyrimTogetherVR client startup failed before the game WinMain");
+}
+
+void RunTiltedEnd() noexcept
+{
+    if (!s_appStarted.load(std::memory_order_acquire) || s_appEndAttempted.exchange(true, std::memory_order_acq_rel))
+        return;
+
+#if TP_SKYRIM_VR
+    const auto currentThreadId = GetCurrentThreadId();
+    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
+    if (ownerThreadId != 0 && ownerThreadId != currentThreadId)
+        spdlog::critical("SkyrimTogetherVR WinMain lifecycle shutdown ran on thread {}; owner is {}", currentThreadId, ownerThreadId);
+    spdlog::info("SkyrimTogetherVR WinMain lifecycle shutdown hook reached on thread {}", currentThreadId);
+#endif
+
+    try
+    {
+        if (g_appInstance)
+            g_appInstance->EndMain();
+    }
+    catch (const std::exception& error)
+    {
+        spdlog::critical("SkyrimTogetherVR client teardown threw: {}", error.what());
+    }
+    catch (...)
+    {
+        spdlog::critical("SkyrimTogetherVR client teardown threw an unknown exception");
+    }
 }
