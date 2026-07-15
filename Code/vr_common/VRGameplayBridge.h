@@ -428,9 +428,12 @@ static_assert(alignof(AtomicU64) == 8);
 static_assert(AtomicU32::is_always_lock_free);
 static_assert(AtomicU64::is_always_lock_free);
 static_assert(std::is_standard_layout_v<AtomicU32>);
-static_assert(std::is_trivially_copyable_v<AtomicU32>);
 static_assert(std::is_standard_layout_v<AtomicU64>);
-static_assert(std::is_trivially_copyable_v<AtomicU64>);
+
+// The mapped synchronization objects are placement-constructed once and are
+// never copied. Their cross-view contract is deliberately pinned to Windows
+// x64/MSVC and guarded by the lock-free, size, alignment, and layout checks
+// below; MSVC correctly does not classify std::atomic as trivially copyable.
 
 static_assert(std::is_standard_layout_v<AdapterHandle>);
 static_assert(std::is_trivially_copyable_v<AdapterHandle>);
@@ -498,15 +501,11 @@ static_assert(sizeof(CommandRing) == 0x2220);
 static_assert(alignof(EventRing) == 8);
 static_assert(alignof(CommandRing) == 8);
 static_assert(std::is_standard_layout_v<MappingHeader>);
-static_assert(std::is_trivially_copyable_v<MappingHeader>);
 static_assert(std::is_standard_layout_v<EventRing>);
-static_assert(std::is_trivially_copyable_v<EventRing>);
 static_assert(std::is_standard_layout_v<CommandRing>);
-static_assert(std::is_trivially_copyable_v<CommandRing>);
 static_assert(sizeof(GameplayBridgeMapping) == 0x44D0);
 static_assert(alignof(GameplayBridgeMapping) == 8);
 static_assert(offsetof(GameplayBridgeMapping, Events) == 0x90);
 static_assert(offsetof(GameplayBridgeMapping, Commands) == 0x22B0);
 static_assert(std::is_standard_layout_v<GameplayBridgeMapping>);
-static_assert(std::is_trivially_copyable_v<GameplayBridgeMapping>);
 } // namespace SkyrimTogetherVR::GameplayBridge
