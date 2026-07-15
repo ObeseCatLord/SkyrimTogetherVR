@@ -57,13 +57,13 @@ add_requires(
     "tiltedcore 0.2.8", 
     "cryptopp 8.9.0", 
     "cpp-httplib 0.14.0",
-    "fmt 11.2.0",
     "gtest v1.14.0", 
     "mem 1.0.0", 
     "glm 0.9.9+8", 
     "zlib v1.3.1"
 )
 if is_plat("windows") then
+    add_requires("fmt 11.2.0")
     add_requires(
         "discord 3.2.1", 
         "imgui v1.89.7"
@@ -73,7 +73,8 @@ if is_plat("windows") then
     -- the CommonLib gameplay adapter.
     add_requires("spdlog v1.16.0", {configs = {header_only = false, wchar = true, std_format = true}})
 else
-    add_requires("spdlog v1.15.0", {configs = {fmt_external = true}})
+    add_requires("fmt 12.2.0")
+    add_requires("spdlog v1.16.0", {configs = {fmt_external = true}})
 end
 
 -- dependencies' dependencies version pinning
@@ -83,7 +84,7 @@ add_requireconfs("*.openssl", { version = "1.1.1-w", override = true })
 add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
 if is_plat("linux") then
     add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
-    add_requireconfs("spdlog.fmt", { version = "11.2.0", override = true })
+    add_requireconfs("spdlog.fmt", { version = "12.2.0", override = true })
 end
 
 add_requireconfs("cpp-httplib", {configs = {ssl = true}})
