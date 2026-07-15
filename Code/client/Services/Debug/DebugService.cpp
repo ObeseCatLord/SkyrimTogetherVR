@@ -322,17 +322,20 @@ void DebugService::OnDraw() noexcept
         ImGui::MenuItem("Show build tag", nullptr, &m_showBuildTag);
         if (ImGui::Button("Log all open windows"))
         {
-            UI* pUI = UI::Get();
-            for (const auto& it : pUI->GetMenuMapData())
+            if (UI* pUI = UI::Get())
             {
-                if (pUI->GetMenuOpen(it.key))
-                    spdlog::info("{}", it.key.AsAscii());
+                for (const auto& it : pUI->GetMenuMapData())
+                {
+                    if (pUI->GetMenuOpen(it.key))
+                        spdlog::info("{}", it.key.AsAscii());
+                }
             }
         }
 
         if (ImGui::Button("Close all menus"))
         {
-            UI::Get()->CloseAllMenus();
+            if (UI* pUI = UI::Get())
+                pUI->CloseAllMenus();
         }
 
         ImGui::EndMenu();

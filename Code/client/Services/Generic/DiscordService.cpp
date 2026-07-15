@@ -6,6 +6,7 @@
 #include <TiltedCore/Filesystem.hpp>
 #include <PlayerCharacter.h>
 #include <Forms/TESWorldSpace.h>
+#include <VR/VRPlayerReadiness.h>
 
 #include <base/threading/ThreadUtils.h>
 #include <Events/LocationChangeEvent.h>
@@ -49,7 +50,7 @@ void DiscordService::OnUserUpdate(void* userp)
 
 void DiscordService::OnLocationChangeEvent() noexcept
 {
-    auto* pPlayer = PlayerCharacter::Get();
+    auto* pPlayer = SkyrimTogetherVR::TryGetReadablePlayerForVR();
 
     // we'll disable this inbuilt location tracker
     // in case the user requests a custom discord presence

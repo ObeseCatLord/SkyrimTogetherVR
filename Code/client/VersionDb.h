@@ -142,6 +142,13 @@ private:
     }
 
 #if TP_SKYRIM_VR
+    void ApplyVrProjectAddressFiles(const std::filesystem::path& acGamePath)
+    {
+        const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
+        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv");
+        ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
+    }
+
     void ApplyIdAliasFile(const std::filesystem::path& path)
     {
         std::ifstream file(path);
@@ -202,8 +209,7 @@ private:
         _moduleName = "SkyrimVR.exe";
         _base = reinterpret_cast<unsigned long long>(GetModuleHandleA(NULL));
 
-        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv");
-        ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
+        ApplyVrProjectAddressFiles(acGamePath);
 
         return !_data.empty();
     }
@@ -478,12 +484,17 @@ public:
             if ((high & 8) != 0)
                 q2 *= (unsigned long long)ptrSize;
 
-            _data[q1] = q2;
-            _rdata[q2] = q1;
+            SetOffsetForId(q1, q2);
 
             poffset = q2;
             pvid = q1;
         }
+
+#if TP_SKYRIM_VR
+        // Project corrections must be authoritative regardless of whether the
+        // base VR Address Library is distributed as CSV or versionlib binary.
+        ApplyVrProjectAddressFiles(acGamePath);
+#endif
 
         return true;
     }

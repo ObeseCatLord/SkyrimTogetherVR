@@ -529,15 +529,15 @@
   "nonRttiResolutionSources": {
     "addrlib": 180,
     "commonlib_vtable": 1,
-    "release": 57,
-    "sse_vr": 43
+    "release": 74,
+    "sse_vr": 27
   },
   "resolutionSources": {
     "addrlib": 180,
     "commonlib_vtable": 1,
     "missing": 47,
-    "release": 58,
-    "sse_vr": 2802
+    "release": 75,
+    "sse_vr": 2786
   },
   "resolvedNonRtti": [
     {
@@ -708,7 +708,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 153
+          "line": 158
         }
       ],
       "resolvedId": 13631,
@@ -724,7 +724,7 @@
         {
           "file": "Code/client/Games/ModManager.cpp",
           "isRtti": false,
-          "line": 72
+          "line": 73
         }
       ],
       "resolvedId": 13718,
@@ -740,7 +740,7 @@
         {
           "file": "Code/client/Games/ModManager.cpp",
           "isRtti": false,
-          "line": 80
+          "line": 81
         }
       ],
       "resolvedId": 13625,
@@ -2260,7 +2260,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 140
+          "line": 145
         }
       ],
       "resolvedId": 36548,
@@ -2276,12 +2276,12 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 121
+          "line": 132
         },
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 192
+          "line": 203
         }
       ],
       "resolvedId": 36564,
@@ -3095,7 +3095,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 194
+          "line": 205
         }
       ],
       "resolvedId": 40412,
@@ -3335,7 +3335,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 147
+          "line": 152
         }
       ],
       "resolvedId": 51538,
@@ -3511,12 +3511,12 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 135
+          "line": 146
         },
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 193
+          "line": 204
         }
       ],
       "resolvedId": 53926,
@@ -4102,7 +4102,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 30
+          "line": 35
         }
       ],
       "resolvedId": 82074,
@@ -4118,7 +4118,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 133
+          "line": 138
         }
       ],
       "resolvedId": 82082,
@@ -4134,7 +4134,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 38
+          "line": 43
         }
       ],
       "resolvedId": 82088,
@@ -4417,7 +4417,7 @@
     {
       "id": 400269,
       "name": "",
-      "offset": "0x1c39a18",
+      "offset": "0x1f82ad8",
       "references": [
         {
           "file": "Code/client/Games/ModManager.cpp",
@@ -4425,10 +4425,10 @@
           "line": 12
         }
       ],
-      "resolvedId": 400269,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514141,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400312,
@@ -4465,7 +4465,7 @@
     {
       "id": 400320,
       "name": "",
-      "offset": "0x1c39cc8",
+      "offset": "0x1f831c8",
       "references": [
         {
           "file": "Code/client/Games/BGSCreatedObjectManager.cpp",
@@ -4473,26 +4473,26 @@
           "line": 5
         }
       ],
-      "resolvedId": 400320,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514172,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400327,
       "name": "",
-      "offset": "0x1c39d20",
+      "offset": "0x1f83200",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 20
+          "line": 23
         }
       ],
-      "resolvedId": 400327,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514178,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400441,
@@ -4513,7 +4513,7 @@
     {
       "id": 400443,
       "name": "",
-      "offset": "0x1c3a33c",
+      "offset": "0x1f850e8",
       "references": [
         {
           "file": "Code/client/Games/Misc/SubtitleManager.cpp",
@@ -4521,15 +4521,15 @@
           "line": 13
         }
       ],
-      "resolvedId": 400443,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514283,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400447,
       "name": "",
-      "offset": "0x1c3a370",
+      "offset": "0x1f85108",
       "references": [
         {
           "file": "Code/client/Games/TimeManager.cpp",
@@ -4537,15 +4537,15 @@
           "line": 9
         }
       ],
-      "resolvedId": 400447,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514287,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400475,
       "name": "",
-      "offset": "0x1c3a518",
+      "offset": "0x1f889d8",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Misc/GameVM.cpp",
@@ -4553,10 +4553,10 @@
           "line": 7
         }
       ],
-      "resolvedId": 400475,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514315,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400508,
@@ -4577,7 +4577,7 @@
     {
       "id": 400636,
       "name": "",
-      "offset": "0x1c3ad98",
+      "offset": "0x2f896d8",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/EquipManager.cpp",
@@ -4585,15 +4585,15 @@
           "line": 212
         }
       ],
-      "resolvedId": 400636,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514494,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400802,
       "name": "",
-      "offset": "0x1c3b738",
+      "offset": "0x2f8a888",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Camera/PlayerCamera.cpp",
@@ -4601,15 +4601,15 @@
           "line": 8
         }
       ],
-      "resolvedId": 400802,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514642,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400863,
       "name": "",
-      "offset": "0x1c3bd10",
+      "offset": "0x2f8aaa0",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
@@ -4617,15 +4617,15 @@
           "line": 24
         }
       ],
-      "resolvedId": 400863,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514705,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 400864,
       "name": "",
-      "offset": "0x1c3bd18",
+      "offset": "0x2f8aaa8",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/AI/Movement/PlayerControls.cpp",
@@ -4633,10 +4633,10 @@
           "line": 6
         }
       ],
-      "resolvedId": 400864,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 514706,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 401069,
@@ -4694,7 +4694,7 @@
     {
       "id": 401263,
       "name": "",
-      "offset": "0x1c3d784",
+      "offset": "0x2fc52e8",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Interface/MenuControls.cpp",
@@ -4702,15 +4702,15 @@
           "line": 11
         }
       ],
-      "resolvedId": 401263,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 515124,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 403330,
       "name": "",
-      "offset": "0x1c47da4",
+      "offset": "0x2feb200",
       "references": [
         {
           "file": "Code/client/Games/Forms.cpp",
@@ -4718,10 +4718,10 @@
           "line": 106
         }
       ],
-      "resolvedId": 403330,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 516851,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 403566,
@@ -4827,7 +4827,7 @@
     {
       "id": 404238,
       "name": "",
-      "offset": "0x1c4d910",
+      "offset": "0x2fffdea",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
@@ -4835,10 +4835,10 @@
           "line": 143
         }
       ],
-      "resolvedId": 404238,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 517711,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 405282,
@@ -4907,7 +4907,7 @@
     {
       "id": 411155,
       "name": "",
-      "offset": "0x1c75e00",
+      "offset": "0x3175fe0",
       "references": [
         {
           "file": "Code/client/Games/INISettingCollection.cpp",
@@ -4915,15 +4915,15 @@
           "line": 10
         }
       ],
-      "resolvedId": 411155,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 524557,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 411347,
       "name": "",
-      "offset": "0x1c77af0",
+      "offset": "0x317e790",
       "references": [
         {
           "file": "Code/client/Games/Renderer.cpp",
@@ -4931,15 +4931,15 @@
           "line": 21
         }
       ],
-      "resolvedId": 411347,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 524728,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 411348,
       "name": "",
-      "offset": "0x1c77b18",
+      "offset": "0x317e798",
       "references": [
         {
           "file": "Code/client/Games/Renderer.cpp",
@@ -4947,10 +4947,10 @@
           "line": 28
         }
       ],
-      "resolvedId": 411348,
-      "source": "sse_vr",
-      "status": "exact_sse_vr",
-      "translation": "direct"
+      "resolvedId": 524729,
+      "source": "release",
+      "status": "release",
+      "translation": "ae_to_se"
     },
     {
       "id": 411393,
@@ -5033,6 +5033,22 @@
       "translation": "direct"
     },
     {
+      "id": 514178,
+      "name": "",
+      "offset": "0x1f83200",
+      "references": [
+        {
+          "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
+          "isRtti": false,
+          "line": 21
+        }
+      ],
+      "resolvedId": 514178,
+      "source": "release",
+      "status": "release",
+      "translation": "direct"
+    },
+    {
       "id": 514287,
       "name": "",
       "offset": "0x1f85108",
@@ -5098,22 +5114,22 @@
     }
   ],
   "runtimeHelperCsvs": {
-    "addressOverrideDataRows": 2983,
+    "addressOverrideDataRows": 2967,
     "addressOverrides": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "aeToSe": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
-    "aeToSeDataRows": 61,
+    "aeToSeDataRows": 77,
     "validationFailures": []
   },
   "schema": "skyrim_together_vr_address_audit_v1",
   "summary": {
-    "addressOverrideHelperCsvRows": 2983,
-    "aeToSeHelperCsvRows": 61,
+    "addressOverrideHelperCsvRows": 2967,
+    "aeToSeHelperCsvRows": 77,
     "helperCsvValidationFailures": 0,
     "missingIdsIncludingRtti": 47,
     "missingNonRttiIds": 0,
     "missingRttiIdsUsedByCast": 0,
-    "uniqueAddressIds": 3088,
-    "uniqueNonRttiAddressIds": 281,
+    "uniqueAddressIds": 3089,
+    "uniqueNonRttiAddressIds": 282,
     "uniqueRttiAddressIds": 2807
   }
 }

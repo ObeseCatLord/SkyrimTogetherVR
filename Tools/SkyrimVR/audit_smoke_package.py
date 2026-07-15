@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import ast
+import csv
 import pathlib
 import re
 import sys
 
 import vr_paths
+from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS
 
 REQUIRED_STAGED_FILES = (
     "SkyrimTogether.esp",
@@ -35,6 +37,7 @@ REQUIRED_SOURCE_FILES = (
     "AuditSkyrimTogetherVRGameplayEvidence-Windows.bat",
     "Tools/SkyrimVR/vr_handoff.py",
     "Tools/SkyrimVR/vr_paths.py",
+    "Tools/SkyrimVR/vr_address_contract.py",
     "Tools/SkyrimVR/audit_runtime_handoff.py",
     "Tools/SkyrimVR/collect_runtime_evidence.py",
     "Tools/SkyrimVR/audit_runtime_evidence_zip.py",
@@ -259,14 +262,32 @@ REQUIRED_INSTALLER_TOKENS = (
 )
 
 REQUIRED_VR_PLAYER_READINESS_TOKENS = {
-    "Code/client/Games/Skyrim/VR/VRPlayerReadiness.h": (
-        "TryGetReadablePlayerForVR",
-        "IsReadablePlayerPage",
+    "Code/client/Games/Skyrim/VR/VRMemorySafety.h": (
+        "IsReadableVrMemory",
         "VirtualQuery",
         "MEM_COMMIT",
         "PAGE_GUARD",
         "PAGE_NOACCESS",
+        "page.RegionSize",
+    ),
+    "Code/client/Games/Skyrim/VR/VRPlayerReadiness.h": (
+        "TryGetReadablePlayerForVR",
+        "IsReadableVrMemory",
         "deferring player-derived work",
+    ),
+    "Code/client/Games/Skyrim/Interface/UI.cpp": (
+        "POINTER_SKYRIMSE(UI*, s_instance, 514178)",
+    ),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        "IsReadableVrMemory",
+        "deferring menu probes",
+    ),
+    "Code/client/Services/Generic/DiscordService.cpp": ("TryGetReadablePlayerForVR",),
+    "Code/client/Games/ModManager.cpp": ("ppModManager ? *ppModManager : nullptr",),
+    "Code/client/Systems/ModSystem.cpp": ("game mod manager is unavailable",),
+    "Code/client/VersionDb.h": (
+        "ApplyVrProjectAddressFiles(acGamePath)",
+        "Project corrections must be authoritative",
     ),
     "Code/client/Services/Generic/DiscoveryService.cpp": ("TryGetReadablePlayerForVR",),
     "Code/client/Services/Generic/VRLifecycleService.cpp": (
@@ -401,6 +422,23 @@ def count_csv_rows(path):
         return sum(1 for line in handle if line.strip())
 
 
+def audit_vr_address_aliases(path, failures):
+    if not path.exists():
+        return
+
+    rows = set()
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                rows.add((int(row.get("sseid", ""), 10), int(row.get("aeid", ""), 10)))
+    except (OSError, TypeError, ValueError) as error:
+        failures.append(f"invalid SkyrimTogetherVR_AE_to_SE.csv: {error}")
+        return
+
+    for vr_id, desktop_id in sorted(REQUIRED_VR_ADDRESS_ALIAS_ROWS - rows):
+        failures.append(f"package is missing required VR address alias {vr_id},{desktop_id}")
+
+
 def local_import_modules(path):
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
@@ -494,6 +532,9 @@ def main():
         failures.append("SkyrimTogetherVR_AE_to_SE.csv has no data rows")
     if overrides_rows <= 1:
         failures.append("SkyrimTogetherVR_AddressOverrides.csv has no data rows")
+    audit_vr_address_aliases(
+        package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv", failures
+    )
 
     script_text = read_text(root / "BuildSkyrimTogetherVR-Windows.ps1")
     for token in REQUIRED_PACKAGE_SCRIPT_TOKENS:

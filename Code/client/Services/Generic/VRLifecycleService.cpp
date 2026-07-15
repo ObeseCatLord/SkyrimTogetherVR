@@ -7,11 +7,13 @@
 #include <Games/Skyrim/Interface/UI.h>
 #include <Misc/BSFixedString.h>
 #include <PlayerCharacter.h>
+#include <VR/VRMemorySafety.h>
 #include <VR/VRPlayerReadiness.h>
 #include <World.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <fstream>
+#include <atomic>
 
 namespace
 {
@@ -23,8 +25,13 @@ constexpr char kStatusFileName[] = "SkyrimTogetherVR.lifecycle";
 const char* GetBlockingMenuName() noexcept
 {
     auto* pUI = UI::Get();
-    if (!pUI)
+    if (!pUI || !SkyrimTogetherVR::IsReadableVrMemory(pUI, sizeof(void*)))
+    {
+        static std::atomic_flag s_reportedUnreadableUi = ATOMIC_FLAG_INIT;
+        if (!s_reportedUnreadableUi.test_and_set(std::memory_order_relaxed))
+            spdlog::warn("SkyrimTogetherVR UI singleton is not readable yet; deferring menu probes");
         return "ui_unavailable";
+    }
 
     static const BSFixedString s_mainMenu("Main Menu");
     static const BSFixedString s_raceSexMenu("RaceSex Menu");

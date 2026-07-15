@@ -12,7 +12,8 @@ ModManager* ModManager::Get() noexcept
     POINTER_SKYRIMSE(ModManager*, modManager, 400269);
 #endif
 
-    return *modManager.Get();
+    auto** ppModManager = modManager.Get();
+    return ppModManager ? *ppModManager : nullptr;
 }
 
 uint32_t Mod::GetFormId(uint32_t aBaseId) const noexcept

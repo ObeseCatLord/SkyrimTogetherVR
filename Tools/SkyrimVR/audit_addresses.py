@@ -8,6 +8,8 @@ import re
 import sys
 from collections import Counter, defaultdict
 
+from vr_address_contract import VALIDATED_COMMONLIB_VR_ALIASES
+
 BASE = 0x140000000
 MIN_AE_TO_SE_DATA_ROWS = 50
 MIN_ADDRESS_OVERRIDE_DATA_ROWS = 2800
@@ -363,7 +365,7 @@ def write_runtime_csvs(out_dir, resolved):
     return alias_path, override_path
 
 
-def validate_runtime_csvs(alias_path, override_path):
+def validate_runtime_csvs(alias_path, override_path, release):
     failures = []
     alias_rows = []
     override_rows = []
@@ -396,6 +398,22 @@ def validate_runtime_csvs(alias_path, override_path):
         failures.append(
             f"{alias_path}: expected at least {MIN_AE_TO_SE_DATA_ROWS} data rows, found {len(alias_rows)}"
         )
+
+    alias_row_set = set(alias_rows)
+    for desktop_id, metadata in sorted(VALIDATED_COMMONLIB_VR_ALIASES.items()):
+        vr_id = metadata["vr_id"]
+        expected_row = (vr_id, desktop_id)
+        if expected_row not in alias_row_set:
+            failures.append(
+                f"{alias_path}: missing validated CommonLib VR alias {vr_id},{desktop_id} ({metadata['name']})"
+            )
+
+        release_offset = release.get(vr_id)
+        if release_offset != metadata["offset"]:
+            actual = "missing" if release_offset is None else f"0x{release_offset:x}"
+            failures.append(
+                f"VR release ID {vr_id} ({metadata['name']}) expected 0x{metadata['offset']:x}, found {actual}"
+            )
 
     with override_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -641,6 +659,9 @@ def main():
     offsets_1597 = read_offsets_csv(refs_root / "offsets-1.5.97.0.csv")
     sse_vr = read_sse_vr_csv(refs_root / "sse_vr.csv")
     ae_to_se = read_ae_to_se(refs_root / "se_ae.csv")
+    ae_to_se.update(
+        {desktop_id: metadata["vr_id"] for desktop_id, metadata in VALIDATED_COMMONLIB_VR_ALIASES.items()}
+    )
     refs = find_source_refs(repo)
 
     unique_ids = sorted({ref["id"] for ref in refs})
@@ -649,7 +670,7 @@ def main():
     missing_rtti_cast_refs = find_missing_rtti_cast_refs(repo, missing_rtti)
 
     alias_path, override_path = write_runtime_csvs(repo / args.runtime_csv_dir, resolved)
-    csv_failures, alias_rows, override_rows = validate_runtime_csvs(alias_path, override_path)
+    csv_failures, alias_rows, override_rows = validate_runtime_csvs(alias_path, override_path, release)
     write_report(repo / args.report, refs, resolved, missing_rtti_cast_refs, alias_rows, override_rows, csv_failures)
     write_json_report(
         repo / args.json_report,

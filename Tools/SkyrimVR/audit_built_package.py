@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import ast
+import csv
 import hashlib
 import json
 import pathlib
@@ -11,6 +12,7 @@ import tempfile
 
 import audit_gamefiles
 import vr_paths
+from vr_address_contract import REQUIRED_VR_ADDRESS_ALIAS_ROWS
 
 BRIDGE_RUNTIME_FILES = (
     "EarlyLoad.dll",
@@ -221,6 +223,23 @@ def count_csv_rows(path):
 
     with path.open(encoding="utf-8-sig", errors="replace") as handle:
         return sum(1 for line in handle if line.strip())
+
+
+def audit_vr_address_aliases(path, failures):
+    if not path.exists():
+        return
+
+    rows = set()
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                rows.add((int(row.get("sseid", ""), 10), int(row.get("aeid", ""), 10)))
+    except (OSError, TypeError, ValueError) as error:
+        failures.append(f"invalid SkyrimTogetherVR_AE_to_SE.csv: {error}")
+        return
+
+    for vr_id, desktop_id in sorted(REQUIRED_VR_ADDRESS_ALIAS_ROWS - rows):
+        failures.append(f"built package is missing required VR address alias {vr_id},{desktop_id}")
 
 
 def pe_machine(path):
@@ -884,6 +903,9 @@ def audit_package(
         failures.append("SkyrimTogetherVR_AE_to_SE.csv has no data rows in the built package")
     if overrides_rows <= 1:
         failures.append("SkyrimTogetherVR_AddressOverrides.csv has no data rows in the built package")
+    audit_vr_address_aliases(
+        package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv", failures
+    )
 
     if dll_only:
         mode_forbidden_files = DLL_ONLY_FORBIDDEN_RUNTIME_FILES
@@ -1023,7 +1045,14 @@ def write_x64_pe(path, normal_imports=(), delay_imports=()):
 
 def write_csv(path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("id,address\n1,2\n", encoding="utf-8")
+    if path.name == "SkyrimTogetherVR_AE_to_SE.csv":
+        rows = ["sseid,aeid"]
+        rows.extend(f"{vr_id},{desktop_id}" for vr_id, desktop_id in sorted(REQUIRED_VR_ADDRESS_ALIAS_ROWS))
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    elif path.name == "SkyrimTogetherVR_AddressOverrides.csv":
+        path.write_text("id,offset,source,status,name\n1,2,database,self_test,fixture\n", encoding="utf-8")
+    else:
+        path.write_text("id,address\n1,2\n", encoding="utf-8")
 
 
 def papyrus_pex_fixture():

@@ -56,13 +56,13 @@ void CopyLocalRotation(const NiAVObject& acNode, VRPoseNodeData& aOut) noexcept
 
 bool ResolveBodyNodes(NiAVObject* apRoot, std::array<NiAVObject*, static_cast<std::size_t>(BodyNode::Count)>& aNodes) noexcept
 {
-    if (!SkyrimTogetherVR::IsReadablePlayerPage(apRoot))
+    if (!SkyrimTogetherVR::IsReadableVrMemory(apRoot, sizeof(void*)))
         return false;
 
     for (std::size_t index = 0; index < aNodes.size(); ++index)
     {
         aNodes[index] = apRoot->GetObjectByName(s_nodeNames[index]);
-        if (!SkyrimTogetherVR::IsReadablePlayerPage(aNodes[index]))
+        if (!SkyrimTogetherVR::IsReadableVrMemory(aNodes[index], sizeof(void*)))
             return false;
     }
 
@@ -74,7 +74,7 @@ bool ResolveBodyNodes(NiAVObject* apRoot, std::array<NiAVObject*, static_cast<st
     auto* const pRightCalf = aNodes[static_cast<std::size_t>(BodyNode::RightCalf)];
     auto* const pRightFoot = aNodes[static_cast<std::size_t>(BodyNode::RightFoot)];
 
-    return SkyrimTogetherVR::IsReadablePlayerPage(pPelvis->parent) &&
+    return SkyrimTogetherVR::IsReadableVrMemory(pPelvis->parent, sizeof(void*)) &&
            pLeftThigh->parent == pPelvis && pLeftCalf->parent == pLeftThigh && pLeftFoot->parent == pLeftCalf &&
            pRightThigh->parent == pPelvis && pRightCalf->parent == pRightThigh && pRightFoot->parent == pRightCalf;
 }

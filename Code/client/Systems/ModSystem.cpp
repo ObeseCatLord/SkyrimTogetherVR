@@ -84,6 +84,11 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     m_standardToServer[0xFF] = std::numeric_limits<uint32_t>::max();
 
     const auto pModManager = ModManager::Get();
+    if (!pModManager)
+    {
+        spdlog::error("Cannot process the server mod list because the game mod manager is unavailable");
+        return;
+    }
 
     for (const auto& mod : acMods.ModList)
     {

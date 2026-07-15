@@ -17,7 +17,12 @@ static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x682;
 
 UI* UI::Get()
 {
+#if TP_SKYRIM_VR
+    POINTER_SKYRIMSE(UI*, s_instance, 514178);
+#else
     POINTER_SKYRIMSE(UI*, s_instance, 400327);
+#endif
+
     return *s_instance.Get();
 }
 
