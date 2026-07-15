@@ -57,7 +57,9 @@ Skyrim Together action parity.
 - 571 `TPTests` assertions in 33 test cases;
 - 503-file gameplay package plus paired evidence audits with zero failures and
   zero evidence warnings;
-- independent Linux package/evidence validation and exact client deployment.
+- independent Linux package/evidence validation and exact client deployment;
+- matching ARM64 `d201a3f8` server binary deployed as the only server container,
+  with zero restarts and UDP 26099 listening.
 
 ## Remaining Gates
 

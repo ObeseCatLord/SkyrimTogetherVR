@@ -212,10 +212,10 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Complete and document the exact client plus matching-server no-launch
-   deployment, then retain it in the private local-agent handoff.
+1. Retain the exact `d201a3f8` client/evidence pair, matching deployed server,
+   updated checklist, and runbooks in the private local-agent handoff.
 2. Run the Phase 0 plus movement/graph two-client acceptance matrix against
-   that exact deployment.
+   the exact `d201a3f8` binary deployment.
 3. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
    in retained runtime evidence before adding another mutation domain.
 4. Semantically verify and implement exact animation/action replay, then proceed

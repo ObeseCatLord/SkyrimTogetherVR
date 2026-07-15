@@ -14,7 +14,9 @@ Nexus, cloud storage, or a public issue.
   evidence archive. Use these for the next runtime test; the older public alpha
   bundle is retained only as release/history context.
   `LOCAL-MANIFEST.json` binds both archives to one build manifest and records
-  the built source revision separately from the newer documentation HEAD.
+  the built source revision separately from the newer documentation HEAD. The
+  current pair is the `d201a3f8` movement/animation ABI-v2 build: 571 assertions
+  in 33 tests, 503 packaged files, and zero package/evidence audit failures.
 - `dependencies/fus-mods/`: pristine FUS mod directories for SKSE scripts, VR
   Address Library, VRIK, HIGGS, PLANCK, Controller Fix VR, SkyUI/VR Tools,
   Realm of Lorkhan, controller bindings, and related configuration fixes.
@@ -119,11 +121,14 @@ the overlay-specific `KeyboardDone` event.
 ## Server
 
 Exactly one server container is expected: `skyrim-together-vr`, image
-`skyrim-together-vr-server:99d1e1d1`, Linux ARM64, host network, UDP 26099,
-restart policy `unless-stopped`. See `source/Docs/SkyrimVR/server-deployment.md`
-for build, Compose, firewall, configuration, revision-compatibility, and
-verification instructions. The password remains private and must be supplied
-through `STVR_PASSWORD` or the connection UI.
+`skyrim-together-vr-server:f9d32cd0`, Linux ARM64, host network, UDP 26099,
+restart policy `unless-stopped`. Its gameplay/protocol binary revision is
+`d201a3f8`, matching the packaged client; the image tag includes Linux-only
+build dependency corrections. See
+`source/Docs/SkyrimVR/server-deployment.md` for the exact image ID and binary
+hashes plus build, Compose, firewall, configuration, and verification
+instructions. The password remains private and must be supplied through
+`STVR_PASSWORD` or the connection UI.
 
 ## Test Standard
 
@@ -132,3 +137,10 @@ active `SkyrimTogether.esp`, lifecycle `ready`, fresh `online=1`, nonzero player
 ID, a newer valid current-cell request, and matching server admission. Full
 remote gameplay, pose/FBT, HIGGS/PLANCK interactions, and clean shutdown remain
 separate evidence gates; do not infer them from connection success.
+
+For the current movement/animation stage, use two clients and retain evidence
+for one interior/exterior retained-handle transfer, one deliberate stale-tick
+rejection, a complete local and remote graph snapshot, applied graph
+acknowledgement, and zero spatial/animation rejection or ring-drop counters.
+The complete ordered matrix and per-domain definition of done are in
+`source/Docs/SkyrimVR/original-gameplay-parity-checklist.md`.

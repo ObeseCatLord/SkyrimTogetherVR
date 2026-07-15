@@ -94,21 +94,30 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:99d1e1d1`.
-- Image digest: `sha256:71d77428f3a5c262291e126dfce3c612d88eceef0cb96fbc0c16c3d98f7807b8`.
-- Server source revision: `99d1e1d1`.
-- Packaged client binary source revision: `2f006674`.
+- Image tag: `skyrim-together-vr-server:f9d32cd0`.
+- Image ID:
+  `sha256:dfed40c8b8061ff25f57dcfaffc0e9f51e6669981c96ef0f0989d636959b9631`.
+- Runtime executable SHA-256:
+  `8c3e5bf19e523f065169513ac878281d233206b676a2684039d1878c782a8cb6`.
+- Runtime core SHA-256:
+  `6963ca3348abe5f886803fe44ba9b7112ffac09604dc6186185973183911f361`.
+- Server binary source revision: `d201a3f8`; startup reports
+  `stvr-v0.1.0-alpha.1-27-gd201a3f8`.
+- Linux dependency/build configuration revision: `f9d32cd0`.
+- Packaged client binary source revision: `d201a3f8`.
 - Password-protected; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client/server revision difference is intentional for this alpha: no shared
-protocol, `Code/server`, `Code/common`, or encoding code changed between the
-running server revision and the packaged client. Later submodule lifecycle and
-client diagnostics changes do not alter the wire protocol. Rebuild and redeploy
-the server whenever shared message definitions, encoding, or server code
-changes.
+The client and server binaries use the same `d201a3f8` gameplay/protocol source.
+The newer server image tag records Linux-only xmake dependency declarations;
+those changes do not alter shared messages, encoding, or runtime gameplay code.
+The container was recreated through the existing Compose project on 2026-07-15
+and verified with one container, zero restarts, host networking, UDP 26099
+listening, and the existing public-zone `26001-27000/udp` firewall allowance.
+Rebuild and redeploy whenever shared message definitions, encoding, or server
+code changes.
 
 The server password is deliberately omitted from the repository and handoff.
 Obtain it privately from the operator.
