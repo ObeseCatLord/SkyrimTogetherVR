@@ -244,6 +244,11 @@ success.
 A successful connection test requires all of the following from the current
 process:
 
+- current `sksevr.log` reports `SkyrimTogetherVRGameplayBridge.dll ... loaded
+  correctly`, and `SkyrimTogetherVRGameplayBridge.log` reports loader runtime
+  `0x010400F1`, SKSE version at least `0x020000C0`, and release index at least
+  `60`; do not confuse that SKSE interface version with SkyrimVR.exe and VR
+  Address Library version `1.4.15.0`;
 - no `Main Menu`, `RaceSex Menu`, loading/fader menu, or message box;
 - Realm of Lorkhan scene and stable nonempty player name/race;
 - `SkyrimTogether.esp` active;

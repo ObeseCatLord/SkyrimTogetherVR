@@ -1,6 +1,7 @@
 #include "CommandExecutor.h"
 #include "EventCapture.h"
 
+#include <cstdio>
 #include <memory>
 
 #include <spdlog/sinks/basic_file_sink.h>
@@ -31,12 +32,34 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         if (!a_skse)
             return false;
 
-        SKSE::Init(a_skse);
-        InitializeLogging();
-        if (a_skse->RuntimeVersion() != SKSE::RUNTIME_VR_1_4_15) {
-            SKSE::log::error("SkyrimTogetherVRGameplayBridge: unsupported runtime");
+        const auto interfaceRuntime = a_skse->RuntimeVersion();
+        const auto skseVersion = a_skse->SKSEVersion();
+        const auto releaseIndex = skseVersion >= SkyrimTogetherVR::GameplayBridge::kMinimumSkseVrVersion ?
+                                      a_skse->GetReleaseIndex() :
+                                      0;
+        if (interfaceRuntime.pack() != SkyrimTogetherVR::GameplayBridge::kSkseVrInterfaceRuntimeVersion ||
+            skseVersion < SkyrimTogetherVR::GameplayBridge::kMinimumSkseVrVersion ||
+            releaseIndex < SkyrimTogetherVR::GameplayBridge::kMinimumSkseVrReleaseIndex) {
+            char message[256]{};
+            _snprintf_s(
+                message,
+                _countof(message),
+                _TRUNCATE,
+                "SkyrimTogetherVRGameplayBridge: unsupported loader contract runtime=0x%08X skse=0x%08X release=%u\n",
+                interfaceRuntime.pack(),
+                skseVersion,
+                releaseIndex);
+            OutputDebugStringA(message);
             return false;
         }
+
+        SKSE::Init(a_skse);
+        InitializeLogging();
+        SKSE::log::info(
+            "SkyrimTogetherVRGameplayBridge: validated loader runtime=0x{:08X} skse=0x{:08X} release={}",
+            interfaceRuntime.pack(),
+            skseVersion,
+            releaseIndex);
 
         auto& endpoint = SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get();
         if (!endpoint.Attach())

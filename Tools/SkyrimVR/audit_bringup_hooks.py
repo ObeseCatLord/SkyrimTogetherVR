@@ -480,6 +480,36 @@ def audit_commonlib_abi_contracts(root: pathlib.Path) -> list[str]:
                 f"{path.relative_to(root)}: manually enables SPDLOG_WCHAR_FILENAMES outside the package ABI"
             )
 
+    runtime_header = root / "Code" / "vr_common" / "VRGameplayBridge.h"
+    runtime_text = runtime_header.read_text(encoding="utf-8", errors="replace") if runtime_header.exists() else ""
+    for token in (
+        "kSkyrimVrRuntimeVersion = 0x010400F0",
+        "kSkseVrInterfaceRuntimeVersion = 0x010400F1",
+        "kMinimumSkseVrVersion = 0x020000C0",
+        "kMinimumSkseVrReleaseIndex = 60",
+    ):
+        if token not in runtime_text:
+            failures.append(f"Code/vr_common/VRGameplayBridge.h: missing distinct VR runtime contract `{token}`")
+
+    bridge_main = root / "Code" / "vr_gameplay_bridge" / "main.cpp"
+    bridge_text = bridge_main.read_text(encoding="utf-8", errors="replace") if bridge_main.exists() else ""
+    if "interfaceRuntime.pack() != SkyrimTogetherVR::GameplayBridge::kSkseVrInterfaceRuntimeVersion" not in bridge_text:
+        failures.append(
+            "Code/vr_gameplay_bridge/main.cpp: must validate SKSEVR's 1.4.15.1 interface version, not CommonLib's 1.4.15.0 executable version"
+        )
+    init_position = bridge_text.find("SKSE::Init(a_skse);")
+    runtime_gate_position = bridge_text.find("interfaceRuntime.pack() != SkyrimTogetherVR::GameplayBridge::kSkseVrInterfaceRuntimeVersion")
+    if init_position < 0 or runtime_gate_position < 0 or init_position < runtime_gate_position:
+        failures.append(
+            "Code/vr_gameplay_bridge/main.cpp: must validate the SKSEVR loader contract before CommonLib initialization"
+        )
+    for token in (
+        "skseVersion < SkyrimTogetherVR::GameplayBridge::kMinimumSkseVrVersion",
+        "releaseIndex < SkyrimTogetherVR::GameplayBridge::kMinimumSkseVrReleaseIndex",
+    ):
+        if token not in bridge_text:
+            failures.append(f"Code/vr_gameplay_bridge/main.cpp: missing SKSEVR 2.0.12 loader gate `{token}`")
+
     return failures
 
 

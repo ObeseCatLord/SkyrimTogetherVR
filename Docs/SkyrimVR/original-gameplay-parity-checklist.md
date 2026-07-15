@@ -30,6 +30,10 @@ The canonical implementation boundary is fixed:
   connection generation, lifecycle epoch, action ID, and sequence ID exist.
 - [x] Source: fixed-width POD gameplay bridge with bounded command/event rings.
 - [x] Source: CommonLib owner-thread command pump and process-lifetime sinks.
+- [x] Source: CommonLib bridge distinguishes SkyrimVR.exe/address-library
+  `1.4.15.0` from SKSEVR's plugin-interface `1.4.15.1`, validates SKSEVR
+  2.0.12/release 60 before CommonLib initialization, and locks the distinction
+  with unit/static audits.
 - [x] Source: checked packed EnTT slot/version identity, including server ID 0.
 - [x] Source: canonical remote humanoid create/root/spatial-transfer/despawn path
   using `CreateReferenceAtLocation`, retained adapter identity, and post-move
@@ -212,11 +216,13 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Retain the exact `d201a3f8` client/evidence pair, matching deployed server,
-   updated checklist, and runbooks in the private local-agent handoff.
-2. Run the Phase 0 plus movement/graph two-client acceptance matrix against
-   the exact `d201a3f8` binary deployment.
-3. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
+1. Build, audit, and deploy the CommonLib bridge runtime-gate correction that
+   supersedes `d201a3f8`; prove the bridge remains loaded and reaches Ready.
+2. Prove one automated client reaches Realm of Lorkhan and receives a nonzero
+   server player ID before establishing the isolated second client.
+3. Run the Phase 0 plus movement/graph two-client acceptance matrix against
+   that exact client/server source revision.
+4. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
    in retained runtime evidence before adding another mutation domain.
-4. Semantically verify and implement exact animation/action replay, then proceed
+5. Semantically verify and implement exact animation/action replay, then proceed
    to appearance/equipment/inventory in the dependency order above.

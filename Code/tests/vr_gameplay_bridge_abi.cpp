@@ -41,6 +41,10 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(kMappingAbiVersion == 2);
     REQUIRE(kCapabilityRevision == 2);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
+    REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
+    REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
+    REQUIRE(kMinimumSkseVrVersion == 0x020000C0);
+    REQUIRE(kMinimumSkseVrReleaseIndex == 60);
     REQUIRE(kFixedPayloadBytes == 64);
     REQUIRE(kDefaultEventRingCapacity == 64);
     REQUIRE(kDefaultCommandRingCapacity == 64);

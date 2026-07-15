@@ -17,9 +17,14 @@ inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HA
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
 inline constexpr std::uint16_t kMappingAbiVersion = 2;
 inline constexpr std::uint32_t kCapabilityRevision = 2;
-// REL::Version(1, 4, 15, 0).pack(). Keep the ABI header independent of
-// CommonLib while using the same documented packing contract.
+// SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
+// by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
+// SKSEVR 2.0.12 deliberately publishes 1.4.15.1 through SKSEInterface. Do not
+// use CommonLib's executable-version constant to validate that interface.
+inline constexpr std::uint32_t kSkseVrInterfaceRuntimeVersion = 0x010400F1;
+inline constexpr std::uint32_t kMinimumSkseVrVersion = 0x020000C0; // 2.0.12
+inline constexpr std::uint32_t kMinimumSkseVrReleaseIndex = 60;
 inline constexpr std::uint16_t kFixedPayloadBytes = 64;
 inline constexpr std::uint32_t kDefaultEventRingCapacity = 64;
 inline constexpr std::uint32_t kDefaultCommandRingCapacity = 64;
