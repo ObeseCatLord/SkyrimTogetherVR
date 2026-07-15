@@ -30,7 +30,10 @@ constexpr CapabilityMask kRequestedCapabilities =
     static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
     static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
     static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
-    static_cast<CapabilityMask>(Capability::RemoteRootTransform)
+    static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+    static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
+    static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot)
 #endif
     ;
 
@@ -136,6 +139,12 @@ constexpr CapabilityMask kRequestedCapabilities =
            aValue <= static_cast<std::uint32_t>(RemoteAvatarState::Faulted);
 }
 
+[[nodiscard]] bool IsKnownRemoteAnimationGraphState(const std::uint32_t aValue) noexcept
+{
+    return aValue >= static_cast<std::uint32_t>(RemoteAnimationGraphState::Applied) &&
+           aValue <= static_cast<std::uint32_t>(RemoteAnimationGraphState::Faulted);
+}
+
 [[nodiscard]] bool IsKnownCommandStatus(const std::uint32_t aValue) noexcept
 {
     return aValue <= static_cast<std::uint32_t>(CommandStatus::QueueOverflow);
@@ -176,6 +185,36 @@ constexpr CapabilityMask kRequestedCapabilities =
                IsKnownCommandStatus(payload.Status) && IsFinite(payload.Root) && IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
                HasActiveCapabilities(required);
     }
+    case EventKind::LocalAnimationGraphChunk:
+    {
+        const auto& payload = acEvent.Payload.LocalAnimationGraphChunk;
+        const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 && header.Identity.SequenceId != 0 &&
+               header.Identity.ActionId == 0 && payload.AvatarHandle.Value == kLocalPlayerHandle.Value && payload.SnapshotId != 0 &&
+               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 &&
+               payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot));
+    }
+    case EventKind::RemoteAnimationGraphState:
+    {
+        const auto& payload = acEvent.Payload.RemoteAnimationGraphState;
+        return header.Identity.EntityId != 0 && header.Identity.EntityGeneration != 0 &&
+               header.Identity.SequenceId != 0 && header.Identity.ActionId == 0 && payload.AvatarHandle.Value != 0 &&
+               payload.SnapshotId != 0 && IsKnownRemoteAnimationGraphState(payload.State) &&
+               IsKnownCommandStatus(payload.Status) && IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot));
+    }
+    case EventKind::RemoteSpatialTransferState:
+    {
+        const auto& payload = acEvent.Payload.RemoteSpatialTransferState;
+        return header.Identity.EntityId != 0 && header.Identity.EntityGeneration != 0 &&
+               header.Identity.SequenceId != 0 && header.Identity.ActionId == 0 && payload.AvatarHandle.Value != 0 &&
+               payload.SourceCellFormId != 0 && payload.TargetCellFormId != 0 && IsKnownCommandStatus(payload.Status) &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer));
+    }
     default:
         return false;
     }
@@ -189,7 +228,10 @@ constexpr CapabilityMask kRequestedCapabilities =
     case CommandKind::DestroyRemoteAvatar:
         return static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle);
     case CommandKind::UpdateRemoteRootTransform:
-        return static_cast<CapabilityMask>(Capability::RemoteRootTransform);
+        return static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+               static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer);
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+        return static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
     case CommandKind::RetireEpoch:
         return static_cast<CapabilityMask>(Capability::Lifecycle);
     default:
@@ -220,8 +262,20 @@ constexpr CapabilityMask kRequestedCapabilities =
     {
         const auto& payload = acCommand.Payload.UpdateRemoteRootTransform;
         return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.ActionId == 0 &&
-               payload.AvatarHandle.Value != 0 && payload.Reserved0 == 0 && IsFinite(payload.Root) &&
+               payload.AvatarHandle.Value != 0 && payload.LocalCellFormId != 0 &&
+               (payload.UpdateFlags & ~GameplayBridge::SpatialTransfer) == 0 && IsFinite(payload.Root) &&
                IsZero(payload.Reserved, sizeof(payload.Reserved));
+    }
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+    {
+        const auto& payload = acCommand.Payload.ApplyRemoteAnimationGraphChunk;
+        const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
+        return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.ActionId == 0 &&
+               payload.AvatarHandle.Value != 0 && payload.SnapshotId != 0 &&
+               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 &&
+               payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values);
     }
     case CommandKind::RetireEpoch:
     {
@@ -426,6 +480,8 @@ Diagnostics GetDiagnostics() noexcept
     diagnostics.StaleCommandCount = s_mapping->Header.StaleCommandCount.load(std::memory_order_acquire);
     diagnostics.DiscardedEventCount = s_discardedEventCount.load(std::memory_order_relaxed);
     diagnostics.RejectedSubmissionCount = s_rejectedSubmissionCount.load(std::memory_order_relaxed);
+    diagnostics.EventRingDroppedPushCount = s_mapping->Events.DroppedPushCount.load(std::memory_order_acquire);
+    diagnostics.CommandRingDroppedPushCount = s_mapping->Commands.DroppedPushCount.load(std::memory_order_acquire);
     return diagnostics;
 }
 
@@ -497,7 +553,8 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
     identity.ConnectionGeneration = s_mapping->Header.ConnectionGeneration.load(std::memory_order_acquire);
     identity.LifecycleEpoch = s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire);
 
-    const bool isSequencedUpdate = kind == CommandKind::UpdateRemoteRootTransform;
+    const bool isSequencedUpdate = kind == CommandKind::UpdateRemoteRootTransform ||
+                                   kind == CommandKind::ApplyRemoteAnimationGraphChunk;
     auto& lastCounter = isSequencedUpdate ? s_lastBridgeSequence : s_lastBridgeAction;
     auto& suppliedCounter = isSequencedUpdate ? identity.SequenceId : identity.ActionId;
     const auto previousCounter = lastCounter.load(std::memory_order_acquire);

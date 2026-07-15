@@ -6,6 +6,8 @@
 #include <limits>
 #include <type_traits>
 
+#include "VRAnimationGraphProtocol.h"
+
 namespace SkyrimTogetherVR::GameplayBridge
 {
 // This mapping is shared only by modules in one 64-bit Windows process. Its
@@ -13,8 +15,8 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 1;
-inline constexpr std::uint32_t kCapabilityRevision = 1;
+inline constexpr std::uint16_t kMappingAbiVersion = 2;
+inline constexpr std::uint32_t kCapabilityRevision = 2;
 // REL::Version(1, 4, 15, 0).pack(). Keep the ABI header independent of
 // CommonLib while using the same documented packing contract.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -39,6 +41,9 @@ enum class Capability : std::uint64_t
     LocalPlayerSnapshot = 1ull << 2,
     RemoteAvatarLifecycle = 1ull << 3,
     RemoteRootTransform = 1ull << 4,
+    RemoteSpatialTransfer = 1ull << 5,
+    LocalAnimationGraphSnapshot = 1ull << 6,
+    RemoteAnimationGraphSnapshot = 1ull << 7,
 };
 
 using CapabilityMask = std::uint64_t;
@@ -48,7 +53,10 @@ inline constexpr CapabilityMask kInitialCapabilities =
     static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
     static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
     static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
-    static_cast<CapabilityMask>(Capability::RemoteRootTransform);
+    static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+    static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
+    static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
 
 [[nodiscard]] constexpr bool HasCapability(const CapabilityMask a_mask, const Capability a_capability) noexcept
 {
@@ -106,6 +114,9 @@ enum class EventKind : std::uint16_t
     Lifecycle = 1,
     LocalPlayerState = 2,
     RemoteAvatarState = 3,
+    LocalAnimationGraphChunk = 4,
+    RemoteAnimationGraphState = 5,
+    RemoteSpatialTransferState = 6,
 };
 
 enum class LifecycleState : std::uint32_t
@@ -195,11 +206,56 @@ struct RemoteAvatarStatePayload
     std::uint8_t Reserved[8];
 };
 
+struct AnimationGraphChunkPayload
+{
+    AdapterHandle AvatarHandle;
+    std::uint64_t SnapshotId;
+    std::uint16_t DescriptorVersion;
+    std::uint16_t ValueType;
+    std::uint16_t StartIndex;
+    std::uint16_t ValueCount;
+    std::uint16_t TotalCount;
+    std::uint16_t Reserved0;
+    std::uint32_t ChunkFlags;
+    float Direction;
+    std::uint32_t Values[AnimationGraphProtocol::kValuesPerChunk];
+};
+
+enum class RemoteAnimationGraphState : std::uint32_t
+{
+    Applied = 1,
+    Rejected = 2,
+    Faulted = 3,
+};
+
+struct RemoteAnimationGraphStatePayload
+{
+    AdapterHandle AvatarHandle;
+    std::uint64_t SnapshotId;
+    std::uint32_t State;
+    std::uint32_t Status;
+    std::uint8_t Reserved[40];
+};
+
+struct RemoteSpatialTransferStatePayload
+{
+    AdapterHandle AvatarHandle;
+    std::uint32_t SourceCellFormId;
+    std::uint32_t SourceWorldspaceFormId;
+    std::uint32_t TargetCellFormId;
+    std::uint32_t TargetWorldspaceFormId;
+    std::uint32_t Status;
+    std::uint8_t Reserved[36];
+};
+
 union EventPayload
 {
     LifecycleEventPayload Lifecycle;
     LocalPlayerStatePayload LocalPlayerState;
     RemoteAvatarStatePayload RemoteAvatarState;
+    AnimationGraphChunkPayload LocalAnimationGraphChunk;
+    RemoteAnimationGraphStatePayload RemoteAnimationGraphState;
+    RemoteSpatialTransferStatePayload RemoteSpatialTransferState;
     std::uint8_t Bytes[kFixedPayloadBytes];
 };
 
@@ -215,6 +271,7 @@ enum class CommandKind : std::uint16_t
     DestroyRemoteAvatar = 2,
     UpdateRemoteRootTransform = 3,
     RetireEpoch = 4,
+    ApplyRemoteAnimationGraphChunk = 5,
 };
 
 struct CreateRemoteAvatarPayload
@@ -242,8 +299,14 @@ struct UpdateRemoteRootTransformPayload
     AdapterHandle AvatarHandle;
     RootTransform Root;
     std::uint32_t UpdateFlags;
-    std::uint32_t Reserved0;
-    std::uint8_t Reserved[16];
+    std::uint32_t LocalCellFormId;
+    std::uint32_t LocalWorldspaceFormId;
+    std::uint8_t Reserved[12];
+};
+
+enum RootTransformUpdateFlag : std::uint32_t
+{
+    SpatialTransfer = 1u << 0,
 };
 
 struct RetireEpochPayload
@@ -260,6 +323,7 @@ union CommandPayload
     DestroyRemoteAvatarPayload DestroyRemoteAvatar;
     UpdateRemoteRootTransformPayload UpdateRemoteRootTransform;
     RetireEpochPayload RetireEpoch;
+    AnimationGraphChunkPayload ApplyRemoteAnimationGraphChunk;
     std::uint8_t Bytes[kFixedPayloadBytes];
 };
 
@@ -456,6 +520,12 @@ static_assert(std::is_standard_layout_v<LocalPlayerStatePayload>);
 static_assert(std::is_trivially_copyable_v<LocalPlayerStatePayload>);
 static_assert(std::is_standard_layout_v<RemoteAvatarStatePayload>);
 static_assert(std::is_trivially_copyable_v<RemoteAvatarStatePayload>);
+static_assert(std::is_standard_layout_v<AnimationGraphChunkPayload>);
+static_assert(std::is_trivially_copyable_v<AnimationGraphChunkPayload>);
+static_assert(std::is_standard_layout_v<RemoteAnimationGraphStatePayload>);
+static_assert(std::is_trivially_copyable_v<RemoteAnimationGraphStatePayload>);
+static_assert(std::is_standard_layout_v<RemoteSpatialTransferStatePayload>);
+static_assert(std::is_trivially_copyable_v<RemoteSpatialTransferStatePayload>);
 static_assert(std::is_standard_layout_v<CreateRemoteAvatarPayload>);
 static_assert(std::is_trivially_copyable_v<CreateRemoteAvatarPayload>);
 static_assert(std::is_standard_layout_v<DestroyRemoteAvatarPayload>);
@@ -467,6 +537,9 @@ static_assert(std::is_trivially_copyable_v<RetireEpochPayload>);
 static_assert(sizeof(LifecycleEventPayload) == kFixedPayloadBytes);
 static_assert(sizeof(LocalPlayerStatePayload) == kFixedPayloadBytes);
 static_assert(sizeof(RemoteAvatarStatePayload) == kFixedPayloadBytes);
+static_assert(sizeof(AnimationGraphChunkPayload) == kFixedPayloadBytes);
+static_assert(sizeof(RemoteAnimationGraphStatePayload) == kFixedPayloadBytes);
+static_assert(sizeof(RemoteSpatialTransferStatePayload) == kFixedPayloadBytes);
 static_assert(sizeof(CreateRemoteAvatarPayload) == kFixedPayloadBytes);
 static_assert(sizeof(DestroyRemoteAvatarPayload) == kFixedPayloadBytes);
 static_assert(sizeof(UpdateRemoteRootTransformPayload) == kFixedPayloadBytes);

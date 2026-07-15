@@ -39,6 +39,7 @@
 #include <Messages/NotifySubtitle.h>
 #include <Messages/NotifyActorTeleport.h>
 #include <Messages/NotifyRelinquishControl.h>
+#include <Structs/MovementOrdering.h>
 
 #include <Setting.h>
 namespace
@@ -336,6 +337,8 @@ void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& ac
             continue;
 
         ownerComponent.SetOwner(pPlayer);
+        if (auto* movementComponent = m_world.try_get<MovementComponent>(acEvent.Entity))
+            movementComponent->HasTick = false;
 
         pPlayer->Send(response);
 
@@ -400,7 +403,8 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
         auto itor = view.find(entity);
         if (itor == std::end(view))
         {
-            spdlog::debug("{:x} requested move of {:x} but does not exist", acMessage.pPlayer->GetConnectionId(), World::ToInteger(*itor));
+            spdlog::debug("{:x} requested move of {:x} but does not exist or is not owned by the sender",
+                          acMessage.pPlayer->GetConnectionId(), entry.first);
             continue;
         }
 
@@ -408,9 +412,10 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
         auto& cellIdComponent = view.get<CellIdComponent>(*itor);
         auto& animationComponent = view.get<AnimationComponent>(*itor);
 
+        if (!SkyrimTogether::Protocol::IsNewerMovementTick(movementComponent.HasTick, movementComponent.Tick, message.Tick))
+            continue;
         movementComponent.Tick = message.Tick;
-
-        const auto movementCopy = movementComponent;
+        movementComponent.HasTick = true;
 
         auto& update = entry.second;
         auto& movement = update.UpdatedMovement;
@@ -677,6 +682,8 @@ void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
 
     characterOwnerComponent.SetOwner(apPlayer);
     characterOwnerComponent.InvalidOwners.clear();
+    if (auto* movementComponent = m_world.try_get<MovementComponent>(*it))
+        movementComponent->HasTick = false;
 
     BroadcastActorData(apPlayer, *it, acActorData);
 
@@ -839,6 +846,8 @@ void CharacterService::ProcessMovementChanges() const noexcept
             auto& update = message.Updates[World::ToInteger(entity)];
             auto& movement = update.UpdatedMovement;
 
+            movement.CellId = cellIdComponent.Cell;
+            movement.WorldSpaceId = cellIdComponent.WorldSpaceId;
             movement.Position = movementComponent.Position;
 
             movement.Rotation.x = movementComponent.Rotation.x;

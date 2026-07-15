@@ -76,7 +76,7 @@ This matters for VR connection-only clients because actor assignment/spawn remai
 
 `ShiftGridCellRequest` can still make an unmodified server send `CharacterSpawnRequest` packets for nearby actors. In the default staged VR mode those packets are decoded by `TransportService` and ignored because `CharacterService` is not instantiated.
 
-The explicit `SkyrimTogetherVRClientAvatarSync` build is the exception. It keeps `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1`, adds `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, and instantiates `VRAvatarService`. That service uses the canonical assignment/spawn/movement protocol and delegates same-cell actor lifecycle/root mutation to `SkyrimTogetherVRGameplayBridge.dll`; it does not instantiate the legacy desktop `CharacterService` or the full object, inventory, magic, combat, projectile, overlay, and input service set.
+The explicit `SkyrimTogetherVRClientAvatarSync` build is the exception. It keeps `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1`, adds `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, and instantiates `VRAvatarService`. That service uses the canonical assignment/spawn/movement protocol and delegates actor lifecycle, retained-identity root/spatial mutation, and named humanoid graph snapshots to `SkyrimTogetherVRGameplayBridge.dll`; it does not instantiate the legacy desktop `CharacterService` or the full object, inventory, magic, combat, projectile, overlay, and input service set.
 
 ## Remaining Gate
 

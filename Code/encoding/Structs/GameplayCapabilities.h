@@ -17,6 +17,8 @@ enum class GameplayCapability : std::uint64_t
     HiggsInteractionIntent = 1ull << 6,
     PlanckInteractionIntent = 1ull << 7,
     FullBodyTrackingPose = 1ull << 8,
+    RemoteSpatialTransfer = 1ull << 9,
+    AnimationGraphSnapshot = 1ull << 10,
 };
 
 using GameplayCapabilityMask = std::uint64_t;
@@ -39,7 +41,9 @@ inline constexpr GameplayCapabilityMask kCoreCapabilities =
 // semantics. Merely having message types or telemetry does not advertise them.
 inline constexpr GameplayCapabilityMask kRemoteAvatarCapabilities =
     ToMask(GameplayCapability::RemoteAvatarLifecycle) |
-    ToMask(GameplayCapability::RemoteRootTransform);
+    ToMask(GameplayCapability::RemoteRootTransform) |
+    ToMask(GameplayCapability::RemoteSpatialTransfer) |
+    ToMask(GameplayCapability::AnimationGraphSnapshot);
 
 inline constexpr GameplayCapabilityMask kServerCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities;

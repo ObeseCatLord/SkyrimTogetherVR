@@ -24,7 +24,7 @@ When connected, `VRInventoryService` sends `RequestVREquipmentUpdate` at 1 Hz if
 
 Remote equipment state is cleared when the client disconnects. Individual remote entries are removed on `NotifyPlayerLeft`.
 
-The explicit avatar-sync and gameplay targets do not yet apply this stream to CommonLib-owned remote actors. `VRInventoryService` receives and reports it independently, while `VRAvatarService` and `SkyrimTogetherVRGameplayBridge.dll` currently implement only canonical same-cell actor lifecycle and root movement. The old `CharacterService`/`RemoteVREquipmentComponent` path is inactive prototype code and must not be used as acceptance evidence. Equipment forms, inventory mutation, weapon draw state, and held-item rendering remain future bridge capabilities.
+The explicit avatar-sync and gameplay targets do not yet apply this stream to CommonLib-owned remote actors. `VRInventoryService` receives and reports it independently, while `VRAvatarService` and `SkyrimTogetherVRGameplayBridge.dll` currently implement canonical actor lifecycle, root/spatial movement, and named humanoid graph snapshots. The old `CharacterService`/`RemoteVREquipmentComponent` path is inactive prototype code and must not be used as acceptance evidence. Equipment forms, inventory mutation, weapon draw state, and held-item rendering remain future bridge capabilities.
 
 The service does not:
 

@@ -29,7 +29,7 @@ REQUIRED_TOKENS = {
     ),
     "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp": (
         "#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS",
-        "SkyrimTogetherVR renderer init hook reached: self={}, osData={}, fbData={}",
+        "SkyrimTogetherVR renderer init hook reached: self=0x{:X}, osData=0x{:X}, fbData=0x{:X}",
         "Renderer_Init(self, aOSData, aFBData, aOut);",
         "SkyrimTogetherVR renderer init completed",
         "return;",
@@ -85,7 +85,7 @@ DOC_TOKENS = {
         "Default Boundary",
         "Connection-only",
         "flat CEF/D3D11 overlay",
-        "no-op flat overlay service",
+        "does not construct `OverlayService`",
         "Renderer Init",
         "Companion",
         "Papyrus",
@@ -175,15 +175,15 @@ def main() -> int:
     missing_docs = missing_tokens(root, DOC_TOKENS)
 
     world_text = read_text(root / "Code/client/World.cpp")
-    connection_block = extract_block(
+    vr_world_block = extract_block(
         world_text,
-        "#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY",
-        "#else",
+        "#if TP_SKYRIM_VR\n#if TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY",
+        "#else\n    ctx().emplace<DiscoveryService>",
     )
     missing_connection_block = []
-    if not connection_block:
-        missing_connection_block.append("connection-only preprocessor block")
-    forbidden_connection = [token for token in CONNECTION_ONLY_FORBIDDEN if token in connection_block]
+    if not vr_world_block:
+        missing_connection_block.append("VR service-graph preprocessor block")
+    forbidden_connection = [token for token in CONNECTION_ONLY_FORBIDDEN if token in vr_world_block]
 
     renderer_text = read_text(root / "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp")
     main_text = read_text(root / "Code/client/main.cpp")

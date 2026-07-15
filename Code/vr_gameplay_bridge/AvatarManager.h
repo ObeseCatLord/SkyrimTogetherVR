@@ -2,6 +2,7 @@
 
 #include "BridgeEndpoint.h"
 
+#include <array>
 #include <functional>
 #include <unordered_map>
 
@@ -14,6 +15,11 @@ struct AvatarCommandResult
     std::uint32_t LocalCellFormId{};
     std::uint32_t LocalWorldspaceFormId{};
     RootTransform Root{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+    std::uint64_t AnimationSnapshotId{};
+    bool AnimationApplied{};
+    bool SpatialTransferApplied{};
+    std::uint32_t SourceCellFormId{};
+    std::uint32_t SourceWorldspaceFormId{};
 };
 
 class AvatarManager
@@ -24,10 +30,18 @@ public:
     void BindCommandPumpOwner(std::uint32_t a_threadId) noexcept;
     [[nodiscard]] AvatarCommandResult CreateRemoteAvatar(const CommandRecord& a_command) noexcept;
     [[nodiscard]] AvatarCommandResult UpdateRemoteRootTransform(const CommandRecord& a_command) noexcept;
+    [[nodiscard]] AvatarCommandResult ApplyRemoteAnimationGraphChunk(const CommandRecord& a_command) noexcept;
+    void ProcessPendingAnimationSnapshots() noexcept;
     [[nodiscard]] AvatarCommandResult DestroyRemoteAvatar(const CommandRecord& a_command) noexcept;
     void RetireAllOnCommandPumpOwner() noexcept;
 
 private:
+    enum class PendingAnimationResult
+    {
+        WaitingForGraph,
+        Applied,
+        Rejected,
+    };
     struct AvatarKey
     {
         std::uint64_t ServerInstanceNonce{};
@@ -61,19 +75,26 @@ private:
 
     struct AvatarRecord
     {
+        using PendingAnimationSnapshot = AnimationGraphProtocol::SnapshotBuffer;
+
         AdapterHandle Token{};
         RE::ActorHandle Actor;
-        std::uint64_t LastSequence{};
+        std::uint64_t LastRootSequence{};
+        std::uint64_t LastAnimationSequence{};
+        std::uint64_t LastAnimationSnapshot{};
         std::uint64_t LastAction{};
         std::uint32_t LocalCellFormId{};
         std::uint32_t LocalWorldspaceFormId{};
         RootTransform Root{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+        PendingAnimationSnapshot PendingAnimation{};
+        bool AnimationGraphValidated{};
     };
 
     struct EntityLedger
     {
         std::uint32_t EntityGeneration{};
-        std::uint64_t LastSequence{};
+        std::uint64_t LastRootSequence{};
+        std::uint64_t LastAnimationSequence{};
         std::uint64_t LastAction{};
         bool Destroyed{};
     };
@@ -83,6 +104,12 @@ private:
     [[nodiscard]] bool IsCommandPumpOwner() const noexcept;
     [[nodiscard]] static bool NormalizeRoot(const RootTransform& a_root, RootTransform& a_normalized, RE::NiPoint3& a_angles) noexcept;
     [[nodiscard]] static AvatarCommandResult ResultFor(const AvatarRecord& a_record, CommandStatus a_status) noexcept;
+    [[nodiscard]] static bool MoveActorToLocation(RE::Actor& a_actor, RE::TESObjectCELL& a_cell,
+                                                  RE::TESWorldSpace* a_worldspace, const RE::NiPoint3& a_position,
+                                                  const RE::NiPoint3& a_angles) noexcept;
+    [[nodiscard]] static bool ValidateAnimationGraph(RE::Actor& a_actor) noexcept;
+    [[nodiscard]] static bool ApplyAnimationSnapshot(RE::Actor& a_actor, const AvatarRecord::PendingAnimationSnapshot& a_snapshot) noexcept;
+    [[nodiscard]] static PendingAnimationResult TryApplyPendingAnimation(AvatarRecord& a_record) noexcept;
     void DestroyRecord(AvatarRecord& a_record) noexcept;
 
     std::unordered_map<AvatarKey, AvatarRecord, AvatarKeyHash> _avatars;

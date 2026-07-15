@@ -31,7 +31,9 @@ The canonical implementation boundary is fixed:
 - [x] Source: fixed-width POD gameplay bridge with bounded command/event rings.
 - [x] Source: CommonLib owner-thread command pump and process-lifetime sinks.
 - [x] Source: checked packed EnTT slot/version identity, including server ID 0.
-- [x] Source: canonical same-cell remote humanoid create/root/despawn path.
+- [x] Source: canonical remote humanoid create/root/spatial-transfer/despawn path
+  using `CreateReferenceAtLocation`, retained adapter identity, and post-move
+  cell/worldspace verification.
 - [x] Source: exact result correlation, bounded create recovery, fail-closed
   retirement, visibility re-spawn, and interpolation convergence.
 - [x] Build: canonical-avatar commit `94544550` compiled on WinBoat; Windows
@@ -40,7 +42,7 @@ The canonical implementation boundary is fixed:
 - [ ] Runtime: two clients prove unique spawn, move, turn, stop, leave, despawn.
 - [ ] Runtime: repeat reconnect, load, cell transition, and entity reuse ten
   times with no duplicate/stale actor, leaked handle, or queue corruption.
-- [ ] Runtime: prove `PlaceObjectAtMe`, player-template clone, and
+- [ ] Runtime: prove `CreateReferenceAtLocation`, player-template clone, and
   `Disable`/`SetDelete` do not persist unsafe references in saves.
 - [ ] Replace `player_template_fallback` with remote appearance/race/sex data.
 
@@ -52,14 +54,26 @@ passes.
 ### Movement And Animation
 
 - [x] Source: local/remote movement and pose observation/relay diagnostics.
-- [ ] Apply authoritative root movement, heading, stop, and cell transitions to
-  all remote actors, including interpolation correction and teleport policy.
-- [ ] Port animation graph variable snapshots and graph-event/action replay.
+- [x] Source: authoritative root movement, heading, stop, and retained-identity
+  cell/worldspace transfer with independent sequence ordering, stale-tick
+  rejection, bounded pending spawns, destination-pinned acknowledgement timeout,
+  and applied/faulted acknowledgements.
+- [x] Source: complete named humanoid animation graph variable snapshots in both
+  directions, with bounded five-chunk assembly, finite-value validation,
+  supersession recovery, preimage rollback, and per-avatar quarantine.
+- [ ] Build: compile bridge ABI v2, run TPTests, and audit the exact Windows
+  gameplay package and evidence bundle.
+- [ ] Port exact graph-event/action replay after `ActorMediator` targets and
+  global pointer shapes are semantically and ABI verified for Skyrim VR.
 - [ ] Port draw/sheath, idle, jump, sneak, sprint, swim, ragdoll, and furniture
   state without enabling unvalidated desktop hooks.
-- [ ] Validate actor/process/animation CommonLib APIs and thread ownership.
+- [x] Source: validate the current actor/process/animation CommonLib API and
+  owner-thread contract; runtime semantics remain gated below.
 - [ ] Runtime: two clients prove locomotion and animation state without jitter,
   stuck movement, duplicate events, or animation feedback loops.
+- [ ] Runtime: prove one retained-handle interior/exterior spatial transfer, one
+  deliberate stale-tick rejection, zero graph/command ring drops, and zero
+  spatial/animation rejection counters.
 
 ### Appearance, Equipment, And Inventory
 
@@ -195,9 +209,11 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Install or deploy the exact `94544550` package without launching Skyrim
-   automatically, after the target prerequisite audit and installer dry run.
-2. Run the Phase 0 two-client acceptance matrix and retain evidence.
-3. Fix the actor factory/lifecycle from evidence before adding another domain.
-4. Implement animation/action replay, then equipment/inventory, following the
-   dependency order above.
+1. Commit and build the movement/animation graph ABI-v2 slice once on WinBoat;
+   retain and audit the exact package and build-evidence archive.
+2. Deploy the exact client and matching server artifacts without launching
+   Skyrim, then run the Phase 0 plus movement/graph two-client acceptance matrix.
+3. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
+   in retained runtime evidence before adding another mutation domain.
+4. Semantically verify and implement exact animation/action replay, then proceed
+   to appearance/equipment/inventory in the dependency order above.

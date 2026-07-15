@@ -1544,12 +1544,16 @@ def command_self_test(_: argparse.Namespace) -> int:
         )
         write(
             "avatar",
-            "schema=commonlib_bridge_v1\n"
-            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\n"
-            "actorSkeletonWritesEnabled=0\nlifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerId=7\n"
-            "trackedAvatarCount=1\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
+            "schema=commonlib_bridge_v2\n"
+            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\nanimationGraphEnabled=1\nlocalAnimationGraphReady=1\n"
+            "actorSkeletonWritesEnabled=0\nvisualPolicy=player_template_fallback\ncleanupRequired=0\n"
+            "lifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerAssigned=1\nlocalServerId=7\n"
+            "trackedAvatarCount=1\npendingSpawnCount=0\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
             "updateSubmittedCount=1\ndestroySubmittedCount=0\ndestroySucceededCount=0\n"
-            "rejectedCommandCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\nsameSpaceCount=2\n",
+            "rejectedCommandCount=0\neventRingDropCount=0\ncommandRingDropCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\n"
+            "staleMovementRejectedCount=1\nspatialTransferSubmittedCount=1\nspatialTransferSucceededCount=1\nspatialTransferRejectedCount=0\n"
+            "animationSnapshotSubmittedCount=1\nanimationSnapshotAppliedCount=1\n"
+            "animationSnapshotRejectedCount=0\nsameSpaceCount=2\n",
         )
         (handoff / vr_handoff.CONFIG_FILE).write_text("endpoint=127.0.0.1:10578\n", encoding="utf-8")
         build_manifest = {

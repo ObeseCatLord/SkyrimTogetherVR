@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -8,9 +9,10 @@
 #include <entt/entt.hpp>
 
 #include <vr_common/VRGameplayBridge.h>
+#include <Messages/CharacterSpawnRequest.h>
 
 struct AssignCharacterResponse;
-struct CharacterSpawnRequest;
+struct AnimationVariables;
 struct ConnectedEvent;
 struct DisconnectedEvent;
 struct NotifyRemoveCharacter;
@@ -33,6 +35,8 @@ struct VRAvatarService
     TP_NOCOPYMOVE(VRAvatarService);
 
 private:
+    using AnimationSnapshot = SkyrimTogetherVR::AnimationGraphProtocol::SnapshotBuffer;
+
     struct RemoteAvatar
     {
         std::uint32_t PlayerId{0};
@@ -47,9 +51,26 @@ private:
         std::uint8_t CreateAttempts{0};
         double CreatePendingElapsed{0.0};
         double DestroyPendingElapsed{0.0};
+        double SpatialTransferPendingElapsed{0.0};
         std::uint64_t PendingCreateActionId{0};
         std::uint64_t PendingDestroyActionId{0};
         std::uint64_t LastSubmittedSequenceId{0};
+        std::uint64_t LastSubmittedAnimationSequenceId{0};
+        std::uint64_t LastAcceptedServerTick{0};
+        std::uint64_t NextAnimationSnapshotId{0};
+        std::uint64_t LastAcknowledgedAnimationSnapshotId{0};
+        std::uint64_t PendingSpatialTransferSequenceId{0};
+        std::uint32_t PendingSpatialTargetCellFormId{0};
+        std::uint32_t PendingSpatialTargetWorldspaceFormId{0};
+        std::uint32_t TargetCellFormId{0};
+        std::uint32_t TargetWorldspaceFormId{0};
+        std::uint32_t AppliedCellFormId{0};
+        std::uint32_t AppliedWorldspaceFormId{0};
+        AnimationSnapshot PendingAnimation{};
+        bool HasAcceptedServerTick{false};
+        bool HasPendingAnimation{false};
+        bool AnimationFaulted{false};
+        bool SpatialTransferPending{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -64,6 +85,9 @@ private:
     void HandleBridgeLifecycle(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeLocalPlayerState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeRemoteAvatarState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeLocalAnimationGraphChunk(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeRemoteAnimationGraphState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeRemoteSpatialTransferState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
 
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
@@ -72,12 +96,19 @@ private:
     void UpdateRemoteAvatars(double aDelta) noexcept;
     void SubmitCreateRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
     void SubmitDestroyRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
+    void SubmitRemoteAnimationSnapshot(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
+    void CachePendingSpawn(const CharacterSpawnRequest& acMessage) noexcept;
+    void ProcessPendingSpawns() noexcept;
+    [[nodiscard]] bool StageRemoteAnimationSnapshot(RemoteAvatar& arAvatar, const AnimationVariables& acVariables,
+                                                    float aDirection) noexcept;
     void RetireAvatarLifecycle(const char* apReason) noexcept;
     void ResetStatusCounters() noexcept;
     void WriteStatus() noexcept;
 
     [[nodiscard]] bool HasValidLocalSnapshot() const noexcept;
     [[nodiscard]] bool HasAvatarCapabilities() const noexcept;
+    [[nodiscard]] bool HasAnimationCapabilities() const noexcept;
+    [[nodiscard]] bool IsLocalAnimationGraphReady() const noexcept;
     [[nodiscard]] bool CanSubmitAvatarCommands() noexcept;
     [[nodiscard]] bool BuildLocalLocation(struct GameId& arCellId, struct GameId& arWorldspaceId) const noexcept;
     [[nodiscard]] bool BuildCommand(SkyrimTogetherVR::GameplayBridge::CommandKind aKind, std::uint32_t aServerId,
@@ -86,7 +117,10 @@ private:
     World& m_world;
     TransportService& m_transport;
     SkyrimTogetherVR::GameplayBridge::LocalPlayerStatePayload m_localSnapshot{};
+    AnimationSnapshot m_localAnimationSnapshot{};
+    AnimationSnapshot m_pendingLocalAnimationSnapshot{};
     std::unordered_map<std::uint32_t, RemoteAvatar> m_remoteAvatars{};
+    std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_pendingSpawns{};
     std::uint32_t m_localPlayerId{0};
     std::optional<std::uint32_t> m_localServerId{};
     std::uint32_t m_assignmentCookie{0};
@@ -101,8 +135,17 @@ private:
     std::uint64_t m_destroySucceededCount{0};
     std::uint64_t m_invalidTransformCount{0};
     std::uint64_t m_remoteMovementAcceptedCount{0};
+    std::uint64_t m_staleMovementRejectedCount{0};
+    std::uint64_t m_spatialTransferSubmittedCount{0};
+    std::uint64_t m_spatialTransferSucceededCount{0};
+    std::uint64_t m_spatialTransferRejectedCount{0};
+    std::uint64_t m_animationSnapshotSubmittedCount{0};
+    std::uint64_t m_animationSnapshotAppliedCount{0};
+    std::uint64_t m_animationSnapshotRejectedCount{0};
     std::uint64_t m_sameSpaceCount{0};
     std::uint64_t m_rejectedCommandBaseline{0};
+    std::uint64_t m_eventRingDropBaseline{0};
+    std::uint64_t m_commandRingDropBaseline{0};
     bool m_connected{false};
     bool m_hasLocalSnapshot{false};
     bool m_assignmentPending{false};

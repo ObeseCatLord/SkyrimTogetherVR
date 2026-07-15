@@ -710,7 +710,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 158
+          "line": 188
         }
       ],
       "resolvedId": 13631,
@@ -2102,7 +2102,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 68
+          "line": 70
         }
       ],
       "resolvedId": 35545,
@@ -2278,7 +2278,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 70
+          "line": 72
         }
       ],
       "resolvedId": 36544,
@@ -2294,7 +2294,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 145
+          "line": 175
         }
       ],
       "resolvedId": 36548,
@@ -2310,7 +2310,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 272
+          "line": 273
         }
       ],
       "resolvedId": 36564,
@@ -3124,7 +3124,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 274
+          "line": 275
         }
       ],
       "resolvedId": 40412,
@@ -3364,7 +3364,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 152
+          "line": 182
         }
       ],
       "resolvedId": 51538,
@@ -3540,7 +3540,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 273
+          "line": 274
         }
       ],
       "resolvedId": 53926,
@@ -3929,7 +3929,7 @@
         {
           "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
-          "line": 120
+          "line": 123
         }
       ],
       "resolvedId": 68781,
@@ -4073,12 +4073,12 @@
         {
           "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
-          "line": 97
+          "line": 99
         },
         {
           "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
-          "line": 114
+          "line": 117
         }
       ],
       "resolvedId": 77226,
@@ -4094,7 +4094,7 @@
         {
           "file": "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp",
           "isRtti": false,
-          "line": 129
+          "line": 132
         }
       ],
       "resolvedId": 77246,
@@ -4126,7 +4126,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 35
+          "line": 63
         }
       ],
       "resolvedId": 82074,
@@ -4142,7 +4142,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 138
+          "line": 168
         }
       ],
       "resolvedId": 82082,
@@ -4158,7 +4158,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 43
+          "line": 72
         }
       ],
       "resolvedId": 82088,
@@ -4366,7 +4366,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 175
+          "line": 227
         }
       ],
       "resolvedId": 380768,
@@ -4510,7 +4510,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 23
+          "line": 24
         }
       ],
       "resolvedId": 514178,
@@ -5064,7 +5064,7 @@
         {
           "file": "Code/client/Games/Skyrim/Interface/UI.cpp",
           "isRtti": false,
-          "line": 21
+          "line": 22
         }
       ],
       "resolvedId": 514178,

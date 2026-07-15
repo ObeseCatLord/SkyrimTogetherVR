@@ -61,7 +61,7 @@ The fields include:
 
 This file is a validation and handoff surface in the default target. It is intended for launcher, external overlay, or debug/proxy visual consumers.
 
-The explicit avatar-sync and gameplay targets now use `VRAvatarService` for embodiment. It sends the local root over the canonical `ClientReferencesMoveRequest` lane and consumes canonical `ServerReferencesMoveRequest` updates for CommonLib-owned same-cell actors. The VR-only `VRMovementService` relay remains an observation and compatibility lane; it is not the authoritative actor-mutation input. HMD/hand/VRIK targets are not applied to remote skeletons.
+The explicit avatar-sync and gameplay targets now use `VRAvatarService` for embodiment. It sends the local root and complete humanoid graph snapshot over the canonical `ClientReferencesMoveRequest` lane and consumes canonical `ServerReferencesMoveRequest` updates for CommonLib-owned actors, including retained-identity spatial transfer. The VR-only `VRMovementService` relay remains an observation and compatibility lane; it is not the authoritative actor-mutation input. HMD/hand/VRIK targets are not applied to remote skeletons.
 
 ## Server Relay
 

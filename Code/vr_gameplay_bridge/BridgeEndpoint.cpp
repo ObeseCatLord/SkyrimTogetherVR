@@ -12,7 +12,10 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
     static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
     static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
-    static_cast<CapabilityMask>(Capability::RemoteRootTransform);
+    static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+    static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
+    static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
 
 [[nodiscard]] bool ParseMappingHandle(HANDLE& a_handle) noexcept
 {

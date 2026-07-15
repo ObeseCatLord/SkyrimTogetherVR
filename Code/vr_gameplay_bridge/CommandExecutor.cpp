@@ -5,6 +5,8 @@
 
 #include <vr_common/VRCanonicalEntity.h>
 
+#include <cmath>
+
 namespace SkyrimTogetherVR::GameplayAdapter
 {
 namespace
@@ -76,20 +78,47 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
         break;
     case CommandKind::UpdateRemoteRootTransform:
         if (a_command.Header.Identity.SequenceId == 0 || a_command.Header.Identity.ActionId != 0 ||
-            a_command.Payload.UpdateRemoteRootTransform.AvatarHandle.Value == 0 || a_command.Payload.UpdateRemoteRootTransform.UpdateFlags != 0 ||
-            a_command.Payload.UpdateRemoteRootTransform.Reserved0 != 0 ||
+            a_command.Payload.UpdateRemoteRootTransform.AvatarHandle.Value == 0 ||
+            (a_command.Payload.UpdateRemoteRootTransform.UpdateFlags & ~GameplayBridge::SpatialTransfer) != 0 ||
+            a_command.Payload.UpdateRemoteRootTransform.LocalCellFormId == 0 ||
             !IsZero(a_command.Payload.UpdateRemoteRootTransform.Reserved, sizeof(a_command.Payload.UpdateRemoteRootTransform.Reserved)))
             return CommandStatus::Malformed;
         break;
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+    {
+        const auto& payload = a_command.Payload.ApplyRemoteAnimationGraphChunk;
+        const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
+        if (a_command.Header.Identity.SequenceId == 0 || a_command.Header.Identity.ActionId != 0 ||
+            payload.AvatarHandle.Value == 0 || payload.SnapshotId == 0 ||
+            payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved0 != 0 ||
+            payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !std::isfinite(payload.Direction) ||
+            !AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||
+            !AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values))
+            return CommandStatus::Malformed;
+        break;
+    }
     default:
         return CommandStatus::Malformed;
     }
 
-    const auto requiredCapability = static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::UpdateRemoteRootTransform ?
-                                        Capability::RemoteRootTransform :
-                                        Capability::RemoteAvatarLifecycle;
+    CapabilityMask requiredCapability{};
+    switch (static_cast<CommandKind>(a_command.Header.Kind)) {
+    case CommandKind::CreateRemoteAvatar:
+    case CommandKind::DestroyRemoteAvatar:
+        requiredCapability = static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle);
+        break;
+    case CommandKind::UpdateRemoteRootTransform:
+        requiredCapability = static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+                             static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer);
+        break;
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+        requiredCapability = static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
+        break;
+    default:
+        return CommandStatus::Malformed;
+    }
     const auto active = a_header.ActiveCapabilities.load(std::memory_order_acquire);
-    if (!HasCapability(active, requiredCapability))
+    if ((active & requiredCapability) != requiredCapability)
         return CommandStatus::Unsupported;
     return CommandStatus::Success;
 }
@@ -113,6 +142,35 @@ void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarComm
         a_result.Root);
 }
 
+void PublishAnimationCommandResult(const CommandRecord& a_command, const AvatarCommandResult& a_result) noexcept
+{
+    const auto snapshotId = a_result.AnimationSnapshotId != 0 ?
+                                a_result.AnimationSnapshotId :
+                                a_command.Payload.ApplyRemoteAnimationGraphChunk.SnapshotId;
+    const auto handle = a_result.AvatarHandle.Value != 0 ?
+                            a_result.AvatarHandle :
+                            a_command.Payload.ApplyRemoteAnimationGraphChunk.AvatarHandle;
+    PublishRemoteAnimationGraphState(
+        a_command.Header.Identity,
+        handle,
+        snapshotId,
+        a_result.Status == CommandStatus::Success ? RemoteAnimationGraphState::Applied : RemoteAnimationGraphState::Faulted,
+        a_result.Status);
+}
+
+void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCommandResult& a_result) noexcept
+{
+    const auto& payload = a_command.Payload.UpdateRemoteRootTransform;
+    PublishRemoteSpatialTransferState(
+        a_command.Header.Identity,
+        a_result.AvatarHandle.Value != 0 ? a_result.AvatarHandle : payload.AvatarHandle,
+        a_result.SourceCellFormId != 0 ? a_result.SourceCellFormId : a_result.LocalCellFormId,
+        a_result.SourceWorldspaceFormId != 0 ? a_result.SourceWorldspaceFormId : a_result.LocalWorldspaceFormId,
+        payload.LocalCellFormId,
+        payload.LocalWorldspaceFormId,
+        a_result.Status);
+}
+
 [[nodiscard]] AvatarCommandResult ExecuteAvatarCommand(const MappingHeader& a_header, const CommandRecord& a_command) noexcept
 {
     AvatarCommandResult result{};
@@ -134,6 +192,8 @@ void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarComm
         return AvatarManager::Get().DestroyRemoteAvatar(a_command);
     case CommandKind::UpdateRemoteRootTransform:
         return AvatarManager::Get().UpdateRemoteRootTransform(a_command);
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+        return AvatarManager::Get().ApplyRemoteAnimationGraphChunk(a_command);
     default:
         result.Status = CommandStatus::Malformed;
         return result;
@@ -149,9 +209,19 @@ void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarComm
     case CommandKind::UpdateRemoteRootTransform:
     {
         const auto result = ExecuteAvatarCommand(header, a_command);
-        if (static_cast<CommandKind>(a_command.Header.Kind) != CommandKind::UpdateRemoteRootTransform ||
-            result.Status != CommandStatus::Success)
+        const auto kind = static_cast<CommandKind>(a_command.Header.Kind);
+        if (kind == CommandKind::UpdateRemoteRootTransform &&
+            (a_command.Payload.UpdateRemoteRootTransform.UpdateFlags & GameplayBridge::SpatialTransfer) != 0)
+            PublishSpatialTransferResult(a_command, result);
+        if (kind != CommandKind::UpdateRemoteRootTransform || result.Status != CommandStatus::Success)
             PublishAvatarCommandResult(a_command, result);
+        return result.Status;
+    }
+    case CommandKind::ApplyRemoteAnimationGraphChunk:
+    {
+        const auto result = ExecuteAvatarCommand(header, a_command);
+        if (result.Status != CommandStatus::Success || result.AnimationApplied)
+            PublishAnimationCommandResult(a_command, result);
         return result.Status;
     }
     case CommandKind::RetireEpoch:
@@ -214,7 +284,9 @@ CommandPumpResult ProcessCommands(
             CountRejected(mapping->Header, status);
     }
 
+    AvatarManager::Get().ProcessPendingAnimationSnapshots();
     PublishCurrentLocalPlayerState();
+    PublishCurrentLocalAnimationState();
     return CommandPumpResult::Success;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

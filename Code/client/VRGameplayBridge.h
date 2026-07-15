@@ -25,6 +25,8 @@ struct Diagnostics
     std::uint64_t StaleCommandCount{0};
     std::uint64_t DiscardedEventCount{0};
     std::uint64_t RejectedSubmissionCount{0};
+    std::uint64_t EventRingDroppedPushCount{0};
+    std::uint64_t CommandRingDroppedPushCount{0};
 };
 
 bool Initialize() noexcept;

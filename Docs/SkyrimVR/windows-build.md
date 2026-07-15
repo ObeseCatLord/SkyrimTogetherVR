@@ -151,10 +151,12 @@ This builds and packages:
 - `TPProcess.exe`
 
 This is the opt-in staged gameplay build. It enables the VR observation relays
-and the CommonLib-owned same-cell remote-avatar root synchronization slice. It
-does not instantiate the legacy desktop mutation services; inventory, combat,
-magic, equipment, skeleton, HIGGS, PLANCK, and FBT mutation remain disabled.
-The unvalidated flat-Skyrim hook batch and flat D3D overlay also remain disabled.
+and the CommonLib-owned remote-avatar lifecycle, retained-identity root/spatial
+movement, and named humanoid animation graph snapshot slice. It does not
+instantiate the legacy desktop mutation services; inventory, combat, magic,
+equipment, skeleton, HIGGS, PLANCK, and FBT mutation remain disabled. Exact
+animation action replay is also still gated on Skyrim VR ABI proof. The
+unvalidated flat-Skyrim hook batch and flat D3D overlay remain disabled.
 
 To build and immediately audit the produced package in one Windows command, use:
 

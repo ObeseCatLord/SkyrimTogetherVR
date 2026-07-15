@@ -429,7 +429,7 @@ void AppendAvatarSummary(std::string& aOut)
         return;
     }
 
-    if (GetValue(values, "schema") == "commonlib_bridge_v1")
+    if (GetValue(values, "schema") == "commonlib_bridge_v2")
     {
         aOut += "bridge=";
         aOut += GetValue(values, "bridgeReady");
@@ -499,7 +499,7 @@ void AppendAvatarTelemetry(std::string& aOut)
         return;
     }
 
-    if (GetValue(values, "schema") == "commonlib_bridge_v1")
+    if (GetValue(values, "schema") == "commonlib_bridge_v2")
     {
         aOut += "\nschema=";
         aOut += GetValue(values, "schema");

@@ -36,12 +36,14 @@ BASE_REQUIRED_HANDOFF_FILES = (
 )
 
 ACTOR_FORM_ID_PATTERN = re.compile(r"^actor\.(\d+)\.formId$")
-COMMONLIB_BRIDGE_AVATAR_SCHEMA = "commonlib_bridge_v1"
+COMMONLIB_BRIDGE_AVATAR_SCHEMA = "commonlib_bridge_v2"
 COMMONLIB_BRIDGE_AVATAR_BOOL_FIELDS = (
     "ready",
     "connected",
     "bridgeReady",
     "actorTargetsEnabled",
+    "animationGraphEnabled",
+    "localAnimationGraphReady",
     "actorSkeletonWritesEnabled",
     "localSnapshotReady",
     "localServerAssigned",
@@ -51,6 +53,7 @@ COMMONLIB_BRIDGE_AVATAR_INT_FIELDS = (
     "lifecycleEpoch",
     "localServerId",
     "trackedAvatarCount",
+    "pendingSpawnCount",
     "activeAvatarCount",
     "createSubmittedCount",
     "createSucceededCount",
@@ -58,8 +61,17 @@ COMMONLIB_BRIDGE_AVATAR_INT_FIELDS = (
     "destroySubmittedCount",
     "destroySucceededCount",
     "rejectedCommandCount",
+    "eventRingDropCount",
+    "commandRingDropCount",
     "invalidTransformCount",
     "remoteMovementAcceptedCount",
+    "staleMovementRejectedCount",
+    "spatialTransferSubmittedCount",
+    "spatialTransferSucceededCount",
+    "spatialTransferRejectedCount",
+    "animationSnapshotSubmittedCount",
+    "animationSnapshotAppliedCount",
+    "animationSnapshotRejectedCount",
     "sameSpaceCount",
 )
 
@@ -156,7 +168,7 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
             errors.append(f"{key} missing/invalid")
         parsed_ints[key] = value
 
-    for key in ("ready", "bridgeReady", "actorTargetsEnabled", "localSnapshotReady"):
+    for key in ("ready", "bridgeReady", "actorTargetsEnabled", "animationGraphEnabled", "localAnimationGraphReady", "localSnapshotReady"):
         if not parsed_bools.get(key, False):
             errors.append(f"{key} must be enabled")
     if parsed_bools.get("actorSkeletonWritesEnabled", False):
@@ -184,26 +196,50 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
         errors.append("updateSubmittedCount must be positive")
     if parsed_ints.get("remoteMovementAcceptedCount", 0) <= 0:
         errors.append("remoteMovementAcceptedCount must be positive")
+    if parsed_ints.get("pendingSpawnCount", 0) != 0:
+        errors.append("pendingSpawnCount must be zero")
+    if parsed_ints.get("staleMovementRejectedCount", 0) <= 0:
+        errors.append("staleMovementRejectedCount must be positive for the ordering acceptance probe")
+    if parsed_ints.get("spatialTransferSubmittedCount", 0) <= 0:
+        errors.append("spatialTransferSubmittedCount must be positive")
+    if parsed_ints.get("spatialTransferSucceededCount", 0) <= 0:
+        errors.append("spatialTransferSucceededCount must be positive")
+    if parsed_ints.get("spatialTransferRejectedCount", 0) != 0:
+        errors.append("spatialTransferRejectedCount must be zero")
+    if parsed_ints.get("animationSnapshotSubmittedCount", 0) <= 0:
+        errors.append("animationSnapshotSubmittedCount must be positive")
+    if parsed_ints.get("animationSnapshotAppliedCount", 0) <= 0:
+        errors.append("animationSnapshotAppliedCount must be positive")
+    if parsed_ints.get("animationSnapshotRejectedCount", 0) != 0:
+        errors.append("animationSnapshotRejectedCount must be zero")
     if parsed_ints.get("sameSpaceCount", 0) <= 0:
         errors.append("sameSpaceCount must be positive")
     if parsed_ints.get("invalidTransformCount", 0) != 0:
         errors.append("invalidTransformCount must be zero")
     if parsed_ints.get("rejectedCommandCount", 0) != 0:
         errors.append("rejectedCommandCount must be zero")
+    if parsed_ints.get("eventRingDropCount", 0) != 0:
+        errors.append("eventRingDropCount must be zero")
+    if parsed_ints.get("commandRingDropCount", 0) != 0:
+        errors.append("commandRingDropCount must be zero")
 
     detail = (
-        "schema={} ready={} connected={} bridgeReady={} actorTargetsEnabled={} "
+        "schema={} ready={} connected={} bridgeReady={} actorTargetsEnabled={} animationGraphEnabled={} localAnimationGraphReady={} "
         "actorSkeletonWritesEnabled={} visualPolicy={} cleanupRequired={} lifecycleEpoch={} "
         "localSnapshotReady={} localServerAssigned={} localServerId={} "
-        "trackedAvatarCount={} activeAvatarCount={} createSubmittedCount={} createSucceededCount={} "
+        "trackedAvatarCount={} pendingSpawnCount={} activeAvatarCount={} createSubmittedCount={} createSucceededCount={} "
         "updateSubmittedCount={} destroySubmittedCount={} destroySucceededCount={} "
-        "rejectedCommandCount={} invalidTransformCount={} remoteMovementAcceptedCount={} sameSpaceCount={}"
+        "rejectedCommandCount={} eventRingDropCount={} commandRingDropCount={} invalidTransformCount={} remoteMovementAcceptedCount={} staleMovementRejectedCount={} "
+        "spatialTransferSubmittedCount={} spatialTransferSucceededCount={} spatialTransferRejectedCount={} "
+        "animationSnapshotSubmittedCount={} animationSnapshotAppliedCount={} animationSnapshotRejectedCount={} sameSpaceCount={}"
     ).format(*(values.get(key, "<missing>") for key in (
         "schema",
         "ready",
         "connected",
         "bridgeReady",
         "actorTargetsEnabled",
+        "animationGraphEnabled",
+        "localAnimationGraphReady",
         "actorSkeletonWritesEnabled",
         "visualPolicy",
         "cleanupRequired",
@@ -212,6 +248,7 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
         "localServerAssigned",
         "localServerId",
         "trackedAvatarCount",
+        "pendingSpawnCount",
         "activeAvatarCount",
         "createSubmittedCount",
         "createSucceededCount",
@@ -219,8 +256,17 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
         "destroySubmittedCount",
         "destroySucceededCount",
         "rejectedCommandCount",
+        "eventRingDropCount",
+        "commandRingDropCount",
         "invalidTransformCount",
         "remoteMovementAcceptedCount",
+        "staleMovementRejectedCount",
+        "spatialTransferSubmittedCount",
+        "spatialTransferSucceededCount",
+        "spatialTransferRejectedCount",
+        "animationSnapshotSubmittedCount",
+        "animationSnapshotAppliedCount",
+        "animationSnapshotRejectedCount",
         "sameSpaceCount",
     )))
     if errors:
@@ -1485,13 +1531,16 @@ def command_self_test(_: argparse.Namespace) -> int:
         )
         write(
             "avatar",
-            "schema=commonlib_bridge_v1\n"
-            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\n"
+            "schema=commonlib_bridge_v2\n"
+            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\nanimationGraphEnabled=1\nlocalAnimationGraphReady=1\n"
             "actorSkeletonWritesEnabled=0\nvisualPolicy=player_template_fallback\ncleanupRequired=0\n"
             "lifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerAssigned=1\nlocalServerId=0\n"
-            "trackedAvatarCount=1\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
+            "trackedAvatarCount=1\npendingSpawnCount=0\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
             "updateSubmittedCount=1\ndestroySubmittedCount=0\ndestroySucceededCount=0\n"
-            "rejectedCommandCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\nsameSpaceCount=2\n",
+            "rejectedCommandCount=0\neventRingDropCount=0\ncommandRingDropCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\n"
+            "staleMovementRejectedCount=1\nspatialTransferSubmittedCount=1\nspatialTransferSucceededCount=1\nspatialTransferRejectedCount=0\n"
+            "animationSnapshotSubmittedCount=1\nanimationSnapshotAppliedCount=1\n"
+            "animationSnapshotRejectedCount=0\nsameSpaceCount=2\n",
         )
 
         args = argparse.Namespace(
