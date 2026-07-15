@@ -23,7 +23,8 @@ from `github/main`. It uses the private `winboat-ssh` channel, fetches the
 matching commit in WinBoat, creates a fresh detached Windows worktree, syncs
 all pinned submodules recursively, and runs the command below. Before creating
 the new worktree it removes prior generated WinBoat build worktrees so the VM
-disk cannot grow by several gigabytes per iteration.
+disk cannot grow by several gigabytes per iteration. Per-build cleanup does not
+run `Optimize-Volume`; retrim is optional maintenance and must not block a build.
 
 ```bat
 BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
@@ -65,9 +66,9 @@ Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 7 --trim
 systemd timer that runs daily and removes generated outputs older than two
 days. The timer also removes only `/tmp/stvr-*` temporary test/build paths
 older than two days; it does not scan unrelated temporary content. The build
-helper also removes and retrims prior generated WinBoat
-worktrees before each build. Cleanup uses a process lock and skips WinBoat
-cleanup without failing when the VM is offline. Do not expand the cleanup
+helper also removes prior generated WinBoat worktrees before each build; it
+does not request a synchronous volume retrim. Cleanup uses a process lock and
+skips WinBoat cleanup without failing when the VM is offline. Do not expand the cleanup
 patterns to game installs, source checkouts, model caches, handoff archives,
 Docker containers, or unrelated application data.
 

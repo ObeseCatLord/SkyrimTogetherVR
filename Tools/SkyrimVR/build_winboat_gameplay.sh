@@ -24,7 +24,7 @@ if [[ ! -x $winboat_powershell ]]; then
     exit 2
 fi
 
-"$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" --max-age-days 0 --skip-local-artifacts --trim
+"$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" --max-age-days 0 --skip-local-artifacts
 
 winboat_repo=${STVR_WINBOAT_REPO:-'C:\Users\obesecatlord\Documents\Codex\SkyrimTogetherVR'}
 timestamp=$(date -u +%Y%m%d%H%M%SZ)
