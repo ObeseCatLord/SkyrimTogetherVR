@@ -1000,44 +1000,65 @@ def build_runtime_checklist(
     )
 
     if avatar_sync:
-        skeleton_writes_enabled = get_bool(avatar, "actorSkeletonWritesEnabled")
-        skeleton_write_ready = (
-            not skeleton_writes_enabled
-            or (
-                get_int(avatar, "hmdCopiedCount") > 0
-                and get_int(avatar, "leftHandCopiedCount") > 0
-                and get_int(avatar, "rightHandCopiedCount") > 0
+        schema_kind = audit_runtime_handoff.avatar_schema_kind(avatar)
+        if schema_kind == "commonlib_bridge":
+            commonlib_ok, commonlib_detail = audit_runtime_handoff.commonlib_bridge_avatar_detail(avatar)
+            add_check(
+                checks,
+                "avatar_sync_commonlib_bridge",
+                "9",
+                "avatar-sync CommonLib gameplay bridge",
+                commonlib_ok,
+                commonlib_detail,
             )
-        )
-        add_check(
-            checks,
-            "avatar_sync_actor_targets",
-            "9",
-            "avatar-sync pose cache and actor write policy",
-            get_bool(avatar, "ready")
-            and get_bool(avatar, "actorTargetsEnabled")
-            and get_int(avatar, "sameSpaceCount") > 0
-            and skeleton_write_ready
-            and get_int(avatar, "vrikDetectedCount") > 0
-            and get_int(avatar, "vrikInterfaceAvailableCount") > 0
-            and get_int(avatar, "invalidVrikCount") == 0
-            and get_int(avatar, "invalidTransformCount") == 0
-            and get_int(avatar, "invalidMovementCount") == 0,
-            "ready={} actorTargetsEnabled={} actorSkeletonWritesEnabled={} sameSpaceCount={} hmdCopiedCount={} leftHandCopiedCount={} rightHandCopiedCount={} vrikDetectedCount={} vrikInterfaceAvailableCount={} invalidVrikCount={} invalidTransformCount={} invalidMovementCount={}".format(
-                avatar.get("ready", "<missing>"),
-                avatar.get("actorTargetsEnabled", "<missing>"),
-                avatar.get("actorSkeletonWritesEnabled", "<missing>"),
-                avatar.get("sameSpaceCount", "<missing>"),
-                avatar.get("hmdCopiedCount", "<missing>"),
-                avatar.get("leftHandCopiedCount", "<missing>"),
-                avatar.get("rightHandCopiedCount", "<missing>"),
-                avatar.get("vrikDetectedCount", "<missing>"),
-                avatar.get("vrikInterfaceAvailableCount", "<missing>"),
-                avatar.get("invalidVrikCount", "<missing>"),
-                avatar.get("invalidTransformCount", "<missing>"),
-                avatar.get("invalidMovementCount", "<missing>"),
-            ),
-        )
+        elif schema_kind == "legacy":
+            skeleton_writes_enabled = get_bool(avatar, "actorSkeletonWritesEnabled")
+            skeleton_write_ready = (
+                not skeleton_writes_enabled
+                or (
+                    get_int(avatar, "hmdCopiedCount") > 0
+                    and get_int(avatar, "leftHandCopiedCount") > 0
+                    and get_int(avatar, "rightHandCopiedCount") > 0
+                )
+            )
+            add_check(
+                checks,
+                "avatar_sync_actor_targets",
+                "9",
+                "avatar-sync pose cache and actor write policy",
+                get_bool(avatar, "ready")
+                and get_bool(avatar, "actorTargetsEnabled")
+                and get_int(avatar, "sameSpaceCount") > 0
+                and skeleton_write_ready
+                and get_int(avatar, "vrikDetectedCount") > 0
+                and get_int(avatar, "vrikInterfaceAvailableCount") > 0
+                and get_int(avatar, "invalidVrikCount") == 0
+                and get_int(avatar, "invalidTransformCount") == 0
+                and get_int(avatar, "invalidMovementCount") == 0,
+                "ready={} actorTargetsEnabled={} actorSkeletonWritesEnabled={} sameSpaceCount={} hmdCopiedCount={} leftHandCopiedCount={} rightHandCopiedCount={} vrikDetectedCount={} vrikInterfaceAvailableCount={} invalidVrikCount={} invalidTransformCount={} invalidMovementCount={}".format(
+                    avatar.get("ready", "<missing>"),
+                    avatar.get("actorTargetsEnabled", "<missing>"),
+                    avatar.get("actorSkeletonWritesEnabled", "<missing>"),
+                    avatar.get("sameSpaceCount", "<missing>"),
+                    avatar.get("hmdCopiedCount", "<missing>"),
+                    avatar.get("leftHandCopiedCount", "<missing>"),
+                    avatar.get("rightHandCopiedCount", "<missing>"),
+                    avatar.get("vrikDetectedCount", "<missing>"),
+                    avatar.get("vrikInterfaceAvailableCount", "<missing>"),
+                    avatar.get("invalidVrikCount", "<missing>"),
+                    avatar.get("invalidTransformCount", "<missing>"),
+                    avatar.get("invalidMovementCount", "<missing>"),
+                ),
+            )
+        else:
+            add_check(
+                checks,
+                "avatar_sync_commonlib_bridge",
+                "9",
+                "avatar-sync CommonLib gameplay bridge",
+                False,
+                "unsupported schema={}".format(avatar.get("schema", "<missing>")),
+            )
     else:
         add_not_required(
             checks,
@@ -1521,7 +1542,15 @@ def command_self_test(_: argparse.Namespace) -> int:
             "remotePlayer.7.avatarValidationReady=1\nremotePlayer.7.avatarValidationBlocker=ready\n"
             "remotePlayer.7.higgsAvatarValidationReady=1\nremotePlayer.7.higgsAvatarValidationBlocker=ready\n",
         )
-        write("avatar", "ready=1\nactorTargetsEnabled=1\nactorSkeletonWritesEnabled=0\nsameSpaceCount=1\nhmdCopiedCount=0\nleftHandCopiedCount=0\nrightHandCopiedCount=0\nvrikDetectedCount=1\nvrikInterfaceAvailableCount=1\ninvalidVrikCount=0\ninvalidTransformCount=0\ninvalidMovementCount=0\n")
+        write(
+            "avatar",
+            "schema=commonlib_bridge_v1\n"
+            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\n"
+            "actorSkeletonWritesEnabled=0\nlifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerId=7\n"
+            "trackedAvatarCount=1\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
+            "updateSubmittedCount=1\ndestroySubmittedCount=0\ndestroySucceededCount=0\n"
+            "rejectedCommandCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\nsameSpaceCount=2\n",
+        )
         (handoff / vr_handoff.CONFIG_FILE).write_text("endpoint=127.0.0.1:10578\n", encoding="utf-8")
         build_manifest = {
             "schema": BUILD_MANIFEST_SCHEMA,
@@ -1603,6 +1632,14 @@ def command_self_test(_: argparse.Namespace) -> int:
             checklist_summary = checklist.get("summary", {})
             if checklist_summary.get(CHECK_FAIL) != 0:
                 print(f"Evidence collector self-test checklist failures: {checklist_summary}")
+                return 1
+            checklist_checks = {
+                str(check.get("id")): check
+                for check in checklist.get("checks", [])
+                if isinstance(check, dict)
+            }
+            if checklist_checks.get("avatar_sync_commonlib_bridge", {}).get("status") != CHECK_PASS:
+                print("Evidence collector self-test did not pass the CommonLib avatar bridge check.")
                 return 1
 
         baseline_readouts = {

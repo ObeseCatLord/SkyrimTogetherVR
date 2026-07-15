@@ -36,6 +36,30 @@ BASE_REQUIRED_HANDOFF_FILES = (
 )
 
 ACTOR_FORM_ID_PATTERN = re.compile(r"^actor\.(\d+)\.formId$")
+COMMONLIB_BRIDGE_AVATAR_SCHEMA = "commonlib_bridge_v1"
+COMMONLIB_BRIDGE_AVATAR_BOOL_FIELDS = (
+    "ready",
+    "connected",
+    "bridgeReady",
+    "actorTargetsEnabled",
+    "actorSkeletonWritesEnabled",
+    "localSnapshotReady",
+)
+COMMONLIB_BRIDGE_AVATAR_INT_FIELDS = (
+    "lifecycleEpoch",
+    "localServerId",
+    "trackedAvatarCount",
+    "activeAvatarCount",
+    "createSubmittedCount",
+    "createSucceededCount",
+    "updateSubmittedCount",
+    "destroySubmittedCount",
+    "destroySucceededCount",
+    "rejectedCommandCount",
+    "invalidTransformCount",
+    "remoteMovementAcceptedCount",
+    "sameSpaceCount",
+)
 
 
 def resolve_handoff_dir(args: argparse.Namespace) -> pathlib.Path:
@@ -89,6 +113,109 @@ def parse_int_field(values: dict[str, str], key: str) -> tuple[bool, int]:
         return True, int(raw.strip(), 0)
     except ValueError:
         return False, 0
+
+
+def parse_bool_field(values: dict[str, str], key: str) -> tuple[bool, bool]:
+    raw = values.get(key)
+    if raw is None:
+        return False, False
+    normalized = raw.strip().lower()
+    if normalized not in {"0", "1", "true", "false", "yes", "no"}:
+        return False, False
+    return True, normalized in {"1", "true", "yes"}
+
+
+def avatar_schema_kind(values: dict[str, str]) -> str:
+    schema = values.get("schema")
+    if schema is None:
+        return "legacy"
+    if schema == COMMONLIB_BRIDGE_AVATAR_SCHEMA:
+        return "commonlib_bridge"
+    return "unsupported"
+
+
+def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
+    """Validate the versioned CommonLib gameplay-bridge avatar readout."""
+    errors: list[str] = []
+    if values.get("schema") != COMMONLIB_BRIDGE_AVATAR_SCHEMA:
+        errors.append(f"schema={values.get('schema', '<missing>')}")
+
+    parsed_bools: dict[str, bool] = {}
+    for key in COMMONLIB_BRIDGE_AVATAR_BOOL_FIELDS:
+        valid, value = parse_bool_field(values, key)
+        if not valid:
+            errors.append(f"{key} missing/invalid")
+        parsed_bools[key] = value
+
+    parsed_ints: dict[str, int] = {}
+    for key in COMMONLIB_BRIDGE_AVATAR_INT_FIELDS:
+        valid, value = parse_int_field(values, key)
+        if not valid or value < 0:
+            errors.append(f"{key} missing/invalid")
+        parsed_ints[key] = value
+
+    for key in ("ready", "bridgeReady", "actorTargetsEnabled", "localSnapshotReady"):
+        if not parsed_bools.get(key, False):
+            errors.append(f"{key} must be enabled")
+    if parsed_bools.get("actorSkeletonWritesEnabled", False):
+        errors.append("actorSkeletonWritesEnabled must be disabled")
+    if parsed_ints.get("localServerId", 0) <= 0:
+        errors.append("localServerId must be positive")
+    if parsed_ints.get("lifecycleEpoch", 0) <= 0:
+        errors.append("lifecycleEpoch must be positive")
+    if parsed_ints.get("activeAvatarCount", 0) > parsed_ints.get("trackedAvatarCount", 0):
+        errors.append("activeAvatarCount cannot exceed trackedAvatarCount")
+    if parsed_ints.get("createSucceededCount", 0) > parsed_ints.get("createSubmittedCount", 0):
+        errors.append("createSucceededCount cannot exceed createSubmittedCount")
+    if parsed_ints.get("destroySucceededCount", 0) > parsed_ints.get("destroySubmittedCount", 0):
+        errors.append("destroySucceededCount cannot exceed destroySubmittedCount")
+    if (
+        parsed_ints.get("activeAvatarCount", 0) <= 0
+        and parsed_ints.get("createSucceededCount", 0) <= 0
+    ):
+        errors.append("requires an active or successfully created avatar")
+    if parsed_ints.get("updateSubmittedCount", 0) <= 0:
+        errors.append("updateSubmittedCount must be positive")
+    if parsed_ints.get("remoteMovementAcceptedCount", 0) <= 0:
+        errors.append("remoteMovementAcceptedCount must be positive")
+    if parsed_ints.get("sameSpaceCount", 0) <= 0:
+        errors.append("sameSpaceCount must be positive")
+    if parsed_ints.get("invalidTransformCount", 0) != 0:
+        errors.append("invalidTransformCount must be zero")
+    if parsed_ints.get("rejectedCommandCount", 0) != 0:
+        errors.append("rejectedCommandCount must be zero")
+
+    detail = (
+        "schema={} ready={} connected={} bridgeReady={} actorTargetsEnabled={} "
+        "actorSkeletonWritesEnabled={} lifecycleEpoch={} localSnapshotReady={} localServerId={} "
+        "trackedAvatarCount={} activeAvatarCount={} createSubmittedCount={} createSucceededCount={} "
+        "updateSubmittedCount={} destroySubmittedCount={} destroySucceededCount={} "
+        "rejectedCommandCount={} invalidTransformCount={} remoteMovementAcceptedCount={} sameSpaceCount={}"
+    ).format(*(values.get(key, "<missing>") for key in (
+        "schema",
+        "ready",
+        "connected",
+        "bridgeReady",
+        "actorTargetsEnabled",
+        "actorSkeletonWritesEnabled",
+        "lifecycleEpoch",
+        "localSnapshotReady",
+        "localServerId",
+        "trackedAvatarCount",
+        "activeAvatarCount",
+        "createSubmittedCount",
+        "createSucceededCount",
+        "updateSubmittedCount",
+        "destroySubmittedCount",
+        "destroySucceededCount",
+        "rejectedCommandCount",
+        "invalidTransformCount",
+        "remoteMovementAcceptedCount",
+        "sameSpaceCount",
+    )))
+    if errors:
+        detail += " errors=" + "; ".join(errors)
+    return not errors, detail
 
 
 def parse_grid_field(values: dict[str, str], key: str) -> tuple[bool, tuple[int, int]]:
@@ -1013,6 +1140,22 @@ def audit_gameplay_relay_lanes(args: argparse.Namespace, results: list[tuple[str
 
 def audit_avatar_sync(results: list[tuple[str, bool, str]], readouts: dict[str, dict[str, str]]) -> None:
     avatar = readouts.get("avatar", {})
+    schema_kind = avatar_schema_kind(avatar)
+    if schema_kind == "commonlib_bridge":
+        commonlib_ok, commonlib_detail = commonlib_bridge_avatar_detail(avatar)
+        add_check(results, "avatar CommonLib gameplay bridge", commonlib_ok, commonlib_detail)
+        return
+    if schema_kind == "unsupported":
+        add_check(
+            results,
+            "avatar schema",
+            False,
+            "unsupported schema={}".format(avatar.get("schema", "<missing>")),
+        )
+        return
+
+    # Archived CharacterService evidence has no schema marker. Keep its
+    # validation unchanged so historical handoffs remain auditable.
     skeleton_writes_enabled = get_bool(avatar, "actorSkeletonWritesEnabled")
     skeleton_write_ready = (
         not skeleton_writes_enabled
@@ -1330,7 +1473,15 @@ def command_self_test(_: argparse.Namespace) -> int:
             "remotePlayer.7.sameSpace=1\nremotePlayer.7.avatarValidationReady=1\nremotePlayer.7.avatarValidationBlocker=ready\n"
             "remotePlayer.7.higgsAvatarValidationReady=1\nremotePlayer.7.higgsAvatarValidationBlocker=ready\n",
         )
-        write("avatar", "ready=1\nactorTargetsEnabled=1\nactorSkeletonWritesEnabled=0\nsameSpaceCount=1\nhmdCopiedCount=0\nleftHandCopiedCount=0\nrightHandCopiedCount=0\nvrikDetectedCount=1\nvrikInterfaceAvailableCount=1\ninvalidVrikCount=0\ninvalidTransformCount=0\ninvalidMovementCount=0\n")
+        write(
+            "avatar",
+            "schema=commonlib_bridge_v1\n"
+            "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\n"
+            "actorSkeletonWritesEnabled=0\nlifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerId=7\n"
+            "trackedAvatarCount=1\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
+            "updateSubmittedCount=1\ndestroySubmittedCount=0\ndestroySucceededCount=0\n"
+            "rejectedCommandCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\nsameSpaceCount=2\n",
+        )
 
         args = argparse.Namespace(
             game_path=game,
@@ -1359,6 +1510,15 @@ def command_self_test(_: argparse.Namespace) -> int:
         broad_result = run_audit(args)
         if broad_result:
             return broad_result
+
+        avatar_values = vr_handoff.read_key_value_file(handoff / vr_handoff.READOUT_FILES["avatar"])
+        if avatar_schema_kind(avatar_values) != "commonlib_bridge":
+            print("Runtime audit self-test did not detect the CommonLib avatar schema.")
+            return 1
+        commonlib_ok, _ = commonlib_bridge_avatar_detail(avatar_values)
+        if not commonlib_ok:
+            print("Runtime audit self-test rejected valid CommonLib avatar evidence.")
+            return 1
 
         compat_path = handoff / vr_handoff.READOUT_FILES["compat"]
         compat_values = vr_handoff.read_key_value_file(compat_path)

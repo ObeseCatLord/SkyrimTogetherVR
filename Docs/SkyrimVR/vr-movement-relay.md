@@ -61,7 +61,7 @@ The fields include:
 
 This file is a validation and handoff surface in the default target. It is intended for launcher, external overlay, or debug/proxy visual consumers.
 
-In the explicit `SkyrimTogetherVRClientAvatarSync` validation build and the explicit `SkyrimTogetherVRGameplayClient` build, `CharacterService` also reads the in-memory remote `VRMovementService` snapshots by server player id and uses them to drive the remote actor root position and yaw before applying remote HMD/hand pose targets. That consumer stays behind `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1` and is not active in the default connection-only build.
+The explicit avatar-sync and gameplay targets now use `VRAvatarService` for embodiment. It sends the local root over the canonical `ClientReferencesMoveRequest` lane and consumes canonical `ServerReferencesMoveRequest` updates for CommonLib-owned same-cell actors. The VR-only `VRMovementService` relay remains an observation and compatibility lane; it is not the authoritative actor-mutation input. HMD/hand/VRIK targets are not applied to remote skeletons.
 
 ## Server Relay
 

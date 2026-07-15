@@ -144,7 +144,7 @@ AvatarCommandResult AvatarManager::CreateRemoteAvatar(const CommandRecord& a_com
             result.Status = CommandStatus::EngineRejected;
             return result;
         }
-        resolvedActor->SetPosition({normalized.PositionX, normalized.PositionY, normalized.PositionZ});
+        resolvedActor->SetPosition({normalized.PositionX, normalized.PositionY, normalized.PositionZ}, true);
         resolvedActor->SetAngle(angles);
         resolvedActor->SetScale(normalized.Scale);
         AvatarRecord record{};
@@ -211,7 +211,7 @@ AvatarCommandResult AvatarManager::UpdateRemoteRootTransform(const CommandRecord
             result = ResultFor(record, CommandStatus::InvalidHandle);
             return result;
         }
-        actor->SetPosition({normalized.PositionX, normalized.PositionY, normalized.PositionZ});
+        actor->SetPosition({normalized.PositionX, normalized.PositionY, normalized.PositionZ}, true);
         actor->SetAngle(angles);
         actor->SetScale(normalized.Scale);
         record.LastSequence = identity.SequenceId;

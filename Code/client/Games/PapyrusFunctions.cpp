@@ -429,6 +429,29 @@ void AppendAvatarSummary(std::string& aOut)
         return;
     }
 
+    if (GetValue(values, "schema") == "commonlib_bridge_v1")
+    {
+        aOut += "bridge=";
+        aOut += GetValue(values, "bridgeReady");
+        aOut += " targets=";
+        aOut += GetValue(values, "actorTargetsEnabled");
+        aOut += " local=";
+        aOut += GetValue(values, "localServerId");
+        aOut += " active=";
+        aOut += GetValue(values, "activeAvatarCount");
+        aOut += " created=";
+        aOut += GetValue(values, "createSucceededCount");
+        aOut += " updates=";
+        aOut += GetValue(values, "updateSubmittedCount");
+        aOut += " moves=";
+        aOut += GetValue(values, "remoteMovementAcceptedCount");
+        aOut += " rejected=";
+        aOut += GetValue(values, "rejectedCommandCount");
+        aOut += " invalid=";
+        aOut += GetValue(values, "invalidTransformCount");
+        return;
+    }
+
     aOut += "targets=";
     aOut += GetValue(values, "actorTargetsEnabled");
     aOut += " poses=";
@@ -473,6 +496,51 @@ void AppendAvatarTelemetry(std::string& aOut)
     if (values.empty())
     {
         aOut += "\nmissing";
+        return;
+    }
+
+    if (GetValue(values, "schema") == "commonlib_bridge_v1")
+    {
+        aOut += "\nschema=";
+        aOut += GetValue(values, "schema");
+        aOut += " ready=";
+        aOut += GetValue(values, "ready");
+        aOut += " connected=";
+        aOut += GetValue(values, "connected");
+        aOut += " bridge=";
+        aOut += GetValue(values, "bridgeReady");
+        aOut += " targets=";
+        aOut += GetValue(values, "actorTargetsEnabled");
+        aOut += " skeletonWrites=";
+        aOut += GetValue(values, "actorSkeletonWritesEnabled");
+        aOut += "\nepoch=";
+        aOut += GetValue(values, "lifecycleEpoch");
+        aOut += " localSnapshot=";
+        aOut += GetValue(values, "localSnapshotReady");
+        aOut += " localServerId=";
+        aOut += GetValue(values, "localServerId");
+        aOut += "\navatars tracked=";
+        aOut += GetValue(values, "trackedAvatarCount");
+        aOut += " active=";
+        aOut += GetValue(values, "activeAvatarCount");
+        aOut += " sameSpace=";
+        aOut += GetValue(values, "sameSpaceCount");
+        aOut += "\ncommands create=";
+        aOut += GetValue(values, "createSubmittedCount");
+        aOut += "/";
+        aOut += GetValue(values, "createSucceededCount");
+        aOut += " update=";
+        aOut += GetValue(values, "updateSubmittedCount");
+        aOut += " acceptedMove=";
+        aOut += GetValue(values, "remoteMovementAcceptedCount");
+        aOut += " destroy=";
+        aOut += GetValue(values, "destroySubmittedCount");
+        aOut += "/";
+        aOut += GetValue(values, "destroySucceededCount");
+        aOut += "\nrejected=";
+        aOut += GetValue(values, "rejectedCommandCount");
+        aOut += " invalidTransforms=";
+        aOut += GetValue(values, "invalidTransformCount");
         return;
     }
 

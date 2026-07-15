@@ -143,7 +143,7 @@ REQUIRED_TOKENS = {
         "World::Destroy();",
     ),
     "Code/client/SkyrimVM64.cpp": (
-        "Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw={}",
+        "Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw=0x{:X}",
         "SkyrimTogetherVR Main::Draw observer reached:",
         "SkyrimTogetherVR Main::Draw cadence:",
         "SkyrimTogetherVR VR update-owner runtime mode: {}",

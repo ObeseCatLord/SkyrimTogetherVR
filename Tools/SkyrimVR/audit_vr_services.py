@@ -547,91 +547,48 @@ REQUIRED_EQUIPMENT_RELAY_TOKENS = {
     ),
 }
 
-REQUIRED_REMOTE_EQUIPMENT_COMPONENT_TOKENS = {
-    "Code/client/Components/RemoteVREquipmentComponent.h": (
-        "struct RemoteVREquipmentComponent",
-        "uint32_t PlayerId",
-        "VREquipmentUpdate Equipment",
-    ),
-    "Code/client/Components.h": (
-        "RemoteVREquipmentComponent.h",
-    ),
-    "Code/client/Services/CharacterService.h": (
-        "UpdateRemoteVRPoseComponents",
-    ),
-    "Code/client/Services/Generic/CharacterService.cpp": (
-        "Services/VRInventoryService.h",
-        "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
-        "TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE",
-        "UpdateRemoteVRPoseComponents",
-        "inventoryService.GetRemoteEquipment()",
-        "RemoteVREquipmentComponent",
-        "m_world.emplace_or_replace<RemoteVREquipmentComponent>",
-        "m_world.remove<RemoteVREquipmentComponent>",
-        "DesiredRemoteWeaponDrawn",
-        "equipmentWeaponDrawQueuedCount",
-        "m_weaponDrawUpdates[pFormId->Id]",
-    ),
-}
-
-FORBIDDEN_REMOTE_EQUIPMENT_COMPONENT_TOKENS = {
-    "Code/client/Components/RemoteVREquipmentComponent.h": (
-        "EquipManager",
-        "SetInventory",
-        "SetActorInventory",
-        "AddOrRemoveItem",
-        "ScopedInventoryOverride",
-        "ScopedEquipOverride",
-    ),
-}
-
 REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
-    "Code/client/Components/RemoteVRPoseComponent.h": (
-        "struct RemoteVRPoseComponent",
-        "uint32_t PlayerId",
-        "VRPoseUpdate Pose",
+    "Code/client/Services/VRAvatarService.h": (
+        "Canonical VR avatar client path backed exclusively by GameplayBridge",
+        "GameplayBridge::AdapterHandle",
+        "RemoteAvatar",
     ),
-    "Code/client/Components/RemoteVREquipmentComponent.h": (
-        "struct RemoteVREquipmentComponent",
-        "uint32_t PlayerId",
-        "VREquipmentUpdate Equipment",
-    ),
-    "Code/client/Services/Generic/CharacterService.cpp": (
-        "UpdateRemoteVRPoseComponents",
-        "poseService.GetRemotePoses()",
-        "acMovementService.GetRemoteMovements()",
-        "m_world.emplace_or_replace<RemoteVRPoseComponent>",
-        "m_world.remove<RemoteVRPoseComponent>",
-        "actorMovementAuthorityEnabled=0",
-        "actorSkeletonWritesEnabled",
-        "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SKELETON_WRITES",
-        "ApplyRemoteAvatarPoseToActor",
-        "RemoteEquipmentMatchCount",
-        "inventoryService.GetRemoteEquipment()",
-        "HasRemoteEquipmentPayloadChanged",
-        "remoteEquipmentMatchCount",
-        "equipmentWeaponDrawQueuedCount",
-        "spellOriginValidCount",
-        "arrowOriginValidCount",
-        "leftWeaponOffsetValidCount",
-        "primaryMagicOffsetValidCount",
-        "last.spellOriginValid",
-        "lastEquipment.sequence",
-        "IsRemotePoseNodeSafe",
-        "InvalidTransformCount",
-        "InvalidMovementCount",
+    "Code/client/Services/Generic/VRAvatarService.cpp": (
+        "AssignCharacterRequest",
+        "CharacterSpawnRequest",
+        "ServerReferencesMoveRequest",
+        "NotifyRemoveCharacter",
+        "GameplayBridge::CommandKind::CreateRemoteAvatar",
+        "GameplayBridge::CommandKind::UpdateRemoteRootTransform",
+        "GameplayBridge::CommandKind::DestroyRemoteAvatar",
+        "return TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS != 0 &&",
+        "schema=commonlib_bridge_v1",
+        "actorSkeletonWritesEnabled=0",
+        "remoteMovementAcceptedCount",
+        "sameSpaceCount",
         "invalidTransformCount",
-        "invalidMovementCount",
-        "last.invalidTransformCount",
-        "last.invalidMovement",
-        "m_world.emplace_or_replace<RemoteVREquipmentComponent>",
-        "m_world.remove<RemoteVREquipmentComponent>",
+    ),
+    "Code/client/VRGameplayBridge.cpp": (
+        "TrySubmitCommand",
+        "TryConsumeEvent",
+        "GetDiagnostics",
+        "GetActiveCapabilities",
+    ),
+    "Code/vr_gameplay_bridge/AvatarManager.cpp": (
+        "RE::ActorHandle",
+        "CreateRemoteAvatar",
+        "UpdateRemoteRootTransform",
+        "DestroyRemoteAvatar",
+        "PlaceObjectAtMe",
+        "SetPosition",
+        "SetAngle",
+        "SetScale",
     ),
     "Code/client/World.cpp": (
         "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
         "ctx().emplace<VRPoseService>(m_dispatcher, m_transport);",
         "ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);",
-        "ctx().emplace<CharacterService>",
+        "ctx().emplace<VRAvatarService>(*this, m_dispatcher, m_transport);",
     ),
     "Code/client/xmake.lua": (
         "SkyrimTogetherVRClientAvatarSync",
@@ -645,16 +602,20 @@ REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
 }
 
 FORBIDDEN_REMOTE_AVATAR_COMPONENT_TOKENS = {
-    "Code/client/Components/RemoteVRPoseComponent.h": (
-        "AgeSeconds",
+    "Code/client/Services/Generic/VRAvatarService.cpp": (
+        "RE::Actor",
+        "RE::ActorHandle",
+        "PlaceObjectAtMe",
+        "SetPosition",
+        "SetAngle",
+        "SetScale",
+        "GetObjectByName",
     ),
-    "Code/client/Components/RemoteVREquipmentComponent.h": (
-        "AgeSeconds",
-    ),
-    "Code/client/Services/Generic/CharacterService.cpp": (
-        "AgeSeconds",
-        ">= 3.0",
-        "Equipment.Sequence != equipmentIt->second.Sequence",
+    "Code/vr_gameplay_bridge/AvatarManager.cpp": (
+        "GetObjectByName",
+        "NPC Head [Head]",
+        "NPC L Hand [LHnd]",
+        "NPC R Hand [RHnd]",
     ),
 }
 
@@ -841,7 +802,7 @@ REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
         "m_sessionId =",
         "m_localPlayerId = 0;",
         "m_localPlayerId = acMessage.PlayerId;",
-        "++m_connectionGeneration;",
+        "m_connectionGeneration = acMessage.ConnectionGeneration;",
         'request.Username = "Skyrim VR Player";',
         "request.WorldSpaceId = {};",
         "request.CellId = {};",
@@ -4314,8 +4275,6 @@ def main() -> int:
     missing_movement_relay = audit_required_token_map(root, REQUIRED_MOVEMENT_RELAY_TOKENS)
     missing_pose_relay = audit_required_token_map(root, REQUIRED_POSE_RELAY_TOKENS)
     missing_equipment_relay = audit_required_token_map(root, REQUIRED_EQUIPMENT_RELAY_TOKENS)
-    missing_remote_equipment_component = audit_required_token_map(root, REQUIRED_REMOTE_EQUIPMENT_COMPONENT_TOKENS)
-    forbidden_remote_equipment_component = audit_forbidden_token_map(root, FORBIDDEN_REMOTE_EQUIPMENT_COMPONENT_TOKENS)
     missing_remote_avatar_component = audit_required_token_map(root, REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS)
     forbidden_remote_avatar_component = audit_forbidden_token_map(root, FORBIDDEN_REMOTE_AVATAR_COMPONENT_TOKENS)
     missing_remote_player_proxy = audit_required_token_map(root, REQUIRED_REMOTE_PLAYER_PROXY_TOKENS)
@@ -4334,8 +4293,6 @@ def main() -> int:
     missing_movement_relay_count = sum(len(tokens) for tokens in missing_movement_relay.values())
     missing_pose_relay_count = sum(len(tokens) for tokens in missing_pose_relay.values())
     missing_equipment_relay_count = sum(len(tokens) for tokens in missing_equipment_relay.values())
-    missing_remote_equipment_component_count = sum(len(tokens) for tokens in missing_remote_equipment_component.values())
-    forbidden_remote_equipment_component_count = sum(len(tokens) for tokens in forbidden_remote_equipment_component.values())
     missing_remote_avatar_component_count = sum(len(tokens) for tokens in missing_remote_avatar_component.values())
     forbidden_remote_avatar_component_count = sum(len(tokens) for tokens in forbidden_remote_avatar_component.values())
     missing_remote_player_proxy_count = sum(len(tokens) for tokens in missing_remote_player_proxy.values())
@@ -4376,8 +4333,6 @@ def main() -> int:
         handle.write(f"- `VRInventoryService.cpp` observer tokens missing: {len(missing_inventory)}\n")
         handle.write(f"- `VRInventoryService.cpp` forbidden full-sync tokens present: {len(forbidden_inventory)}\n")
         handle.write(f"- VR equipment relay tokens missing: {missing_equipment_relay_count}\n")
-        handle.write(f"- Remote VR equipment component tokens missing: {missing_remote_equipment_component_count}\n")
-        handle.write(f"- Remote VR equipment component forbidden mutation tokens present: {forbidden_remote_equipment_component_count}\n")
         handle.write(f"- Remote VR avatar component tokens missing: {missing_remote_avatar_component_count}\n")
         handle.write(f"- Remote VR avatar component forbidden stale-cache tokens present: {forbidden_remote_avatar_component_count}\n")
         handle.write(f"- Remote player proxy service tokens missing: {missing_remote_player_proxy_count}\n")
@@ -4468,10 +4423,6 @@ def main() -> int:
         handle.write(fmt_tokens(forbidden_inventory))
         handle.write("\n## Missing VR Equipment Relay Tokens\n\n")
         handle.write(fmt_token_map(missing_equipment_relay))
-        handle.write("\n## Missing Remote VR Equipment Component Tokens\n\n")
-        handle.write(fmt_token_map(missing_remote_equipment_component))
-        handle.write("\n## Forbidden Remote VR Equipment Component Mutation Tokens\n\n")
-        handle.write(fmt_token_map(forbidden_remote_equipment_component))
         handle.write("\n## Missing Remote VR Avatar Component Tokens\n\n")
         handle.write(fmt_token_map(missing_remote_avatar_component))
         handle.write("\n## Forbidden Remote VR Avatar Component Stale-Cache Tokens\n\n")
@@ -4550,8 +4501,6 @@ def main() -> int:
     print(f"Missing VRInventoryService observer tokens: {len(missing_inventory)}")
     print(f"Forbidden VRInventoryService full-sync tokens: {len(forbidden_inventory)}")
     print(f"Missing VR equipment relay tokens: {missing_equipment_relay_count}")
-    print(f"Missing remote VR equipment component tokens: {missing_remote_equipment_component_count}")
-    print(f"Forbidden remote VR equipment component mutation tokens: {forbidden_remote_equipment_component_count}")
     print(f"Missing remote VR avatar component tokens: {missing_remote_avatar_component_count}")
     print(f"Forbidden remote VR avatar component stale-cache tokens: {forbidden_remote_avatar_component_count}")
     print(f"Missing remote player proxy service tokens: {missing_remote_player_proxy_count}")
@@ -4630,8 +4579,6 @@ def main() -> int:
         or missing_movement_relay
         or missing_pose_relay
         or missing_equipment_relay
-        or missing_remote_equipment_component
-        or forbidden_remote_equipment_component
         or missing_remote_avatar_component
         or forbidden_remote_avatar_component
         or missing_remote_player_proxy

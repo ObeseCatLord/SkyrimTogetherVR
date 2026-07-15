@@ -24,7 +24,7 @@ When connected, `VRInventoryService` sends `RequestVREquipmentUpdate` at 1 Hz if
 
 Remote equipment state is cleared when the client disconnects. Individual remote entries are removed on `NotifyPlayerLeft`.
 
-In the explicit `SkyrimTogetherVRClientAvatarSync` build and the explicit `SkyrimTogetherVRGameplayClient` build, `CharacterService` also reads the `VRInventoryService` remote map and stores matching snapshots on remote player entities as `RemoteVREquipmentComponent`. The first in-engine consumer is deliberately narrow: when a new remote equipment sequence changes the drawn/sheath state, `CharacterService` queues the existing delayed remote-actor weapon draw helper for the matched actor. It does not equip forms, alter inventory, or call normal equipment sync. The same pass writes equipment match/upsert/stale counts, `equipmentWeaponDrawQueuedCount`, missing form/actor counters, and latest equipment sequence/drawn flags into `SkyrimTogetherVR.avatar`, so the companion panel and Papyrus telemetry can confirm the remote avatar cache has pose and held-item context together.
+The explicit avatar-sync and gameplay targets do not yet apply this stream to CommonLib-owned remote actors. `VRInventoryService` receives and reports it independently, while `VRAvatarService` and `SkyrimTogetherVRGameplayBridge.dll` currently implement only canonical same-cell actor lifecycle and root movement. The old `CharacterService`/`RemoteVREquipmentComponent` path is inactive prototype code and must not be used as acceptance evidence. Equipment forms, inventory mutation, weapon draw state, and held-item rendering remain future bridge capabilities.
 
 The service does not:
 

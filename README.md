@@ -6,6 +6,7 @@ for direct comparison.
 
 The current release line is an **alpha connection test**, not a gameplay-ready
 multiplayer release. Start with the
+[documentation index](Docs/README.md),
 [Linux/Monado prerelease guide](Docs/SkyrimVR/linux-monado-prerelease-guide.md),
 [Windows build guide](Docs/SkyrimVR/windows-agent-build-guide.md), and
 [server guide](Docs/SkyrimVR/server-deployment.md). Release maturity and tag

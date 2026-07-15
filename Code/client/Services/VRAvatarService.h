@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <unordered_map>
 
 #include <entt/entt.hpp>
@@ -64,8 +65,11 @@ private:
     void UpdateRemoteAvatars(double aDelta) noexcept;
     void SubmitCreateRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
     void SubmitDestroyRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
+    void ResetStatusCounters() noexcept;
+    void WriteStatus() noexcept;
 
     [[nodiscard]] bool HasValidLocalSnapshot() const noexcept;
+    [[nodiscard]] bool HasAvatarCapabilities() const noexcept;
     [[nodiscard]] bool CanSubmitAvatarCommands() noexcept;
     [[nodiscard]] bool BuildLocalLocation(struct GameId& arCellId, struct GameId& arWorldspaceId) const noexcept;
     [[nodiscard]] bool BuildCommand(GameplayBridge::CommandKind aKind, std::uint32_t aServerId, GameplayBridge::CommandRecord& arCommand) const noexcept;
@@ -82,10 +86,22 @@ private:
     std::uint32_t m_nextAssignmentCookie{1};
     double m_assignmentElapsed{0.0};
     double m_localMovementElapsed{0.0};
+    double m_statusElapsed{0.0};
+    std::uint64_t m_createSubmittedCount{0};
+    std::uint64_t m_createSucceededCount{0};
+    std::uint64_t m_updateSubmittedCount{0};
+    std::uint64_t m_destroySubmittedCount{0};
+    std::uint64_t m_destroySucceededCount{0};
+    std::uint64_t m_invalidTransformCount{0};
+    std::uint64_t m_remoteMovementAcceptedCount{0};
+    std::uint64_t m_sameSpaceCount{0};
+    std::uint64_t m_rejectedCommandBaseline{0};
     bool m_connected{false};
     bool m_hasLocalSnapshot{false};
     bool m_assignmentPending{false};
     bool m_capabilityWarningLogged{false};
+    bool m_statusDirty{true};
+    std::filesystem::path m_statusPath{};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
     entt::scoped_connection m_disconnectedConnection;
