@@ -4,8 +4,6 @@ import re
 import sys
 
 
-VR_VM_UPDATE_ADDRESS_ID = "53926"
-VR_VM_UPDATE_RVA = "12765b0"
 VR_MAIN_DRAW_ADDRESS_ID = "35560"
 VR_MAIN_DRAW_RVA = "5b9330"
 VR_WIN_MAIN_ADDRESS_ID = "35545"
@@ -96,7 +94,7 @@ REQUIRED_TOKENS = {
     ),
     "Code/client/main.cpp": (
         "SkyrimTogetherVR runtime flags: connectionOnly={}, bringupHooks={}, unvalidatedHooks={}, validatedInlinePatches={}",
-        "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
+        "Installing SkyrimTogetherVR deferred startup/update-owner hook",
         "SkyrimTogetherVR bring-up hooks are disabled at compile time",
         "SkyrimTogetherVR bring-up mode: skipping unvalidated Skyrim gameplay hooks",
         "BuildVRCompatibilityStatus",
@@ -104,12 +102,12 @@ REQUIRED_TOKENS = {
         "PLANCK detected; keeping SkyrimTogetherVR in PLANCK/HIGGS-compatible hook mode",
         "HIGGS or PLANCK is installed; refusing to install unvalidated SkyrimTogetherVR gameplay hooks",
         "InstallVrMainLoopBringupHooks();",
-        "BSGraphics::InstallVrRenderBringupHooks();",
         "Installing SkyrimTogetherVR WinMain lifecycle hook:",
         "TP_HOOK(&s_vrWinMain, HookVrWinMain);",
         "~ShutdownGuard() { RunTiltedEnd(); }",
         "g_appInstance->EndMain();",
         "SkyrimTogetherVR client startup hook reached",
+        "SkyrimTogetherVR::TickBridge::Retire();",
     ),
     "Code/client/VRCompatibilityStatus.h": (
         "bool PoseService{false};",
@@ -137,14 +135,15 @@ REQUIRED_TOKENS = {
         "stubs::g_IsPlanckActive",
         "PLANCK SKSE plugin is loaded; active-ragdoll compatibility guard is active",
         "POINTER_SKYRIMSE(void, winMain, 35545);",
+        "connection-only mode: Discord SDK callbacks are disabled",
     ),
     "Code/client/SkyrimVM64.cpp": (
         "Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw={}",
         "SkyrimTogetherVR Main::Draw observer reached:",
         "SkyrimTogetherVR Main::Draw cadence:",
         "SkyrimTogetherVR VR update-owner runtime mode: {}",
-        "Installing opaque SkyrimTogetherVR VM-update observer: target={}",
-        "SkyrimTogetherVR VM-update worker observed:",
+        "RunTiltedApp();",
+        "std::call_once(s_observerActivationOnce, []() { SkyrimTogetherVR::TickBridge::Activate(); });",
         "SkyrimTogetherVR::TickBridge::TryConsumeUpdatePermit(sequence)",
         "s_clientUpdateInProgress.test_and_set(std::memory_order_acquire)",
         "SkyrimTogetherVR::TickBridge::RecordOwnerHeartbeat()",
@@ -163,6 +162,7 @@ REQUIRED_TOKENS = {
         'Suspend("load_event", true)',
         "m_stableTickCount >= kRequiredStableTicks",
         "stableFor >= kRequiredStableDuration",
+        "load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target",
     ),
     "Code/client/World.cpp": (
         "ctx().emplace<VRLifecycleService>(*this)",
@@ -171,6 +171,7 @@ REQUIRED_TOKENS = {
         "if (!lifecycle.IsReady())",
         "kMaximumUpdateDeltaSeconds = 0.25",
         "std::clamp(cDeltaSeconds, 0.0, kMaximumUpdateDeltaSeconds)",
+        "SkyrimTogetherVR could not construct the client world:",
     ),
     "Code/client/Services/Generic/VRConnectionService.cpp": (
         'SetStatus("waiting_for_gameplay")',
@@ -189,13 +190,18 @@ REQUIRED_TOKENS = {
         'SetEnvironmentVariableA("STVR_VM_UPDATE_MODE", pMode)',
         'std::strcmp(pMode, "observe")',
         'std::strcmp(pMode, "active")',
+        "could not install the mapped-game CRT startup hooks",
+    ),
+    "Code/client/Games/Skyrim/Events/EventDispacther.cpp": (
+        "blocked an unvalidated VR BSTEventSource::AddEventSink request",
+        "blocked an unvalidated VR BSTEventSource::RemoveEventSink request",
+    ),
+    "Libraries/TiltedReverse/Code/reverse/src/FunctionHook.cpp": (
+        "rolling back all hooks after a delayed MinHook failure",
+        "for (auto it = m_installedHooks.rbegin(); it != m_installedHooks.rend(); ++it)",
     ),
     "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp": (
-        "Installing SkyrimTogetherVR renderer bring-up hook: rendererInit={}",
-        "SkyrimTogetherVR renderer bring-up hook skipped because renderer init address did not resolve",
-        "SkyrimTogetherVR renderer init hook reached: self={}, osData={}, fbData={}",
-        "SkyrimTogetherVR renderer init completed",
-        "TP_HOOK_IMMEDIATE(&Renderer_Init, &Hook_Renderer_Init);",
+        "#if !TP_SKYRIM_VR || TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS",
     ),
     "Docs/SkyrimVR/connection-only-mode.md": (
         "Build-Time Guard",
@@ -203,21 +209,18 @@ REQUIRED_TOKENS = {
         "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=0",
         "Expected First-Run Log Breadcrumbs",
         "SkyrimTogetherVR runtime flags:",
-        "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
+        "Installing SkyrimTogetherVR deferred startup/update-owner hook",
         "Installing SkyrimTogetherVR Main::Draw owner observer:",
         "SkyrimTogetherVR Main::Draw observer reached:",
         "STVR_VM_UPDATE_MODE",
         "never executes client or engine work",
         "SkyrimTogetherVR.lifecycle",
-        "Installing SkyrimTogetherVR renderer bring-up hook:",
-        "SkyrimTogetherVR renderer init hook reached:",
     ),
     "Docs/SkyrimVR/porting-status.md": (
         "runtime flag summary",
         "effective VR client target configuration",
         "explicit avatar-sync-only target configuration",
         "resolved Main::Draw owner address",
-        "resolved renderer-init hook address",
         "Tools/SkyrimVR/audit_bringup_hooks.py",
     ),
 }
@@ -227,6 +230,10 @@ FORBIDDEN_TOKENS = {
     "Code/client/xmake.lua": (
         'add_defines("TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=1")',
         'add_defines("TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES=1")',
+    ),
+    "Code/client/main.cpp": (
+        "BSGraphics::InstallVrRenderBringupHooks();",
+        "RunTiltedApp();\n    struct ShutdownGuard",
     ),
 }
 
@@ -335,17 +342,14 @@ def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
         "TP_THIS_FUNCTION(TMainDraw, void, Main, std::uint32_t, bool);",
         "void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen)",
         "POINTER_SKYRIMSE(TMainDraw, cMainDraw, 35560);",
-        "TP_THIS_FUNCTION(TVrVmUpdate, void, VrVmUpdateContext, float);",
-        "void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)",
-        "TVrVmUpdate",
-        "HookVrVmUpdate",
         "STVR_VM_UPDATE_MODE",
         "TryConsumeUpdatePermit",
         "GetActivationThreadId",
         "VrUpdateMode::Observe",
         "VrUpdateMode::Active",
         "TiltedPhoques::ThisCall(MainDraw, apThis, aUnk, aMainMenuOpen);",
-        "TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);",
+        "RunTiltedApp();",
+        "s_observerActivationOnce",
         "s_clientUpdateInProgress.test_and_set",
         "beforeConsume.Ready",
         "beforeUpdate.Ready",
@@ -368,16 +372,12 @@ def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
         "HookMainLoop",
         "36564",
         "::ConsumeUpdatePermit()",
+        "VrVmUpdate",
+        "HookVrVmUpdate",
+        "53926",
     ):
         if forbidden_token in vr_block:
             failures.append(f"Code/client/SkyrimVM64.cpp: opaque VR observer block must not contain `{forbidden_token}`")
-
-    vm_hook_start = vr_block.find("void TP_MAKE_THISCALL(HookVrVmUpdate")
-    vm_hook_end = vr_block.find("void TP_MAKE_THISCALL(HookMainDraw", vm_hook_start)
-    vm_hook = vr_block[vm_hook_start:vm_hook_end] if vm_hook_start >= 0 and vm_hook_end >= 0 else ""
-    for forbidden_token in ("g_appInstance->Update()", "TryConsumeUpdatePermit", "RecordOwnerHeartbeat"):
-        if forbidden_token in vm_hook:
-            failures.append(f"Code/client/SkyrimVM64.cpp: forwarding VM observer must not contain `{forbidden_token}`")
 
     tick_bridge_path = root / "Code" / "client" / "VRTickBridge.cpp"
     tick_bridge_text = tick_bridge_path.read_text(encoding="utf-8", errors="replace") if tick_bridge_path.exists() else ""
@@ -392,7 +392,6 @@ def audit_vr_owner_addresses(root: pathlib.Path) -> list[str]:
     path = root / "GameFiles" / "SkyrimVR" / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv"
     failures: list[str] = []
     rows: dict[str, list[tuple[int, list[str]]]] = {
-        VR_VM_UPDATE_ADDRESS_ID: [],
         VR_MAIN_DRAW_ADDRESS_ID: [],
         VR_WIN_MAIN_ADDRESS_ID: [],
     }
@@ -403,7 +402,6 @@ def audit_vr_owner_addresses(root: pathlib.Path) -> list[str]:
                 rows[columns[0]].append((line_number, columns))
 
     expected = {
-        VR_VM_UPDATE_ADDRESS_ID: (VR_VM_UPDATE_RVA, ("commonlib_vtable", "exact_vr_vtable"), "VirtualMachine::Update"),
         VR_MAIN_DRAW_ADDRESS_ID: (VR_MAIN_DRAW_RVA, ("database", "exact_vr_database"), "Main::Draw"),
         VR_WIN_MAIN_ADDRESS_ID: (VR_WIN_MAIN_RVA, ("database", "exact_vr_database"), "WinMain"),
     }
@@ -429,6 +427,20 @@ def audit_vr_owner_addresses(root: pathlib.Path) -> list[str]:
                 f"{path.relative_to(root)}:{line_number}: address ID {address_id} must record provenance "
                 f"{expected_provenance}, found {actual_provenance}"
             )
+
+    override_ids = {
+        columns[0]
+        for raw_line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        if (columns := [column.strip() for column in raw_line.split(",")]) and columns[0].isdigit()
+    } if path.exists() else set()
+    alias_path = path.with_name("SkyrimTogetherVR_AE_to_SE.csv")
+    if alias_path.exists():
+        for line_number, raw_line in enumerate(alias_path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
+            columns = [column.strip() for column in raw_line.split(",")]
+            if len(columns) >= 2 and columns[0].isdigit() and columns[1].isdigit() and columns[1] in override_ids:
+                failures.append(
+                    f"{alias_path.relative_to(root)}:{line_number}: alias target {columns[1]} collides with an explicit project override"
+                )
 
     return failures
 

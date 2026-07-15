@@ -29,8 +29,9 @@ void WINAPI TP_RaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags, DWO
     RaiseException(dwExceptionCode, dwExceptionFlags, nNumberOfArguments, lpArguments);
 }
 
-void InstallStartHook()
+bool InstallStartHook()
 {
-    TP_HOOK_IAT2("Kernel32.dll", "GetStartupInfoW", TP_GetStartupInfoW);
-    TP_HOOK_IAT2("Kernel32.dll", "RaiseException", TP_RaiseException);
+    const auto startupInfo = TP_HOOK_IAT2("Kernel32.dll", "GetStartupInfoW", TP_GetStartupInfoW);
+    const auto raiseException = TP_HOOK_IAT2("Kernel32.dll", "RaiseException", TP_RaiseException);
+    return startupInfo != nullptr && raiseException != nullptr;
 };

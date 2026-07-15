@@ -26,7 +26,6 @@ REQUIRED_TOKENS = {
         "SkyrimTogetherVR runtime flags: connectionOnly={}, bringupHooks={}, unvalidatedHooks={}, validatedInlinePatches={}",
         "SkyrimTogetherVR bring-up mode: skipping unvalidated Skyrim gameplay hooks",
         "InstallVrBringupHooks();",
-        "BSGraphics::InstallVrRenderBringupHooks();",
     ),
     "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp": (
         "#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS",
@@ -39,6 +38,7 @@ REQUIRED_TOKENS = {
         "aOSData->pWndProc = Hook_WndProc;",
         "g_sRs = &World::Get().ctx().at<RenderSystemD3D11>();",
         "g_sRs->OnDeviceCreation",
+        "#if !TP_SKYRIM_VR || TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS",
     ),
     "Code/client/Services/Generic/OverlayService.cpp": (
         "if (!m_pOverlay)\n        return;",
@@ -186,6 +186,7 @@ def main() -> int:
     forbidden_connection = [token for token in CONNECTION_ONLY_FORBIDDEN if token in connection_block]
 
     renderer_text = read_text(root / "Code/client/Games/Skyrim/BSGraphics/BSGraphicsRenderer.cpp")
+    main_text = read_text(root / "Code/client/main.cpp")
     renderer_vr_block = extract_block(
         renderer_text,
         "#if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS",
@@ -195,6 +196,8 @@ def main() -> int:
     if not renderer_vr_block:
         missing_renderer_block.append("renderer VR early-return block")
     forbidden_renderer = [token for token in RENDERER_VR_BRANCH_FORBIDDEN if token in renderer_vr_block]
+    if "BSGraphics::InstallVrRenderBringupHooks();" in main_text:
+        forbidden_renderer.append("default main path installs renderer bring-up hook")
 
     app_text = read_text(root / "Code/client/TiltedOnlineApp.cpp")
     install_hooks_block = extract_block(

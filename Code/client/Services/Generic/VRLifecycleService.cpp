@@ -57,10 +57,14 @@ VRLifecycleService::VRLifecycleService(World& aWorld) noexcept
     std::error_code ec;
     std::filesystem::create_directories(m_statusPath.parent_path(), ec);
 
+#if TP_SKYRIM_VR
+    spdlog::info("SkyrimTogetherVR lifecycle load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target");
+#else
     if (auto* pEvents = EventDispatcherManager::Get())
         pEvents->GetLoadGameEventData().RegisterSink(this);
     else
         spdlog::warn("VRLifecycleService could not register TESLoadGameEvent sink");
+#endif
 
     spdlog::info("SkyrimTogetherVR lifecycle status file: {}", m_statusPath.string());
     WriteStatusFile();

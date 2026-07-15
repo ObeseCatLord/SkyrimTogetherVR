@@ -16,7 +16,10 @@ The explicit gameplay package still constructs the normal gameplay services, inc
 
 ## Renderer Init
 
-The renderer bring-up hook remains installed only as a breadcrumb and address-validation point. In the default VR path, `Hook_Renderer_Init` logs entry, calls the original renderer init, logs completion, and returns before changing the window class/icon, replacing the WndProc, creating the D3D11 render system, or attaching the flat overlay render callback.
+The renderer bring-up hook is not installed in the default VR target. Its
+generic address row did not provide enough semantic evidence to justify an
+otherwise unnecessary detour. The dormant implementation remains available
+only behind the unvalidated-hook build gate for future renderer research.
 
 Any future in-game overlay work should be a separate VR implementation. It should not reuse the desktop WndProc and flat swap-chain hook by default.
 
@@ -38,6 +41,6 @@ reviewed.
 
 ## Audit
 
-`Tools/SkyrimVR/audit_vr_overlay_boundary.py` locks down this boundary. It checks that the default VR build enables connection-only mode, keeps unvalidated hooks and validated inline patches off, avoids flat overlay services in the connection-only world construction path, keeps the renderer-init VR branch as a log-and-return path, and keeps gameplay-package overlay calls guarded when the flat overlay app is absent. The explicit gameplay build turns connection-only mode off, but still sets `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`, so it also skips flat D3D overlay startup by default.
+`Tools/SkyrimVR/audit_vr_overlay_boundary.py` locks down this boundary. It checks that the default VR build enables connection-only mode, keeps unvalidated hooks and validated inline patches off, avoids flat overlay services in the connection-only world construction path, does not install the renderer-init hook from the default main path, and keeps gameplay-package overlay calls guarded when the flat overlay app is absent. The explicit gameplay build turns connection-only mode off, but still sets `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`, so it also skips flat D3D overlay startup by default.
 
 The audit also checks the companion, Papyrus, and documentation tokens that define the supported VR-safe overlay/input surfaces.

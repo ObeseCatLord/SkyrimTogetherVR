@@ -133,6 +133,8 @@ static TiltedPhoques::Initializer s_viewportHooks(
         // Once we find a proper way to locate it for different versions, go back to swapcall
         // TiltedPhoques::SwapCall(mem::pointer(initLoc.GetPtr()) + 0xD1A, Renderer_Init, &Hook_Renderer_Init);
 #endif
+#if !TP_SKYRIM_VR || TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
         InstallVrRenderBringupHooks();
+#endif
     });
 } // namespace BSGraphics

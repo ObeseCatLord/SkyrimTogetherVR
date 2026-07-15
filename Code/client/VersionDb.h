@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <stdio.h>
 #include <string>
 
@@ -26,6 +27,7 @@ public:
 private:
     std::map<unsigned long long, unsigned long long> _data;
     std::map<unsigned long long, unsigned long long> _rdata;
+    std::set<unsigned long long> _vrProjectOverrideIds;
     int _ver[4];
     std::string _verStr;
     std::string _moduleName;
@@ -110,7 +112,7 @@ private:
         _rdata[offset] = id;
     }
 
-    bool LoadCsvOffsetFile(const std::filesystem::path& path)
+    bool LoadCsvOffsetFile(const std::filesystem::path& path, std::set<unsigned long long>* apLoadedIds = nullptr)
     {
         std::ifstream file(path);
         if (!file.good())
@@ -135,6 +137,8 @@ private:
                 continue;
 
             SetOffsetForId(id, offset);
+            if (apLoadedIds)
+                apLoadedIds->insert(id);
             loadedAny = true;
         }
 
@@ -142,18 +146,18 @@ private:
     }
 
 #if TP_SKYRIM_VR
-    void ApplyVrProjectAddressFiles(const std::filesystem::path& acGamePath)
+    bool ApplyVrProjectAddressFiles(const std::filesystem::path& acGamePath)
     {
         const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
-        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv");
-        ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
+        LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", &_vrProjectOverrideIds);
+        return ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
     }
 
-    void ApplyIdAliasFile(const std::filesystem::path& path)
+    bool ApplyIdAliasFile(const std::filesystem::path& path)
     {
         std::ifstream file(path);
         if (!file.good())
-            return;
+            return true;
 
         std::string line;
         while (std::getline(file, line))
@@ -175,12 +179,21 @@ private:
             const auto mapped = _data.find(seId);
             if (mapped != _data.end())
             {
+                const auto existingTarget = _data.find(aeId);
+                if (_vrProjectOverrideIds.contains(aeId) && existingTarget != _data.end() && existingTarget->second != mapped->second)
+                {
+                    OutputDebugStringA("SkyrimTogetherVR: address alias conflicts with an explicit project override.\n");
+                    return false;
+                }
+
                 // The generated alias file is authoritative for IDs used by
                 // the AE-oriented client, even when the VR database happens
                 // to use the same numeric ID for a different function.
                 SetOffsetForId(aeId, mapped->second);
             }
         }
+
+        return true;
     }
 
     bool LoadVrCsvAddressLibrary(const std::filesystem::path& acGamePath, int major, int minor, int revision, int build)
@@ -209,7 +222,8 @@ private:
         _moduleName = "SkyrimVR.exe";
         _base = reinterpret_cast<unsigned long long>(GetModuleHandleA(NULL));
 
-        ApplyVrProjectAddressFiles(acGamePath);
+        if (!ApplyVrProjectAddressFiles(acGamePath))
+            return false;
 
         return !_data.empty();
     }
@@ -326,6 +340,7 @@ public:
     {
         _data.clear();
         _rdata.clear();
+        _vrProjectOverrideIds.clear();
         for (int i = 0; i < 4; i++)
             _ver[i] = 0;
         _verStr = std::string();

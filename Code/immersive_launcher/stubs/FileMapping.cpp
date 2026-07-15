@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 #include <FunctionHook.hpp>
 #include <TiltedCore/Initializer.hpp>
@@ -229,13 +230,78 @@ bool IsLocalModulePath(HMODULE aHmod)
     return buf.find(s_OverridePath) != std::wstring::npos;
 }
 
+bool IsModuleBasenameMatch(const wchar_t* lpModuleName, size_t aModuleNameLength, const wchar_t* lpExpectedBasename)
+{
+    if (!lpModuleName || !lpExpectedBasename || aModuleNameLength == 0)
+        return false;
+
+    const auto expectedLength = std::wcslen(lpExpectedBasename);
+    if (aModuleNameLength < expectedLength)
+        return false;
+
+    auto* p = lpModuleName + aModuleNameLength;
+    while (p != lpModuleName)
+    {
+        --p;
+        if (*p == L'\\' || *p == L'/')
+        {
+            ++p;
+            break;
+        }
+    }
+
+    const auto basenameLength = (lpModuleName + aModuleNameLength) - p;
+    return basenameLength == expectedLength && _wcsnicmp(p, lpExpectedBasename, expectedLength) == 0;
+}
+
+bool IsModuleBasenameMatch(LPCWSTR lpModuleName, const wchar_t* lpExpectedBasename)
+{
+    if (!lpModuleName || !lpExpectedBasename)
+        return false;
+    return IsModuleBasenameMatch(lpModuleName, std::wcslen(lpModuleName), lpExpectedBasename);
+}
+
+bool IsModuleBasenameMatch(LPCSTR lpModuleName, const char* lpExpectedBasename)
+{
+    if (!lpModuleName || !lpExpectedBasename)
+        return false;
+
+    const auto expectedLength = std::strlen(lpExpectedBasename);
+    const auto fullLength = std::strlen(lpModuleName);
+
+    if (fullLength < expectedLength)
+        return false;
+
+    auto* p = lpModuleName + fullLength;
+    while (p != lpModuleName)
+    {
+        --p;
+        if (*p == '\\' || *p == '/')
+        {
+            ++p;
+            break;
+        }
+    }
+
+    const auto basenameLength = (lpModuleName + fullLength) - p;
+    return basenameLength == expectedLength && _stricmp(p, lpExpectedBasename) == 0;
+}
+
+bool IsModuleBasenameMatch(const UNICODE_STRING* apDllName)
+{
+    if (!apDllName || !apDllName->Buffer || apDllName->Length <= 0)
+        return false;
+
+    constexpr auto pTarget = TARGET_NAME L".exe";
+    return IsModuleBasenameMatch(apDllName->Buffer, apDllName->Length / sizeof(wchar_t), pTarget);
+}
+
 // Some mods do GetModuleHandle("SkyrimVR.exe") for some reason instead of GetModuleHandle(nullptr).
 HMODULE WINAPI TP_GetModuleHandleW(LPCWSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME L".exe";
-    auto targetSize = std::wcslen(pTarget);
 
-    if (lpModuleName && std::wcsncmp(pTarget, lpModuleName, targetSize) == 0)
+    if (lpModuleName && IsModuleBasenameMatch(lpModuleName, pTarget))
         lpModuleName = nullptr;
     return RealGetModuleHandleW(lpModuleName);
 }
@@ -244,9 +310,8 @@ HMODULE WINAPI TP_GetModuleHandleW(LPCWSTR lpModuleName)
 HMODULE WINAPI TP_GetModuleHandleA(LPCSTR lpModuleName)
 {
     constexpr auto pTarget = TARGET_NAME_A ".exe";
-    constexpr auto targetSize = sizeof(TARGET_NAME_A ".exe");
 
-    if (lpModuleName && std::strncmp(pTarget, lpModuleName, targetSize) == 0)
+    if (lpModuleName && IsModuleBasenameMatch(lpModuleName, pTarget))
         lpModuleName = nullptr;
     return RealGetModuleHandleA(lpModuleName);
 }
@@ -257,7 +322,7 @@ NTSTATUS WINAPI TP_LdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUN
     // no need to check for nullptr here, this is handeled by the higher level GetModuleHandle function.
     TP_EMPTY_HOOK_PLACEHOLDER;
 
-    if (std::wcsncmp(TARGET_NAME L".exe", DllName->Buffer, DllName->Length) == 0)
+    if (IsModuleBasenameMatch(DllName))
     {
         *DllHandle = NtInternal::ThePeb()->pImageBase;
         return 0; // success
@@ -268,7 +333,7 @@ NTSTATUS WINAPI TP_LdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUN
 
 NTSTATUS WINAPI TP_LdrGetDllHandleEx(ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, UNICODE_STRING* DllName, PVOID* DllHandle)
 {
-    if (DllName && std::wcsncmp(TARGET_NAME L".exe", DllName->Buffer, DllName->Length) == 0)
+    if (IsModuleBasenameMatch(DllName))
     {
         *DllHandle = NtInternal::ThePeb()->pImageBase;
         return 0; // success
@@ -303,12 +368,18 @@ DWORD WINAPI TP_GetModuleFileNameW(HMODULE aModule, LPWSTR alpFilename, DWORD aS
     // trampoline space for USVFS
     TP_EMPTY_HOOK_PLACEHOLDER;
 
+    if (!alpFilename || !aSize)
+        return 0;
+
     if (IsMyModule(aModule) && launcher::GetLaunchContext() && launcher::GetLaunchContext()->GetLoaded())
     {
         auto& aExePath = launcher::GetLaunchContext()->exePath;
-        StringCchCopyW(alpFilename, aSize, aExePath.c_str());
-
-        return static_cast<DWORD>(std::wcslen(alpFilename));
+        const auto exePathLen = std::wcslen(aExePath.c_str());
+        const auto copyLen = std::min<size_t>(exePathLen, static_cast<size_t>(aSize) - 1);
+        if (copyLen > 0)
+            std::memcpy(alpFilename, aExePath.c_str(), copyLen * sizeof(wchar_t));
+        alpFilename[copyLen] = L'\0';
+        return exePathLen < static_cast<size_t>(aSize) ? static_cast<DWORD>(exePathLen) : aSize;
     }
 
     return RealGetModuleFileNameW(aModule, alpFilename, aSize);
@@ -333,7 +404,10 @@ DWORD WINAPI TP_GetModuleFileNameA(HMODULE aModule, char* alpFileName, DWORD aBu
 {
     TP_EMPTY_HOOK_PLACEHOLDER;
 
-    ScopedOSHeapItem wideBuffer((aBufferSize * sizeof(wchar_t)) + 1);
+    if (!alpFileName || !aBufferSize)
+        return 0;
+
+    ScopedOSHeapItem wideBuffer((static_cast<size_t>(aBufferSize) + 1) * sizeof(wchar_t));
 
     wchar_t* pBuffer = static_cast<wchar_t*>(wideBuffer.m_pBlock);
 
@@ -344,22 +418,36 @@ DWORD WINAPI TP_GetModuleFileNameA(HMODULE aModule, char* alpFileName, DWORD aBu
     DWORD result = 0;
     HMODULE tMod = RealGetModuleHandleW(L"XAudio2_7.dll");
     if (tMod == nullptr || aModule != tMod)
-        result = TP_GetModuleFileNameW(aModule, pBuffer, aBufferSize * sizeof(wchar_t)); // To make sure spoofing happens if needed
+        result = TP_GetModuleFileNameW(aModule, pBuffer, aBufferSize); // To make sure spoofing happens if needed
 
     if (result == 0)
     {
         return result;
     }
 
-    UNICODE_STRING source{};
-    RtlInitUnicodeString(&source, pBuffer);
+    const bool truncatedByWidePath = result >= aBufferSize;
+    auto wideLength = static_cast<size_t>(result);
+    wideLength = std::min(wideLength, static_cast<size_t>(aBufferSize) - 1);
 
-    // convert using the proper OS function
-    ANSI_STRING dest{.Length = static_cast<USHORT>(result), .MaximumLength = static_cast<USHORT>(aBufferSize), .Buffer = alpFileName};
-    if (RtlUnicodeStringToAnsiString(&dest, &source, FALSE) != 0)
-        return 0;
+    for (;;)
+    {
+        pBuffer[wideLength] = L'\0';
 
-    return result;
+        const int ansiLengthWithNull = WideCharToMultiByte(CP_ACP, 0, pBuffer, -1, alpFileName, static_cast<int>(aBufferSize), nullptr, nullptr);
+        if (ansiLengthWithNull > 0)
+        {
+            const auto ansiLength = static_cast<DWORD>(ansiLengthWithNull - 1);
+            return (truncatedByWidePath || wideLength != static_cast<size_t>(result)) ? aBufferSize : ansiLength;
+        }
+
+        if (wideLength == 0)
+        {
+            alpFileName[0] = '\0';
+            return truncatedByWidePath ? aBufferSize : 0;
+        }
+
+        --wideLength;
+    }
 }
 
 // we use this function to enforce the DLL load policy

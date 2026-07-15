@@ -28,6 +28,8 @@ def main() -> int:
                 "MiniDumpWithUnloadedModules",
                 "MiniDumpWithFullMemoryInfo",
                 "MiniDumpWithCodeSegs",
+                "STVR_FULL_MEMORY_DUMP",
+                "MiniDumpWithFullMemory",
                 "dumpWritten = MiniDumpWriteDump",
                 "coredump write failed",
                 "(IS_MASTER) && (!defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1)",
@@ -73,27 +75,22 @@ def main() -> int:
     vm_text = (root / "Code" / "client" / "SkyrimVM64.cpp").read_text(encoding="utf-8")
     vr_match = re.search(r"#if TP_SKYRIM_VR(?P<body>.*?)#else", vm_text, re.DOTALL)
     vr_block = vr_match.group("body") if vr_match else ""
-    vm_hook_match = re.search(
-        r"void TP_MAKE_THISCALL\(HookVrVmUpdate.*?\n\}(?=\n\nvoid TP_MAKE_THISCALL\(HookMainDraw)",
-        vr_block,
-        re.DOTALL,
-    )
-    vm_hook = vm_hook_match.group(0) if vm_hook_match else ""
-    if not vm_hook:
-        failures.append("Code/client/SkyrimVM64.cpp: could not isolate forwarding VR VM observer")
-    for forbidden in ("g_appInstance->Update()", "TryConsumeUpdatePermit", "RecordOwnerHeartbeat"):
-        if forbidden in vm_hook:
-            failures.append(f"Code/client/SkyrimVM64.cpp: VR VM observer contains unsafe `{forbidden}`")
-    for forbidden in ("POINTER_SKYRIMSE(TMainLoop", "HookVMDestructor", "TP_HOOK(&MainLoop"):
+    for forbidden in (
+        "POINTER_SKYRIMSE(TMainLoop",
+        "HookVMDestructor",
+        "TP_HOOK(&MainLoop",
+        "HookVrVmUpdate",
+        "TVrVmUpdate",
+        "POINTER_SKYRIMSE(TVrVmUpdate",
+    ):
         if forbidden in vr_block:
             failures.append(f"Code/client/SkyrimVM64.cpp: VR block contains retired hook `{forbidden}`")
 
-    teardown_text = (root / "Code" / "client" / "TiltedOnlineApp.cpp").read_text(encoding="utf-8")
-    retire_index = teardown_text.find("SkyrimTogetherVR::TickBridge::Retire();")
-    lifecycle_index = teardown_text.find("World::Get().ctx().at<VRLifecycleService>().BeginTeardown();")
-    if retire_index < 0 or lifecycle_index < 0 or retire_index >= lifecycle_index:
-        failures.append("Code/client/TiltedOnlineApp.cpp: endpoint retirement must precede lifecycle teardown")
     client_main = (root / "Code" / "client" / "main.cpp").read_text(encoding="utf-8")
+    retire_index = client_main.find("SkyrimTogetherVR::TickBridge::Retire();", client_main.find("void RunTiltedEnd()"))
+    end_main_index = client_main.find("g_appInstance->EndMain();", client_main.find("void RunTiltedEnd()"))
+    if retire_index < 0 or end_main_index < 0 or retire_index >= end_main_index:
+        failures.append("Code/client/main.cpp: endpoint retirement must precede client teardown")
     for token in (
         "static int __stdcall HookVrWinMain",
         "~ShutdownGuard() { RunTiltedEnd(); }",
@@ -114,6 +111,29 @@ def main() -> int:
                 "if (createStatus != MH_OK)",
                 "if (enableStatus != MH_OK)",
                 "MH_RemoveHook(hook.m_pSystemFunction)",
+                "for (auto it = m_installedHooks.rbegin(); it != m_installedHooks.rend(); ++it)",
+                "rolling back all hooks after a delayed MinHook failure",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "client" / "Games" / "Skyrim" / "Events" / "EventDispacther.cpp",
+            (
+                "blocked an unvalidated VR BSTEventSource::AddEventSink request",
+                "blocked an unvalidated VR BSTEventSource::RemoveEventSink request",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "immersive_launcher" / "stubs" / "FileMapping.cpp",
+            (
+                "IsModuleBasenameMatch",
+                "WideCharToMultiByte(CP_ACP",
+                "TP_GetModuleFileNameW(aModule, pBuffer, aBufferSize)",
             ),
         )
     )

@@ -20,6 +20,7 @@ struct Main;
 #if TP_SKYRIM_VR
 
 extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
+extern void RunTiltedApp();
 
 enum class VrUpdateMode
 {
@@ -28,13 +29,10 @@ enum class VrUpdateMode
     Active,
 };
 
-struct VrVmUpdateContext;
-
 TP_THIS_FUNCTION(TMainDraw, void, Main, std::uint32_t, bool);
-TP_THIS_FUNCTION(TVrVmUpdate, void, VrVmUpdateContext, float);
 static TMainDraw* MainDraw = nullptr;
-static TVrVmUpdate* VrVmUpdate = nullptr;
 static std::once_flag s_mainDrawLogOnce;
+static std::once_flag s_observerActivationOnce;
 static std::atomic_uint64_t s_mainDrawCallCount{0};
 static std::atomic_uint64_t s_mainDrawOwnerCallCount{0};
 static std::atomic_uint64_t s_mainDrawMismatchCallCount{0};
@@ -46,9 +44,6 @@ static std::atomic_uint32_t s_mainDrawDepth{0};
 static std::atomic_uint32_t s_mainDrawMaximumDepth{0};
 static std::atomic_flag s_clientUpdateInProgress = ATOMIC_FLAG_INIT;
 static std::atomic_uint64_t s_clientUpdateCount{0};
-static std::atomic_uint64_t s_vmUpdateMismatchCallCount{0};
-static std::atomic_uint64_t s_vmUpdateUnavailableCallCount{0};
-static std::atomic_uint64_t s_vmUpdateActivationCallCount{0};
 static VrUpdateMode s_updateMode{VrUpdateMode::Observe};
 
 template <class T>
@@ -89,32 +84,6 @@ static VrUpdateMode ReadVrUpdateMode() noexcept
     return VrUpdateMode::Observe;
 }
 
-void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)
-{
-    TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);
-
-    const auto threadId = GetCurrentThreadId();
-    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
-    if (ownerThreadId == 0)
-    {
-        const auto count = s_vmUpdateUnavailableCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (count <= 2 || count % 6000 == 0)
-            spdlog::info("SkyrimTogetherVR VM-update observer has no ready owner: call={} mode={} thread={}", count, GetVrUpdateModeName(), threadId);
-    }
-    else if (threadId != ownerThreadId)
-    {
-        const auto count = s_vmUpdateMismatchCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (count <= 2 || count % 6000 == 0)
-            spdlog::info("SkyrimTogetherVR VM-update worker observed: call={} mode={} thread={} owner={}", count, GetVrUpdateModeName(), threadId, ownerThreadId);
-    }
-    else
-    {
-        const auto count = s_vmUpdateActivationCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (count <= 2 || count % 6000 == 0)
-            spdlog::info("SkyrimTogetherVR VM-update activation-thread observation: call={} mode={} thread={}", count, GetVrUpdateModeName(), threadId);
-    }
-}
-
 void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen)
 {
     const auto entryDepth = s_mainDrawDepth.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -126,6 +95,18 @@ void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen
     UpdateMaximum(s_mainDrawMaximumOriginalUs, originalUs);
     const auto depthBeforeExit = s_mainDrawDepth.fetch_sub(1, std::memory_order_acq_rel);
     const bool outermost = entryDepth == 1 && depthBeforeExit == 1;
+
+    if (outermost)
+    {
+        if (s_updateMode == VrUpdateMode::Observe)
+        {
+            std::call_once(s_observerActivationOnce, []() { SkyrimTogetherVR::TickBridge::Activate(); });
+        }
+        else if (s_updateMode == VrUpdateMode::Active)
+        {
+            RunTiltedApp();
+        }
+    }
 
     const auto callCount = s_mainDrawCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto now = GetTickCount64();
@@ -233,14 +214,6 @@ static void InstallVrMainDrawObserver()
     TP_HOOK(&MainDraw, HookMainDraw);
 }
 
-static void InstallVrVmUpdateObserver()
-{
-    POINTER_SKYRIMSE(TVrVmUpdate, cVrVmUpdate, 53926);
-    VrVmUpdate = cVrVmUpdate.Get();
-    spdlog::info("Installing opaque SkyrimTogetherVR VM-update observer: target={}", fmt::ptr(VrVmUpdate));
-    TP_HOOK(&VrVmUpdate, HookVrVmUpdate);
-}
-
 void InstallVrMainLoopBringupHooks()
 {
     s_updateMode = ReadVrUpdateMode();
@@ -249,7 +222,6 @@ void InstallVrMainLoopBringupHooks()
         return;
 
     InstallVrMainDrawObserver();
-    InstallVrVmUpdateObserver();
 }
 
 #else

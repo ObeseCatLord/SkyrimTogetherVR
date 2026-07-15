@@ -4,6 +4,7 @@
 #include <Games/Events.h>
 
 #include <filesystem>
+#include <atomic>
 
 #include <Structs/GridCellCoords.h>
 
@@ -108,6 +109,7 @@ private:
 
     entt::scoped_connection m_preUpdateConnection;
     entt::scoped_connection m_connectedConnection;
+    std::atomic_bool m_loadInvalidated{false};
     double m_vrDiscoveryStatusTimer{0.0};
     bool m_vrDiscoveryStatusDirty{true};
 };

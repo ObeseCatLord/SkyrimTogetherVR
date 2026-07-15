@@ -17,21 +17,20 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
 ## Enabled
 
 - The disproved outer main-loop address is not installed in VR.
-- Address-library ID `53926` is installed as an opaque VR VM-update detour when
-  `STVR_VM_UPDATE_MODE` is `observe` or `active`. It never reads the unverified
-  VR `VMContext` layout, always forwards to Skyrim, and never calls the client.
 - Address-library ID `35560` is the exact Skyrim VR `Main::Draw` target at RVA
   `0x5B9330`. The default `observe` mode records cadence, thread, depth, gap,
-  original-call duration, and permit state without advancing the client.
+  original-call duration, and permit state without constructing `World` or any
+  client service.
 - In opt-in `active` mode, only an outermost `Main::Draw` callback on the
-  published activation thread may consume one coalesced permit and call
-  `World::Update()`. An atomic guard rejects reentrancy. The SKSE task callback
-  itself never executes client or engine work.
+  published activation thread may start the client after the original game
+  callback has returned, consume one coalesced permit, and call `World::Update()`.
+  An atomic guard rejects reentrancy. The SKSE task callback itself never
+  executes client or engine work.
 - Address-library ID `35545` is the exact Skyrim VR `WinMain` target at RVA
   `0x5B4290`. Its wrapper makes startup idempotent and calls the client teardown
   path on normal WinMain return, before the mapped CRT can terminate the process.
-  Endpoint retirement is the first teardown action; MinHook detours and the
-  mapping remain resident until process exit.
+  Endpoint retirement is the first teardown action; owned MinHook and IAT hooks
+  are removed in reverse order on normal shutdown.
 - `RunnerService` drains queued main-thread work.
 - `SkyrimTogetherVRTickBridge.dll` registers one normal SKSEVR Papyrus native.
   The attached quest uses a 50 ms single-update timer to request one coalesced
@@ -45,12 +44,14 @@ The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGame
   menus and stable player, base, and cell identities. It records a monotonic
   lifecycle epoch in `SkyrimTogetherVR.lifecycle`; load or player invalidation
   suspends the client, closes transport, resets discovery, and defers reconnect
-  until the next stable epoch.
+  until the next stable epoch. Native load-event registration is disabled until
+  an exact Skyrim VR `BSTEventSource::AddEventSink` target is established.
 - `TransportService` polls, authenticates, sends, and closes on the latched
   `Main::Draw` owner. Low-level client entry points assert that ownership.
 - `ModSystem` receives server mod mappings.
 - `StringCacheService` receives and clears string-cache state.
-- `DiscordService` is present so authentication can include Discord state when available.
+- `DiscordService` remains as a zero-state authentication dependency, but its
+  SDK and detached callback thread are disabled in connection-only mode.
 - `VRConnectionService` owns environment autoconnect plus a file-based command/status handoff for launcher or future VR overlay integration.
 - `Tools/SkyrimVR/vr_handoff.py` provides a desktop-side bridge and local browser companion panel for that file handoff, so connect/disconnect/status/readout workflows can be driven without the flat overlay or DirectInput hooks. Its `config` command and browser connect action write `SkyrimTogetherVR.connection` as the remembered endpoint. The launcher accepts `--no-open-browser` when the panel should stay background-only. Its `players` command consolidates broader avatar-sync/gameplay readouts when those targets are in use; those optional files are not required from the default target.
 - `DiscoveryService` runs in narrow VR observation mode, discovering cell/grid/location changes while actor-handle enumeration remains disabled in the default target.
@@ -110,6 +111,7 @@ Connection-only mode does not instantiate:
 - normal object, full inventory, full magic, actor-value, full combat/projectile, map, weather, quest, and party services
 - behavior-variable patch initialization
 - flat D3D11 overlay/render startup
+- VM-update and renderer-init diagnostic detours
 - DirectInput overlay toggles
 
 The normal initializer gameplay hook batch remains disabled by `TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=0`.
@@ -123,7 +125,7 @@ The normal initializer gameplay hook batch remains disabled by `TP_SKYRIM_VR_ENA
 The first VR smoke test should show these one-time breadcrumbs in `logs/tp_client.log` before any gameplay systems are enabled:
 
 - `SkyrimTogetherVR runtime flags:` with `connectionOnly=1`, `bringupHooks=1`, `unvalidatedHooks=0`, and `validatedInlinePatches=0`.
-- `Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks`.
+- `Installing SkyrimTogetherVR deferred startup/update-owner hook`.
 - `Installing SkyrimTogetherVR WinMain lifecycle hook:` with the resolved address.
 - `Installing SkyrimTogetherVR Main::Draw owner observer:` with the resolved address.
 - `SkyrimTogetherVR client startup hook reached`.
@@ -133,19 +135,16 @@ The first VR smoke test should show these one-time breadcrumbs in `logs/tp_clien
 - `SkyrimTogetherVR SKSE task callback accepted` after the quest timer reaches
   the SKSEVR task queue; this proves only that a coalesced update permit was
   published.
-- `SkyrimTogetherVR VR update-owner runtime mode: observe`, forwarding VM
-  observations, and recurring activation-thread `Main::Draw` cadence during
-  the observer gate. An active connection test must instead show mode `active`,
+- `SkyrimTogetherVR VR update-owner runtime mode: observe` and recurring
+  activation-thread `Main::Draw` cadence during
+  the observer gate. After forwarding the original draw call, observer mode
+  never executes client or engine work. An active connection test must instead show mode `active`,
   completed `Main::Draw` client updates, a stable owner thread, and
   `SkyrimTogetherVR lifecycle ready` before `connecting` or `online` status.
 - `SkyrimTogetherVRTickBridge: SKSEVR task and Papyrus bridge registered` in
   the SKSEVR log. A runtime-gate message instead means the installed game or
   SKSEVR version is incompatible and the client must not be tested.
-- `Installing SkyrimTogetherVR renderer bring-up hook:` with the resolved renderer-init address.
-- `SkyrimTogetherVR renderer init hook reached:` and `SkyrimTogetherVR renderer init completed` if the renderer hook executes.
 - `SkyrimTogetherVR WinMain lifecycle shutdown hook reached` on a clean exit.
-
-If the renderer init address does not resolve, the client logs `SkyrimTogetherVR renderer bring-up hook skipped because renderer init address did not resolve` and leaves the renderer hook uninstalled rather than hooking a null pointer.
 
 ## Test Autoconnect
 

@@ -75,8 +75,14 @@ void* TiltedOnlineApp::GetMainAddress() const
 
 bool TiltedOnlineApp::BeginMain()
 {
-    World::Create();
+    if (!World::Create())
+        return false;
+
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+    spdlog::info("SkyrimTogetherVR connection-only mode: Discord SDK callbacks are disabled");
+#else
     World::Get().ctx().at<DiscordService>().Init();
+#endif
 
 #if TP_SKYRIM_VR && (TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY || !TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY)
     spdlog::warn("SkyrimTogetherVR flat D3D overlay/render startup is disabled for this VR target");
@@ -131,7 +137,6 @@ bool TiltedOnlineApp::BeginMain()
 bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
-    SkyrimTogetherVR::TickBridge::Retire();
     World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
 #endif
 
@@ -198,6 +203,7 @@ void TiltedOnlineApp::InstallHooks2()
 
 void TiltedOnlineApp::UninstallHooks()
 {
+    TiltedPhoques::FunctionHookManager::GetInstance().UninstallHooks();
 }
 
 void TiltedOnlineApp::ApplyNvidiaFix() noexcept

@@ -29,7 +29,7 @@
 #include <thread>
 
 // These symbols are defined within the client code skyrimtogetherclient
-extern void InstallStartHook();
+extern bool InstallStartHook();
 extern void RunTiltedApp();
 extern bool RunTiltedInit(const std::filesystem::path& acGamePath, const TiltedPhoques::String& aExeVersion);
 
@@ -250,7 +250,12 @@ int StartUp(int argc, char** argv)
     if (!LoadProgram(*LC))
         return 3;
 
-    InstallStartHook();
+    if (!InstallStartHook())
+    {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        Die(L"SkyrimTogetherVR could not install the mapped-game CRT startup hooks.", true);
+        return 4;
+    }
     // Initialize all hooks before calling game init
     // TiltedPhoques::Initializer::RunAll();
     if (!RunTiltedInit(LC->gamePath, LC->Version))

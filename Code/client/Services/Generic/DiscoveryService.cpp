@@ -75,11 +75,15 @@ DiscoveryService::DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher)
     m_preUpdateConnection = m_dispatcher.sink<PreUpdateEvent>().connect<&DiscoveryService::OnUpdate>(this);
     m_connectedConnection = m_dispatcher.sink<ConnectedEvent>().connect<&DiscoveryService::OnConnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("SkyrimTogetherVR discovery load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetLoadGameEventData().RegisterSink(this);
     else
         spdlog::warn("DiscoveryService could not register TESLoadGameEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
@@ -349,6 +353,16 @@ void DiscoveryService::VisitForms() noexcept
 void DiscoveryService::OnUpdate(const PreUpdateEvent& acUpdateEvent) noexcept
 {
 #if TP_SKYRIM_VR
+    if (m_loadInvalidated.exchange(false, std::memory_order_acq_rel))
+    {
+        ResetCachedCellData();
+        m_interiorCellId = 0;
+        m_pLocation = nullptr;
+        m_forms.clear();
+        m_vrDiscoveryStatusDirty = true;
+        spdlog::info("SkyrimTogetherVR discovery reset caches on the update owner after a load boundary");
+    }
+
     if (!m_world.ctx().at<VRLifecycleService>().IsReady())
         return;
 #endif
@@ -404,12 +418,7 @@ BSTEventResult DiscoveryService::OnEvent(const TESLoadGameEvent*, const EventDis
     spdlog::info("Finished loading, triggering visit cell");
 
 #if TP_SKYRIM_VR
-    ResetCachedCellData();
-    m_interiorCellId = 0;
-    m_pLocation = nullptr;
-    m_forms.clear();
-    m_vrDiscoveryStatusDirty = true;
-    spdlog::info("SkyrimTogetherVR discovery reset caches at load boundary; visit deferred until lifecycle readiness");
+    m_loadInvalidated.store(true, std::memory_order_release);
     return BSTEventResult::kOk;
 #endif
 

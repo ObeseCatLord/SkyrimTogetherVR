@@ -264,7 +264,7 @@ def log_breadcrumb_detail(log_path: pathlib.Path, skip_log: bool) -> tuple[bool,
     missing = [token for token in audit_runtime_handoff.LOG_BREADCRUMBS if token not in text]
     if missing:
         return False, "missing: " + ", ".join(missing)
-    return True, "all startup/update-owner/render breadcrumbs present"
+    return True, "all deferred startup/update-owner breadcrumbs present"
 
 
 def load_json_file(path: pathlib.Path) -> tuple[dict[str, object], str]:
@@ -426,7 +426,7 @@ def build_runtime_checklist(
         checks,
         "startup_breadcrumbs",
         "5",
-        "startup/update-owner/render logging",
+        "deferred startup/update-owner logging",
         log_ok,
         log_detail,
     )

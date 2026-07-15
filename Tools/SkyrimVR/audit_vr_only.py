@@ -90,6 +90,8 @@ REQUIRED_TOKENS = {
     "Code/immersive_launcher/stubs/FileMapping.cpp": (
         'GetModuleHandle("SkyrimVR.exe")',
         "SKSEVR's runtime lookup can ask for the executable module by name",
+        "IsModuleBasenameMatch(lpModuleName, pTarget)",
+        "WideCharToMultiByte(CP_ACP",
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (
         "SKYRIM TOGETHER VR marker",
@@ -144,6 +146,8 @@ FORBIDDEN_TOKENS = {
     "Code/immersive_launcher/stubs/FileMapping.cpp": (
         "SkyrimSE.exe",
         "skse64",
+        "std::wcsncmp(TARGET_NAME L\".exe\"",
+        "aBufferSize * sizeof(wchar_t)",
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (
         "SKYRIM TOGETHER REBORN marker",

@@ -18,13 +18,11 @@ PLANCK_READOUT_NAME = "SkyrimTogetherVR.planck"
 LOG_BREADCRUMBS = (
     "SkyrimTogetherVR runtime flags:",
     "Installing SkyrimTogetherVR WinMain lifecycle hook:",
-    "Installing SkyrimTogetherVR startup/update-owner/render bring-up hooks",
+    "Installing SkyrimTogetherVR deferred startup/update-owner hook",
     "Installing SkyrimTogetherVR Main::Draw owner observer:",
     "SkyrimTogetherVR VR update-owner runtime mode:",
-    "Installing opaque SkyrimTogetherVR VM-update observer:",
     "SkyrimTogetherVR client startup hook reached",
     "SkyrimTogetherVR Main::Draw observer reached:",
-    "Installing SkyrimTogetherVR renderer bring-up hook:",
     "SkyrimTogetherVR WinMain lifecycle shutdown hook reached",
 )
 

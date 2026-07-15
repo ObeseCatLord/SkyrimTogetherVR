@@ -82,6 +82,12 @@ LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo)
                 // Capture mapped engine code and thread metadata without writing a full-memory dump.
                 auto dumpSettings = MiniDumpWithDataSegs | MiniDumpWithProcessThreadData | MiniDumpWithHandleData | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules |
                                     MiniDumpWithFullMemoryInfo | MiniDumpWithCodeSegs;
+                char fullMemoryValue[2]{};
+                if (GetEnvironmentVariableA("STVR_FULL_MEMORY_DUMP", fullMemoryValue, static_cast<DWORD>(sizeof(fullMemoryValue))) > 0 && fullMemoryValue[0] == '1')
+                {
+                    dumpSettings |= MiniDumpWithFullMemory;
+                    spdlog::critical(__FUNCTION__ ": full-memory crash capture enabled by STVR_FULL_MEMORY_DUMP=1.");
+                }
 
                 if (hDumpFile != INVALID_HANDLE_VALUE)
                 {

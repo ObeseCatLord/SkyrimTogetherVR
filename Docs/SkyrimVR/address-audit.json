@@ -790,7 +790,7 @@
         {
           "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
-          "line": 42
+          "line": 58
         }
       ],
       "resolvedId": 14108,
@@ -1078,7 +1078,7 @@
         {
           "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
-          "line": 32
+          "line": 48
         }
       ],
       "resolvedId": 19364,
@@ -2118,7 +2118,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 229
+          "line": 210
         }
       ],
       "resolvedId": 35560,
@@ -2310,7 +2310,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 300
+          "line": 272
         }
       ],
       "resolvedId": 36564,
@@ -3124,7 +3124,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 302
+          "line": 274
         }
       ],
       "resolvedId": 40412,
@@ -3540,12 +3540,7 @@
         {
           "file": "Code/client/SkyrimVM64.cpp",
           "isRtti": false,
-          "line": 238
-        },
-        {
-          "file": "Code/client/SkyrimVM64.cpp",
-          "isRtti": false,
-          "line": 301
+          "line": 273
         }
       ],
       "resolvedId": 53926,
@@ -3561,7 +3556,7 @@
         {
           "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
-          "line": 12
+          "line": 21
         }
       ],
       "resolvedId": 54425,
@@ -3577,7 +3572,7 @@
         {
           "file": "Code/client/Games/Skyrim/Events/EventDispacther.cpp",
           "isRtti": false,
-          "line": 22
+          "line": 37
         }
       ],
       "resolvedId": 53705,
@@ -4371,7 +4366,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 165
+          "line": 170
         }
       ],
       "resolvedId": 380768,

@@ -310,12 +310,26 @@ uint64_t World::GetTick() const noexcept
     return m_transport.GetClock().GetCurrentTick();
 }
 
-void World::Create() noexcept
+bool World::Create() noexcept
 {
-    if (!entt::locator<World>::has_value())
+    if (entt::locator<World>::has_value())
+        return true;
+
+    try
     {
         entt::locator<World>::emplace();
+        return true;
     }
+    catch (const std::exception& error)
+    {
+        spdlog::critical("SkyrimTogetherVR could not construct the client world: {}", error.what());
+    }
+    catch (...)
+    {
+        spdlog::critical("SkyrimTogetherVR could not construct the client world: unknown exception");
+    }
+
+    return false;
 }
 
 World& World::Get() noexcept

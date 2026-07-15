@@ -110,7 +110,7 @@ supersedes them.
   - applies `SkyrimTogetherVR_AE_to_SE.csv`
 - Added a conservative VR bring-up mode:
   - launcher startup hook is still committed
-  - startup/update-owner/render-init bring-up hooks are installed when `TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1`
+  - only exact WinMain and `Main::Draw` startup/update-owner hooks are installed when `TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1`; VM-update and renderer-init diagnostic hooks are excluded from the default target
   - Skyrim gameplay hooks are skipped unless `TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=1`
   - flat-SE byte-level inline patches require `TP_SKYRIM_VR_ENABLE_VALIDATED_INLINE_PATCHES`, a per-site `TP_SKYRIM_VR_INLINE_PATCH_*` flag, and a per-site `*_VR_RESOLVED` gate before they can compile into VR
   - all inline patch site flags and all `*_VR_RESOLVED` gates default to `0`, so unresolved SE addends cannot be enabled by setting only the broad/per-site inline-patch flags; these patches stay disabled in the default VR target even if the broader gameplay hook batch is enabled later for testing
@@ -133,22 +133,20 @@ supersedes them.
   - client startup hook
   - resolved Main::Draw owner address
   - Main::Draw owner cadence, depth, gap, original duration, and permit sequence
-  - resolved renderer-init hook address
-  - renderer-init hook
   - initial VR HMD/hand/spell/arrow node pointer capture
-- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining the first-run startup, Main::Draw owner observer, and render-init breadcrumbs.
+- Added `Tools/SkyrimVR/audit_bringup_hooks.py` for repeatable validation that the default VR client keeps dangerous hooks/inline patches disabled while retaining only the exact WinMain and Main::Draw startup/update-owner hooks.
 - `Tools/SkyrimVR/audit_bringup_hooks.py` also parses the effective VR client target configuration in `Code/client/xmake.lua`, so `SkyrimTogetherVRClient` must stay connection-only with unvalidated gameplay hooks, validated inline patches, and remote avatar actor targets disabled; `SkyrimTogetherVRClientAvatarSync` and `SkyrimTogetherVRGameplayClient` may enable the guarded remote-avatar actor-target validation path, and they still keep the dangerous hook gates disabled.
 - Added VR connection-only mode:
   - `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1` on the VR target
   - uses exact address-library ID `35560` `Main::Draw` as the candidate owner;
-    the SKSEVR task bridge only publishes coalesced permits, ID `53926` remains
-    forwarding telemetry only, and the outer main-loop hook is not installed
+    the SKSEVR task bridge only publishes coalesced permits, and neither the
+    VM-update nor outer main-loop hook is installed
   - selects `off`, `observe`, or `active` at runtime with
     `STVR_VM_UPDATE_MODE`, defaulting to `observe` so a new binary cannot run
     client work before its VM cadence and owner are proven
   - gates updates and connection behind a monotonic lifecycle epoch with closed
     RaceSex/loading UI and stable player/base/cell identities
-  - keeps transport/session, runner, Discord, mod mapping, and string cache services active
+  - keeps transport/session, runner, mod mapping, and string cache services active; the Discord SDK callback thread is disabled in connection-only mode
   - skips character sync, the full player/gameplay sync service set, behavior patching, DirectInput overlay toggles, and flat D3D11 overlay/render startup
   - adds `VRConnectionService` for guarded `STVR_AUTOCONNECT=host:port`, optional `STVR_PASSWORD`, and file-based command/status handoff without a flat overlay
   - adds `Tools/SkyrimVR/vr_handoff.py` as a desktop/launcher-side bridge for connect, disconnect, HIGGS bridge status, HIGGS relay status, and status/telemetry readout through the existing file bus
