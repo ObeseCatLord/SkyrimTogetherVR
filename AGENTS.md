@@ -26,6 +26,15 @@ pgrep -af 'monado-service|envision'
 test -S /run/user/1000/monado_comp_ipc
 ```
 
+The Linux helper must pass the game executable through Proton's standard
+`Z:` mapping, for example
+`Z:\\home\\...\\SkyrimVR\\SkyrimVR.exe`. Do not prefer a custom Steam-library
+drive such as `S:` merely because its `dosdevices` symlink exists before
+launch: Proton can recreate that directory during prefix initialization and
+remove the mapping after the launcher has computed its command line. The
+result is launcher error 161 (`The specified path is invalid`) before Skyrim
+starts.
+
 Launch the deterministic New Game and connection test:
 
 ```bash
