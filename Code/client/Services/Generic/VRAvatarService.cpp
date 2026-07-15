@@ -128,7 +128,6 @@ void InterpolateRoot(GameplayBridge::RootTransform& arCurrent, const GameplayBri
     arCurrent.RotationZ = interpolate(arCurrent.RotationZ, acTarget.RotationZ);
     arCurrent.RotationW = interpolate(arCurrent.RotationW, acTarget.RotationW);
     arCurrent.Scale = interpolate(arCurrent.Scale, acTarget.Scale);
-    NormalizeRotation(arCurrent);
 }
 } // namespace
 
