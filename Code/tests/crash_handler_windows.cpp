@@ -6,6 +6,8 @@
 #include <spdlog/spdlog.h>
 
 #include <atomic>
+#include <filesystem>
+#include <process.h>
 
 namespace
 {
@@ -63,31 +65,22 @@ LONG WINAPI PriorRecursiveEntry(PEXCEPTION_POINTERS apExceptionInfo)
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-__declspec(noinline) void RaiseFrameHandledAccessViolation()
+int RunCrashHandlerProbe()
 {
-    __try
-    {
-        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-    }
+    wchar_t moduleFilename[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, moduleFilename, static_cast<DWORD>(std::size(moduleFilename))) == 0)
+        return -1;
+
+    auto probePath = std::filesystem::path(moduleFilename);
+    probePath.replace_filename(L"TPCrashHandlerProbe.exe");
+    return static_cast<int>(
+        _wspawnl(_P_WAIT, probePath.c_str(), probePath.c_str(), static_cast<const wchar_t*>(nullptr)));
 }
 } // namespace
 
 TEST_CASE("Frame-handled access violations do not reach the STVR top-level filter")
 {
-    const auto originalFilter = SetUnhandledExceptionFilter(&PriorContinueSearch);
-    ProcessFilterRestore restore{originalFilter};
-    CrashHandler::ResetForTesting();
-    CrashHandler handler;
-    handler.Install();
-    const auto logger = spdlog::default_logger();
-
-    RaiseFrameHandledAccessViolation();
-
-    REQUIRE(CrashHandler::GetInvocationCountForTesting() == 0);
-    REQUIRE(spdlog::default_logger() == logger);
+    REQUIRE(RunCrashHandlerProbe() == 0);
 }
 
 TEST_CASE("Crash handler installs outermost and preserves the existing filter")

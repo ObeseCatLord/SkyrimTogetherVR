@@ -85,8 +85,19 @@ def main() -> int:
                 "EXCEPTION_CONTINUE_EXECUTION",
                 "EXCEPTION_EXECUTE_HANDLER",
                 "EXCEPTION_CONTINUE_SEARCH",
-                "GetInvocationCountForTesting() == 0",
+                "RunCrashHandlerProbe() == 0",
                 "s_priorCalls.load(std::memory_order_relaxed) == 1",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "tests" / "probe" / "crash_handler_probe.cpp",
+            (
+                "RaiseFrameHandledAccessViolation()",
+                "CrashHandler::GetInvocationCountForTesting()",
+                "return invocationCount == 0 ? 0 : 1",
             ),
         )
     )
@@ -95,9 +106,11 @@ def main() -> int:
             root,
             root / "Code" / "tests" / "xmake.lua",
             (
+                'target("TPCrashHandlerProbe")',
                 '"TP_CRASH_HANDLER_TESTING=1"',
                 'add_includedirs("../../build")',
                 '"../client/CrashHandler.cpp"',
+                'add_deps("TPCrashHandlerProbe")',
                 'add_packages("spdlog")',
                 '"dbghelp"',
             ),

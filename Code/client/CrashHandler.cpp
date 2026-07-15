@@ -30,7 +30,8 @@ std::atomic_uint32_t s_crashHandlerInvocations{};
 std::string SerializeTimePoint(const time_point& time, const std::string& format)
 {
     const std::time_t timestamp = std::chrono::system_clock::to_time_t(time);
-    const std::tm utc = *std::gmtime(&timestamp);
+    std::tm utc{};
+    gmtime_s(&utc, &timestamp);
     std::stringstream stream;
     stream << std::put_time(&utc, format.c_str());
     return stream.str();
