@@ -41,12 +41,12 @@ SkyrimTogetherVR::MenuOpenState UI::GetMenuOpen(const BSFixedString& acName) con
     static_assert(IMenu::kOnStack == 0x40);
     static_assert(sizeof(UIMenuEntry) == 0x10);
     static_assert(sizeof(MenuTableEntry) == 0x20);
-    static_assert(sizeof(MenuTable) == 0x28);
-    static_assert(offsetof(MenuTable, m_size) == 0x4);
-    static_assert(offsetof(MenuTable, m_freeCount) == 0x8);
-    static_assert(offsetof(MenuTable, m_freeOffset) == 0xC);
-    static_assert(offsetof(MenuTable, m_eolPtr) == 0x10);
-    static_assert(offsetof(MenuTable, m_entries) == 0x20);
+    static_assert(sizeof(MenuTable) == 0x30);
+    static_assert(offsetof(MenuTable, m_size) == 0xC);
+    static_assert(offsetof(MenuTable, m_freeCount) == 0x10);
+    static_assert(offsetof(MenuTable, m_freeOffset) == 0x14);
+    static_assert(offsetof(MenuTable, m_eolPtr) == 0x18);
+    static_assert(offsetof(MenuTable, m_entries) == 0x28);
     static_assert(offsetof(MenuTableEntry, key) == 0x0);
     static_assert(offsetof(MenuTableEntry, value) == 0x8);
     static_assert(offsetof(MenuTableEntry, next) == 0x18);
