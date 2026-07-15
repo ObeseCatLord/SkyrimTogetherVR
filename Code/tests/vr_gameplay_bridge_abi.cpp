@@ -203,6 +203,7 @@ TEST_CASE("animation graph assembly commits only complete current snapshots", "[
     REQUIRE(Animation::AcceptChunk(snapshot, 5, Animation::ValueType::Float, 0, 7, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Malformed);
     REQUIRE_FALSE(snapshot.IsComplete());
+    REQUIRE(snapshot.SnapshotId == 0);
 }
 
 TEST_CASE("VR gameplay bridge ring rejects full pushes and wraps", "[skyrim-vr][gameplay-bridge]")

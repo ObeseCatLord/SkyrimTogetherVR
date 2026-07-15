@@ -118,14 +118,18 @@ struct SnapshotBuffer
     const float a_direction,
     const std::uint32_t (&a_values)[kValuesPerChunk]) noexcept
 {
-    if (a_snapshotId == 0 || !std::isfinite(a_direction) ||
-        !IsValidChunk(a_type, a_startIndex, a_valueCount, a_totalCount) ||
-        !AreChunkValuesValid(a_type, a_valueCount, a_values))
+    if (a_snapshotId == 0)
         return ChunkAcceptResult::Malformed;
     if (a_snapshotId < a_snapshot.SnapshotId)
         return ChunkAcceptResult::Stale;
-    if (a_snapshotId > a_snapshot.SnapshotId) {
+    const bool supersedesPending = a_snapshotId > a_snapshot.SnapshotId;
+    if (supersedesPending)
         a_snapshot = {};
+    if (!std::isfinite(a_direction) ||
+        !IsValidChunk(a_type, a_startIndex, a_valueCount, a_totalCount) ||
+        !AreChunkValuesValid(a_type, a_valueCount, a_values))
+        return ChunkAcceptResult::Malformed;
+    if (supersedesPending) {
         a_snapshot.SnapshotId = a_snapshotId;
         a_snapshot.Direction = a_direction;
     }
