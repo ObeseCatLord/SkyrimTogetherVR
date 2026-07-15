@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 
+from local_handoff_artifacts import validate_artifact_pair
+
 
 MOD_NAMES = (
     "SKSE files",
@@ -121,6 +123,13 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def newest(root: pathlib.Path, pattern: str) -> pathlib.Path:
+    matches = [path for path in root.glob(pattern) if path.is_file()]
+    if not matches:
+        raise FileNotFoundError(f"no file matching {pattern} under {root}")
+    return max(matches, key=lambda path: path.stat().st_mtime_ns)
+
+
 def skip(path: pathlib.Path, root: pathlib.Path) -> bool:
     parts = {part.lower() for part in path.relative_to(root).parts}
     return bool(parts & EXCLUDED_DIRS) or path.suffix.lower() in EXCLUDED_SUFFIXES
@@ -202,6 +211,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--xrizer-root", type=pathlib.Path, default=home / ".local/share/envision/ovr_comp")
     parser.add_argument("--reference-root", type=pathlib.Path, default=home / "Documents/SkyrimModding")
     parser.add_argument("--public-assets", type=pathlib.Path)
+    parser.add_argument("--gameplay-package", type=pathlib.Path)
+    parser.add_argument("--build-evidence", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     return parser.parse_args()
 
@@ -224,9 +235,31 @@ def main() -> int:
 
     public_runtime = public_assets / "SkyrimTogetherVR-stvr-v0.1.0-alpha.1-linux-monado-runtime.zip"
     public_handoff = public_assets / "SkyrimTogetherVR-stvr-v0.1.0-alpha.1-review-handoff.zip"
-    for path in (public_runtime, public_handoff):
+    gameplay_package = args.gameplay_package or newest(
+        repo / "artifacts/SkyrimTogetherVR/packages", "SkyrimTogetherVR-gameplay-*.zip"
+    )
+    build_evidence = args.build_evidence or newest(
+        repo / "artifacts/SkyrimTogetherVR/build-evidence", "SkyrimTogetherVR-build-evidence-gameplay-*.zip"
+    )
+    for path in (public_runtime, public_handoff, gameplay_package, build_evidence):
         if not path.is_file():
             raise FileNotFoundError(path)
+    with zipfile.ZipFile(build_evidence) as archive:
+        try:
+            evidence_build_manifest = json.loads(
+                archive.read("package/SkyrimTogetherVR_BuildManifest.json").decode("utf-8-sig")
+            )
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"could not read build revision from {build_evidence}: {error}") from error
+    build_revision = evidence_build_manifest.get("sourceRevision")
+    if not isinstance(build_revision, str) or len(build_revision) != 40:
+        raise ValueError("build evidence has no full source revision")
+    if subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", build_revision, head],
+        check=False,
+    ).returncode:
+        raise ValueError(f"build source revision {build_revision} is not an ancestor of handoff HEAD {head}")
+    build_identity = validate_artifact_pair(gameplay_package, build_evidence, build_revision)
 
     with tempfile.TemporaryDirectory(prefix="stvr-local-handoff-") as temp_dir:
         bundle = pathlib.Path(temp_dir) / "source.bundle"
@@ -245,6 +278,8 @@ def main() -> int:
             writer = Writer(archive, timestamp)
             writer.add(public_runtime, f"{root}/bundles/{public_runtime.name}")
             writer.add(public_handoff, f"{root}/bundles/{public_handoff.name}")
+            writer.add(gameplay_package, f"{root}/build/{gameplay_package.name}")
+            writer.add(build_evidence, f"{root}/build/{build_evidence.name}")
             writer.add(bundle, f"{root}/source.bundle")
             writer.add(repo / "Docs/SkyrimVR/local-agent-complete-handoff.md", f"{root}/START-HERE.md")
 
@@ -313,8 +348,19 @@ def main() -> int:
                 "schema": "skyrim_together_vr_local_agent_handoff_v1",
                 "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
                 "sourceHead": head,
+                "buildSourceRevision": build_revision,
                 "localOnly": True,
                 "serverEndpoint": "incidentalstoat.xyz:26099",
+                "gameplayPackage": {
+                    "name": gameplay_package.name,
+                    "sha256": sha256(gameplay_package),
+                    **build_identity,
+                },
+                "buildEvidence": {
+                    "name": build_evidence.name,
+                    "sha256": sha256(build_evidence),
+                    **build_identity,
+                },
                 "machinePaths": {
                     "repo": str(repo),
                     "game": str(args.game_dir),

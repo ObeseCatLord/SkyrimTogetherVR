@@ -1,5 +1,14 @@
 # Skyrim Together VR Agent Runbook
 
+## Gameplay Parity Roadmap
+
+Use `Docs/SkyrimVR/original-gameplay-parity-checklist.md` as the living
+implementation and acceptance checklist for behavioral parity with the
+`original-skyrim-together` branch. Update domain status only when its stated
+source, build, or runtime evidence gate has actually passed. Architecture and
+dependency-order rationale are in
+`Docs/SkyrimVR/full-gameplay-parity-senior-disposition-20260715.md`.
+
 ## One-Command WinBoat Build
 
 Commit and push all source and submodule changes before a Windows build. From

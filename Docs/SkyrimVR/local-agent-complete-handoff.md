@@ -10,6 +10,11 @@ Nexus, cloud storage, or a public issue.
 ## Archive Layout
 
 - `bundles/`: the audited public runtime and review handoff.
+- `build/`: the newest exact gameplay package and its audited Windows build
+  evidence archive. Use these for the next runtime test; the older public alpha
+  bundle is retained only as release/history context.
+  `LOCAL-MANIFEST.json` binds both archives to one build manifest and records
+  the built source revision separately from the newer documentation HEAD.
 - `dependencies/fus-mods/`: pristine FUS mod directories for SKSE scripts, VR
   Address Library, VRIK, HIGGS, PLANCK, Controller Fix VR, SkyUI/VR Tools,
   Realm of Lorkhan, controller bindings, and related configuration fixes.
@@ -33,6 +38,8 @@ Nexus, cloud storage, or a public issue.
   the FUS Basic profile configuration.
 - `source/`: the newest SkyrimTogetherVR tracked source and initialized
   submodule working trees.
+- `source/Docs/SkyrimVR/original-gameplay-parity-checklist.md`: the living
+  original-branch parity matrix and per-domain definition of done.
 - `source.bundle`: Git history for `main`, `original-skyrim-together`, and the
   alpha release tag.
 - `LOCAL-MANIFEST.json`: SHA-256 and size for every payload file.

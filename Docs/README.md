@@ -11,6 +11,8 @@ Start with these documents:
 - [`linux-monado-prerelease-guide.md`](SkyrimVR/linux-monado-prerelease-guide.md): Linux and Monado install/test workflow.
 - [`server-deployment.md`](SkyrimVR/server-deployment.md): dedicated-server deployment and the existing Foundry service.
 - [`final-handoff-checklist.md`](SkyrimVR/final-handoff-checklist.md): build, install, and two-client acceptance checklist.
+- [`original-gameplay-parity-checklist.md`](SkyrimVR/original-gameplay-parity-checklist.md): living source/build/runtime matrix for parity with the original branch.
+- [`local-agent-complete-handoff.md`](SkyrimVR/local-agent-complete-handoff.md): private all-dependencies handoff layout and local-machine test instructions.
 
 Files with dated `senior-brief`, `senior-disposition`, `review`, or `result` names
 are engineering records. They preserve the state and decisions at that date and
