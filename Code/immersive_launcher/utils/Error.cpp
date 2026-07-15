@@ -2,7 +2,7 @@
 #include <Windows.h>
 
 #define SPDLOG_WCHAR_FILENAMES
-#include <fmt/format.h>
+#include <fmt/xchar.h>
 #include <spdlog/formatter.h>
 
 #include "TargetConfig.h"

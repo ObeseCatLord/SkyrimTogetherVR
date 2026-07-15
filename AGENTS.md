@@ -1,5 +1,45 @@
 # Skyrim Together VR Agent Runbook
 
+## One-Command WinBoat Build
+
+Commit and push all source and submodule changes before a Windows build. From
+the Linux repository root, run:
+
+```bash
+Tools/SkyrimVR/build_winboat_gameplay.sh
+```
+
+The helper refuses a dirty Linux worktree or a commit that is not reachable
+from `github/main`. It uses the private `winboat-ssh` channel, fetches the
+matching commit in WinBoat, creates a fresh detached Windows worktree, syncs
+all pinned submodules recursively, and runs:
+
+```bat
+BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```
+
+That Windows wrapper configures xmake, regenerates all required Papyrus PEX
+files, builds and runs `TPTests`, builds the gameplay launcher and all bridge
+DLLs, packages them, audits the package, collects build evidence, and audits
+the evidence archive. It never installs files or launches Skyrim. Caprica is
+resolved from `-PapyrusCompiler`, `CAPRICA`, `PATH`, `C:\Tools\Caprica`, or the
+repository-adjacent `_refs` locations, in that order.
+
+The WinBoat helper prints `STVR_BUILD_WORKTREE`, `STVR_GAMEPLAY_PACKAGE`, and
+`STVR_BUILD_EVIDENCE` on success. Do not build from the long-lived primary
+Windows checkout: generated PEX and package files make rebuild provenance
+ambiguous. If a build exposes a source error, fix all related occurrences,
+commit and push the next revision, then rerun the same helper. Do not delete old
+worktrees without explicit cleanup intent.
+
+Overrides are available when the WinBoat layout differs:
+
+```bash
+STVR_WINBOAT_REPO='C:\Users\name\Documents\Codex\SkyrimTogetherVR' \
+WINBOAT_POWERSHELL=/path/to/winboat-powershell \
+Tools/SkyrimVR/build_winboat_gameplay.sh <commit>
+```
+
 ## Runtime Safety
 
 - Never force-close `RaceSex Menu` with DevBench `menu close`/`kHide`. It does

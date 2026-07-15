@@ -507,7 +507,15 @@ function Resolve-PapyrusCompilerForPreflight {
         return $compilerPath
     }
 
-    $defaultCompilers = @(
+    $defaultCompilers = @()
+    $capricaCommand = Get-Command "Caprica.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $capricaCommand) {
+        $defaultCompilers += $capricaCommand.Source
+    }
+    if ($env:SystemDrive) {
+        $defaultCompilers += (Join-Path $env:SystemDrive "Tools\Caprica\Caprica.exe")
+    }
+    $defaultCompilers += @(
         (Join-Path $RepoRoot "..\_refs\Caprica-release\extracted\Caprica.exe"),
         (Join-Path $RepoRoot "..\_refs\Caprica\build\Caprica\Caprica.exe"),
         (Join-Path $RepoRoot "..\_refs\Caprica\build\Caprica\Caprica")

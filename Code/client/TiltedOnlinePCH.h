@@ -38,7 +38,7 @@ extern void* RipAllocateN(size_t blockLength);
 #define SPDLOG_WCHAR_FILENAMES
 #define SPDLOG_WCHAR_TO_UTF8_SUPPORT
 #include <entt/entt.hpp>
-#include <fmt/format.h>
+#include <fmt/xchar.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>

@@ -2,6 +2,32 @@
 
 For the short end-to-end Windows/MSVC handoff sequence, see `Docs\SkyrimVR\final-handoff-checklist.md`.
 
+## Automated WinBoat Build
+
+Agents working from the Linux checkout should commit and push `main`, then use
+the checked-in host helper:
+
+```bash
+Tools/SkyrimVR/build_winboat_gameplay.sh
+```
+
+It verifies that the Linux worktree is clean and its commit is on
+`github/main`, creates a fresh detached worktree in WinBoat, initializes every
+pinned submodule, and runs the gameplay build, package audit, build-evidence
+collector, and evidence audit. The helper does not install files and does not
+launch Skyrim. On success it prints the Windows worktree, gameplay package, and
+evidence archive paths. Set `STVR_WINBOAT_REPO` or `WINBOAT_POWERSHELL` only
+when the local layout differs from the defaults documented in `AGENTS.md`.
+
+On native Windows, the equivalent audited command is:
+
+```bat
+BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```
+
+Caprica is discovered from an explicit `-PapyrusCompiler`, `CAPRICA`, `PATH`,
+`C:\Tools\Caprica\Caprica.exe`, or the repository-adjacent `_refs` locations.
+
 ## CommonLib Gameplay Adapter
 
 The VR gameplay adapter uses the maintained alandtse `CommonLibVR` `ng` branch,

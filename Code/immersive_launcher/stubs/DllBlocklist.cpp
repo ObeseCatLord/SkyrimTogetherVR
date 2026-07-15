@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <regex>
-#include <fmt/format.h>
+#include <fmt/xchar.h>
 #include <cwctype>
 #define SPDLOG_WCHAR_FILENAMES
 #include <spdlog/formatter.h>

@@ -123,7 +123,8 @@ void OverlayClient::ProcessChatMessage(CefRefPtr<CefListValue> aEventArgs)
         messageRequest.MessageType = static_cast<ChatMessageType>(aEventArgs->GetInt(0));
         messageRequest.ChatMessage = contents;
 
-        spdlog::info(L"Send chat message of type {}: '{}' ", messageRequest.MessageType, aEventArgs->GetString(1).ToWString());
+        spdlog::info(L"Send chat message of type {}: '{}' ",
+            static_cast<unsigned int>(messageRequest.MessageType), aEventArgs->GetString(1).ToWString());
 
         m_transport.Send(messageRequest);
     }
