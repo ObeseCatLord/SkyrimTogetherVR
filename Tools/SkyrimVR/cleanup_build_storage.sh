@@ -7,6 +7,7 @@ trim=0
 scheduled=0
 local_artifacts=1
 rebuildable_caches=0
+temp_artifacts=0
 
 lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-cleanup.lock"
 exec 9>"$lock_file"
@@ -37,6 +38,10 @@ while (($#)); do
             rebuildable_caches=1
             shift
             ;;
+        --temp-artifacts)
+            temp_artifacts=1
+            shift
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 2
@@ -65,6 +70,17 @@ if ((rebuildable_caches)); then
     if command -v python3 >/dev/null 2>&1; then
         python3 -m pip cache purge || true
     fi
+fi
+
+if ((temp_artifacts)); then
+    temp_root=${TMPDIR:-/tmp}
+    while IFS= read -r -d '' temp_path; do
+        echo "Removing expired Skyrim Together temporary output: $temp_path"
+        rm -rf -- "$temp_path"
+    done < <(
+        find "$temp_root" -xdev -mindepth 1 -maxdepth 1 -name 'stvr-*' \
+            -mtime "+$max_age_days" -print0
+    )
 fi
 
 winboat_powershell=${WINBOAT_POWERSHELL:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-powershell}
