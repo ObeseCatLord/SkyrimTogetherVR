@@ -261,7 +261,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_localPlayerId = 0;
 #if TP_SKYRIM_VR
     if (m_serverInstanceNonce != 0 && m_connectionGeneration != 0 &&
-        !SkyrimTogetherVR::GameplayBridgeClient::RetireSession(
+        !RetireGameplaySession(
             SkyrimTogetherVR::GameplayBridge::EpochRetireReason::Disconnect))
         spdlog::warn("SkyrimTogetherVR CommonLib gameplay session could not be retired during disconnect");
 #endif
@@ -328,6 +328,19 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             m_dispatcher.trigger(errorEvent);
             return;
         }
+
+#if TP_SKYRIM_VR
+        if (m_gameplayCleanupRequired &&
+            !RetireGameplaySession(SkyrimTogetherVR::GameplayBridge::EpochRetireReason::LifecycleReset))
+        {
+            spdlog::error("Rejected authentication acceptance because the prior CommonLib gameplay session could not be retired");
+            ConnectionErrorEvent errorEvent;
+            errorEvent.ErrorDetail = "{\"error\":\"gameplay_cleanup_required\"}";
+            Client::Close();
+            m_dispatcher.trigger(errorEvent);
+            return;
+        }
+#endif
 
         m_connected = true;
         m_localPlayerId = acMessage.PlayerId;
@@ -419,6 +432,19 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     }
 
     m_dispatcher.trigger(errorEvent);
+}
+
+bool TransportService::RetireGameplaySession(const SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason) noexcept
+{
+#if TP_SKYRIM_VR
+    const auto retired = SkyrimTogetherVR::GameplayBridgeClient::RetireSession(aReason);
+    m_gameplayCleanupRequired = !retired;
+    return retired;
+#else
+    TP_UNUSED(aReason);
+    m_gameplayCleanupRequired = false;
+    return true;
+#endif
 }
 
 void TransportService::HandleNotifySettingsChange(const NotifySettingsChange& acMessage) noexcept

@@ -39,6 +39,6 @@ void UpdateSessionIdentity(std::uint64_t aServerInstanceNonce, std::uint64_t aCo
 [[nodiscard]] GameplayBridge::CapabilityMask GetActiveCapabilities() noexcept;
 
 [[nodiscard]] bool TryConsumeEvent(GameplayBridge::EventRecord& arEvent) noexcept;
-[[nodiscard]] bool TrySubmitCommand(const GameplayBridge::CommandRecord& acCommand) noexcept;
+[[nodiscard]] bool TrySubmitCommand(GameplayBridge::CommandRecord& arCommand) noexcept;
 [[nodiscard]] GameplayBridge::CommandPumpResult PumpCommands(std::uint32_t aMaxCommands) noexcept;
 } // namespace SkyrimTogetherVR::GameplayBridgeClient

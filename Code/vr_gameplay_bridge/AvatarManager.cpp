@@ -1,5 +1,7 @@
 #include "AvatarManager.h"
 
+#include <vr_common/VRCanonicalEntity.h>
+
 #include <cmath>
 #include <limits>
 
@@ -77,9 +79,11 @@ AvatarCommandResult AvatarManager::CreateRemoteAvatar(const CommandRecord& a_com
         const auto entityKey = MakeEntityKey(identity);
         if (const auto ledgerIt = _entityLedger.find(entityKey); ledgerIt != _entityLedger.end()) {
             const auto& ledger = ledgerIt->second;
-            if (identity.EntityGeneration < ledger.EntityGeneration ||
-                (identity.EntityGeneration == ledger.EntityGeneration && (ledger.Destroyed || identity.ActionId <= ledger.LastAction)) ||
-                (identity.EntityGeneration > ledger.EntityGeneration && !ledger.Destroyed)) {
+            if (!ledger.Destroyed || !CanonicalEntity::CanCreateAfterDestroyedGeneration(
+                    identity.EntityGeneration,
+                    identity.ActionId,
+                    ledger.EntityGeneration,
+                    ledger.LastAction)) {
                 result.Status = CommandStatus::StaleEntity;
                 return result;
             }

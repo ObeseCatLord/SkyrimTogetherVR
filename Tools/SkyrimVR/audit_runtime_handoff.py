@@ -44,6 +44,8 @@ COMMONLIB_BRIDGE_AVATAR_BOOL_FIELDS = (
     "actorTargetsEnabled",
     "actorSkeletonWritesEnabled",
     "localSnapshotReady",
+    "localServerAssigned",
+    "cleanupRequired",
 )
 COMMONLIB_BRIDGE_AVATAR_INT_FIELDS = (
     "lifecycleEpoch",
@@ -159,8 +161,12 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
             errors.append(f"{key} must be enabled")
     if parsed_bools.get("actorSkeletonWritesEnabled", False):
         errors.append("actorSkeletonWritesEnabled must be disabled")
-    if parsed_ints.get("localServerId", 0) <= 0:
-        errors.append("localServerId must be positive")
+    if not parsed_bools.get("localServerAssigned", False):
+        errors.append("localServerAssigned must be enabled")
+    if parsed_bools.get("cleanupRequired", False):
+        errors.append("cleanupRequired must be disabled")
+    if values.get("visualPolicy") != "player_template_fallback":
+        errors.append("visualPolicy must be player_template_fallback")
     if parsed_ints.get("lifecycleEpoch", 0) <= 0:
         errors.append("lifecycleEpoch must be positive")
     if parsed_ints.get("activeAvatarCount", 0) > parsed_ints.get("trackedAvatarCount", 0):
@@ -187,7 +193,8 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
 
     detail = (
         "schema={} ready={} connected={} bridgeReady={} actorTargetsEnabled={} "
-        "actorSkeletonWritesEnabled={} lifecycleEpoch={} localSnapshotReady={} localServerId={} "
+        "actorSkeletonWritesEnabled={} visualPolicy={} cleanupRequired={} lifecycleEpoch={} "
+        "localSnapshotReady={} localServerAssigned={} localServerId={} "
         "trackedAvatarCount={} activeAvatarCount={} createSubmittedCount={} createSucceededCount={} "
         "updateSubmittedCount={} destroySubmittedCount={} destroySucceededCount={} "
         "rejectedCommandCount={} invalidTransformCount={} remoteMovementAcceptedCount={} sameSpaceCount={}"
@@ -198,8 +205,11 @@ def commonlib_bridge_avatar_detail(values: dict[str, str]) -> tuple[bool, str]:
         "bridgeReady",
         "actorTargetsEnabled",
         "actorSkeletonWritesEnabled",
+        "visualPolicy",
+        "cleanupRequired",
         "lifecycleEpoch",
         "localSnapshotReady",
+        "localServerAssigned",
         "localServerId",
         "trackedAvatarCount",
         "activeAvatarCount",
@@ -1477,7 +1487,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             "avatar",
             "schema=commonlib_bridge_v1\n"
             "ready=1\nconnected=1\nbridgeReady=1\nactorTargetsEnabled=1\n"
-            "actorSkeletonWritesEnabled=0\nlifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerId=7\n"
+            "actorSkeletonWritesEnabled=0\nvisualPolicy=player_template_fallback\ncleanupRequired=0\n"
+            "lifecycleEpoch=3\nlocalSnapshotReady=1\nlocalServerAssigned=1\nlocalServerId=0\n"
             "trackedAvatarCount=1\nactiveAvatarCount=1\ncreateSubmittedCount=1\ncreateSucceededCount=1\n"
             "updateSubmittedCount=1\ndestroySubmittedCount=0\ndestroySucceededCount=0\n"
             "rejectedCommandCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\nsameSpaceCount=2\n",

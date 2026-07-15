@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <unordered_map>
 
 #include <entt/entt.hpp>
@@ -42,7 +43,13 @@ private:
         bool CreatePending{false};
         bool DestroyPending{false};
         bool RemovalRequested{false};
-        std::uint8_t DestroyAttempts{0};
+        bool RespawnRequested{false};
+        std::uint8_t CreateAttempts{0};
+        double CreatePendingElapsed{0.0};
+        double DestroyPendingElapsed{0.0};
+        std::uint64_t PendingCreateActionId{0};
+        std::uint64_t PendingDestroyActionId{0};
+        std::uint64_t LastSubmittedSequenceId{0};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -65,6 +72,7 @@ private:
     void UpdateRemoteAvatars(double aDelta) noexcept;
     void SubmitCreateRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
     void SubmitDestroyRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
+    void RetireAvatarLifecycle(const char* apReason) noexcept;
     void ResetStatusCounters() noexcept;
     void WriteStatus() noexcept;
 
@@ -74,15 +82,13 @@ private:
     [[nodiscard]] bool BuildLocalLocation(struct GameId& arCellId, struct GameId& arWorldspaceId) const noexcept;
     [[nodiscard]] bool BuildCommand(SkyrimTogetherVR::GameplayBridge::CommandKind aKind, std::uint32_t aServerId,
                                     SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
-    [[nodiscard]] static std::uint64_t ToBridgeEntityId(std::uint32_t aServerId) noexcept;
-    [[nodiscard]] static std::uint32_t ToBridgeEntityGeneration(std::uint32_t aServerId) noexcept;
 
     World& m_world;
     TransportService& m_transport;
     SkyrimTogetherVR::GameplayBridge::LocalPlayerStatePayload m_localSnapshot{};
     std::unordered_map<std::uint32_t, RemoteAvatar> m_remoteAvatars{};
     std::uint32_t m_localPlayerId{0};
-    std::uint32_t m_localServerId{0};
+    std::optional<std::uint32_t> m_localServerId{};
     std::uint32_t m_assignmentCookie{0};
     std::uint32_t m_nextAssignmentCookie{1};
     double m_assignmentElapsed{0.0};

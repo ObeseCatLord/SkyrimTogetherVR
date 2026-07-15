@@ -12,6 +12,11 @@ struct ClientMessage;
 struct AuthenticationResponse;
 struct NotifySettingsChange;
 
+namespace SkyrimTogetherVR::GameplayBridge
+{
+enum class EpochRetireReason : std::uint32_t;
+}
+
 struct World;
 
 using TiltedPhoques::Client;
@@ -41,6 +46,8 @@ struct TransportService : Client
     [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
     [[nodiscard]] uint64_t GetNegotiatedGameplayCapabilities() const noexcept { return m_negotiatedGameplayCapabilities; }
     [[nodiscard]] uint64_t GetRequestedGameplayCapabilities() const noexcept { return m_requestedGameplayCapabilities; }
+    [[nodiscard]] bool IsGameplayCleanupRequired() const noexcept { return m_gameplayCleanupRequired; }
+    [[nodiscard]] bool RetireGameplaySession(SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason) noexcept;
 
 protected:
     // Event handlers
@@ -64,6 +71,7 @@ private:
     uint64_t m_serverInstanceNonce = 0;
     uint64_t m_negotiatedGameplayCapabilities = 0;
     uint64_t m_requestedGameplayCapabilities = 0;
+    bool m_gameplayCleanupRequired = false;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_sendServerMessageConnection;

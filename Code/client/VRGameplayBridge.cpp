@@ -474,24 +474,24 @@ bool TryConsumeEvent(EventRecord& arEvent) noexcept
     return false;
 }
 
-bool TrySubmitCommand(const CommandRecord& acCommand) noexcept
+bool TrySubmitCommand(CommandRecord& arCommand) noexcept
 {
-    if (!IsOperational() || acCommand.Header.PayloadSize != kFixedPayloadBytes || acCommand.Header.Flags != 0 ||
-        !IdentityIsCurrentOrUnspecified(acCommand.Header.Identity))
+    if (!IsOperational() || arCommand.Header.PayloadSize != kFixedPayloadBytes || arCommand.Header.Flags != 0 ||
+        !IdentityIsCurrentOrUnspecified(arCommand.Header.Identity))
     {
         RejectSubmission();
         return false;
     }
 
-    const auto kind = static_cast<CommandKind>(acCommand.Header.Kind);
+    const auto kind = static_cast<CommandKind>(arCommand.Header.Kind);
     const auto requiredCapability = RequiredCapability(kind);
-    if (requiredCapability == 0 || !HasActiveCapabilities(requiredCapability) || !ValidateCommandPayload(acCommand))
+    if (requiredCapability == 0 || !HasActiveCapabilities(requiredCapability) || !ValidateCommandPayload(arCommand))
     {
         RejectSubmission();
         return false;
     }
 
-    CommandRecord command = acCommand;
+    CommandRecord command = arCommand;
     auto& identity = command.Header.Identity;
     identity.ServerInstanceNonce = s_mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire);
     identity.ConnectionGeneration = s_mapping->Header.ConnectionGeneration.load(std::memory_order_acquire);
@@ -515,6 +515,7 @@ bool TrySubmitCommand(const CommandRecord& acCommand) noexcept
 
     lastCounter.store(suppliedCounter, std::memory_order_release);
     s_mapping->Header.SubmittedCommandCount.fetch_add(1, std::memory_order_relaxed);
+    arCommand = command;
     return true;
 }
 

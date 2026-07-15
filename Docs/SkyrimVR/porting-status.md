@@ -536,6 +536,32 @@ Current result:
 
 ## Build Verification
 
+### Canonical avatar foundation hardening (2026-07-15)
+
+- Packed server entity ID `0` is now valid. The VR client stores local
+  assignment as an optional value instead of overloading zero as an unassigned
+  sentinel.
+- The CommonLib bridge identity is a checked EnTT slot/version split with
+  modulo-4095 generation ordering, sentinel rejection, and exact round-trip
+  tests. Same-generation visibility recreation requires a completed destroy
+  followed by a newer action ID.
+- Create/destroy results are correlated to exact pending action IDs; root
+  failures are correlated to the latest sequence. Lost create acknowledgements
+  use bounded idempotent retry, while accepted destroy uncertainty retires the
+  lifecycle.
+- Failed bridge retirement latches `cleanupRequired`, disables avatar
+  capability, and blocks a later authentication acceptance until cleanup
+  succeeds.
+- Root interpolation uses shortest-arc quaternion nlerp and stops submitting
+  after convergence. Fast remove/re-enter transitions retain a pending respawn
+  until the old adapter handle is confirmed destroyed.
+- `SkyrimTogetherVR.avatar` now reports `localServerAssigned`,
+  `visualPolicy=player_template_fallback`, and `cleanupRequired`. The runtime
+  handoff self-test deliberately validates a connected local server ID of zero.
+- Linux `TPTests` pass with 371 assertions in 16 cases. The no-launch source,
+  runtime-handoff, build-wrapper, CommonLib lock, and VRIK audits pass. The
+  current hardening patch still requires its clean WinBoat gameplay build.
+
 Verified on this Linux workspace:
 
 ```sh
@@ -565,10 +591,10 @@ Current result:
 
 - `SkyrimEncoding` builds with the VR pose, VR movement, VR equipment, VR activation, VR magic-effect, VR combat-hit, VR projectile intent, and VR grab-release protocol files.
 - `CommonLib` builds in the current Linux configuration.
-- `TPTests` builds and passes: 112 assertions in 5 test cases.
+- `TPTests` builds and passes on Linux: 371 assertions in 16 test cases.
 - `SkyrimTogetherServer` builds and includes `VRPoseRelayService`, `VRMovementRelayService`, `VREquipmentRelayService`, `VRActivationRelayService`, `VRMagicRelayService`, `VRCombatRelayService`, `VRProjectileRelayService`, `VRGrabRelayService`, and `VRHiggsRelayService`.
 - `SkyrimTogetherServer` builds with player exterior-cell state updates that do not require a spawned character.
-- Final source-side compile check on this Linux host passes for `SkyrimEncoding`, `CommonLib`, `TPTests`, and `SkyrimTogetherServer`; the actual Windows VR client/launcher build remains unverified. The current Wine/MSVC experiment reached the compiler and CMake but failed before target compilation because PowerShell did not execute payloads reliably and xmake's package CMake linker probes lost Windows SDK library paths. See `wine-build-status-20260710.md`.
+- Final source-side compile checks on this Linux host pass. A clean WinBoat/MSVC gameplay build of baseline commit `dda9cad8` passed 491 assertions in 26 cases and produced audited gameplay/package evidence; see `windows-gameplay-build-result-20260715.md`. The canonical-avatar hardening above is newer and remains pending its own clean WinBoat build.
 - `Tools/SkyrimVR/vr_handoff.py self-test` passes for temp-directory command writing, readout parsing, remote-player proxy aggregation, and consolidated remote-player table generation.
 - `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, strict staged gameplay relay checks with semantic local and remote payload fields, and avatar-sync handoff validation; rerun it during the final validation phase after the source-only work is complete.
 - `Tools/SkyrimVR/collect_runtime_evidence.py --self-test` and `Tools/SkyrimVR/audit_runtime_evidence_zip.py --self-test` are included in `audit_vr_readiness.py`; their fixtures now require `SkyrimTogetherVR_BuildManifest.json`, validate the package build manifest against avatar-sync mode, embed it in `manifest.json`, include it under `package/` in the evidence zip, and enforce manifest-requested runtime checklist lanes such as `requiredRemotePlayer`, `requiredWeaponPose`, `requiredMovementRelay`, and `avatarSyncAudit` even when the zip audit is run without repeating strict CLI flags. `avatarSyncAudit` itself now requires connection, local VRIK API, HIGGS bridge, remote-player proxy, remote VRIK avatar readiness, remote VRIK/HIGGS avatar readiness, and actor-target checklist lanes, so a two-client VRIK/HIGGS avatar evidence zip cannot be relaxed by omitting `requiredRemotePlayer`.
@@ -606,7 +632,7 @@ Current result:
 - `BuildSkyrimTogetherVR-Windows.bat` is available for Windows verification, `BuildSkyrimTogetherVR-DLL-Windows.bat`, `BuildSkyrimTogetherVR-DLLs-Windows.bat`, or `BuildSkyrimTogetherVR-ClientDLL-Windows.bat` is available when only the DLL-producing targets are needed, `BuildSkyrimTogetherVR-AvatarSync-Windows.bat` builds the explicit two-client VRIK/HIGGS remote-avatar validation package, and `BuildSkyrimTogetherVR-Gameplay-Windows.bat` builds the staged gameplay package. Pass `-PreflightOnly` to the wrappers to configure/check the Windows xmake target graph, verify staged VR game files, resolve packaged Python helper imports, and exit before any target build. `BuildAuditCollectSkyrimTogetherVR-Windows.bat` combines build/package audit, evidence collection, and evidence zip audit for default, `--avatar-sync`, `--gameplay`, or `--dll-only` handoffs while still collecting evidence on failure. `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat` is the top-level Windows handoff driver; by default it runs the default and avatar-sync packages, `--include-gameplay` adds the gameplay package, and `--all` runs default, avatar-sync, gameplay, and DLL-only package handoffs. The shared script copies the companion panel, default/avatar-sync/gameplay runtime audit wrappers, default/avatar-sync/gameplay evidence collection/audit wrappers, packaged Python helper closure, writes `SkyrimTogetherVR_BuildManifest.json`, writes stable snapshots under `artifacts\SkyrimTogetherVR\packages\default`, `avatar-sync`, `gameplay`, and `dll-only`, and fails if a requested target's expected runtime/static artifact is missing. The built-package audit rejects stale opposite-mode launchers and mismatched build manifest modes for default, avatar-sync, gameplay, and DLL-only packages so back-to-back builds cannot pass with stale target metadata.
 - The launcher-side companion link is implemented in source and audited statically, including selected Skyrim VR install propagation. The launcher also exports `STVR_GAME_PATH`, and the client plus SKSEVR bridge DLLs use `Code/vr_common/VRHandoffPath.h` to resolve `Data\SkyrimTogetherReborn` from that selected install before falling back to executable/current-directory paths. This still needs Windows artifact build and runtime validation.
 
-The Windows client/launcher targets are still unverified on this machine. The Linux xmake graph exposes Wine wrapper targets for `SkyrimTogetherVRClient`, `SkyrimTogetherVRClientAvatarSync`, `SkyrimTogetherVRGameplayClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimVRImmersiveLauncher`, `SkyrimVRImmersiveLauncherAvatarSync`, and `SkyrimVRImmersiveLauncherGameplay`, but they still delegate to a Windows/Wine MSVC toolchain. The isolated Wine experiment can invoke MSVC and CMake but cannot yet build xmake's Windows packages reliably, and it produced no client artifacts. `xmake f -p windows -a x64 -m releasedbg --toolchain=clang-cl -y` also fails because xmake cannot detect Visual Studio or a named `clang-cl` xmake toolchain, and explicit `/usr/bin/clang-cl` plus `/usr/bin/lld-link` still fails while installing Windows packages because the MSVC/Visual Studio toolchain and C++ standard library are unavailable to xmake. Treat Windows/MSVC as the supported build path until a reproducible Wine build passes.
+Windows/MSVC through the checked-in WinBoat helper is the supported client build path. The Linux xmake graph exposes Wine wrapper targets, but native Wine package/toolchain probing remains less reliable than the clean detached WinBoat workflow. Use `Tools/SkyrimVR/build_winboat_gameplay.sh` after committing and pushing the exact source revision.
 
 ## Remaining High-Risk Work
 

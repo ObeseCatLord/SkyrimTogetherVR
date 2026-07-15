@@ -3,6 +3,8 @@
 #include "AvatarManager.h"
 #include "EventCapture.h"
 
+#include <vr_common/VRCanonicalEntity.h>
+
 namespace SkyrimTogetherVR::GameplayAdapter
 {
 namespace
@@ -54,7 +56,9 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
 
 [[nodiscard]] CommandStatus ValidateAvatarCommand(const MappingHeader& a_header, const CommandRecord& a_command) noexcept
 {
-    if (a_command.Header.Identity.EntityId == 0 || a_command.Header.Identity.EntityGeneration == 0)
+    if (!CanonicalEntity::IsValid(
+            a_command.Header.Identity.EntityId,
+            a_command.Header.Identity.EntityGeneration))
         return CommandStatus::StaleEntity;
 
     switch (static_cast<CommandKind>(a_command.Header.Kind)) {

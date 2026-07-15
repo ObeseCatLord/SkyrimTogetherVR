@@ -22,6 +22,7 @@ target("TPTests")
         "tiltedcore",
         "hopscotch-map",
         "catch2",
+        "entt",
         "mimalloc",
         "glm")
 

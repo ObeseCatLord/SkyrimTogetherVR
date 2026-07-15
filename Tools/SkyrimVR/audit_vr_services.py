@@ -548,10 +548,28 @@ REQUIRED_EQUIPMENT_RELAY_TOKENS = {
 }
 
 REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
+    "Code/client/VRCanonicalEntityIdentity.h": (
+        "entt::to_entity",
+        "entt::to_version",
+        "EntityTraits::construct",
+        "TrySplitServerId",
+        "TryJoinServerId",
+    ),
+    "Code/vr_common/VRCanonicalEntity.h": (
+        "kGenerationCycle",
+        "CompareGenerations",
+        "OlderOrAmbiguous",
+        "CanCreateAfterDestroyedGeneration",
+    ),
     "Code/client/Services/VRAvatarService.h": (
         "Canonical VR avatar client path backed exclusively by GameplayBridge",
         "GameplayBridge::AdapterHandle",
         "RemoteAvatar",
+        "std::optional<std::uint32_t> m_localServerId",
+        "PendingCreateActionId",
+        "PendingDestroyActionId",
+        "LastSubmittedSequenceId",
+        "RespawnRequested",
     ),
     "Code/client/Services/Generic/VRAvatarService.cpp": (
         "AssignCharacterRequest",
@@ -567,12 +585,18 @@ REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
         "remoteMovementAcceptedCount",
         "sameSpaceCount",
         "invalidTransformCount",
+        "visualPolicy=player_template_fallback",
+        "cleanupRequired=",
+        "TrySplitServerId",
+        "TryJoinServerId",
+        "RetireAvatarLifecycle",
     ),
     "Code/client/VRGameplayBridge.cpp": (
         "TrySubmitCommand",
         "TryConsumeEvent",
         "GetDiagnostics",
         "GetActiveCapabilities",
+        "arCommand = command;",
     ),
     "Code/vr_gameplay_bridge/AvatarManager.cpp": (
         "RE::ActorHandle",
@@ -583,6 +607,17 @@ REQUIRED_REMOTE_AVATAR_COMPONENT_TOKENS = {
         "SetPosition",
         "SetAngle",
         "SetScale",
+        "CanCreateAfterDestroyedGeneration",
+    ),
+    "Code/client/Services/Generic/TransportService.cpp": (
+        "m_gameplayCleanupRequired",
+        "RetireGameplaySession",
+        "gameplay_cleanup_required",
+    ),
+    "Code/tests/vr_canonical_entity.cpp": (
+        "preserves packed EnTT values",
+        "rejects EnTT sentinels",
+        "handles rollover",
     ),
     "Code/client/World.cpp": (
         "TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
@@ -610,6 +645,11 @@ FORBIDDEN_REMOTE_AVATAR_COMPONENT_TOKENS = {
         "SetAngle",
         "SetScale",
         "GetObjectByName",
+        "ServerId == 0",
+        "serverId == 0",
+        ">> 20",
+        "ToBridgeEntityId",
+        "ToBridgeEntityGeneration",
     ),
     "Code/vr_gameplay_bridge/AvatarManager.cpp": (
         "GetObjectByName",
