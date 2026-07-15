@@ -27,6 +27,24 @@ add_vectorexts("neon")
 -- build configurations
 add_rules("mode.debug", "mode.releasedbg", "mode.release")
 
+-- Declare CommonLib's public runtime switches at the root so a fresh xmake
+-- configure can validate them before platform-conditional subprojects load.
+-- The pinned CommonLib project applies the matching ENABLE_SKYRIM_* defines.
+option("skyrim_se", function()
+    set_default(true)
+    set_description("Enable CommonLib runtime support for Skyrim SE")
+end)
+
+option("skyrim_ae", function()
+    set_default(true)
+    set_description("Enable CommonLib runtime support for Skyrim AE")
+end)
+
+option("skyrim_vr", function()
+    set_default(true)
+    set_description("Enable CommonLib runtime support for Skyrim VR")
+end)
+
 if has_config("unitybuild") then
     add_rules("c.unity_build")
     add_rules("c++.unity_build", {batchsize = 12})

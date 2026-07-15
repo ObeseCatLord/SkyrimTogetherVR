@@ -23,6 +23,13 @@ OPTIONAL_TARGETS = (
     "SkyrimVRImmersiveLauncherGameplay",
 )
 
+ROOT_XMAKE_TOKENS = (
+    'option("skyrim_se", function()',
+    'option("skyrim_ae", function()',
+    'option("skyrim_vr", function()',
+    'includes("Libraries")',
+)
+
 ENV_BATCH_TOKENS = (
     "Shared Windows build environment bootstrap",
     "Intentionally does not use setlocal",
@@ -136,7 +143,7 @@ SCRIPT_TOKENS = (
     "Cannot package SkyrimTogetherVRTickBridge with -SkipPapyrusCompile",
     "$sourceProvenanceForPackage = Get-SourceProvenance",
     '$packageFlavor = "gameplay"',
-    '$dllOnlyPackage = ($targetSet.Count -eq 5)',
+    '$dllOnlyPackage = ($targetSet.Count -eq 6)',
     '$packageFlavor = "default"',
     'Join-Path "packages" $packageFlavor',
     "packageFlavor = $packageFlavor",
@@ -151,7 +158,7 @@ DLL_BATCH_TOKENS = (
     "SetupSkyrimTogetherVRBuildEnv-Windows.bat",
     "STVR_ENV_RESULT",
     "BuildSkyrimTogetherVR-Windows.ps1",
-    "STVR_TARGETS=SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf",
+    "STVR_TARGETS=SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,SkyrimTogetherVRGameplayBridge,ImmersiveElf",
     '-Targets "%STVR_TARGETS%"',
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
@@ -200,7 +207,7 @@ AVATAR_SYNC_BATCH_TOKENS = (
     "SetupSkyrimTogetherVRBuildEnv-Windows.bat",
     "STVR_ENV_RESULT",
     "BuildSkyrimTogetherVR-Windows.ps1",
-    "-Targets SkyrimTogetherVRClientAvatarSync,SkyrimVRImmersiveLauncherAvatarSync,SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf,TPProcess",
+    "-Targets SkyrimTogetherVRClientAvatarSync,SkyrimVRImmersiveLauncherAvatarSync,SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,SkyrimTogetherVRGameplayBridge,ImmersiveElf,TPProcess",
     "SkyrimTogetherVRAvatarSync.exe",
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
@@ -215,7 +222,7 @@ GAMEPLAY_BATCH_TOKENS = (
     "SetupSkyrimTogetherVRBuildEnv-Windows.bat",
     "STVR_ENV_RESULT",
     "BuildSkyrimTogetherVR-Windows.ps1",
-    "-Targets SkyrimTogetherVRGameplayClient,SkyrimVRImmersiveLauncherGameplay,SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf,TPProcess",
+    "-Targets SkyrimTogetherVRGameplayClient,SkyrimVRImmersiveLauncherGameplay,SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,SkyrimTogetherVRGameplayBridge,ImmersiveElf,TPProcess",
     "SkyrimTogetherVRGameplay.exe",
     "SkyrimTogetherVRVrikBridge.dll",
     "SkyrimTogetherVRHiggsBridge.dll",
@@ -223,7 +230,7 @@ GAMEPLAY_BATCH_TOKENS = (
     "SkyrimTogetherVRTickBridge.dll",
     "EarlyLoad.dll",
     "TPProcess.exe",
-    "full gameplay SkyrimTogetherVR package",
+    "staged gameplay SkyrimTogetherVR package",
 )
 
 BUILD_AND_AUDIT_BATCH_TOKENS = (
@@ -804,8 +811,10 @@ def main():
     missing_install_batch_tokens = [token for token in INSTALL_BATCH_TOKENS if token not in install_batch]
     missing_wine_script_tokens = [token for token in WINE_SCRIPT_TOKENS if token not in wine_script]
     missing_launcher_tokens = [token for token in LAUNCHER_TOKENS if token not in launcher]
+    root_xmake = read_text(root / "xmake.lua")
     code_xmake = read_text(root / "Code/xmake.lua")
     immersive_launcher_xmake = read_text(root / "Code/immersive_launcher/xmake.lua")
+    missing_root_xmake_tokens = [token for token in ROOT_XMAKE_TOKENS if token not in root_xmake]
     missing_linux_wrapper_tokens = [token for token in LINUX_WRAPPER_TOKENS if token not in code_xmake]
 
     if missing_default_targets:
@@ -922,6 +931,8 @@ def main():
         failures.append(f"Wine script tokens missing: {', '.join(missing_wine_script_tokens)}")
     if missing_launcher_tokens:
         failures.append(f"launcher tokens missing: {', '.join(missing_launcher_tokens)}")
+    if missing_root_xmake_tokens:
+        failures.append(f"root xmake bootstrap tokens missing: {', '.join(missing_root_xmake_tokens)}")
     if missing_linux_wrapper_tokens:
         failures.append(f"Linux Wine xmake wrapper tokens missing: {', '.join(missing_linux_wrapper_tokens)}")
 
@@ -1000,6 +1011,7 @@ def main():
     print(f"Missing readiness batch tokens: {len(missing_readiness_batch_tokens)}")
     print(f"Missing Wine script tokens: {len(missing_wine_script_tokens)}")
     print(f"Missing launcher tokens: {len(missing_launcher_tokens)}")
+    print(f"Missing root xmake bootstrap tokens: {len(missing_root_xmake_tokens)}")
     print(f"Missing Linux xmake wrapper tokens: {len(missing_linux_wrapper_tokens)}")
     print(f"Failures: {len(failures)}")
 
