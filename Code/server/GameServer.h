@@ -66,6 +66,7 @@ struct GameServer final : Server
 
     bool IsRunning() const noexcept { return !m_requestStop; }
     bool IsPasswordProtected() const noexcept { return m_isPasswordProtected; }
+    [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
 
     template <class T> void ForEachAdmin(const T& aFunctor)
     {
@@ -125,6 +126,8 @@ private:
     UniquePtr<World> m_pWorld;
 
     bool m_requestStop;
+    uint64_t m_serverInstanceNonce{0};
+    uint64_t m_nextConnectionGeneration{1};
 
     static inline GameServer* s_pInstance = nullptr;
 };

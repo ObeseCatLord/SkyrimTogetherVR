@@ -13,6 +13,10 @@ void AuthenticationRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter)
     CellId.Serialize(aWriter);
     Serialization::WriteVarInt(aWriter, Level);
     PlayerTime.Serialize(aWriter);
+    Serialization::WriteVarInt(aWriter, GameplayProtocolRevision);
+    Serialization::WriteVarInt(aWriter, GameplayCapabilities);
+    Serialization::WriteVarInt(aWriter, ClientSessionNonce);
+    Serialization::WriteVarInt(aWriter, ConnectionAttempt);
 }
 
 void AuthenticationRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -30,4 +34,8 @@ void AuthenticationRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReade
     CellId.Deserialize(aReader);
     Level = Serialization::ReadVarInt(aReader) & 0xFFFF;
     PlayerTime.Deserialize(aReader);
+    GameplayProtocolRevision = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    GameplayCapabilities = Serialization::ReadVarInt(aReader);
+    ClientSessionNonce = Serialization::ReadVarInt(aReader);
+    ConnectionAttempt = Serialization::ReadVarInt(aReader);
 }

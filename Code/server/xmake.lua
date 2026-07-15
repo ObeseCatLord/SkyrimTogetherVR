@@ -29,6 +29,7 @@ local function build_server()
     add_packages(
         "gamenetworkingsockets",
         "spdlog",
+        "fmt",
         "hopscotch-map",
         "sqlite3",
         "lua",

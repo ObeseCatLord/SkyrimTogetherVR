@@ -64,6 +64,8 @@ private:
     Float m_floatValue = 0.0f;
     ConnectionState m_state = ConnectionState::kNone;
     String m_password;
+    uint64_t m_sessionId{0};
+    uint64_t m_connectionAttempt{0};
     std::function<void(TiltedPhoques::UniquePtr<ServerAdminMessage>&)> m_messageHandlers[kServerAdminOpcodeMax];
     Overlay m_overlay;
 };

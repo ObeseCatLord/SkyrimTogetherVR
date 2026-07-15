@@ -35,6 +35,7 @@
 #include <Services/VRHiggsService.h>
 #include <Services/VRSaveLoadService.h>
 #include <Services/VRLifecycleService.h>
+#include <Services/VRAvatarService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -105,59 +106,6 @@
 #define TP_SKYRIM_VR_ENABLE_POSE_SERVICE 0
 #endif
 
-namespace
-{
-#if TP_SKYRIM_VR
-void EmplaceSkyrimVRServices(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
-{
-#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR movement service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRMovementService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR inventory service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRInventoryService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR activation service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRActivationService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR magic service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRMagicService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR combat service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRCombatService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR projectile service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRProjectileService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR grab service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRGrabService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR HIGGS service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRHiggsService>(aWorld, aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE
-    spdlog::warn("SkyrimTogetherVR save/load service is enabled in observation-only mode");
-    aWorld.ctx().emplace<VRSaveLoadService>(aWorld, aDispatcher, aTransport);
-#endif
-    aWorld.ctx().emplace<VRConnectionService>(aWorld, aDispatcher, aTransport);
-#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
-    aWorld.ctx().emplace<VRPoseService>(aDispatcher, aTransport);
-#endif
-#if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
-    spdlog::warn("SkyrimTogetherVR remote-player proxy service is enabled in readout-only mode");
-    aWorld.ctx().emplace<VRRemotePlayerService>(aWorld, aDispatcher, aTransport);
-#endif
-}
-#endif
-} // namespace
-
 World::World()
     : m_runner(m_dispatcher)
     , m_transport(*this, m_dispatcher)
@@ -168,11 +116,15 @@ World::World()
 #if TP_SKYRIM_VR
     ctx().emplace<VRLifecycleService>(*this);
 #endif
-#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+#if TP_SKYRIM_VR
+#if TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
-    spdlog::warn("SkyrimTogetherVR remote avatar validation mode: CharacterService is enabled while full gameplay services stay disabled");
+    spdlog::warn("SkyrimTogetherVR remote avatar validation mode: the CommonLib bridge owns remote game actors");
 #else
     spdlog::warn("SkyrimTogetherVR connection-only mode: gameplay sync services are disabled");
+#endif
+#else
+    spdlog::warn("SkyrimTogetherVR staged gameplay mode: CommonLib avatar sync and observation services are enabled; unported legacy mutations remain disabled");
 #endif
 #if TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE
     spdlog::warn("SkyrimTogetherVR discovery service is enabled in observation-only mode");
@@ -230,18 +182,12 @@ World::World()
 #endif
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
     ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
-    ctx().emplace<CharacterService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<VRAvatarService>(*this, m_dispatcher, m_transport);
 #endif
 #else
-#if TP_SKYRIM_VR
-    spdlog::warn("SkyrimTogetherVR gameplay mode: normal gameplay services are enabled with VR relay services and flat overlay disabled by default");
-#endif
     ctx().emplace<DiscoveryService>(*this, m_dispatcher);
     ctx().emplace<OverlayService>(*this, m_transport, m_dispatcher);
     ctx().emplace<InputService>(ctx().at<OverlayService>());
-#if TP_SKYRIM_VR
-    EmplaceSkyrimVRServices(*this, m_dispatcher, m_transport);
-#endif
     ctx().emplace<CharacterService>(*this, m_dispatcher, m_transport);
     ctx().emplace<DebugService>(m_dispatcher, *this, m_transport, ctx().at<ImguiService>());
     ctx().emplace<PapyrusService>(m_dispatcher);
@@ -291,9 +237,9 @@ void World::Shutdown() noexcept
     SkyrimTogetherVR::LogShutdownPhase("transport.close.done");
 #endif
 
-#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
+#if TP_SKYRIM_VR
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
-    ctx().erase<CharacterService>();
+    ctx().erase<VRAvatarService>();
     ctx().erase<PartyService>();
 #endif
 #if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
@@ -382,40 +328,6 @@ void World::Shutdown() noexcept
     ctx().erase<PapyrusService>();
     ctx().erase<DebugService>();
     ctx().erase<CharacterService>();
-#if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
-    ctx().erase<VRRemotePlayerService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
-    ctx().erase<VRPoseService>();
-#endif
-    ctx().erase<VRConnectionService>();
-#if TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE
-    ctx().erase<VRSaveLoadService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
-    ctx().erase<VRHiggsService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE
-    ctx().erase<VRGrabService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
-    ctx().erase<VRProjectileService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
-    ctx().erase<VRCombatService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
-    ctx().erase<VRMagicService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
-    ctx().erase<VRActivationService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
-    ctx().erase<VRInventoryService>();
-#endif
-#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
-    ctx().erase<VRMovementService>();
-#endif
     ctx().erase<InputService>();
     ctx().erase<OverlayService>();
     ctx().erase<DiscoveryService>();

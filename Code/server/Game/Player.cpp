@@ -27,6 +27,12 @@ Player::Player(Player&& aRhs) noexcept
     , m_party{std::exchange(aRhs.m_party, {})}
     , m_questLog{std::exchange(aRhs.m_questLog, {})}
     , m_cell{std::exchange(aRhs.m_cell, {})}
+    , m_stringCacheId{std::exchange(aRhs.m_stringCacheId, 0)}
+    , m_level{std::exchange(aRhs.m_level, 0)}
+    , m_gameplayProtocolRevision{std::exchange(aRhs.m_gameplayProtocolRevision, 0)}
+    , m_gameplayCapabilities{std::exchange(aRhs.m_gameplayCapabilities, 0)}
+    , m_clientSessionNonce{std::exchange(aRhs.m_clientSessionNonce, 0)}
+    , m_connectionGeneration{std::exchange(aRhs.m_connectionGeneration, 0)}
 {
 }
 
@@ -88,6 +94,14 @@ void Player::SetStringCacheId(uint32_t aStringCacheId) noexcept
 void Player::SetLevel(uint16_t aLevel) noexcept
 {
     m_level = aLevel;
+}
+
+void Player::SetGameplaySession(uint32_t aProtocolRevision, uint64_t aCapabilities, uint64_t aClientSessionNonce, uint64_t aConnectionGeneration) noexcept
+{
+    m_gameplayProtocolRevision = aProtocolRevision;
+    m_gameplayCapabilities = aCapabilities;
+    m_clientSessionNonce = aClientSessionNonce;
+    m_connectionGeneration = aConnectionGeneration;
 }
 
 void Player::SetCellComponent(const CellIdComponent& aCellComponent) noexcept

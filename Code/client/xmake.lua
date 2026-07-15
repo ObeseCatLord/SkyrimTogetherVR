@@ -83,6 +83,7 @@ target(name)
     add_packages(
         "tiltedcore",
         "spdlog",
+        "fmt",
         "hopscotch-map",
         "cryptopp",
         "gamenetworkingsockets",

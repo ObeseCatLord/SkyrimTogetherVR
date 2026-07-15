@@ -1,4 +1,5 @@
 set_xmakever("3.0.0")
+set_project("SkyrimTogetherVR")
 
 -- If newer version of xmake, remove ccache until it actually works
 if set_policy ~= nil then
@@ -37,8 +38,8 @@ add_requires(
     "recastnavigation v1.6.0", 
     "tiltedcore 0.2.8", 
     "cryptopp 8.9.0", 
-    "spdlog v1.13.0", 
     "cpp-httplib 0.14.0",
+    "fmt 11.2.0",
     "gtest v1.14.0", 
     "mem 1.0.0", 
     "glm 0.9.9+8", 
@@ -49,6 +50,12 @@ if is_plat("windows") then
         "discord 3.2.1", 
         "imgui v1.89.7"
     )
+    -- alandtse/CommonLibVR exposes this configuration publicly. Use one
+    -- process-wide spdlog ABI for every Windows target that can coexist with
+    -- the CommonLib gameplay adapter.
+    add_requires("spdlog v1.16.0", {configs = {header_only = false, wchar = true, std_format = true}})
+else
+    add_requires("spdlog v1.13.0")
 end
 
 -- dependencies' dependencies version pinning

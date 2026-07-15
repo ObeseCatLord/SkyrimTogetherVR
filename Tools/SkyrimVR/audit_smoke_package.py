@@ -104,6 +104,7 @@ REQUIRED_PACKAGE_SCRIPT_TOKENS = (
     '"SkyrimTogetherVRHiggsBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRHiggsBridge.dll") }',
     '"SkyrimTogetherVRPlanckBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRPlanckBridge.dll") }',
     '"SkyrimTogetherVRTickBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRTickBridge.dll") }',
+    '"SkyrimTogetherVRGameplayBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRGameplayBridge.dll") }',
     '"SkyrimVRImmersiveLauncher" { $expectedArtifactNames.Add("SkyrimTogetherVR.exe") }',
     '"SkyrimVRImmersiveLauncherAvatarSync" { $expectedArtifactNames.Add("SkyrimTogetherVRAvatarSync.exe") }',
     '"SkyrimVRImmersiveLauncherGameplay" { $expectedArtifactNames.Add("SkyrimTogetherVRGameplay.exe") }',
@@ -136,7 +137,7 @@ REQUIRED_PACKAGE_SCRIPT_TOKENS = (
     'schema = "skyrim_together_vr_build_package_v2"',
     "gameplay = [bool]$gameplayPackage",
     '$packageFlavor = "gameplay"',
-    '$dllOnlyPackage = ($targetSet.Count -eq 5)',
+    '$dllOnlyPackage = ($targetSet.Count -eq 6)',
     '$packageFlavor = "default"',
     'Join-Path "packages" $packageFlavor',
     "packageFlavor = $packageFlavor",
@@ -235,6 +236,7 @@ REQUIRED_BUILT_PACKAGE_AUDIT_TOKENS = (
     '"Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll"',
     '"Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll"',
     '"Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll"',
+    '"Data/SKSE/Plugins/SkyrimTogetherVRGameplayBridge.dll"',
     "Package mode: {package_mode_name",
 )
 

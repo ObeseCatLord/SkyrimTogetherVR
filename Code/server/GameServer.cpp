@@ -19,10 +19,22 @@
 #include <Messages/NotifyPlayerJoined.h>
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifySettingsChange.h>
+#include <Structs/GameplayCapabilities.h>
 #include <console/ConsoleRegistry.h>
 #include <resources/ResourceCollection.h>
 
 constexpr size_t kMaxServerNameLength = 128u;
+
+namespace
+{
+uint64_t GenerateServerInstanceNonce() noexcept
+{
+    static std::atomic<uint64_t> sequence{1};
+    const auto now = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const auto value = now ^ (sequence.fetch_add(1, std::memory_order_relaxed) * 0x9E3779B97F4A7C15ull);
+    return value != 0 ? value : 1;
+}
+}
 
 // -- Cvars --
 Console::Setting uServerPort{"GameServer:uPort", "Which port to host the server on", 10578u};
@@ -154,6 +166,7 @@ GameServer::GameServer(Console::ConsoleRegistry& aConsole) noexcept
 {
     BASE_ASSERT(s_pInstance == nullptr, "Server instance already exists?");
     s_pInstance = this;
+    m_serverInstanceNonce = GenerateServerInstanceNonce();
 
     auto port = uServerPort.value_as<uint16_t>();
     while (!Host(port, GetUserTickRate()))
@@ -830,6 +843,11 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
 
     AuthenticationResponse serverResponse;
     serverResponse.Version = BUILD_COMMIT;
+    serverResponse.GameplayProtocolRevision = SkyrimTogether::Protocol::kGameplayProtocolRevision;
+    serverResponse.ServerCapabilities = SkyrimTogether::Protocol::kServerCapabilities;
+    serverResponse.ServerInstanceNonce = m_serverInstanceNonce;
+    serverResponse.ClientSessionNonce = acRequest->ClientSessionNonce;
+    serverResponse.ConnectionAttempt = acRequest->ConnectionAttempt;
 
     using RT = AuthenticationResponse::ResponseType;
     auto sendKick = [&](const RT type)
@@ -848,6 +866,23 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
         return;
     }
 #endif
+
+    if (acRequest->GameplayProtocolRevision != SkyrimTogether::Protocol::kGameplayProtocolRevision ||
+        (acRequest->GameplayCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) != SkyrimTogether::Protocol::kCoreCapabilities ||
+        acRequest->ClientSessionNonce == 0 || acRequest->ConnectionAttempt == 0)
+    {
+        spdlog::info(
+            "New player {:x} '{}' has incompatible gameplay protocol revision/capabilities (revision={}, capabilities={:#x})",
+            aConnectionId,
+            remoteAddress,
+            acRequest->GameplayProtocolRevision,
+            acRequest->GameplayCapabilities);
+        sendKick(RT::kProtocolMismatch);
+        return;
+    }
+
+    serverResponse.NegotiatedCapabilities =
+        acRequest->GameplayCapabilities & SkyrimTogether::Protocol::kServerCapabilities;
 
     if (m_pWorld->GetPlayerManager().Count() >= uMaxPlayerCount.value_as<uint32_t>())
     {
@@ -957,6 +992,14 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
         }
 
         Player* pPlayer = m_pWorld->GetPlayerManager().Create(aConnectionId);
+        uint64_t connectionGeneration = 0;
+        while (connectionGeneration == 0)
+            connectionGeneration = m_nextConnectionGeneration++;
+        pPlayer->SetGameplaySession(
+            acRequest->GameplayProtocolRevision,
+            serverResponse.NegotiatedCapabilities,
+            acRequest->ClientSessionNonce,
+            connectionGeneration);
         pPlayer->SetEndpoint(remoteAddress);
         pPlayer->SetDiscordId(acRequest->DiscordId);
         pPlayer->SetUsername(std::move(acRequest->Username));
@@ -975,6 +1018,7 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
         }
 
         serverResponse.PlayerId = pPlayer->GetId();
+        serverResponse.ConnectionGeneration = connectionGeneration;
 
         auto modList = PrettyPrintModList(acRequest->UserMods.ModList);
         spdlog::info("New player '{}' [{:x}] connected with {} mods\n\t: {}", pPlayer->GetUsername().c_str(), aConnectionId, acRequest->UserMods.ModList.size(), modList.c_str());

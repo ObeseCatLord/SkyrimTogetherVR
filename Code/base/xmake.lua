@@ -11,3 +11,4 @@ target("BaseLib")
         "hopscotch-map", 
         "gtest",
         "spdlog")
+    add_packages("fmt", {public = true})

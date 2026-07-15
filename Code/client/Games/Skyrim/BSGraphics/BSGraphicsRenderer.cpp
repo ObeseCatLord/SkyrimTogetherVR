@@ -55,7 +55,9 @@ LRESULT CALLBACK Hook_WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 void Hook_Renderer_Init(Renderer* self, BSGraphics::RendererInitOSData* aOSData, const BSGraphics::ApplicationWindowProperties* aFBData, BSGraphics::RendererInitReturn* aOut)
 {
 #if TP_SKYRIM_VR && !TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
-    spdlog::info("SkyrimTogetherVR renderer init hook reached: self={}, osData={}, fbData={}", fmt::ptr(self), fmt::ptr(aOSData), fmt::ptr(aFBData));
+    spdlog::info("SkyrimTogetherVR renderer init hook reached: self=0x{:X}, osData=0x{:X}, fbData=0x{:X}",
+        reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(aOSData),
+        reinterpret_cast<std::uintptr_t>(aFBData));
     Renderer_Init(self, aOSData, aFBData, aOut);
     spdlog::info("SkyrimTogetherVR renderer init completed");
     return;
@@ -97,7 +99,8 @@ void InstallVrRenderBringupHooks()
     const VersionDbPtr<void> renderInit(77226);
 
     Renderer_Init = static_cast<decltype(Renderer_Init)>(renderInit.GetPtr());
-    spdlog::info("Installing SkyrimTogetherVR renderer bring-up hook: rendererInit={}", fmt::ptr(Renderer_Init));
+    spdlog::info("Installing SkyrimTogetherVR renderer bring-up hook: rendererInit=0x{:X}",
+        reinterpret_cast<std::uintptr_t>(Renderer_Init));
     if (!Renderer_Init)
     {
         spdlog::error("SkyrimTogetherVR renderer bring-up hook skipped because renderer init address did not resolve");

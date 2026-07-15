@@ -210,7 +210,8 @@ static void InstallVrMainDrawObserver()
     POINTER_SKYRIMSE(TMainDraw, cMainDraw, 35560);
     MainDraw = cMainDraw.Get();
 
-    spdlog::info("Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw={}", fmt::ptr(MainDraw));
+    spdlog::info("Installing SkyrimTogetherVR Main::Draw owner observer: mainDraw=0x{:X}",
+        reinterpret_cast<std::uintptr_t>(MainDraw));
     TP_HOOK(&MainDraw, HookMainDraw);
 }
 

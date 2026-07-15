@@ -51,6 +51,7 @@ local function build_launcher()
     add_packages(
         "tiltedcore",
         "spdlog",
+        "fmt",
         "minhook",
         "hopscotch-map",
         "cryptopp",

@@ -9,6 +9,13 @@ void AuthenticationResponse::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     UserMods.Serialize(aWriter);
     Settings.Serialize(aWriter);
     Serialization::WriteVarInt(aWriter, PlayerId);
+    Serialization::WriteVarInt(aWriter, GameplayProtocolRevision);
+    Serialization::WriteVarInt(aWriter, ServerCapabilities);
+    Serialization::WriteVarInt(aWriter, NegotiatedCapabilities);
+    Serialization::WriteVarInt(aWriter, ServerInstanceNonce);
+    Serialization::WriteVarInt(aWriter, ConnectionGeneration);
+    Serialization::WriteVarInt(aWriter, ClientSessionNonce);
+    Serialization::WriteVarInt(aWriter, ConnectionAttempt);
 }
 
 void AuthenticationResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -20,4 +27,11 @@ void AuthenticationResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     UserMods.Deserialize(aReader);
     Settings.Deserialize(aReader);
     PlayerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    GameplayProtocolRevision = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    ServerCapabilities = Serialization::ReadVarInt(aReader);
+    NegotiatedCapabilities = Serialization::ReadVarInt(aReader);
+    ServerInstanceNonce = Serialization::ReadVarInt(aReader);
+    ConnectionGeneration = Serialization::ReadVarInt(aReader);
+    ClientSessionNonce = Serialization::ReadVarInt(aReader);
+    ConnectionAttempt = Serialization::ReadVarInt(aReader);
 }

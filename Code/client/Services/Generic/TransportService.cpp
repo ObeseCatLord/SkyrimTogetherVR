@@ -20,9 +20,11 @@
 #include <Messages/AuthenticationRequest.h>
 #include <Messages/ServerMessageFactory.h>
 #include <Messages/NotifySettingsChange.h>
+#include <Structs/GameplayCapabilities.h>
 #include <Packet.hpp>
 
 #include <ScriptExtender.h>
+#include <VRGameplayBridge.h>
 #include <Services/DiscordService.h>
 #include <Services/VRLifecycleService.h>
 
@@ -34,6 +36,10 @@
 
 #ifndef TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
 #define TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+#define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
 #endif
 
 static constexpr wchar_t kMO2DllName[] = L"usvfs_x64.dll";
@@ -51,6 +57,8 @@ TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher)
 
     m_sessionId = (static_cast<uint64_t>(GetCurrentProcessId()) << 32) ^
                   static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    if (m_sessionId == 0)
+        m_sessionId = 1;
 
     auto handlerGenerator = [this](auto& x)
     {
@@ -136,6 +144,17 @@ void TransportService::OnConnected()
 {
     AuthenticationRequest request{};
     request.Version = BUILD_COMMIT;
+    request.GameplayProtocolRevision = SkyrimTogether::Protocol::kGameplayProtocolRevision;
+    m_requestedGameplayCapabilities = SkyrimTogether::Protocol::kCoreCapabilities;
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kRemoteAvatarCapabilities;
+#endif
+    request.GameplayCapabilities = m_requestedGameplayCapabilities;
+    request.ClientSessionNonce = m_sessionId;
+    do
+    {
+        request.ConnectionAttempt = ++m_connectionAttemptGeneration;
+    } while (request.ConnectionAttempt == 0);
 #if TP_SKYRIM_VR
     constexpr auto kSkseVrCoreLoadTimeout = std::chrono::milliseconds(250);
     request.SKSEActive = IsScriptExtenderLoaded();
@@ -240,6 +259,17 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
     m_connected = false;
     m_localPlayerId = 0;
+#if TP_SKYRIM_VR
+    if (m_serverInstanceNonce != 0 && m_connectionGeneration != 0 &&
+        !SkyrimTogetherVR::GameplayBridgeClient::RetireSession(
+            SkyrimTogetherVR::GameplayBridge::EpochRetireReason::Disconnect))
+        spdlog::warn("SkyrimTogetherVR CommonLib gameplay session could not be retired during disconnect");
+#endif
+    m_serverInstanceNonce = 0;
+    m_negotiatedGameplayCapabilities = 0;
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(0, 0);
+#endif
 
     spdlog::warn("Disconnected from server {}", aReason);
 
@@ -270,9 +300,45 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     using AR = AuthenticationResponse::ResponseType;
     if (acMessage.Type == AR::kAccepted)
     {
+        const auto expectedNegotiatedCapabilities =
+            acMessage.ServerCapabilities & m_requestedGameplayCapabilities;
+        const bool validProtocol =
+            acMessage.GameplayProtocolRevision == SkyrimTogether::Protocol::kGameplayProtocolRevision &&
+            (acMessage.ServerCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) == SkyrimTogether::Protocol::kCoreCapabilities &&
+            acMessage.NegotiatedCapabilities == expectedNegotiatedCapabilities &&
+            (acMessage.NegotiatedCapabilities & ~m_requestedGameplayCapabilities) == 0 &&
+            (acMessage.NegotiatedCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) == SkyrimTogether::Protocol::kCoreCapabilities &&
+            acMessage.ServerInstanceNonce != 0 && acMessage.ConnectionGeneration != 0 &&
+            acMessage.ClientSessionNonce == m_sessionId && acMessage.ConnectionAttempt == m_connectionAttemptGeneration;
+        if (!validProtocol)
+        {
+            spdlog::error(
+                "Rejected invalid authentication acceptance: revision={}, serverCapabilities={:#x}, negotiatedCapabilities={:#x}, serverNonce={}, connectionGeneration={}, sessionMatch={}, attemptMatch={}",
+                acMessage.GameplayProtocolRevision,
+                acMessage.ServerCapabilities,
+                acMessage.NegotiatedCapabilities,
+                acMessage.ServerInstanceNonce,
+                acMessage.ConnectionGeneration,
+                acMessage.ClientSessionNonce == m_sessionId,
+                acMessage.ConnectionAttempt == m_connectionAttemptGeneration);
+
+            ConnectionErrorEvent errorEvent;
+            errorEvent.ErrorDetail = "{\"error\":\"invalid_authentication_acceptance\"}";
+            Client::Close();
+            m_dispatcher.trigger(errorEvent);
+            return;
+        }
+
         m_connected = true;
         m_localPlayerId = acMessage.PlayerId;
-        ++m_connectionGeneration;
+        m_connectionGeneration = acMessage.ConnectionGeneration;
+        m_serverInstanceNonce = acMessage.ServerInstanceNonce;
+        m_negotiatedGameplayCapabilities = acMessage.NegotiatedCapabilities;
+#if TP_SKYRIM_VR
+        SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(
+            m_serverInstanceNonce,
+            m_connectionGeneration);
+#endif
 
         m_world.SetServerSettings(acMessage.Settings);
 
@@ -329,6 +395,15 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     case AR::kServerFull:
     {
         ErrorInfo += "\"error\": \"server_full\"";
+        break;
+    }
+    case AR::kProtocolMismatch:
+    {
+        ErrorInfo += fmt::format(
+            "\"error\": \"protocol_mismatch\", \"data\": {{\"expectedRevision\": {}, \"serverCapabilities\": {}, \"clientCapabilities\": {}}}",
+            acMessage.GameplayProtocolRevision,
+            acMessage.ServerCapabilities,
+            m_requestedGameplayCapabilities);
         break;
     }
     default: ErrorInfo += "\"error\": \"no_reason\""; break;

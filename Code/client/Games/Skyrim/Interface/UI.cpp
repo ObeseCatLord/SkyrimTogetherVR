@@ -155,7 +155,8 @@ static TCallback* UIMessageQueue__AddMessage_Real;
 // Useful for debugging UI related issues.
 void UIMessageQueue__AddMessage(void* a1, const BSFixedString* a2, UIMessage::UI_MESSAGE_TYPE a3, void* a4)
 {
-    spdlog::info("Adding Message {} with prio {} from {}", a2->AsAscii(), a3, fmt::ptr(_ReturnAddress()));
+    spdlog::info("Adding Message {} with prio {} from 0x{:X}", a2->AsAscii(), a3,
+        reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
     UIMessageQueue__AddMessage_Real(a1, a2, a3, a4);
 }
 

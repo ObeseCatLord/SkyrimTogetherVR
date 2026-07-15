@@ -38,6 +38,9 @@ struct TransportService : Client
     const uint32_t& GetLocalPlayerId() const noexcept { return m_localPlayerId; }
     [[nodiscard]] uint64_t GetSessionId() const noexcept { return m_sessionId; }
     [[nodiscard]] uint64_t GetConnectionGeneration() const noexcept { return m_connectionGeneration; }
+    [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
+    [[nodiscard]] uint64_t GetNegotiatedGameplayCapabilities() const noexcept { return m_negotiatedGameplayCapabilities; }
+    [[nodiscard]] uint64_t GetRequestedGameplayCapabilities() const noexcept { return m_requestedGameplayCapabilities; }
 
 protected:
     // Event handlers
@@ -57,6 +60,10 @@ private:
     uint32_t m_localPlayerId = 0;
     uint64_t m_sessionId = 0;
     uint64_t m_connectionGeneration = 0;
+    uint64_t m_connectionAttemptGeneration = 0;
+    uint64_t m_serverInstanceNonce = 0;
+    uint64_t m_negotiatedGameplayCapabilities = 0;
+    uint64_t m_requestedGameplayCapabilities = 0;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_sendServerMessageConnection;

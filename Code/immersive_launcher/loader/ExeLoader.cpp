@@ -10,6 +10,7 @@
 // - 2021/2/25: Implemented CEG decryption method.
 
 #define SPDLOG_WCHAR_FILENAMES
+#include <fmt/format.h>
 #include <TiltedCore/Filesystem.hpp>
 #include <spdlog/formatter.h>
 #include <winternl.h>

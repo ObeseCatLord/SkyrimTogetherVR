@@ -69,6 +69,7 @@ REQUIRED_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRGameplayBridge.dll",
 )
 
 REQUIRED_CEF_FILES = (

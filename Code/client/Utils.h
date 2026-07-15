@@ -1,5 +1,7 @@
 #pragma once
 
+#include <fmt/format.h>
+
 #include <optional>
 #include "VersionDb.h"
 #include "World.h"

@@ -21,6 +21,7 @@ BRIDGE_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRGameplayBridge.dll",
 )
 
 CEF_RUNTIME_VERSION = "141.0.11"
@@ -48,6 +49,7 @@ DLL_ONLY_REQUIRED_RUNTIME_FILES = (
     "Data/SKSE/Plugins/SkyrimTogetherVRHiggsBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRPlanckBridge.dll",
     "Data/SKSE/Plugins/SkyrimTogetherVRTickBridge.dll",
+    "Data/SKSE/Plugins/SkyrimTogetherVRGameplayBridge.dll",
 )
 
 DEFAULT_REQUIRED_RUNTIME_FILES = (
@@ -119,6 +121,7 @@ FORBIDDEN_PACKAGE_FILES = (
     "SkyrimTogetherVRHiggsBridge.dll",
     "SkyrimTogetherVRPlanckBridge.dll",
     "SkyrimTogetherVRTickBridge.dll",
+    "SkyrimTogetherVRGameplayBridge.dll",
 )
 
 DEFAULT_FORBIDDEN_RUNTIME_FILES = (
@@ -180,6 +183,7 @@ DEFAULT_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
     "SkyrimTogetherVRTickBridge",
+    "SkyrimTogetherVRGameplayBridge",
     "SkyrimVRImmersiveLauncher",
     "ImmersiveElf",
     "TPProcess",
@@ -189,6 +193,7 @@ DLL_ONLY_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
     "SkyrimTogetherVRTickBridge",
+    "SkyrimTogetherVRGameplayBridge",
     "ImmersiveElf",
 )
 AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
@@ -198,6 +203,7 @@ AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
     "SkyrimTogetherVRTickBridge",
+    "SkyrimTogetherVRGameplayBridge",
     "ImmersiveElf",
     "TPProcess",
 )
@@ -208,6 +214,7 @@ GAMEPLAY_EXPECTED_MANIFEST_TARGETS = (
     "SkyrimTogetherVRHiggsBridge",
     "SkyrimTogetherVRPlanckBridge",
     "SkyrimTogetherVRTickBridge",
+    "SkyrimTogetherVRGameplayBridge",
     "ImmersiveElf",
     "TPProcess",
 )

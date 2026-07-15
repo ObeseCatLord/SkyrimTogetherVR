@@ -3,6 +3,7 @@
 #include <TiltedOnlineApp.h>
 
 #include "VRTickBridge.h"
+#include "VRGameplayBridge.h"
 #include "ShutdownDiagnostics.h"
 
 #include <DInputHook.hpp>
@@ -79,6 +80,25 @@ bool TiltedOnlineApp::BeginMain()
     // SKSEVR plugins have finished loading before this verified game callback,
     // so preserve their current top-level filter and install STVR outermost.
     m_crashHandler.Install();
+
+#if TP_SKYRIM_VR
+    const auto ownerThreadId = GetCurrentThreadId();
+    if (!SkyrimTogetherVR::GameplayBridgeClient::Activate(ownerThreadId))
+    {
+        spdlog::critical("SkyrimTogetherVR could not bind the CommonLib gameplay endpoint to owner thread {}", ownerThreadId);
+        return false;
+    }
+    const auto bridgeBootstrap = SkyrimTogetherVR::GameplayBridgeClient::PumpCommands(0);
+    if (bridgeBootstrap != SkyrimTogetherVR::GameplayBridge::CommandPumpResult::Success ||
+        !SkyrimTogetherVR::GameplayBridgeClient::IsReady())
+    {
+        spdlog::critical(
+            "SkyrimTogetherVR CommonLib gameplay endpoint failed its owner-thread bootstrap: result={} ready={}",
+            static_cast<std::uint32_t>(bridgeBootstrap),
+            SkyrimTogetherVR::GameplayBridgeClient::IsReady());
+        return false;
+    }
+#endif
 
     if (!World::Create())
         return false;
@@ -175,6 +195,17 @@ bool TiltedOnlineApp::EndMain()
 
 void TiltedOnlineApp::Update()
 {
+#if TP_SKYRIM_VR
+    const auto pumpResult = SkyrimTogetherVR::GameplayBridgeClient::PumpCommands(
+        SkyrimTogetherVR::GameplayBridge::kDefaultCommandRingCapacity);
+    if (pumpResult != SkyrimTogetherVR::GameplayBridge::CommandPumpResult::Success)
+    {
+        static std::atomic_bool loggedPumpFailure{false};
+        if (!loggedPumpFailure.exchange(true, std::memory_order_relaxed))
+            spdlog::error("SkyrimTogetherVR CommonLib gameplay command pump stopped: result={}", static_cast<std::uint32_t>(pumpResult));
+    }
+#endif
+
 #if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
     World::Get().Update();
     return;

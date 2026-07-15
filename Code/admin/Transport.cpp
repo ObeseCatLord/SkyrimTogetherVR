@@ -34,6 +34,12 @@ void AdminApp::OnConsume(const void* apData, uint32_t aSize)
 void AdminApp::OnConnected()
 {
     AuthenticationRequest request;
+    request.GameplayCapabilities = SkyrimTogether::Protocol::kCoreCapabilities;
+    request.ClientSessionNonce = m_sessionId;
+    do
+    {
+        request.ConnectionAttempt = ++m_connectionAttempt;
+    } while (request.ConnectionAttempt == 0);
     request.Token = String(m_password.c_str());
     m_password = String();
     m_password.resize(1024);

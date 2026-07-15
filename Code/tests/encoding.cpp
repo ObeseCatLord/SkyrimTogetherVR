@@ -1198,6 +1198,10 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         AuthenticationRequest sendMessage, recvMessage;
         sendMessage.Token = "TesSt";
+        sendMessage.GameplayProtocolRevision = 1;
+        sendMessage.GameplayCapabilities = 3;
+        sendMessage.ClientSessionNonce = 0x1122334455667788ull;
+        sendMessage.ConnectionAttempt = 7;
         sendMessage.UserMods.ModList.push_back({"Hello", 42});
         sendMessage.UserMods.ModList.push_back({"Hi", 14});
         sendMessage.UserMods.ModList.push_back({"Test", 8});
@@ -1222,6 +1226,13 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         AuthenticationResponse sendMessage, recvMessage;
         sendMessage.Type = AuthenticationResponse::ResponseType::kAccepted;
+        sendMessage.GameplayProtocolRevision = 1;
+        sendMessage.ServerCapabilities = 3;
+        sendMessage.NegotiatedCapabilities = 3;
+        sendMessage.ServerInstanceNonce = 0x8877665544332211ull;
+        sendMessage.ConnectionGeneration = 9;
+        sendMessage.ClientSessionNonce = 0x1122334455667788ull;
+        sendMessage.ConnectionAttempt = 7;
         sendMessage.UserMods.ModList.push_back({"Hello", 42});
         sendMessage.UserMods.ModList.push_back({"Hi", 14});
         sendMessage.UserMods.ModList.push_back({"Test", 8});

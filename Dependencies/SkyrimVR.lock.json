@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "name": "Skyrim VR",
+    "version": "1.4.15.0",
+    "steamAppId": 611670,
+    "executable": "SkyrimVR.exe",
+    "sha256": "6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971"
+  },
+  "sksevr": {
+    "version": "2.0.12",
+    "archiveUrl": "https://skse.silverlock.org/beta/sksevr_2_00_12.7z",
+    "archiveSha256": "f03df5d8663f2c9a781f830fb0809c63a9a0e3b626d6d1a96e38493f81a3c9ad",
+    "runtimeFiles": {
+      "sksevr_1_4_15.dll": "633be638897343625d755a6207c9c805aa1b9e82245fbef1b3b154c91a973463",
+      "sksevr_loader.exe": "7e686dc6c8f689b6608723121cd7e9465e869b45d618983e1bed9ce6d6e150ab",
+      "sksevr_steam_loader.dll": "aa3e7dba74bd189a05b0e594fc3fd2a008dd4c573a60b117090de1671c5c325a"
+    }
+  },
+  "commonLibSseNg": {
+    "repository": "https://github.com/alandtse/CommonLibVR.git",
+    "branch": "ng",
+    "tag": "v4.37.0",
+    "commit": "d36bc08cae5d445804d4c22ccd49fec4e9dfbdc4",
+    "submodulePath": "Libraries/CommonLibSSE-NG"
+  },
+  "vrAddressLibrary": {
+    "runtime": "1.4.15.0",
+    "file": "Data/SKSE/Plugins/version-1-4-15-0.csv",
+    "sha256": "2c2ad2630d9500dd62683f99bfb75f7f17dcfd39bf21eec60749de908851a558"
+  },
+  "gameplayBridge": {
+    "abiVersion": 1,
+    "protocolCapabilityRevision": 1
+  }
+}

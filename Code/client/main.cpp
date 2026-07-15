@@ -4,6 +4,7 @@
 #include <VRCompatibilityStatus.h>
 
 #include "VRTickBridge.h"
+#include "VRGameplayBridge.h"
 #include "ShutdownDiagnostics.h"
 
 #include <Commctrl.h>
@@ -72,7 +73,8 @@ static bool InstallVrWinMainLifecycleHook() noexcept
         return false;
     }
 
-    spdlog::info("Installing SkyrimTogetherVR WinMain lifecycle hook: winMain={}", fmt::ptr(s_vrWinMain));
+    spdlog::info("Installing SkyrimTogetherVR WinMain lifecycle hook: winMain=0x{:X}",
+        reinterpret_cast<std::uintptr_t>(s_vrWinMain));
     TP_HOOK(&s_vrWinMain, HookVrWinMain);
     return true;
 }
@@ -252,6 +254,13 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
         return false;
     }
 
+    if (!SkyrimTogetherVR::GameplayBridgeClient::Initialize())
+    {
+        SkyrimTogetherVR::TickBridge::Retire();
+        spdlog::critical("SkyrimTogetherVR could not initialize the required CommonLib gameplay endpoint");
+        return false;
+    }
+
     const auto vrCompatibilityStatus = BuildVRCompatibilityStatus(acGamePath, stubs::g_IsHiggsActive, stubs::g_IsPlanckActive);
     WriteVRCompatibilityStatusFile(acGamePath, vrCompatibilityStatus);
 
@@ -286,6 +295,8 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
         spdlog::critical(
             "SkyrimTogetherVR refused to enter Skyrim VR after {} MinHook failure(s): delayed {}/{}, immediate {}/{}.", hookSummary.Failures, hookSummary.DelayedInstalled,
             hookSummary.DelayedAttempted, hookSummary.ImmediateInstalled, hookSummary.ImmediateAttempted);
+        SkyrimTogetherVR::GameplayBridgeClient::Retire();
+        SkyrimTogetherVR::TickBridge::Retire();
         return false;
     }
 
@@ -325,6 +336,7 @@ void RunTiltedApp()
     if (!started)
     {
 #if TP_SKYRIM_VR
+        SkyrimTogetherVR::GameplayBridgeClient::Retire();
         SkyrimTogetherVR::TickBridge::Retire();
 #endif
         spdlog::critical("SkyrimTogetherVR client startup failed after the first verified game callback; continuing without the client");
@@ -339,6 +351,7 @@ void RunTiltedEnd() noexcept
 #if TP_SKYRIM_VR
     const auto currentThreadId = GetCurrentThreadId();
     const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
+    SkyrimTogetherVR::GameplayBridgeClient::Retire();
     SkyrimTogetherVR::TickBridge::Retire();
     if (ownerThreadId != 0 && ownerThreadId != currentThreadId)
         spdlog::critical("SkyrimTogetherVR WinMain lifecycle shutdown ran on thread {}; owner is {}", currentThreadId, ownerThreadId);

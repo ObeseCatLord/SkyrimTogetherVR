@@ -14,6 +14,7 @@ param(
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
         "SkyrimTogetherVRTickBridge",
+        "SkyrimTogetherVRGameplayBridge",
         "SkyrimVRImmersiveLauncher",
         "ImmersiveElf",
         "TPProcess"
@@ -635,8 +636,17 @@ if (-not (Get-Command $Xmake -ErrorAction SilentlyContinue)) {
     throw "Could not find xmake. Install xmake first or pass -Xmake C:\path\to\xmake.exe."
 }
 
+Write-Host "> git -C $RepoRoot submodule update --init --recursive -- Libraries/CommonLibSSE-NG"
+& git -C $RepoRoot submodule update --init --recursive -- "Libraries/CommonLibSSE-NG"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not initialize the pinned Libraries/CommonLibSSE-NG submodule."
+}
+
 if (-not $SkipConfigure) {
-    $configureArgs = @("f", "-p", "windows", "-a", "x64", "-m", $Mode, "-y")
+    $configureArgs = @(
+        "f", "-p", "windows", "-a", "x64", "-m", $Mode, "-y",
+        "--skyrim_se=y", "--skyrim_ae=y", "--skyrim_vr=y"
+    )
     if ($Toolchain.Length -gt 0) {
         $configureArgs += "--toolchain=$Toolchain"
     }
@@ -652,7 +662,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $targetListText = ($targetList | Out-String)
-$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess", "TPTests")
+$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimTogetherVRGameplayBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess", "TPTests")
 $requiredTargets += @("SkyrimTogetherVRClientAvatarSync", "SkyrimVRImmersiveLauncherAvatarSync", "SkyrimTogetherVRGameplayClient", "SkyrimVRImmersiveLauncherGameplay")
 foreach ($requiredTarget in $requiredTargets) {
     if ($targetListText -notmatch [regex]::Escape($requiredTarget)) {
@@ -811,6 +821,7 @@ if (-not $NoPackage) {
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
         "SkyrimTogetherVRTickBridge",
+        "SkyrimTogetherVRGameplayBridge",
         "EarlyLoad",
         "TPProcess"
     )
@@ -943,6 +954,7 @@ if (-not $NoPackage) {
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
         "SkyrimTogetherVRTickBridge",
+        "SkyrimTogetherVRGameplayBridge",
         "SkyrimTogetherVRClient",
         "SkyrimTogetherVRClientAvatarSync",
         "SkyrimTogetherVRGameplayClient",
@@ -961,6 +973,7 @@ if (-not $NoPackage) {
             "SkyrimTogetherVRHiggsBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRHiggsBridge.dll") }
             "SkyrimTogetherVRPlanckBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRPlanckBridge.dll") }
             "SkyrimTogetherVRTickBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRTickBridge.dll") }
+            "SkyrimTogetherVRGameplayBridge" { $expectedArtifactNames.Add("SkyrimTogetherVRGameplayBridge.dll") }
             "SkyrimVRImmersiveLauncher" { $expectedArtifactNames.Add("SkyrimTogetherVR.exe") }
             "SkyrimVRImmersiveLauncherAvatarSync" { $expectedArtifactNames.Add("SkyrimTogetherVRAvatarSync.exe") }
             "SkyrimVRImmersiveLauncherGameplay" { $expectedArtifactNames.Add("SkyrimTogetherVRGameplay.exe") }
@@ -978,7 +991,7 @@ if (-not $NoPackage) {
     Get-ChildItem -LiteralPath $buildDir -Recurse -File | ForEach-Object {
         $file = $_
         if ($allowedArtifactBaseNames.Contains($file.BaseName) -and $artifactExtensions -contains $file.Extension.ToLowerInvariant()) {
-            if ($file.BaseName -eq "SkyrimTogetherVRVrikBridge" -or $file.BaseName -eq "SkyrimTogetherVRHiggsBridge" -or $file.BaseName -eq "SkyrimTogetherVRPlanckBridge" -or $file.BaseName -eq "SkyrimTogetherVRTickBridge") {
+            if ($file.BaseName -eq "SkyrimTogetherVRVrikBridge" -or $file.BaseName -eq "SkyrimTogetherVRHiggsBridge" -or $file.BaseName -eq "SkyrimTogetherVRPlanckBridge" -or $file.BaseName -eq "SkyrimTogetherVRTickBridge" -or $file.BaseName -eq "SkyrimTogetherVRGameplayBridge") {
                 Copy-MatchingArtifact -File $file -Destination (Join-Path $packageDir "Data\SKSE\Plugins")
             }
             else {
@@ -1026,8 +1039,8 @@ if (-not $NoPackage) {
         $targetSet.Contains("SkyrimTogetherVRGameplayClient") -or
         $targetSet.Contains("SkyrimVRImmersiveLauncherGameplay")
     )
-    $dllOnlyPackage = ($targetSet.Count -eq 5)
-    foreach ($dllOnlyTarget in @("SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "ImmersiveElf")) {
+    $dllOnlyPackage = ($targetSet.Count -eq 6)
+    foreach ($dllOnlyTarget in @("SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimTogetherVRGameplayBridge", "ImmersiveElf")) {
         if (-not $targetSet.Contains($dllOnlyTarget)) {
             $dllOnlyPackage = $false
         }

@@ -4,6 +4,7 @@ if is_plat("windows") then
     includes("higgs_bridge")
     includes("planck_bridge")
     includes("vr_tick_bridge")
+    includes("vr_gameplay_bridge")
     includes("immersive_elf")
     includes("immersive_launcher")
     includes("tp_process")
@@ -16,6 +17,7 @@ else
         "SkyrimTogetherVRHiggsBridge",
         "SkyrimTogetherVRPlanckBridge",
         "SkyrimTogetherVRTickBridge",
+        "SkyrimTogetherVRGameplayBridge",
         "SkyrimVRImmersiveLauncher",
         "SkyrimVRImmersiveLauncherAvatarSync",
         "SkyrimVRImmersiveLauncherGameplay",

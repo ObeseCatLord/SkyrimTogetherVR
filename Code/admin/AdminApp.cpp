@@ -5,9 +5,15 @@
 #include <Magnum/GL/DefaultFramebuffer.h>
 #include <Magnum/GL/Renderer.h>
 
+#include <chrono>
+
 AdminApp::AdminApp(const Arguments& arguments)
     : Platform::Application{arguments, Configuration{}.setTitle("TiltedOnline Server Admin").setWindowFlags(Configuration::WindowFlag::Resizable)}
 {
+    m_sessionId = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    if (m_sessionId == 0)
+        m_sessionId = 1;
+
     m_password.resize(1024);
     m_imgui = ImGuiIntegration::Context(Vector2{windowSize()} / dpiScaling(), windowSize(), framebufferSize());
 

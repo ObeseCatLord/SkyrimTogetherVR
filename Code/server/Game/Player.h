@@ -22,6 +22,10 @@ struct Player
     [[nodiscard]] const uint64_t GetDiscordId() const noexcept { return m_discordId; }
     [[nodiscard]] const uint32_t GetStringCacheId() const noexcept { return m_stringCacheId; }
     [[nodiscard]] const uint16_t GetLevel() const noexcept { return m_level; }
+    [[nodiscard]] uint32_t GetGameplayProtocolRevision() const noexcept { return m_gameplayProtocolRevision; }
+    [[nodiscard]] uint64_t GetGameplayCapabilities() const noexcept { return m_gameplayCapabilities; }
+    [[nodiscard]] uint64_t GetClientSessionNonce() const noexcept { return m_clientSessionNonce; }
+    [[nodiscard]] uint64_t GetConnectionGeneration() const noexcept { return m_connectionGeneration; }
 
     [[nodiscard]] CellIdComponent& GetCellComponent() noexcept;
     [[nodiscard]] const CellIdComponent& GetCellComponent() const noexcept;
@@ -37,6 +41,7 @@ struct Player
     void SetStringCacheId(uint32_t aStringCacheId) noexcept;
     // TODO(cosideci): update on level up
     void SetLevel(uint16_t aLevel) noexcept;
+    void SetGameplaySession(uint32_t aProtocolRevision, uint64_t aCapabilities, uint64_t aClientSessionNonce, uint64_t aConnectionGeneration) noexcept;
 
     void SetCellComponent(const CellIdComponent& aCellComponent) noexcept;
 
@@ -56,4 +61,8 @@ private:
     CellIdComponent m_cell;
     uint32_t m_stringCacheId{0};
     uint16_t m_level{0};
+    uint32_t m_gameplayProtocolRevision{0};
+    uint64_t m_gameplayCapabilities{0};
+    uint64_t m_clientSessionNonce{0};
+    uint64_t m_connectionGeneration{0};
 };

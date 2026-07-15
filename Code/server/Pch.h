@@ -24,6 +24,7 @@
 #include <Server.hpp>
 #include <cxxopts.hpp>
 
+#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>

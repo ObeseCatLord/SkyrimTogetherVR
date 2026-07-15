@@ -2,6 +2,27 @@
 
 For the short end-to-end Windows/MSVC handoff sequence, see `Docs\SkyrimVR\final-handoff-checklist.md`.
 
+## CommonLib Gameplay Adapter
+
+The VR gameplay adapter uses the maintained alandtse `CommonLibVR` `ng` branch,
+pinned as `Libraries\CommonLibSSE-NG` at release `v4.37.0`. The exact commit,
+Skyrim VR runtime, SKSEVR SDK, and VR Address Library hashes are recorded in
+`Dependencies\SkyrimVR.lock.json`.
+
+The PowerShell build initializes this submodule recursively whenever
+`SkyrimTogetherVRGameplayBridge` is selected. For a manual source checkout or
+dependency-only verification:
+
+```bat
+git submodule update --init --recursive -- Libraries/CommonLibSSE-NG
+python Tools/SkyrimVR/verify_runtime_lock.py --source-only
+```
+
+Do not replace the pin with a separately installed CommonLib binary. The plugin
+and its headers must come from the same locked revision, and Windows xmake
+configuration must keep `--skyrim_se=y --skyrim_ae=y --skyrim_vr=y` so the
+CommonLib layout ABI matches its published all-runtime configuration.
+
 Use this from Windows when Visual Studio/MSVC and xmake are available:
 
 ```bat
@@ -37,6 +58,7 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRGameplayBridge.dll`
 - `EarlyLoad.dll`
 
 The main VR client is launcher-linked as `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`.
@@ -48,7 +70,7 @@ BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat
 BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat --skyrim-vr "C:\SteamLibrary\steamapps\common\SkyrimVR" --require-prerequisites
 ```
 
-The DLL-only audit requires the four SKSEVR bridge DLLs and `EarlyLoad.dll`, verifies the generated package manifest lists only `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, and `ImmersiveElf`, and rejects stale launcher or `TPProcess.exe` artifacts. This is useful for checking the native bridge DLL build, but it is not the full installable Skyrim Together VR runtime package.
+The DLL-only audit requires the five SKSEVR bridge DLLs and `EarlyLoad.dll`, verifies the generated package manifest lists only `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, `SkyrimTogetherVRGameplayBridge`, and `ImmersiveElf`, and rejects stale launcher or `TPProcess.exe` artifacts. This is useful for checking the native bridge DLL build, but it is not the full installable Skyrim Together VR runtime package.
 
 To build the explicit VRIK/HIGGS remote-avatar validation package, use:
 
@@ -63,12 +85,13 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRGameplayBridge.dll`
 - `EarlyLoad.dll`
 - `TPProcess.exe`
 
 This is the two-client avatar-sync build. It leaves the default `SkyrimTogetherVR.exe` connection-only path separate.
 
-To build the full gameplay package, use:
+To build the staged gameplay package, use:
 
 ```bat
 BuildSkyrimTogetherVR-Gameplay-Windows.bat
@@ -81,10 +104,15 @@ This builds and packages:
 - `Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`
 - `Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll`
+- `Data\SKSE\Plugins\SkyrimTogetherVRGameplayBridge.dll`
 - `EarlyLoad.dll`
 - `TPProcess.exe`
 
-This is the opt-in gameplay build. It enables the normal Skyrim Together client service set plus the VR relay/remote-avatar services, keeps the unvalidated flat-Skyrim hook batch disabled, and leaves the flat D3D overlay disabled by default.
+This is the opt-in staged gameplay build. It enables the VR observation relays
+and the CommonLib-owned same-cell remote-avatar root synchronization slice. It
+does not instantiate the legacy desktop mutation services; inventory, combat,
+magic, equipment, skeleton, HIGGS, PLANCK, and FBT mutation remain disabled.
+The unvalidated flat-Skyrim hook batch and flat D3D overlay also remain disabled.
 
 To build and immediately audit the produced package in one Windows command, use:
 
@@ -197,7 +225,7 @@ The current xmake graph is VR-only. It defines `SkyrimTogetherVRClient` as a sta
 
 For VRIK/HIGGS remote-avatar validation, the graph also exposes `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync`. These are not in the default package target list. They build `SkyrimTogetherVRAvatarSync.exe` with staged connection-only mode still enabled, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, and `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, so remote player HMD/hand pose and VRIK API packets can be checked against spawned remote actor scene nodes during two-client testing without bringing up the full gameplay service set.
 
-For full gameplay validation, the graph exposes `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay`. These build `SkyrimTogetherVRGameplay.exe` with `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=0`, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, `TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=0`, and `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`. This target instantiates the normal Skyrim Together gameplay services plus the VR relay/remote-player services; use it only after the default and avatar-sync packages pass their no-launch gates.
+For staged gameplay validation, the graph exposes `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay`. These build `SkyrimTogetherVRGameplay.exe` with `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=0`, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, `TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS=0`, and `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`. This target uses the VR-safe observation service graph and the CommonLib gameplay bridge for remote actor lifecycle/root movement. It deliberately does not instantiate the legacy desktop mutation services; use it only after the default and avatar-sync packages pass their no-launch gates.
 
 Useful options:
 
@@ -232,7 +260,7 @@ BuildSkyrimTogetherVR-Windows.bat -PreflightOnly
 BuildSkyrimTogetherVR-Windows.bat -SkseVrSdkRoot "C:\SDKs\sksevr_2_00_12"
 ```
 
-If `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, `SkyrimVRImmersiveLauncher`, `ImmersiveElf`, or `TPProcess` are not listed after configuration, the script fails before building. That usually means xmake was not configured for Windows, or Visual Studio/MSVC is not visible to xmake.
+If `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, `SkyrimTogetherVRTickBridge`, `SkyrimTogetherVRGameplayBridge`, `SkyrimVRImmersiveLauncher`, `ImmersiveElf`, or `TPProcess` are not listed after configuration, the script fails before building. That usually means xmake was not configured for Windows, or Visual Studio/MSVC is not visible to xmake.
 
 The default package build regenerates the staged PEX files unless `-NoPackage` or `-SkipGameFiles` is supplied. `-SkipPapyrusCompile` is rejected for a package that includes `SkyrimTogetherVRTickBridge`, because the matching tick PEX must be rebuilt with the DLL. The build resolves the official SKSEVR 2.0.12 SDK for that target: provide `-SkseVrSdkRoot`/`SKSEVR_SDK_ROOT` only when its bridge-critical source hashes match the pinned archive, or let the script download the archive into `Tools\SkyrimVR\.sdk` after SHA-256 verification. Automatic extraction needs `7z.exe` or `7zz.exe` in `PATH` (or a normal 7-Zip install).
 
@@ -257,6 +285,7 @@ Data\SKSE\Plugins\SkyrimTogetherVRVrikBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRHiggsBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVRTickBridge.dll
+Data\SKSE\Plugins\SkyrimTogetherVRGameplayBridge.dll
 Data\SKSE\Plugins\SkyrimTogetherVR_AE_to_SE.csv
 Data\SKSE\Plugins\SkyrimTogetherVR_AddressOverrides.csv
 LaunchSkyrimTogetherVRCompanion.bat
@@ -362,7 +391,7 @@ python3 Tools/SkyrimVR/install_built_package.py --skyrim-vr "/path/to/SkyrimVR" 
 
 In `--avatar-sync` mode, the package audit still requires `EarlyLoad.dll`, `TPProcess.exe`, and the VRIK/HIGGS/PLANCK/tick bridge DLLs; only the launcher executable requirement changes from `SkyrimTogetherVR.exe` to `SkyrimTogetherVRAvatarSync.exe`. The audit rejects the opposite launcher executable for the selected mode, so stale default/avatar-sync packages cannot be mistaken for each other.
 
-For the full gameplay build, require the gameplay executable instead:
+For the staged gameplay build, require the gameplay executable instead:
 
 ```sh
 BuildSkyrimTogetherVR-Gameplay-Windows.bat
@@ -389,7 +418,7 @@ The first command is audit-only. The second copies VRIK, HIGGS, and PLANCK loose
 
 ## First VR Smoke-Test Package
 
-The main VR client is linked into `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`. The SKSEVR DLLs in `Data\SKSE\Plugins` are narrow VRIK/HIGGS/PLANCK observation bridges plus the separate task-backed client tick bridge.
+The main VR client is linked into `SkyrimTogetherVR.exe`; the package should not contain a main `SkyrimTogetherVR.dll`. The SKSEVR DLLs in `Data\SKSE\Plugins` include narrow VRIK/HIGGS/PLANCK observation bridges, the task-backed client tick bridge, and the alandtse CommonLibSSE-NG gameplay bridge that exclusively owns validated VR actor handles and mutations.
 
 Before the first runtime smoke test, the target Skyrim VR install still needs the public VR Address Library file:
 

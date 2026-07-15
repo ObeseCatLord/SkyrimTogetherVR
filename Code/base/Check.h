@@ -2,6 +2,7 @@
 // For licensing information see LICENSE at the root of this distribution.
 #pragma once
 
+#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
 namespace base

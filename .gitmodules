@@ -18,3 +18,7 @@
 [submodule "Libraries/cpp-httplib"]
 	path = Libraries/cpp-httplib
 	url = https://github.com/yhirose/cpp-httplib.git
+[submodule "Libraries/CommonLibSSE-NG"]
+	path = Libraries/CommonLibSSE-NG
+	url = https://github.com/alandtse/CommonLibVR.git
+	branch = ng
