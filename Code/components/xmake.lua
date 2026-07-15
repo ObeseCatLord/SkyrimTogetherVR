@@ -15,6 +15,7 @@ function component(name)
     add_packages(
       "tiltedcore", 
       "hopscotch-map", 
+      "fmt",
       "gtest",
       "spdlog")
 end
@@ -39,6 +40,7 @@ function unittest(name)
       add_packages(
         "tiltedcore", 
         "hopscotch-map", 
+        "fmt",
         "gtest",
         "spdlog")
   end
