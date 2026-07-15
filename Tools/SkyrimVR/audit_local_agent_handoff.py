@@ -167,46 +167,51 @@ def main() -> int:
         if not isinstance(build_revision, str) or not isinstance(source_head, str):
             failures.append("manifest source/build revisions are missing")
         elif len(artifact_paths) == 2:
-            with tempfile.TemporaryDirectory(prefix="stvr-handoff-audit-") as temp_dir:
-                temp = pathlib.Path(temp_dir)
-                package_path = temp / pathlib.PurePosixPath(artifact_paths["gameplayPackage"]).name
-                evidence_path = temp / pathlib.PurePosixPath(artifact_paths["buildEvidence"]).name
-                bundle_path = temp / "source.bundle"
-                for archive_name, output_path in (
-                    (artifact_paths["gameplayPackage"], package_path),
-                    (artifact_paths["buildEvidence"], evidence_path),
-                    (f"{root}/source.bundle", bundle_path),
-                ):
-                    with archive.open(archive_name) as source, output_path.open("wb") as output:
-                        shutil.copyfileobj(source, output, length=1024 * 1024)
-                try:
-                    identity = validate_artifact_pair(package_path, evidence_path, build_revision)
-                    for metadata_key in ("gameplayPackage", "buildEvidence"):
-                        metadata = manifest[metadata_key]
-                        for key, value in identity.items():
-                            if metadata.get(key) != value:
-                                failures.append(f"{metadata_key} {key} does not match nested artifacts")
-                except (OSError, ValueError, zipfile.BadZipFile) as error:
-                    failures.append(f"nested gameplay artifact audit failed: {error}")
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix=".stvr-handoff-audit-", dir=args.archive.resolve().parent
+                ) as temp_dir:
+                    temp = pathlib.Path(temp_dir)
+                    package_path = temp / pathlib.PurePosixPath(artifact_paths["gameplayPackage"]).name
+                    evidence_path = temp / pathlib.PurePosixPath(artifact_paths["buildEvidence"]).name
+                    bundle_path = temp / "source.bundle"
+                    for archive_name, output_path in (
+                        (artifact_paths["gameplayPackage"], package_path),
+                        (artifact_paths["buildEvidence"], evidence_path),
+                        (f"{root}/source.bundle", bundle_path),
+                    ):
+                        with archive.open(archive_name) as source, output_path.open("wb") as output:
+                            shutil.copyfileobj(source, output, length=1024 * 1024)
+                    try:
+                        identity = validate_artifact_pair(package_path, evidence_path, build_revision)
+                        for metadata_key in ("gameplayPackage", "buildEvidence"):
+                            metadata = manifest[metadata_key]
+                            for key, value in identity.items():
+                                if metadata.get(key) != value:
+                                    failures.append(f"{metadata_key} {key} does not match nested artifacts")
+                    except (OSError, ValueError, zipfile.BadZipFile) as error:
+                        failures.append(f"nested gameplay artifact audit failed: {error}")
 
-                bare_repo = temp / "bundle.git"
-                init = subprocess.run(
-                    ["git", "init", "--bare", str(bare_repo)], capture_output=True, text=True, check=False
-                )
-                unbundle = subprocess.run(
-                    ["git", "-C", str(bare_repo), "bundle", "unbundle", str(bundle_path)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                ) if init.returncode == 0 else init
-                relation = subprocess.run(
-                    ["git", "-C", str(bare_repo), "merge-base", "--is-ancestor", build_revision, source_head],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                ) if unbundle.returncode == 0 else unbundle
-                if init.returncode or unbundle.returncode or relation.returncode:
-                    failures.append("source bundle does not contain the declared build-to-handoff revision ancestry")
+                    bare_repo = temp / "bundle.git"
+                    init = subprocess.run(
+                        ["git", "init", "--bare", str(bare_repo)], capture_output=True, text=True, check=False
+                    )
+                    unbundle = subprocess.run(
+                        ["git", "-C", str(bare_repo), "bundle", "unbundle", str(bundle_path)],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    ) if init.returncode == 0 else init
+                    relation = subprocess.run(
+                        ["git", "-C", str(bare_repo), "merge-base", "--is-ancestor", build_revision, source_head],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    ) if unbundle.returncode == 0 else unbundle
+                    if init.returncode or unbundle.returncode or relation.returncode:
+                        failures.append("source bundle does not contain the declared build-to-handoff revision ancestry")
+            except OSError as error:
+                failures.append(f"could not stage embedded artifacts for audit: {error}")
 
     if failures:
         print("audit failed")
