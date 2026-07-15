@@ -1,15 +1,20 @@
 #include <BranchInfo.h>
+
+#include "CrashContext.h"
 #include "CrashHandler.h"
+
 #include <DbgHelp.h>
 #include <Windows.h>
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
-#include <iostream>
-#include <mutex>
+#include <iterator>
+#include <memory>
 #include <sstream>
-#include <strsafe.h>
+#include <ctime>
 #include <vector>
 
 using time_point = std::chrono::system_clock::time_point;
@@ -17,150 +22,213 @@ using time_point = std::chrono::system_clock::time_point;
 namespace
 {
 constexpr std::size_t kRetainedCrashDumpCount = 5;
-}
+
+#if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
+std::atomic_uint32_t s_crashHandlerInvocations{};
+#endif
 
 std::string SerializeTimePoint(const time_point& time, const std::string& format)
 {
-    std::time_t tt = std::chrono::system_clock::to_time_t(time);
-    std::tm tm = *std::gmtime(&tt); // GMT (UTC)
-    // std::tm tm = *std::localtime(&tt); //Locale time-zone, usually UTC by default.
-    std::stringstream ss;
-    ss << std::put_time(&tm, format.c_str());
-    return ss.str();
+    const std::time_t timestamp = std::chrono::system_clock::to_time_t(time);
+    const std::tm utc = *std::gmtime(&timestamp);
+    std::stringstream stream;
+    stream << std::put_time(&utc, format.c_str());
+    return stream.str();
 }
 
-LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo)
+void FlushCrashLogs() noexcept
 {
-    static int alreadyCrashed = 0;
-    auto retval = EXCEPTION_CONTINUE_SEARCH;
-
-    // Serialize
-    static std::mutex singleThreaded;
-    std::unique_lock lock{singleThreaded};
-
-    // Check for severe, not continuable and not software-originated exception
-    if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && alreadyCrashed++ == 0)
+    try
     {
-        spdlog::critical(__FUNCTION__ ": crash occurred!");
+        spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& apLogger) { apLogger->flush(); });
+    }
+    catch (...)
+    {
+    }
+}
 
-        spdlog::error(
-            __FUNCTION__ ": exception code is {:x}, at address {}, flags {:x} ", pExceptionInfo->ExceptionRecord->ExceptionCode, pExceptionInfo->ExceptionRecord->ExceptionAddress,
-            pExceptionInfo->ExceptionRecord->ExceptionFlags);
-
-#if (IS_MASTER) && (!defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1)
-        volatile static bool bMiniDump = false;
-#else
-        volatile static bool bMiniDump = true;
+void WriteCrashDump(PEXCEPTION_POINTERS apExceptionInfo) noexcept
+{
+#if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
+    (void)apExceptionInfo;
+    return;
 #endif
-        if (bMiniDump)
+#if (IS_MASTER) && (!defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1)
+    constexpr bool kWriteMiniDumpByDefault = false;
+#else
+    constexpr bool kWriteMiniDumpByDefault = true;
+#endif
+    if (!kWriteMiniDumpByDefault)
+        return;
+
+    HANDLE dumpFile = INVALID_HANDLE_VALUE;
+    bool dumpWritten = false;
+    DWORD dumpError = ERROR_SUCCESS;
+    try
+    {
+        MINIDUMP_EXCEPTION_INFORMATION exception{};
+        exception.ThreadId = GetCurrentThreadId();
+        exception.ExceptionPointers = apExceptionInfo;
+        exception.ClientPointers = FALSE;
+
+        char moduleFilename[MAX_PATH]{};
+        if (GetModuleFileNameA(nullptr, moduleFilename, static_cast<DWORD>(std::size(moduleFilename))) == 0)
         {
-            HANDLE hDumpFile = INVALID_HANDLE_VALUE;
-            bool dumpWritten = false;
-            DWORD dumpError = ERROR_SUCCESS;
-            try
+            dumpError = GetLastError();
+        }
+        else
+        {
+            auto dumpDirectory = std::filesystem::path(moduleFilename).parent_path();
+            CrashHandler::PruneCrashDumps(dumpDirectory);
+            const auto dumpPath = dumpDirectory /
+                                  ("crash_" + SerializeTimePoint(std::chrono::system_clock::now(), "UTC_%Y-%m-%d_%H-%M-%S") + ".dmp");
+
+            dumpFile = CreateFileA(dumpPath.string().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (dumpFile == INVALID_HANDLE_VALUE)
             {
-                MINIDUMP_EXCEPTION_INFORMATION M;
-                char dumpPath[MAX_PATH];
-
-                M.ThreadId = GetCurrentThreadId();
-                M.ExceptionPointers = pExceptionInfo;
-                M.ClientPointers = 0;
-
-                std::ostringstream oss;
-                oss << "crash_" << SerializeTimePoint(std::chrono::system_clock::now(), "UTC_%Y-%m-%d_%H-%M-%S") << ".dmp";
-
-                GetModuleFileNameA(NULL, dumpPath, sizeof(dumpPath));
-                std::filesystem::path modulePath(dumpPath);
-                auto subPath = modulePath.parent_path();
-
-                CrashHandler::PruneCrashDumps(subPath);
-
-                subPath /= oss.str();
-
-                hDumpFile = CreateFileA(subPath.string().c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-                // Capture mapped engine code and thread metadata without writing a full-memory dump.
-                auto dumpSettings = MiniDumpWithDataSegs | MiniDumpWithProcessThreadData | MiniDumpWithHandleData | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules |
-                                    MiniDumpWithFullMemoryInfo | MiniDumpWithCodeSegs;
-                char fullMemoryValue[2]{};
-                if (GetEnvironmentVariableA("STVR_FULL_MEMORY_DUMP", fullMemoryValue, static_cast<DWORD>(sizeof(fullMemoryValue))) > 0 && fullMemoryValue[0] == '1')
-                {
-                    dumpSettings |= MiniDumpWithFullMemory;
-                    spdlog::critical(__FUNCTION__ ": full-memory crash capture enabled by STVR_FULL_MEMORY_DUMP=1.");
-                }
-
-                if (hDumpFile != INVALID_HANDLE_VALUE)
-                {
-                    dumpWritten = MiniDumpWriteDump(
-                                      GetCurrentProcess(), GetCurrentProcessId(), hDumpFile, static_cast<MINIDUMP_TYPE>(dumpSettings), pExceptionInfo ? &M : nullptr, nullptr,
-                                      nullptr) != FALSE;
-                    if (!dumpWritten)
-                        dumpError = GetLastError();
-                }
-                else
-                {
-                    dumpError = GetLastError();
-                }
-            }
-            catch (...) // Mini-dump is best effort only.
-            {
-            }
-
-            if (hDumpFile == INVALID_HANDLE_VALUE)
-            {
-                spdlog::critical(__FUNCTION__ ": coredump file creation failed (error {}).", dumpError);
+                dumpError = GetLastError();
             }
             else
             {
-                CloseHandle(hDumpFile);
-                if (dumpWritten)
-                    spdlog::critical(__FUNCTION__ ": coredump created -> flush logs.");
-                else
-                    spdlog::critical(__FUNCTION__ ": coredump write failed (error {}).", dumpError);
+                auto dumpSettings = MiniDumpWithDataSegs | MiniDumpWithProcessThreadData | MiniDumpWithHandleData |
+                                    MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules | MiniDumpWithFullMemoryInfo |
+                                    MiniDumpWithCodeSegs;
+                char fullMemoryValue[2]{};
+                if (GetEnvironmentVariableA("STVR_FULL_MEMORY_DUMP", fullMemoryValue, static_cast<DWORD>(std::size(fullMemoryValue))) > 0 &&
+                    fullMemoryValue[0] == '1')
+                {
+                    dumpSettings |= MiniDumpWithFullMemory;
+                    spdlog::critical("TopLevelCrashHandler: full-memory crash capture enabled by STVR_FULL_MEMORY_DUMP=1.");
+                }
+
+                dumpWritten = MiniDumpWriteDump(
+                                  GetCurrentProcess(), GetCurrentProcessId(), dumpFile, static_cast<MINIDUMP_TYPE>(dumpSettings),
+                                  apExceptionInfo ? &exception : nullptr, nullptr, nullptr) != FALSE;
+                if (!dumpWritten)
+                    dumpError = GetLastError();
             }
         }
+    }
+    catch (...)
+    {
+        if (dumpError == ERROR_SUCCESS)
+            dumpError = ERROR_UNHANDLED_EXCEPTION;
+    }
 
-        // Something in STR breaks top-level unhandled exception filters.
-        // The Win API for them is pretty clunky (non-atomic, not chainable),
-        // but they can do some important things. If someone actually set one
-        // they probably meant it; make sure it actually runs.
-        // This will make more CrashLogger mods work with STR.
+    if (dumpFile == INVALID_HANDLE_VALUE)
+    {
+        spdlog::critical("TopLevelCrashHandler: coredump file creation failed (error {}).", dumpError);
+        return;
+    }
 
-        // Get the current unhandled exception filter. If it has changed
-        // from when STR started up, invoke it here.
-        LPTOP_LEVEL_EXCEPTION_FILTER pCurrentUnhandledExceptionFilter = SetUnhandledExceptionFilter(CrashHandler::GetOriginalUnhandledExceptionFilter());
-        SetUnhandledExceptionFilter(pCurrentUnhandledExceptionFilter);
-        if (pCurrentUnhandledExceptionFilter != CrashHandler::GetOriginalUnhandledExceptionFilter())
+    CloseHandle(dumpFile);
+    if (dumpWritten)
+        spdlog::critical("TopLevelCrashHandler: coredump created -> flush logs.");
+    else
+        spdlog::critical("TopLevelCrashHandler: coredump write failed (error {}).", dumpError);
+}
+} // namespace
+
+LPTOP_LEVEL_EXCEPTION_FILTER CrashHandler::s_pPreviousUnhandledFilter = nullptr;
+std::atomic_flag CrashHandler::s_handlingCrash = ATOMIC_FLAG_INIT;
+
+CrashHandler::CrashHandler() = default;
+
+CrashHandler::~CrashHandler() = default;
+
+void CrashHandler::Install() noexcept
+{
+    if (m_installed)
+        return;
+
+    s_pPreviousUnhandledFilter = SetUnhandledExceptionFilter(&CrashHandler::TopLevelCrashHandler);
+    if (s_pPreviousUnhandledFilter == &CrashHandler::TopLevelCrashHandler)
+        s_pPreviousUnhandledFilter = nullptr;
+    m_installed = true;
+}
+
+LONG WINAPI CrashHandler::TopLevelCrashHandler(PEXCEPTION_POINTERS apExceptionInfo) noexcept
+{
+    if (s_handlingCrash.test_and_set(std::memory_order_acquire))
+        return EXCEPTION_CONTINUE_SEARCH;
+
+#if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
+    s_crashHandlerInvocations.fetch_add(1, std::memory_order_relaxed);
+#endif
+
+    LONG disposition = EXCEPTION_CONTINUE_SEARCH;
+    if (s_pPreviousUnhandledFilter)
+    {
+        disposition = s_pPreviousUnhandledFilter(apExceptionInfo);
+        if (disposition == EXCEPTION_CONTINUE_EXECUTION)
         {
-            spdlog::critical(__FUNCTION__ ": UnhandledExceptionFilter() workaround triggered.");
+            s_handlingCrash.clear(std::memory_order_release);
+            return disposition;
+        }
+    }
 
-            singleThreaded.unlock(); // Might reenter, but is safe at this point.
-            if ((*pCurrentUnhandledExceptionFilter)(pExceptionInfo) == EXCEPTION_CONTINUE_EXECUTION)
-                retval = EXCEPTION_CONTINUE_EXECUTION;
-            singleThreaded.lock();
+    try
+    {
+        const auto context = CaptureCrashContext(apExceptionInfo);
+        if (context.Valid)
+        {
+            spdlog::critical(
+                "TopLevelCrashHandler: unhandled exception code=0x{:08X} flags=0x{:X} address=0x{:X} "
+                "rip=0x{:X} rsp=0x{:X} rcx=0x{:X} rdx=0x{:X}",
+                context.ExceptionCode, context.ExceptionFlags, context.ExceptionAddress, context.InstructionPointer,
+                context.StackPointer, context.FirstArgument, context.SecondArgument);
+            if (context.HasAccessDetails)
+            {
+                spdlog::critical(
+                    "TopLevelCrashHandler: access type={} address=0x{:X}", context.AccessType, context.AccessAddress);
+            }
+            if (context.HasStackReturn)
+                spdlog::critical("TopLevelCrashHandler: stack return=0x{:X}", context.StackReturn);
+            else
+                spdlog::critical("TopLevelCrashHandler: stack return unavailable");
+        }
+        else
+        {
+            spdlog::critical("TopLevelCrashHandler: unhandled exception context unavailable");
         }
 
-        spdlog::shutdown();
+        if (disposition == EXCEPTION_CONTINUE_SEARCH)
+            WriteCrashDump(apExceptionInfo);
+        FlushCrashLogs();
     }
-    return retval;
+    catch (...)
+    {
+        FlushCrashLogs();
+    }
+
+    // A terminal disposition should produce at most one capture. Only a prior
+    // filter that resumes execution re-arms the handler.
+    return disposition;
 }
 
-LPTOP_LEVEL_EXCEPTION_FILTER CrashHandler::m_pUnhandled;
-CrashHandler::CrashHandler()
+#if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
+LONG CrashHandler::InvokeForTesting(PEXCEPTION_POINTERS apExceptionInfo) noexcept
 {
-    // Record the original (or as close as we can get) top-level unhandled exception handler.
-    // We grab this so we can see if it is changed, presumably by a mod or even graphics drivers.
-    // Something in STR breaks unhandled exception handling, so we'll fake it if necessary.
-    // This is the only way to get the current setting, but the race is small.
-    m_pUnhandled = SetUnhandledExceptionFilter(NULL);
-    SetUnhandledExceptionFilter(m_pUnhandled);
-
-    m_handler = AddVectoredExceptionHandler(1, &VectoredExceptionHandler);
+    return TopLevelCrashHandler(apExceptionInfo);
 }
 
-CrashHandler::~CrashHandler()
+void CrashHandler::ResetForTesting(LPTOP_LEVEL_EXCEPTION_FILTER apPreviousFilter) noexcept
 {
+    s_pPreviousUnhandledFilter = apPreviousFilter;
+    s_handlingCrash.clear(std::memory_order_release);
+    s_crashHandlerInvocations.store(0, std::memory_order_relaxed);
 }
+
+std::uint32_t CrashHandler::GetInvocationCountForTesting() noexcept
+{
+    return s_crashHandlerInvocations.load(std::memory_order_relaxed);
+}
+
+LPTOP_LEVEL_EXCEPTION_FILTER CrashHandler::GetTopLevelFilterForTesting() noexcept
+{
+    return &CrashHandler::TopLevelCrashHandler;
+}
+#endif
 
 void CrashHandler::PruneCrashDumps(const std::filesystem::path& path)
 {
@@ -173,9 +241,7 @@ void CrashHandler::PruneCrashDumps(const std::filesystem::path& path)
         const auto& entry = *iterator;
         const auto filename = entry.path().filename().string();
         if (entry.is_regular_file(error) && filename.rfind("crash_", 0) == 0 && entry.path().extension() == ".dmp")
-        {
             dumps.emplace_back(entry);
-        }
         error.clear();
         iterator.increment(error);
     }

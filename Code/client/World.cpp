@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include "World.h"
+#include "ShutdownDiagnostics.h"
 
 #include <Services/DiscoveryService.h>
 #include <Services/InputService.h>
@@ -275,13 +276,20 @@ void World::Shutdown() noexcept
     m_shutdown = true;
 
 #if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("world.shutdown.begin");
     if (auto* pLifecycle = ctx().find<VRLifecycleService>())
         pLifecycle->BeginTeardown();
 #endif
 
     // Deliver the final disconnect while subscribers and the dispatcher still
     // exist, then destroy context services before their referenced members.
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("transport.close.begin");
+#endif
     m_transport.Close();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("transport.close.done");
+#endif
 
 #if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
@@ -294,9 +302,23 @@ void World::Shutdown() noexcept
 #if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
     ctx().erase<VRPoseService>();
 #endif
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.vr_connection.erase.begin");
+#endif
     ctx().erase<VRConnectionService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.vr_connection.erase.done");
+    SkyrimTogetherVR::LogShutdownPhase("service.string_cache.erase.begin");
+#endif
     ctx().erase<StringCacheService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.string_cache.erase.done");
+    SkyrimTogetherVR::LogShutdownPhase("service.discord.erase.begin");
+#endif
     ctx().erase<DiscordService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.discord.erase.done");
+#endif
 #if TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE
     ctx().erase<VRSaveLoadService>();
 #endif
@@ -325,10 +347,22 @@ void World::Shutdown() noexcept
     ctx().erase<VRMovementService>();
 #endif
 #if TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.player.erase.begin");
+#endif
     ctx().erase<PlayerService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.player.erase.done");
+#endif
 #endif
 #if TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.discovery.erase.begin");
+#endif
     ctx().erase<DiscoveryService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.discovery.erase.done");
+#endif
 #endif
 #else
     ctx().erase<MapService>();
@@ -386,8 +420,19 @@ void World::Shutdown() noexcept
     ctx().erase<OverlayService>();
     ctx().erase<DiscoveryService>();
 #endif
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.lifecycle.erase.begin");
+#endif
     ctx().erase<VRLifecycleService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.lifecycle.erase.done");
+    SkyrimTogetherVR::LogShutdownPhase("service.imgui.erase.begin");
+#endif
     ctx().erase<ImguiService>();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("service.imgui.erase.done");
+    SkyrimTogetherVR::LogShutdownPhase("world.shutdown.done");
+#endif
 }
 
 void World::Update() noexcept
@@ -473,5 +518,11 @@ void World::Destroy() noexcept
         return;
 
     entt::locator<World>::value().Shutdown();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("world.locator.reset.begin");
+#endif
     entt::locator<World>::reset();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("world.locator.reset.done");
+#endif
 }

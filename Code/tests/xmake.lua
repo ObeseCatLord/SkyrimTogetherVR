@@ -15,7 +15,9 @@ target("TPTests")
         "glm")
 
     if is_plat("windows") then
-        add_defines("TP_SKYRIM_VR=1")
-        add_files("version_db.cpp", "runtime_version.rc")
-        add_syslinks("version")
+        add_defines("TP_SKYRIM_VR=1", "TP_CRASH_HANDLER_TESTING=1")
+        add_includedirs("../../build")
+        add_files("version_db.cpp", "runtime_version.rc", "../client/CrashHandler.cpp")
+        add_packages("spdlog")
+        add_syslinks("version", "dbghelp", "kernel32")
     end

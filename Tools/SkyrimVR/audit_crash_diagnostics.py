@@ -23,6 +23,16 @@ def main() -> int:
             root,
             root / "Code" / "client" / "CrashHandler.cpp",
             (
+                "CrashHandler::TopLevelCrashHandler",
+                "SetUnhandledExceptionFilter(&CrashHandler::TopLevelCrashHandler)",
+                "s_pPreviousUnhandledFilter(apExceptionInfo)",
+                "CaptureCrashContext(apExceptionInfo)",
+                "TopLevelCrashHandler: access type=",
+                "TopLevelCrashHandler: stack return=",
+                "FlushCrashLogs()",
+                "disposition == EXCEPTION_CONTINUE_EXECUTION",
+                "if (disposition == EXCEPTION_CONTINUE_SEARCH)",
+                "A terminal disposition should produce at most one capture",
                 "PruneCrashDumps",
                 "kRetainedCrashDumpCount = 5",
                 "MiniDumpWithUnloadedModules",
@@ -36,6 +46,100 @@ def main() -> int:
             ),
         )
     )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "client" / "CrashContext.h",
+            (
+                "struct CrashContextSnapshot",
+                "ReadProcessMemory(",
+                "record.ExceptionInformation[0]",
+                "record.ExceptionInformation[1]",
+                "context.Rip",
+                "context.Rsp",
+                "context.Rcx",
+                "context.Rdx",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "tests" / "crash_context.cpp",
+            (
+                'TEST_CASE("Crash context captures x64 registers and access details")',
+                'TEST_CASE("Crash context rejects unreadable stack memory without faulting")',
+                "REQUIRE_FALSE(snapshot.HasStackReturn)",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "tests" / "crash_handler_windows.cpp",
+            (
+                'TEST_CASE("Frame-handled access violations do not reach the STVR top-level filter")',
+                'TEST_CASE("Crash handler installs outermost and preserves the existing filter")',
+                'TEST_CASE("Crash handler propagates prior filter dispositions")',
+                'TEST_CASE("Recursive crash-handler entry does not recurse or deadlock")',
+                "EXCEPTION_CONTINUE_EXECUTION",
+                "EXCEPTION_EXECUTE_HANDLER",
+                "EXCEPTION_CONTINUE_SEARCH",
+                "GetInvocationCountForTesting() == 0",
+                "s_priorCalls.load(std::memory_order_relaxed) == 1",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "tests" / "xmake.lua",
+            (
+                '"TP_CRASH_HANDLER_TESTING=1"',
+                'add_includedirs("../../build")',
+                '"../client/CrashHandler.cpp"',
+                'add_packages("spdlog")',
+                '"dbghelp"',
+            ),
+        )
+    )
+
+    crash_handler_text = (root / "Code" / "client" / "CrashHandler.cpp").read_text(encoding="utf-8")
+    for forbidden in (
+        "VectoredExceptionHandler",
+        "AddVectoredExceptionHandler",
+        "spdlog::shutdown()",
+        "SetUnhandledExceptionFilter(CrashHandler::",
+    ):
+        if forbidden in crash_handler_text:
+            failures.append(f"Code/client/CrashHandler.cpp: forbidden terminal first-chance handler pattern `{forbidden}`")
+
+    filter_start = crash_handler_text.find("LONG WINAPI CrashHandler::TopLevelCrashHandler")
+    filter_end = crash_handler_text.find("LONG CrashHandler::InvokeForTesting", filter_start)
+    filter_body = crash_handler_text[filter_start:filter_end] if filter_start >= 0 and filter_end >= 0 else ""
+    previous_filter_index = filter_body.find("s_pPreviousUnhandledFilter(apExceptionInfo)")
+    dump_index = filter_body.find("WriteCrashDump(apExceptionInfo)")
+    if previous_filter_index < 0 or dump_index < 0 or previous_filter_index >= dump_index:
+        failures.append("Code/client/CrashHandler.cpp: prior top-level filter must get first refusal before STVR writes a dump")
+
+    if "SetUnhandledExceptionFilter(" in filter_body:
+        failures.append("Code/client/CrashHandler.cpp: top-level callback must not mutate the process-wide filter during dispatch")
+    if filter_body.count("s_handlingCrash.clear(std::memory_order_release)") != 1:
+        failures.append("Code/client/CrashHandler.cpp: terminal capture guard must only re-arm on prior CONTINUE_EXECUTION")
+
+    app_text = (root / "Code" / "client" / "TiltedOnlineApp.cpp").read_text(encoding="utf-8")
+    logger_index = app_text.find("set_default_logger(logger);")
+    crash_install_index = app_text.find("m_crashHandler.Install();")
+    if logger_index < 0 or crash_install_index < 0 or logger_index >= crash_install_index:
+        failures.append("Code/client/TiltedOnlineApp.cpp: install the top-level crash handler only after the logger exists")
+    constructor_start = app_text.find("TiltedOnlineApp::TiltedOnlineApp()")
+    constructor_end = app_text.find("TiltedOnlineApp::~TiltedOnlineApp()", constructor_start)
+    begin_main_start = app_text.find("bool TiltedOnlineApp::BeginMain()")
+    begin_main_end = app_text.find("bool TiltedOnlineApp::EndMain()", begin_main_start)
+    constructor_body = app_text[constructor_start:constructor_end]
+    begin_main_body = app_text[begin_main_start:begin_main_end]
+    if "m_crashHandler.Install();" in constructor_body or "m_crashHandler.Install();" not in begin_main_body:
+        failures.append("Code/client/TiltedOnlineApp.cpp: install the crash handler in BeginMain after SKSEVR plugin loading")
     failures.extend(
         require_tokens(
             root,
@@ -94,6 +198,9 @@ def main() -> int:
     for token in (
         "static int __stdcall HookVrWinMain",
         "~ShutdownGuard() { RunTiltedEnd(); }",
+        'LogShutdownPhase("winmain.original.returned")',
+        'LogShutdownPhase("winmain.detour.returning")',
+        'LogShutdownPhase("run_tilted_end.done")',
         "TP_HOOK(&s_vrWinMain, HookVrWinMain);",
         "void RunTiltedEnd() noexcept",
         "g_appInstance->EndMain();",
@@ -116,6 +223,49 @@ def main() -> int:
             ),
         )
     )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "client" / "ShutdownDiagnostics.h",
+            (
+                "inline void LogShutdownPhase(const char* apPhase) noexcept",
+                'spdlog::info("SkyrimTogetherVR shutdown phase={}", apPhase)',
+                "pLogger->flush();",
+                "catch (...)",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "client" / "World.cpp",
+            (
+                'LogShutdownPhase("transport.close.begin")',
+                'LogShutdownPhase("transport.close.done")',
+                'LogShutdownPhase("service.vr_connection.erase.begin")',
+                'LogShutdownPhase("service.vr_connection.erase.done")',
+                'LogShutdownPhase("world.locator.reset.begin")',
+                'LogShutdownPhase("world.locator.reset.done")',
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "immersive_launcher" / "Launcher.cpp",
+            ('LogShutdownPhase("launcher.game_main.returned")',),
+        )
+    )
+
+    for relative_path in (
+        "Code/client/main.cpp",
+        "Code/client/TiltedOnlineApp.cpp",
+        "Code/client/World.cpp",
+        "Code/immersive_launcher/Launcher.cpp",
+    ):
+        phase_text = (root / relative_path).read_text(encoding="utf-8")
+        if 'spdlog::info("SkyrimTogetherVR shutdown phase=' in phase_text:
+            failures.append(f"{relative_path}: shutdown diagnostics must use the shared noexcept phase logger")
     failures.extend(
         require_tokens(
             root,

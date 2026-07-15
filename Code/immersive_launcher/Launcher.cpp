@@ -21,6 +21,7 @@
 #include <BranchInfo.h>
 #include <Shellapi.h>
 #include <client/ScriptExtender.h>
+#include <client/ShutdownDiagnostics.h>
 #include <spdlog/spdlog.h>
 
 #include <chrono>
@@ -280,6 +281,9 @@ int StartUp(int argc, char** argv)
     // This shouldn't return until the game is killed
     spdlog::info("SkyrimTogetherVR entering mapped Skyrim VR gameMain");
     LC->gameMain();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("launcher.game_main.returned");
+#endif
     return 0;
 }
 

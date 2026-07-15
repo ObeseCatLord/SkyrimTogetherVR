@@ -4,6 +4,7 @@
 #include <VRCompatibilityStatus.h>
 
 #include "VRTickBridge.h"
+#include "ShutdownDiagnostics.h"
 
 #include <Commctrl.h>
 #include <Windows.h>
@@ -55,7 +56,11 @@ static int __stdcall HookVrWinMain(HINSTANCE aInstance, HINSTANCE aPreviousInsta
         ~ShutdownGuard() { RunTiltedEnd(); }
     } shutdownGuard;
 
-    return s_vrWinMain(aInstance, aPreviousInstance, apCommandLine, aShowCommand);
+    const auto result = s_vrWinMain(aInstance, aPreviousInstance, apCommandLine, aShowCommand);
+    SkyrimTogetherVR::LogShutdownPhase("winmain.original.returned");
+    RunTiltedEnd();
+    SkyrimTogetherVR::LogShutdownPhase("winmain.detour.returning");
+    return result;
 }
 
 static bool InstallVrWinMainLifecycleHook() noexcept
@@ -353,4 +358,8 @@ void RunTiltedEnd() noexcept
     {
         spdlog::critical("SkyrimTogetherVR client teardown threw an unknown exception");
     }
+
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("run_tilted_end.done");
+#endif
 }

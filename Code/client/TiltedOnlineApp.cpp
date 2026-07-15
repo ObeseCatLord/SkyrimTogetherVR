@@ -3,6 +3,7 @@
 #include <TiltedOnlineApp.h>
 
 #include "VRTickBridge.h"
+#include "ShutdownDiagnostics.h"
 
 #include <DInputHook.hpp>
 #include <dinput.h>
@@ -75,6 +76,10 @@ void* TiltedOnlineApp::GetMainAddress() const
 
 bool TiltedOnlineApp::BeginMain()
 {
+    // SKSEVR plugins have finished loading before this verified game callback,
+    // so preserve their current top-level filter and install STVR outermost.
+    m_crashHandler.Install();
+
     if (!World::Create())
         return false;
 
@@ -137,18 +142,34 @@ bool TiltedOnlineApp::BeginMain()
 bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("endmain.begin");
+    SkyrimTogetherVR::LogShutdownPhase("lifecycle.begin_teardown.begin");
     if (World::Exists())
         World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
+    SkyrimTogetherVR::LogShutdownPhase("lifecycle.begin_teardown.done");
 #endif
 
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("hooks.uninstall.begin");
+#endif
     UninstallHooks();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("hooks.uninstall.done");
+    SkyrimTogetherVR::LogShutdownPhase("world.destroy.begin");
+#endif
     World::Destroy();
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("world.destroy.done");
+#endif
     if (m_pDevice)
     {
         m_pDevice->Release();
         m_pDevice = nullptr;
     }
 
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("endmain.done");
+#endif
     return true;
 }
 
