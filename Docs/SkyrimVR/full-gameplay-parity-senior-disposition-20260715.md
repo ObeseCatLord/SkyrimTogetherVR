@@ -40,8 +40,8 @@ The review's architectural findings stand, with these evidence corrections:
    `b93280e832f263dbef44e44cbe2936622a02f91a`, but that upstream has not moved
    since 2024. The project now pins the maintained alandtse CommonLibSSE-NG
    continuation at tagged commit
-   `4071906acbe5255325a00f71283d995748f6cda5` (`v4.25.1`), matching the
-   DevBench dependency already exercised in this Skyrim VR environment.
+   `d36bc08cae5d445804d4c22ccd49fec4e9dfbdc4` (`v4.37.0`). The exact
+   dependency and runtime inputs are recorded in `Dependencies/SkyrimVR.lock.json`.
 2. Local `Actor` asserts a flat-runtime size of `0x2B8`, while CommonLib's VR
    layout is `0x2B0`. Local `PlayerCharacter` has no VR size assertion and
    CommonLib's VR size is `0x12D8`. These mismatches make appended extension
@@ -67,7 +67,7 @@ The review's architectural findings stand, with these evidence corrections:
 - consumes immutable bridge events and emits explicit bridge commands;
 - never stores a native `Actor*`, scene node, or engine-owned container.
 
-`SkyrimTogetherVRGameplay.dll` / CommonLib SKSEVR plugin:
+`SkyrimTogetherVRGameplayBridge.dll` / CommonLib SKSEVR plugin:
 
 - process-lifetime native event sinks and lifecycle observation;
 - native actor/reference handles and generation validation;

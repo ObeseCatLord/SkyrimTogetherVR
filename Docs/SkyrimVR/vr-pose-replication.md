@@ -2,7 +2,7 @@
 
 The current VR pose work has a dedicated network stream for connection-only bring-up. It captures local Skyrim VR node transforms, sends them to the server through a VR-only pose packet, and relays them to other connected clients without enabling actor spawn, ownership, animation, or gameplay sync.
 
-VRIK IK sync is mandatory for SkyrimTogetherVR. The pose packet therefore carries both the core IK driver targets and an explicit VRIK data lane. The current client publishes the lane through the relay and handoff surfaces; `SkyrimTogetherVRVrikBridge` fills the VRIK API-backed fields through a small SKSEVR plugin handoff file. The default build remains non-mutating. The explicit `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets validate same-space actor targeting and remote VRIK payload readiness, while direct HMD/hand scene-node writes remain separately disabled until a safe embodiment path is implemented. The explicit gameplay targets reuse those readiness checks with the normal gameplay service set enabled.
+VRIK IK sync is mandatory for SkyrimTogetherVR. The pose packet therefore carries both the core IK driver targets and an explicit VRIK data lane. The current client publishes the lane through the relay and handoff surfaces; `SkyrimTogetherVRVrikBridge` fills the VRIK API-backed fields through a small SKSEVR plugin handoff file. The default build remains non-mutating. The explicit avatar-sync and gameplay targets validate remote VRIK payload readiness, but the first CommonLib embodiment slice applies only same-cell actor lifecycle and root movement. Direct HMD/hand scene-node and VRIK skeleton writes remain disabled until a validated integration is added to the gameplay bridge.
 
 ## Captured Nodes
 
@@ -26,12 +26,11 @@ For each valid node, `VRPlayerPoseSnapshot` reads the `NiAVObject::world` transf
 ## Runtime Service
 
 `VRPoseService` is disabled in the default connection-proof target. It is
-constructed before `CharacterService` in the explicit avatar-sync and gameplay
-branches so remote player actors can be joined with pose and VRIK context. The
-avatar-sync validation build keeps `VRConnectionService` active without the
-normal gameplay service set; the gameplay build keeps the relay services while
-also constructing normal gameplay services. `VRMovementService` is active in
-those broader branches for same-space and actor-target readiness checks.
+enabled as an observation/relay service in the explicit avatar-sync and
+gameplay branches. `VRAvatarService` separately consumes canonical character
+and movement messages and sends root-transform commands to the CommonLib
+gameplay bridge; it does not consume pose/VRIK packets yet. `VRMovementService`
+remains active in those broader branches for relay and readiness evidence.
 
 When connected, it sends `RequestVRPoseUpdate` at 20 Hz. The packet contains a shared `VRPoseUpdate` payload with:
 

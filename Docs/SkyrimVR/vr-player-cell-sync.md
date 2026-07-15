@@ -21,7 +21,7 @@ All VR package flavors also write a read-only status file for the companion pane
 Data/SkyrimTogetherReborn/SkyrimTogetherVR.playercell
 ```
 
-The file is rewritten at most once per second, or immediately after a player cell/grid/level send changes the counters. It is telemetry only; in connection-only mode it does not enable actor spawn, movement application, object replay, or player mutation. In `SkyrimTogetherVRGameplay.exe`, it mirrors the normal gameplay `PlayerService` cell/grid sends so runtime evidence can inspect the same lane.
+The file is rewritten at most once per second, or immediately after a player cell/grid/level send changes the counters. It is telemetry only and does not itself enable actor spawn, movement application, object replay, or player mutation. All VR package flavors use this same network-only `PlayerService` branch; staged remote actor lifecycle/root work is owned separately by the CommonLib gameplay bridge.
 
 ## Handoff Fields
 

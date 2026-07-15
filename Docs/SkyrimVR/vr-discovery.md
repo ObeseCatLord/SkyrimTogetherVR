@@ -5,7 +5,7 @@ The VR targets enable the `DiscoveryService` handoff behind `TP_SKYRIM_VR_ENABLE
 In the default connection-only package this is a narrow observation stage. It
 discovers local cell/grid/location changes, but actor-handle enumeration is
 disabled until the explicit avatar-sync/gameplay targets. The gameplay package
-keeps the same handoff while normal gameplay services are active.
+keeps the same handoff alongside the staged VR observation services.
 
 ## What Runs
 
@@ -14,7 +14,7 @@ keeps the same handoff while normal gameplay services are active.
 - `LocationChangeEvent`, `CellChangeEvent`, `GridCellChangeEvent`
 - `ActorAddedEvent` and `ActorRemovedEvent`
 
-In the default VR target these events have no character-spawn or ownership consumer. `DiscordService` can still observe location changes because it is already part of the connection-only service set. In `SkyrimTogetherVRGameplay.exe`, these events also feed the normal gameplay consumers.
+These events do not feed the legacy desktop character/object mutation consumers in any VR package. `DiscordService` can still observe location changes, while `VRAvatarService` obtains local player/cell state from the CommonLib gameplay bridge rather than retaining native pointers from discovery.
 
 ## Observation-Only Differences
 

@@ -10,9 +10,9 @@ inventory, action observation, HIGGS relay, save/load observation, and the
 remote-player proxy are compiled behind options that are disabled for the
 default target and enabled by the explicit avatar-sync/gameplay targets.
 
-The separate `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets are the opt-in VRIK/HIGGS remote-avatar validation build. They keep staged connection-only mode enabled, add `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1` to instantiate `CharacterService`, and enable `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, while the default `SkyrimTogetherVRClient` target keeps actor mutation disabled.
+The separate `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets are the opt-in VRIK/HIGGS remote-avatar validation build. They keep staged connection-only mode enabled, add `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1` to instantiate `VRAvatarService`, and route the same-cell remote actor lifecycle/root slice through `SkyrimTogetherVRGameplayBridge.dll`. The default `SkyrimTogetherVRClient` target requests lifecycle capability only.
 
-The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay` targets build `SkyrimTogetherVRGameplay.exe`. That package turns connection-only mode off and enables the normal gameplay service set plus VR relay/remote-avatar services, while still keeping the unvalidated flat-Skyrim hook batch, validated inline patches, and flat overlay disabled by default.
+The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay` targets build `SkyrimTogetherVRGameplay.exe`. That package turns connection-only mode off and enables VR observation relays plus the CommonLib-owned same-cell remote actor lifecycle/root slice. It does not construct the legacy desktop mutation services. Unvalidated flat-Skyrim hooks, validated inline patches, and the flat overlay remain disabled.
 
 ## Enabled
 

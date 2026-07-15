@@ -12,7 +12,7 @@ reserved for explicit broader targets. It does not instantiate `OverlayService`,
 
 The old flat CEF/D3D11 overlay path depends on desktop swap-chain and Win32 input assumptions. Those assumptions are not validated for Skyrim VR, SteamVR compositor presentation, VRIK/HIGGS/PLANCK input ownership, or VR menu behavior, so they stay outside the default build until a real VR overlay path is designed and checked against VR runtime behavior.
 
-The explicit gameplay package still constructs the normal gameplay services, including `OverlayService`, because other gameplay systems expect that service to exist. Since `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`, the overlay app and render system are never created in that package; the overlay service is a no-op flat overlay service and guards every CEF call when `m_pOverlay` is absent. Debug update and draw paths also guard missing desktop render-window pointers. `InstallHooks2()` also skips the DirectInput overlay hook whenever the VR target is connection-only or flat overlay is disabled.
+The explicit gameplay package uses the same VR-safe service graph and does not construct `OverlayService`, `InputService`, or `DebugService`. Since `TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=0`, the overlay app and render system are never created. `InstallHooks2()` also skips the DirectInput overlay hook whenever the VR target is connection-only or the flat overlay is disabled.
 
 ## Renderer Init
 
