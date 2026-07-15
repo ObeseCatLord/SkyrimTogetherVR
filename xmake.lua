@@ -73,7 +73,7 @@ if is_plat("windows") then
     -- the CommonLib gameplay adapter.
     add_requires("spdlog v1.16.0", {configs = {header_only = false, wchar = true, std_format = true}})
 else
-    add_requires("spdlog v1.13.0")
+    add_requires("spdlog v1.13.0", {configs = {fmt_external = true}})
 end
 
 -- dependencies' dependencies version pinning
