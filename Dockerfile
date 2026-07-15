@@ -30,7 +30,8 @@ RUN --mount=type=cache,target=/root/.xmake/packages \
     source ~/.xmake/profile && \
     xmake config -y -m release && \
     xmake -y SkyrimServerRunner && \
-    xmake install -y -o package SkyrimTogetherServer SkyrimServerRunner
+    xmake install -y -o package SkyrimTogetherServer && \
+    xmake install -y -o package SkyrimServerRunner
 
 # Actual server runtime image; (todo: maybe reconsider 'distroless' in the future)
 
