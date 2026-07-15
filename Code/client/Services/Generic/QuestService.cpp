@@ -77,7 +77,9 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
             if (modSys.GetServerModId(questFormId, Id))
             {
                 spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                             Id.LogFormat(), currentStage, pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started,
+                             Id.LogFormat(), currentStage,
+                             static_cast<std::underlying_type_t<RequestQuestUpdate::StatusCode>>(
+                                 pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started),
                              static_cast<std::underlying_type_t<TESQuest::Type>>(questType),
                              questFormId, pQuest->GetFullNameData().GetFullNameStringData());
             }
@@ -132,7 +134,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
             {
                 spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
                              Id.LogFormat(), currentStage,
-                             RequestQuestUpdate::StageUpdate,
+                             static_cast<std::underlying_type_t<RequestQuestUpdate::StatusCode>>(RequestQuestUpdate::StageUpdate),
                              static_cast<std::underlying_type_t<TESQuest::Type>>(questType),
                              questFormId, pQuest->GetFullNameData().GetFullNameStringData());
             }
