@@ -326,7 +326,7 @@ void DebugService::OnDraw() noexcept
             {
                 for (const auto& it : pUI->GetMenuMapData())
                 {
-                    if (pUI->GetMenuOpen(it.key))
+                    if (pUI->GetMenuOpen(it.key) == SkyrimTogetherVR::MenuOpenState::Open)
                         spdlog::info("{}", it.key.AsAscii());
                 }
             }

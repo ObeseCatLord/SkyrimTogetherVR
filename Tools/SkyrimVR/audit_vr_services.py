@@ -2930,6 +2930,15 @@ REQUIRED_LAYOUT_TOKENS = {
         "GetMenuFlagsData",
         "GetMenuStackData",
         "GetMenuMapData",
+        "ProbeVrMenuOpen",
+        "CommonLibUIOffsets::MenuMap == 0x128",
+        "IMenu::CommonLibIMenuOffsets::MenuFlags == 0x1C",
+        "IMenu::CommonLibIMenuOffsets::InputContext == 0x20",
+        "IMenu::kOnStack == 0x40",
+        "offsetof(MenuTable, m_size) == 0x4",
+        "offsetof(MenuTable, m_entries) == 0x20",
+        "offsetof(MenuTableEntry, next) == 0x18",
+        "MenuOpenState::Unavailable",
     ),
     "Code/client/Games/Skyrim/Interface/UI.h": (
         "#include <RuntimeLayout.h>",
@@ -2938,11 +2947,23 @@ REQUIRED_LAYOUT_TOKENS = {
         "GetMenuStackData",
         "Skyrim::RuntimeLayout::Ref<GameArray<IMenu*>>(this, CommonLibUIOffsets::MenuStack)",
         "GetMenuMapData",
+        "MenuOpenState GetMenuOpen",
         "Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>",
         "static_assert(sizeof(UI) == UI::LocalUIOffsets::Size);",
         "static_assert(offsetof(UI, UI::menuStack) == UI::LocalUIOffsets::MenuStack);",
         "static_assert(offsetof(UI, UI::menuMap) == UI::LocalUIOffsets::MenuMap);",
         "static_assert(offsetof(UI, UI::numPausesGame) == UI::LocalUIOffsets::NumPausesGame);",
+    ),
+    "Code/client/Games/Skyrim/VR/VRMenuOpenProbe.h": (
+        "enum class MenuOpenState",
+        "Unavailable",
+        "kMaximumMenuCapacity = 4096",
+        "acMenuTable.m_freeCount > capacity",
+        "acMenuTable.m_freeOffset > capacity",
+        "aIsReadable(acMenuTable.m_entries",
+        "entry.key.data != apName",
+        "aIsReadable(pMenu, aReadableMenuSize)",
+        "aReadFlags(pMenu) & aOnStackMask",
     ),
     "Code/client/Games/Skyrim/Interface/MenuControls.h": (
         "#include <RuntimeLayout.h>",
@@ -3372,6 +3393,14 @@ REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS = {
         "GetBaseFormData",
         "GetParentCellData",
         "GetFormIdData",
+        "MenuOpenState::Unavailable",
+        "MenuOpenState::Open",
+        'return "ui_unavailable";',
+    ),
+    "Code/tests/vr_menu_open_probe.cpp": (
+        "VR menu probe distinguishes closed and open menus",
+        "VR menu probe fails closed for invalid state",
+        "VR menu probe treats a registered null menu as closed",
     ),
     "Code/client/Services/Generic/VRSaveLoadService.cpp": (
         "GetBaseFormData",
@@ -4076,6 +4105,24 @@ def audit_layout_tokens(root: pathlib.Path) -> tuple[dict[str, list[str]], dict[
     return missing, forbidden
 
 
+def audit_vr_menu_predicate(root: pathlib.Path) -> list[str]:
+    path = root / "Code/client/Games/Skyrim/Interface/UI.cpp"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    start = text.find("SkyrimTogetherVR::MenuOpenState UI::GetMenuOpen")
+    end = text.find("void UI::CloseAllMenus", start)
+    if start < 0 or end < 0:
+        return ["missing tri-state UI::GetMenuOpen definition"]
+
+    body = text[start:end]
+    vr_branch = body.find("#if TP_SKYRIM_VR")
+    desktop_branch = body.find("#else", vr_branch)
+    probe = body.find("ProbeVrMenuOpen")
+    relocation = body.find("POINTER_SKYRIMSE(TMenuSystem_IsOpen, s_isMenuOpen, 82074)")
+    if not (0 <= vr_branch < probe < desktop_branch < relocation):
+        return ["ID 82074 must remain desktop-only after the local VR menu predicate"]
+    return []
+
+
 def audit_forbidden_token_map(root: pathlib.Path, forbidden_tokens: dict[str, tuple[str, ...]]) -> dict[str, list[str]]:
     forbidden: dict[str, list[str]] = {}
 
@@ -4256,6 +4303,9 @@ def main() -> int:
     missing_saveload = missing_tokens(saveload_text, REQUIRED_SAVELOAD_OBSERVER_TOKENS)
     forbidden_saveload = present_tokens(saveload_text, FORBIDDEN_SAVELOAD_OBSERVER_TOKENS)
     missing_layout, forbidden_layout = audit_layout_tokens(root)
+    vr_menu_predicate_errors = audit_vr_menu_predicate(root)
+    if vr_menu_predicate_errors:
+        missing_layout.setdefault("Code/client/Games/Skyrim/Interface/UI.cpp", []).extend(vr_menu_predicate_errors)
     missing_vr_papyrus_bypass = audit_vr_papyrus_native_bypass(root)
     vr_connection_only_safety_errors = audit_vr_connection_only_game_call_safety(root)
     missing_vr_commonlib_accessors = audit_required_token_map(root, REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS)

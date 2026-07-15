@@ -38,14 +38,26 @@ const char* GetBlockingMenuName() noexcept
     static const BSFixedString s_loadingMenu("Loading Menu");
     static const BSFixedString s_faderMenu("Fader Menu");
 
-    if (pUI->GetMenuOpen(s_mainMenu))
-        return "main_menu";
-    if (pUI->GetMenuOpen(s_raceSexMenu))
-        return "racesex_menu";
-    if (pUI->GetMenuOpen(s_loadingMenu))
-        return "loading_menu";
-    if (pUI->GetMenuOpen(s_faderMenu))
-        return "fader_menu";
+    struct BlockingMenu
+    {
+        const BSFixedString* Name;
+        const char* Reason;
+    };
+    const BlockingMenu blockingMenus[]{
+        {&s_mainMenu, "main_menu"},
+        {&s_raceSexMenu, "racesex_menu"},
+        {&s_loadingMenu, "loading_menu"},
+        {&s_faderMenu, "fader_menu"},
+    };
+
+    for (const auto& blockingMenu : blockingMenus)
+    {
+        const auto state = pUI->GetMenuOpen(*blockingMenu.Name);
+        if (state == SkyrimTogetherVR::MenuOpenState::Unavailable)
+            return "ui_unavailable";
+        if (state == SkyrimTogetherVR::MenuOpenState::Open)
+            return blockingMenu.Reason;
+    }
     return nullptr;
 }
 } // namespace
@@ -157,8 +169,8 @@ void VRLifecycleService::Update(double aDelta) noexcept
                     m_suspendReason.clear();
                     m_statusDirty = true;
                     spdlog::info(
-                        "SkyrimTogetherVR lifecycle ready: epoch={} player={:X} base={:X} cell={:X} thread={}", m_epoch,
-                        m_readySample.PlayerFormId, m_readySample.BaseFormId, m_readySample.CellFormId, m_ownerThreadId);
+                        "SkyrimTogetherVR lifecycle ready: epoch={} player={:X} base={:X} cell={:X} thread={}", m_epoch, m_readySample.PlayerFormId, m_readySample.BaseFormId,
+                        m_readySample.CellFormId, m_ownerThreadId);
                 }
             }
         }

@@ -1,6 +1,7 @@
 #include <Games/Skyrim/Interface/IMenu.h>
 #include <Games/Skyrim/Interface/UI.h>
 #include <Games/Skyrim/VR/VRHookPolicy.h>
+#include <Games/Skyrim/VR/VRMemorySafety.h>
 #include <Misc/BSFixedString.h>
 #include <TiltedOnlinePCH.h>
 #include "immersive_launcher/stubs/DllBlocklist.h"
@@ -26,15 +27,43 @@ UI* UI::Get()
     return *s_instance.Get();
 }
 
-bool UI::GetMenuOpen(const BSFixedString& acName) const
+SkyrimTogetherVR::MenuOpenState UI::GetMenuOpen(const BSFixedString& acName) const noexcept
 {
     if (acName.data == nullptr)
-        return false;
+        return SkyrimTogetherVR::MenuOpenState::Unavailable;
 
+#if TP_SKYRIM_VR
+    using MenuTable = creation::BSTHashMap<BSFixedString, UIMenuEntry>;
+    using MenuTableEntry = typename MenuTable::entry_type;
+    static_assert(CommonLibUIOffsets::MenuMap == 0x128);
+    static_assert(IMenu::CommonLibIMenuOffsets::MenuFlags == 0x1C);
+    static_assert(IMenu::CommonLibIMenuOffsets::InputContext == 0x20);
+    static_assert(IMenu::kOnStack == 0x40);
+    static_assert(sizeof(UIMenuEntry) == 0x10);
+    static_assert(sizeof(MenuTableEntry) == 0x20);
+    static_assert(sizeof(MenuTable) == 0x28);
+    static_assert(offsetof(MenuTable, m_size) == 0x4);
+    static_assert(offsetof(MenuTable, m_freeCount) == 0x8);
+    static_assert(offsetof(MenuTable, m_freeOffset) == 0xC);
+    static_assert(offsetof(MenuTable, m_eolPtr) == 0x10);
+    static_assert(offsetof(MenuTable, m_entries) == 0x20);
+    static_assert(offsetof(MenuTableEntry, key) == 0x0);
+    static_assert(offsetof(MenuTableEntry, value) == 0x8);
+    static_assert(offsetof(MenuTableEntry, next) == 0x18);
+
+    constexpr auto kReadableMenuSize = IMenu::CommonLibIMenuOffsets::MenuFlags + sizeof(uint32_t);
+    if (!SkyrimTogetherVR::IsReadableVrMemory(this, CommonLibUIOffsets::MenuMap + sizeof(MenuTable)))
+        return SkyrimTogetherVR::MenuOpenState::Unavailable;
+
+    return SkyrimTogetherVR::ProbeVrMenuOpen(
+        GetMenuMapData(), acName.data, kReadableMenuSize, IMenu::kOnStack, [](const void* apAddress, std::size_t aSize)
+        { return SkyrimTogetherVR::IsReadableVrMemory(apAddress, aSize); }, [](const IMenu* apMenu) { return apMenu->GetMenuFlagsData(); });
+#else
     TP_THIS_FUNCTION(TMenuSystem_IsOpen, bool, const UI, const BSFixedString&);
     POINTER_SKYRIMSE(TMenuSystem_IsOpen, s_isMenuOpen, 82074);
 
-    return TiltedPhoques::ThisCall(s_isMenuOpen.Get(), this, acName);
+    return TiltedPhoques::ThisCall(s_isMenuOpen.Get(), this, acName) ? SkyrimTogetherVR::MenuOpenState::Open : SkyrimTogetherVR::MenuOpenState::Closed;
+#endif
 }
 
 void UI::CloseAllMenus()
@@ -154,16 +183,16 @@ static TiltedPhoques::Initializer s_s(
 #endif
 
 #if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
-        // Some experiments:
-        // POINTER_SKYRIMSE(TCallback, s_start, 13631);
-        // UIMessageQueue__AddMessage_Real = s_start.Get();
-        // TP_HOOK(&UIMessageQueue__AddMessage_Real, UIMessageQueue__AddMessage);
+    // Some experiments:
+    // POINTER_SKYRIMSE(TCallback, s_start, 13631);
+    // UIMessageQueue__AddMessage_Real = s_start.Get();
+    // TP_HOOK(&UIMessageQueue__AddMessage_Real, UIMessageQueue__AddMessage);
 
-        // This kills the loading spinner
-        // TiltedPhoques::Put<uint8_t>(0x1405D51C1, 0xEB);
-        // TiltedPhoques::Nop(0x1405D51A2, 5);
+    // This kills the loading spinner
+    // TiltedPhoques::Put<uint8_t>(0x1405D51C1, 0xEB);
+    // TiltedPhoques::Nop(0x1405D51A2, 5);
 
-        // use 8 threads by default!
-        // TiltedPhoques::Put<uint8_t>(0x141E45770, 8);
+    // use 8 threads by default!
+    // TiltedPhoques::Put<uint8_t>(0x141E45770, 8);
 #endif
     });

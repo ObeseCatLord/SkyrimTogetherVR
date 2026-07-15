@@ -3,6 +3,7 @@
 #include <Games/Skyrim/BSCore/BSTHashMap.h>
 #include <Misc/BSFixedString.h>
 #include <RuntimeLayout.h>
+#include <VR/VRMenuOpenProbe.h>
 
 #include <cstddef>
 
@@ -50,7 +51,7 @@ public:
 
     static UI* Get();
 
-    bool GetMenuOpen(const BSFixedString& acName) const;
+    [[nodiscard]] SkyrimTogetherVR::MenuOpenState GetMenuOpen(const BSFixedString& acName) const noexcept;
     void CloseAllMenus();
     void DebugLogAllMenus();
 
@@ -87,8 +88,7 @@ public:
     [[nodiscard]] creation::BSTHashMap<BSFixedString, UIMenuEntry>& GetMenuMapData() noexcept
     {
 #if TP_SKYRIM_VR
-        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(
-            this, CommonLibUIOffsets::MenuMap);
+        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(this, CommonLibUIOffsets::MenuMap);
 #else
         return menuMap;
 #endif
@@ -97,8 +97,7 @@ public:
     [[nodiscard]] const creation::BSTHashMap<BSFixedString, UIMenuEntry>& GetMenuMapData() const noexcept
     {
 #if TP_SKYRIM_VR
-        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(
-            this, CommonLibUIOffsets::MenuMap);
+        return Skyrim::RuntimeLayout::Ref<creation::BSTHashMap<BSFixedString, UIMenuEntry>>(this, CommonLibUIOffsets::MenuMap);
 #else
         return menuMap;
 #endif

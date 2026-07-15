@@ -277,10 +277,19 @@ REQUIRED_VR_PLAYER_READINESS_TOKENS = {
     ),
     "Code/client/Games/Skyrim/Interface/UI.cpp": (
         "POINTER_SKYRIMSE(UI*, s_instance, 514178)",
+        "ProbeVrMenuOpen",
+        "IMenu::CommonLibIMenuOffsets::MenuFlags == 0x1C",
+        "IMenu::kOnStack == 0x40",
     ),
     "Code/client/Services/Generic/VRLifecycleService.cpp": (
         "IsReadableVrMemory",
         "deferring menu probes",
+        "MenuOpenState::Unavailable",
+        "MenuOpenState::Open",
+        'return "ui_unavailable";',
+        "TryGetReadablePlayerForVR",
+        "GetBaseFormData",
+        "GetParentCellData",
     ),
     "Code/client/Services/Generic/DiscordService.cpp": ("TryGetReadablePlayerForVR",),
     "Code/client/Games/ModManager.cpp": ("ppModManager ? *ppModManager : nullptr",),
@@ -290,11 +299,6 @@ REQUIRED_VR_PLAYER_READINESS_TOKENS = {
         "Project corrections must be authoritative",
     ),
     "Code/client/Services/Generic/DiscoveryService.cpp": ("TryGetReadablePlayerForVR",),
-    "Code/client/Services/Generic/VRLifecycleService.cpp": (
-        "TryGetReadablePlayerForVR",
-        "GetBaseFormData",
-        "GetParentCellData",
-    ),
     "Code/client/Services/Generic/PlayerService.cpp": (
         "VRLifecycleService",
         "GetPlayerFormId",
