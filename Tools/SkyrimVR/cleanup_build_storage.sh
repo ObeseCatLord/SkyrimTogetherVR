@@ -77,6 +77,7 @@ fi
 
 read -r -d '' powershell_payload <<'POWERSHELL' || true
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $repo = '__WINBOAT_REPO__'
 $cutoff = (Get-Date).ToUniversalTime().AddDays(-__MAX_AGE_DAYS__)
 $trim = __TRIM__ -eq 1
@@ -121,7 +122,16 @@ git -C $repo worktree prune
 if ($LASTEXITCODE -ne 0) { throw "Failed to prune WinBoat worktree metadata." }
 "Removed WinBoat build directories: $removed"
 if ($trim -and $removed -gt 0) {
-    Optimize-Volume -DriveLetter C -ReTrim -Verbose
+    try {
+        Optimize-Volume -DriveLetter C -ReTrim -ErrorAction Stop | Out-Null
+        "Requested WinBoat C: retrim."
+    } catch {
+        if ($_.Exception.Message -match 'optimization operation is currently in progress') {
+            "WinBoat C: optimization is already in progress; retrim skipped."
+        } else {
+            throw
+        }
+    }
 }
 POWERSHELL
 
