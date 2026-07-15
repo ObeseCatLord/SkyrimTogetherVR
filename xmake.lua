@@ -73,7 +73,7 @@ if is_plat("windows") then
     -- the CommonLib gameplay adapter.
     add_requires("spdlog v1.16.0", {configs = {header_only = false, wchar = true, std_format = true}})
 else
-    add_requires("spdlog v1.13.0", {configs = {fmt_external = true}})
+    add_requires("spdlog v1.15.0", {configs = {fmt_external = true}})
 end
 
 -- dependencies' dependencies version pinning
@@ -83,6 +83,7 @@ add_requireconfs("*.openssl", { version = "1.1.1-w", override = true })
 add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
 if is_plat("linux") then
     add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
+    add_requireconfs("spdlog.fmt", { version = "11.2.0", override = true })
 end
 
 add_requireconfs("cpp-httplib", {configs = {ssl = true}})
