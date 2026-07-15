@@ -285,14 +285,26 @@ int StartUp(int argc, char** argv)
 
 bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)
 {
-    auto content = TiltedPhoques::LoadFile(LC.exePath);
-    if (content.empty())
-        DIE_NOW(L"Failed to mount game executable");
-
     // Preserve only fixed-width version fields across manual PE mapping. The
     // mapped image can replace process-global CRT state used by heap strings.
     if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))
         DIE_NOW(L"Failed to query game version");
+
+    if (!aRuntimeVersion.IsSupported())
+    {
+        wchar_t message[192]{};
+        swprintf_s(
+            message, _countof(message), L"Unsupported Skyrim VR runtime %u.%u.%u.%u. Skyrim Together VR requires 1.4.15.0.",
+            static_cast<unsigned int>(aRuntimeVersion.Major), static_cast<unsigned int>(aRuntimeVersion.Minor),
+            static_cast<unsigned int>(aRuntimeVersion.Revision), static_cast<unsigned int>(aRuntimeVersion.Build));
+        Die(message);
+        return false;
+    }
+
+    auto content = TiltedPhoques::LoadFile(LC.exePath);
+    if (content.empty())
+        DIE_NOW(L"Failed to mount game executable");
+
     LC.SetLoaded();
 
     ExeLoader loader(CurrentTarget.exeLoadSz);

@@ -1,10 +1,9 @@
 #pragma once
 
 #include "Loader/ExeLoader.h"
+#include "RuntimeVersion.h"
 #include <TiltedCore/Filesystem.hpp>
 #include <TiltedCore/Stl.hpp>
-
-#include <cstdint>
 
 namespace launcher
 {
@@ -15,16 +14,6 @@ enum class Result
     kSuccess,
     kBadPlatform,
     kBadInstall
-};
-
-struct RuntimeVersion
-{
-    uint16_t Major{};
-    uint16_t Minor{};
-    uint16_t Revision{};
-    uint16_t Build{};
-
-    [[nodiscard]] bool IsValid() const noexcept { return Major != 0 || Minor != 0 || Revision != 0 || Build != 0; }
 };
 
 // stays alive through the entire duration of the game.

@@ -221,6 +221,7 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
     {
         spdlog::critical("SkyrimTogetherVR address loading failed: {}", VersionDb::Get().GetLastError());
         ShowAddressLibraryError(acGamePath.c_str());
+        return false;
     }
 
     // VersionDb::Get().DumpToTextFile(R"(S:\Work\Tilted\fallout\_addresslib.txt)");

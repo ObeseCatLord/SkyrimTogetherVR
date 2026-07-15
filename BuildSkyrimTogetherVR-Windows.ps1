@@ -652,7 +652,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $targetListText = ($targetList | Out-String)
-$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess")
+$requiredTargets = @("SkyrimTogetherVRClient", "SkyrimTogetherVRVrikBridge", "SkyrimTogetherVRHiggsBridge", "SkyrimTogetherVRPlanckBridge", "SkyrimTogetherVRTickBridge", "SkyrimVRImmersiveLauncher", "ImmersiveElf", "TPProcess", "TPTests")
 $requiredTargets += @("SkyrimTogetherVRClientAvatarSync", "SkyrimVRImmersiveLauncherAvatarSync", "SkyrimTogetherVRGameplayClient", "SkyrimVRImmersiveLauncherGameplay")
 foreach ($requiredTarget in $requiredTargets) {
     if ($targetListText -notmatch [regex]::Escape($requiredTarget)) {
@@ -756,6 +756,9 @@ if ($CompilePapyrus) {
     }
     Invoke-PapyrusCompile -GameFilesDir $gameFilesDir
 }
+
+Invoke-Xmake @("build", "-y", "TPTests")
+Invoke-Xmake @("run", "TPTests")
 
 foreach ($target in $Targets) {
     Invoke-Xmake @("build", "-y", $target)

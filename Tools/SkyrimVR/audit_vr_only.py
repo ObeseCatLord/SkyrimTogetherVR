@@ -68,8 +68,30 @@ REQUIRED_TOKENS = {
         "TerminateProcess(GetCurrentProcess(), 5)",
         "if (!RunTiltedInit(LC->gamePath, runtimeVersion.Major, runtimeVersion.Minor, runtimeVersion.Revision, runtimeVersion.Build))",
         "if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))",
+        "if (!aRuntimeVersion.IsSupported())",
+        "Unsupported Skyrim VR runtime %u.%u.%u.%u",
         "RuntimeVersion runtimeVersion{};",
         "LC->gameMain();",
+    ),
+    "Code/immersive_launcher/utils/FileVersion.inl": (
+        'L"\\\\VarFileInfo\\\\Translation"',
+        'L"ProductVersion"',
+        'L"FileVersion"',
+        "ParseRuntimeVersionString",
+        "BufferContains",
+        "translationBytes % sizeof(detail::LanguageAndCodePage)",
+    ),
+    "Code/tests/runtime_version.cpp": (
+        'Parse(L"1.4.15.0")',
+        'L"65536.4.15.0"',
+        "embeddedNull",
+        "QueryFileVersion(modulePath.data(), version)",
+    ),
+    "Code/tests/runtime_version.rc": (
+        "FILEVERSION 1,0,0,0",
+        'VALUE "FileVersion", "1.4.15.0\\0"',
+        'VALUE "ProductVersion", "1.4.15.0\\0"',
+        'VALUE "Translation", 0x0409, 0x04B0',
     ),
     "Code/immersive_launcher/loader/ExeLoader.cpp": (
         "ApplyMappedTlsToCurrentThread",
@@ -165,6 +187,13 @@ FORBIDDEN_TOKENS = {
         "SKYRIM TOGETHER REBORN marker",
         "Skyrim Together Reborn",
     ),
+    "Code/immersive_launcher/utils/FileVersion.inl": (
+        "VS_FIXEDFILEINFO",
+        "dwFileVersionMS",
+        "dwFileVersionLS",
+        "dwProductVersionMS",
+        "dwProductVersionLS",
+    ),
 }
 
 
@@ -198,6 +227,15 @@ def main() -> int:
     game_entry = launcher_text.find("LC->gameMain();")
     if not (0 <= address_init < skse_bootstrap < game_entry):
         failures.append("immersive launcher must run the TLS-prepared SKSEVR bootstrap after address initialization and before mapped game entry")
+
+    load_program = launcher_text.find("bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)")
+    version_query = launcher_text.find("if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))", load_program)
+    runtime_gate = launcher_text.find("if (!aRuntimeVersion.IsSupported())", load_program)
+    executable_read = launcher_text.find("TiltedPhoques::LoadFile(LC.exePath)", load_program)
+    mapped_state = launcher_text.find("LC.SetLoaded();", load_program)
+    manual_map = launcher_text.find("loader.Load(", load_program)
+    if not (0 <= load_program < version_query < runtime_gate < executable_read < mapped_state < manual_map):
+        failures.append("immersive launcher must query and reject unsupported runtimes before reading or manually mapping SkyrimVR.exe")
 
     print(f"Audited VR-only files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_TOKENS))}")
     print(f"VR-only audit failures: {len(failures)}")

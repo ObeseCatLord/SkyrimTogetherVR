@@ -17,6 +17,6 @@ target("TPTests")
     if is_plat("windows") then
         add_includedirs("../client")
         add_defines("TP_SKYRIM_VR=1")
-        add_files("version_db.cpp")
+        add_files("version_db.cpp", "runtime_version.rc")
         add_syslinks("version")
     end

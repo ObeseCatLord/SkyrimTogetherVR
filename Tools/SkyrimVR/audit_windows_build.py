@@ -92,6 +92,8 @@ SCRIPT_TOKENS = (
     "Running SkyrimTogetherVR Windows build preflight only; no targets will be built.",
     "Papyrus compile preflight:",
     "Preflight completed; no targets were built.",
+    'Invoke-Xmake @("build", "-y", "TPTests")',
+    'Invoke-Xmake @("run", "TPTests")',
     "Found staged VR game files",
     "Resolved packaged Python helper closure:",
     "LaunchSkyrimTogetherVRCompanion.bat",
