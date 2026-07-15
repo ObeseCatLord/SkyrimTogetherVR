@@ -82,3 +82,12 @@ Slot 4 is exactly VA `0x1412765B0`, proving RVA `0x12765B0` for this executable.
 This closes the senior review's binary-evidence gate for an observer run. The
 runtime must still prove the detour's cadence, forwarding, and stable owner
 before the active connection result is accepted.
+
+The first observer run disproved first-caller ownership: startup/RaceSex calls
+arrived on Windows worker TIDs `588` and `592`, while the tick bridge activation
+thread was `320`. Five consecutive post-character GDB breakpoints at
+`0x1412765B0` then ran on the process main thread with caller `0x14095D1AA`.
+The Sol-max follow-up therefore selected `TickBridge::ActivationThreadId` as the
+semantic owner. The hook forwards every VM call, but only the published ready
+activation thread may consume a permit and update the client; worker calls can
+neither steal a permit nor permanently disable dispatch.

@@ -148,6 +148,18 @@ void Retire() noexcept
 #endif
 }
 
+std::uint32_t GetActivationThreadId() noexcept
+{
+#if !TP_SKYRIM_VR
+    return 0;
+#else
+    if (!s_endpoint || ReadState(*s_endpoint) != static_cast<LONG>(EndpointState::Ready))
+        return 0;
+
+    return s_endpoint->ActivationThreadId;
+#endif
+}
+
 bool ConsumeUpdatePermit() noexcept
 {
 #if !TP_SKYRIM_VR

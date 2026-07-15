@@ -114,9 +114,14 @@ an executable whose section layout, vtable entry, or version differs.
 
 In `active` mode, the SKSE task bridge publishes only an atomic permit. The
 verified VM-update owner consumes that permit and calls the client once; task
-callbacks must never call `World::Update()` directly. A viable connection run
-must log `SkyrimTogetherVR VM-update observer reached`, advance lifecycle from
-`boot`, and retain one owner thread.
+callbacks must never call `World::Update()` directly. The owner is the Windows
+thread recorded by `TickBridge::Activate()` immediately before the endpoint is
+published `Ready`, not the first caller of `VirtualMachine::Update`. Skyrim VR
+can invoke that virtual function from startup workers before settling onto the
+main thread. Worker calls must be logged, ignored by the client, and forwarded
+to Skyrim without consuming a permit. A viable connection run must log
+`SkyrimTogetherVR VM-update owner reached`, advance lifecycle from `boot`, and
+retain the activation thread as owner.
 
 Do not use Monado `O` for RaceSex Done under the simple-controller profile.
 `O` changes the Qwerty WMR squeeze input, but XRizer's simple-controller legacy

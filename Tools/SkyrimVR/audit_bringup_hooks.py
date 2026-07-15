@@ -135,8 +135,9 @@ REQUIRED_TOKENS = {
         "SkyrimTogetherVR main-loop cadence: call={} elapsedMs={} thread={}",
         "SkyrimTogetherVR VM-update runtime mode: {}",
         "Installing opaque SkyrimTogetherVR VM-update observer: target={}",
-        "SkyrimTogetherVR VM-update observer reached: mode={} thread={}",
-        "SkyrimTogetherVR VM-update cadence: call={} mode={} thread={}",
+        "SkyrimTogetherVR VM-update owner reached: mode={} thread={}",
+        "SkyrimTogetherVR VM-update owner cadence: call={} mode={} thread={}",
+        "SkyrimTogetherVR VM-update worker call ignored: call={} mode={} thread={} owner={}",
         "SkyrimTogetherVR::TickBridge::ConsumeUpdatePermit()",
         "s_mainLoopCallCount.fetch_add(1, std::memory_order_relaxed)",
         "callCount <= 2 || callCount % 300 == 0",
@@ -327,6 +328,7 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
         "HookVrVmUpdate",
         "STVR_VM_UPDATE_MODE",
         "ConsumeUpdatePermit",
+        "GetActivationThreadId",
         "VrVmUpdateMode::Observe",
         "VrVmUpdateMode::Active",
     ):
@@ -336,6 +338,8 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     for forbidden_token in (
         "TP_THIS_FUNCTION(TVrVmUpdate, int",
         "int TP_MAKE_THISCALL(HookVrVmUpdate",
+        "compare_exchange_strong",
+        "s_vmUpdateOwnerFault",
         "VMContext",
         "inactive",
         "TVMDestructor",

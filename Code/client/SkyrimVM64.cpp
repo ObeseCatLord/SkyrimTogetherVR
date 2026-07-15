@@ -37,9 +37,10 @@ static TVrVmUpdate* VrVmUpdate = nullptr;
 static std::once_flag s_mainLoopLogOnce;
 static std::atomic_uint64_t s_mainLoopCallCount{0};
 static const auto s_mainLoopStartTime = std::chrono::steady_clock::now();
-static std::atomic_uint64_t s_vmUpdateCallCount{0};
-static std::atomic<DWORD> s_vmUpdateOwnerThread{0};
-static std::atomic_bool s_vmUpdateOwnerFault{false};
+static std::atomic_uint64_t s_vmUpdateOwnerCallCount{0};
+static std::atomic_uint64_t s_vmUpdateMismatchCallCount{0};
+static std::atomic_uint64_t s_vmUpdateUnavailableCallCount{0};
+static std::once_flag s_vmUpdateOwnerLogOnce;
 static VrVmUpdateMode s_vmUpdateMode{VrVmUpdateMode::Observe};
 
 static const char* GetVrVmUpdateModeName() noexcept
@@ -73,25 +74,35 @@ static VrVmUpdateMode ReadVrVmUpdateMode() noexcept
 
 void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)
 {
-    const auto callCount = s_vmUpdateCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto threadId = GetCurrentThreadId();
-    DWORD expectedOwner = 0;
-    if (s_vmUpdateOwnerThread.compare_exchange_strong(expectedOwner, threadId, std::memory_order_relaxed))
+    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
+    if (ownerThreadId == 0)
     {
-        spdlog::info("SkyrimTogetherVR VM-update observer reached: mode={} thread={}", GetVrVmUpdateModeName(), threadId);
+        const auto count = s_vmUpdateUnavailableCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 2 || count % 6000 == 0)
+            spdlog::info("SkyrimTogetherVR VM-update owner unavailable: call={} mode={} thread={}", count, GetVrVmUpdateModeName(), threadId);
     }
-    else if (expectedOwner != threadId && !s_vmUpdateOwnerFault.exchange(true, std::memory_order_relaxed))
+    else if (threadId != ownerThreadId)
     {
-        spdlog::critical("SkyrimTogetherVR VM-update observer changed owner thread from {} to {}; active dispatch is disabled", expectedOwner, threadId);
+        const auto count = s_vmUpdateMismatchCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 2 || count % 6000 == 0)
+            spdlog::warn("SkyrimTogetherVR VM-update worker call ignored: call={} mode={} thread={} owner={}", count, GetVrVmUpdateModeName(), threadId, ownerThreadId);
     }
-
-    if (callCount <= 2 || callCount % 6000 == 0)
-        spdlog::info("SkyrimTogetherVR VM-update cadence: call={} mode={} thread={}", callCount, GetVrVmUpdateModeName(), threadId);
-
-    if (s_vmUpdateMode == VrVmUpdateMode::Active && !s_vmUpdateOwnerFault.load(std::memory_order_relaxed) &&
-        SkyrimTogetherVR::TickBridge::ConsumeUpdatePermit() && g_appInstance)
+    else
     {
-        g_appInstance->Update();
+        std::call_once(
+            s_vmUpdateOwnerLogOnce,
+            [threadId]()
+            {
+                spdlog::info("SkyrimTogetherVR VM-update owner reached: mode={} thread={}", GetVrVmUpdateModeName(), threadId);
+            });
+
+        const auto count = s_vmUpdateOwnerCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 2 || count % 6000 == 0)
+            spdlog::info("SkyrimTogetherVR VM-update owner cadence: call={} mode={} thread={}", count, GetVrVmUpdateModeName(), threadId);
+
+        if (s_vmUpdateMode == VrVmUpdateMode::Active && g_appInstance && SkyrimTogetherVR::TickBridge::ConsumeUpdatePermit())
+            g_appInstance->Update();
     }
 
     TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);

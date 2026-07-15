@@ -27,6 +27,8 @@ REQUIRED_TOKENS = {
         "EndpointState::Ready",
         "EndpointState::Retired",
         "s_endpoint->ActivationThreadId = GetCurrentThreadId()",
+        "std::uint32_t GetActivationThreadId() noexcept",
+        "return s_endpoint->ActivationThreadId",
         "SkyrimTogetherVR SKSE task callback accepted",
         "aExecutorThreadId != currentThreadId",
         "InterlockedCompareExchange64(&s_lastDispatchSequence",
