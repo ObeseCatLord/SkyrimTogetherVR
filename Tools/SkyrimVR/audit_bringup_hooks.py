@@ -452,6 +452,37 @@ def audit_vr_owner_addresses(root: pathlib.Path) -> list[str]:
     return failures
 
 
+def audit_commonlib_abi_contracts(root: pathlib.Path) -> list[str]:
+    failures: list[str] = []
+    pch_path = root / "Code" / "vr_gameplay_bridge" / "pch.h"
+    pch_text = pch_path.read_text(encoding="utf-8", errors="replace") if pch_path.exists() else ""
+    include_positions = {
+        header: pch_text.find(f"#include <{header}>")
+        for header in ("SKSE/SKSE.h", "RE/Skyrim.h", "Windows.h")
+    }
+    for header, position in include_positions.items():
+        if position < 0:
+            failures.append(f"Code/vr_gameplay_bridge/pch.h: missing `<{header}>` include")
+    windows_position = include_positions["Windows.h"]
+    commonlib_positions = (include_positions["SKSE/SKSE.h"], include_positions["RE/Skyrim.h"])
+    if windows_position >= 0 and all(position >= 0 for position in commonlib_positions):
+        if windows_position < max(commonlib_positions):
+            failures.append(
+                "Code/vr_gameplay_bridge/pch.h: Windows.h must be included after CommonLib headers"
+            )
+
+    for path in (root / "Code").rglob("*"):
+        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".cxx"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"^\s*#\s*define\s+SPDLOG_WCHAR_FILENAMES\b", text, re.MULTILINE):
+            failures.append(
+                f"{path.relative_to(root)}: manually enables SPDLOG_WCHAR_FILENAMES outside the package ABI"
+            )
+
+    return failures
+
+
 def main():
     root = repo_root()
     failures = []
@@ -461,6 +492,8 @@ def main():
     failures.extend(observer_failures)
     vm_address_failures = audit_vr_owner_addresses(root)
     failures.extend(vm_address_failures)
+    commonlib_abi_failures = audit_commonlib_abi_contracts(root)
+    failures.extend(commonlib_abi_failures)
 
     for relative_path, tokens in REQUIRED_TOKENS.items():
         path = root / relative_path
@@ -480,6 +513,7 @@ def main():
     print(f"VR target config failures: {len(structural_failures)}")
     print(f"VR update-owner failures: {len(observer_failures)}")
     print(f"VR owner address failures: {len(vm_address_failures)}")
+    print(f"CommonLib ABI contract failures: {len(commonlib_abi_failures)}")
     print(f"Bring-up hook audit failures: {len(failures)}")
     for failure in failures:
         print(f"- {failure}")
