@@ -25,7 +25,7 @@ VM-update path**.
 | Do not automate finalization with `RaceSexMenu::ChangeName` alone. | Adopted | The mapped method supplies a name, but available source does not prove it performs confirmation, name event, normal menu close, and finalization. |
 | Use a valid post-character save for unattended XRizer tests. | Adopted | The fixture must be authored once through vanilla finalization with the packaged load order. Manual New Game remains a separate release gate. |
 | Replace rotating SKSE-task execution with one verified update owner. | Adopted as the target architecture | Current `VRTickBridge::Dispatch` calls `World::Update()` from rotating task thread IDs. `TiltedConnect::Client` has no owner enforcement. Upstream keeps both transport pumping and engine work on one active VM-update owner. |
-| Re-enable VR address ID `53926` directly. | Adapted: observer first, active only after proof | The VR target resolves to RVA `0x9869d0`, but an address-library mapping does not prove signature or semantic identity. The prior destructor-hook crash makes default activation unjustified. Compile `off/observe/active` modes together; observe cadence, stable TID, forwarding, and clean RaceSex/load/exit before selecting active without rebuilding. Never read the unverified VR `VMContext` layout. |
+| Re-enable VR address ID `53926` directly. | Adapted: corrected target, observer first, active only after proof | The former hand-authored override `0x9869d0` was disproved. CommonLibSSE-NG identifies `BSScript::Internal::VirtualMachine::Update(float)` as vtable slot 4; SkyrimVR.exe's readable vtable at RVA `0x18E2148` points that slot to RVA `0x12765B0`, with a `void (this, float)` ABI. The project-local ID now maps exactly to that target and a static audit locks the address, provenance, and signature. Compile `off/observe/active` modes together; observe cadence, stable TID, forwarding, and clean RaceSex/load/exit before selecting active without rebuilding. Never read the unverified VR `VMContext` layout. |
 | Add a lifecycle service with epochs and stable readiness. | Adopted after update-owner proof | `Boot -> Suspended -> Stabilizing -> Ready(epoch) -> Teardown`. Readiness requires RaceSex/loading/fader menus absent and stable player/base/cell identities over consecutive owner ticks plus elapsed time. `VirtualQuery` readability alone is insufficient. |
 | Keep command, connection, discovery, and packet work epoch-aware. | Adopted | A connect command remains pending until `Ready`. Load/player invalidation increments the epoch, resets discovery, rejects stale queued work, disconnects on the owner, then reconnects only after the next stable epoch. Explicit disconnect clears the retained endpoint. |
 | Put transport on a new worker thread now. | Rejected for parity implementation | The current source has no such owner despite an earlier brief implying otherwise. A worker would still require a separate verified game-thread mailbox. The original single-owner VM path is smaller once its VR target is proven. No worker may touch engine objects. |
@@ -64,3 +64,21 @@ Runtime validation order is observer launch and exit, observer New Game/load,
 active deterministic-save connect and first cell sync, online load/reconnect,
 then clean teardown. Active mode must remain opt-in until the observer gates
 pass.
+
+## Corrected VM target evidence
+
+The installed Skyrim VR 1.4.15 executable used for validation has SHA-256
+`6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971`.
+`objdump -h` reports `.rdata` at RVA `0x157F000` and file offset `0x157DA00`.
+CommonLibSSE-NG's primary VR VM vtable RVA `0x18E2148` therefore maps to file
+offset `0x18E0B48`; an eight-entry `od -tx8` read produced:
+
+```text
+1412911f0 141297270 141276ec0 141276e60
+1412765b0 141276c30 141276dd0 141276de0
+```
+
+Slot 4 is exactly VA `0x1412765B0`, proving RVA `0x12765B0` for this executable.
+This closes the senior review's binary-evidence gate for an observer run. The
+runtime must still prove the detour's cadence, forwarding, and stable owner
+before the active connection result is accepted.

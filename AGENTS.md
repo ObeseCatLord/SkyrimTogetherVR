@@ -1,0 +1,151 @@
+# Skyrim Together VR Agent Runbook
+
+## Runtime Safety
+
+- Never force-close `RaceSex Menu` with DevBench `menu close`/`kHide`. It does
+  not run Skyrim's confirm/name transaction and has reproduced an access
+  violation.
+- Do not issue the connection command while `Main Menu`, `RaceSex Menu`, a
+  loading menu, or a message box is open. Require fresh lifecycle readiness
+  from the current process and epoch.
+- Do not terminate a live test unless the user asks, the process crashes, or a
+  relaunch is required for a deployed binary/runtime change.
+
+## Linux Test Path
+
+Skyrim VR root:
+
+```bash
+SKYRIMVR="/home/obesecatlord/FasterGames/SteamLibrary/steamapps/common/SkyrimVR"
+```
+
+Verify Monado before launch:
+
+```bash
+pgrep -af 'monado-service|envision'
+test -S /run/user/1000/monado_comp_ipc
+```
+
+Launch the deterministic New Game and connection test:
+
+```bash
+cd /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR
+python3 Tools/SkyrimVR/devbench_new_game.py \
+  --launch-game \
+  --skyrim-vr "$SKYRIMVR" \
+  --vm-update-mode active \
+  --connect incidentalstoat.xyz:26099 \
+  --timeout 180
+```
+
+The persistent synthetic keyboard socket is:
+
+```bash
+export YDOTOOL_SOCKET=/run/user/1000/stvr-ydotool.sock
+```
+
+## Verified Menu Inputs
+
+Use `kdotool` to focus the exact window before every input. Hold synthetic keys
+for at least 500 ms.
+
+Main Menu -> New Game:
+
+1. Focus `^Skyrim VR$`; send Linux key `End` (`107`), then `Enter` (`28`).
+2. Focus `^Monado!.*$`; send `P` (`25`) to activate the emulated trigger and
+   accept Realm of Lorkhan's New Game confirmation.
+
+RaceSex completion with the Monado Qwerty driver and XRizer:
+
+1. Confirm the current XRizer log negotiated
+   `/interaction_profiles/khr/simple_controller` for both hands.
+2. Focus `^Monado!.*$`; send `N` (`49`). This is simple-controller Menu,
+   translated by XRizer to legacy Grip and Skyrim's RaceSex `XButton`/Done.
+3. Require DevBench `messageBoxOpen: true` and body text
+   `Finish and name your character?`.
+4. Focus `^Monado!.*$`; send `P` (`25`). This is simple-controller Select,
+   translated to legacy Trigger/Menu Accept.
+5. Require the confirmation dialog to close and then require `RaceSex Menu` to
+   disappear. A closed dialog with RaceSex still open is not finalization.
+
+The automation launcher sets `STVR_XRIZER_KEYBOARD_TEXT=Shezarrine` by default
+(`--character-name` overrides it). The active Envision runtime is the checkout
+named by `~/.config/openvr/openvrpaths.vrpath`, currently
+`~/.local/share/envision/ovr_comp`; do not build an inactive duplicate checkout.
+Its opt-in patch implements `ShowKeyboardForOverlay`, stores the name, and
+queues `KeyboardDone` in both the global OpenVR event queue and the requesting
+overlay's `PollNextOverlayEvent` queue. Skyrim VR requires the overlay event;
+global delivery alone closes the confirmation but leaves RaceSex open. In
+`IVROverlay_028`, `unCharMax` is the second `u32` after line mode; the first is
+keyboard flags. Without the environment variable, XRizer retains its normal
+`RequestFailed` behavior.
+
+This exact path was runtime-verified on 2026-07-14: automation selected New
+Game without a manual click, finalized the player as `Shezarrine`, closed
+RaceSex through the normal transaction, accepted the allowlisted Realm intro,
+and reached `RealmLorkhan`. FUS does not supply a RaceSex/input mod fix: its
+launcher explicitly disables OpenComposite because it breaks the keyboard and
+SteamVR overlays. SteamVR normally provides the overlay keyboard transaction
+that XRizer must emulate for this Monado test path.
+
+## VM Update Owner
+
+Skyrim VR 1.4.15 address ID `53926` is a project-local alias for
+`BSScript::Internal::VirtualMachine::Update(float)`. Its verified RVA is
+`0x12765B0` and its ABI is `void (this, float)`. The evidence is CommonLibSSE-NG's
+VR vtable RVA `0x18E2148`, where virtual slot 4 points to `0x1412765B0` in
+SkyrimVR.exe. The former override `0x9869D0` was not this virtual function and
+must not be restored. `Tools/SkyrimVR/audit_bringup_hooks.py` enforces the
+address, provenance, and void-return declaration.
+
+The installed 1.4.15 executable used for this proof has SHA-256
+`6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971`.
+Its `.rdata` starts at RVA `0x157F000` / file offset `0x157DA00`, so the VM
+vtable and slot-4 file offsets are `0x18E0B48` and `0x18E0B68`. Recheck a target
+install without launching it:
+
+```bash
+objdump -h "$SKYRIMVR/SkyrimVR.exe"
+od -An -v -tx8 -j $((0x18e0b68)) -N 8 "$SKYRIMVR/SkyrimVR.exe"
+```
+
+The expected slot value is `00000001412765b0`. Do not enable `active` mode for
+an executable whose section layout, vtable entry, or version differs.
+
+In `active` mode, the SKSE task bridge publishes only an atomic permit. The
+verified VM-update owner consumes that permit and calls the client once; task
+callbacks must never call `World::Update()` directly. A viable connection run
+must log `SkyrimTogetherVR VM-update observer reached`, advance lifecycle from
+`boot`, and retain one owner thread.
+
+Do not use Monado `O` for RaceSex Done under the simple-controller profile.
+`O` changes the Qwerty WMR squeeze input, but XRizer's simple-controller legacy
+Grip comes from `/input/menu/click`, which is Monado `N`.
+
+Inspect live menu state without mutation:
+
+```bash
+curl -sS -X POST -H 'Content-Type: application/json' \
+  --data '{"action":"list"}' http://127.0.0.1:8921/api/tool/menu
+curl -sS -X POST -H 'Content-Type: application/json' \
+  --data '{"action":"describe"}' http://127.0.0.1:8921/api/tool/menu
+```
+
+If XRizer logs `ShowKeyboardForOverlay unimplemented`, the opt-in automation
+runtime is not active. Accepting the RaceSex dialog will leave RaceSex waiting
+for the naming callback. Stop there; do not hide the menu or report connection
+success.
+
+## Success Evidence
+
+A successful connection test requires all of the following from the current
+process:
+
+- no `Main Menu`, `RaceSex Menu`, loading/fader menu, or message box;
+- Realm of Lorkhan scene and stable nonempty player name/race;
+- `SkyrimTogether.esp` active;
+- lifecycle `state=ready`, `ready=1`, nonzero epoch/owner/player/cell;
+- online status with nonzero local player ID and a newer cell request;
+- matching server-side admission while exactly one server container is running.
+
+Use `Tools/SkyrimVR/audit_runtime_handoff.py` for the local post-run audit.

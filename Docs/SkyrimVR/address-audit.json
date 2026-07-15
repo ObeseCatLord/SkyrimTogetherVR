@@ -527,12 +527,14 @@
   ],
   "missingRttiUsedByCast": [],
   "nonRttiResolutionSources": {
-    "addrlib": 181,
+    "addrlib": 180,
+    "commonlib_vtable": 1,
     "release": 57,
     "sse_vr": 43
   },
   "resolutionSources": {
-    "addrlib": 181,
+    "addrlib": 180,
+    "commonlib_vtable": 1,
     "missing": 47,
     "release": 58,
     "sse_vr": 2802
@@ -3503,8 +3505,8 @@
     },
     {
       "id": 53926,
-      "name": "",
-      "offset": "0x9869d0",
+      "name": "BSScript::Internal::VirtualMachine::Update",
+      "offset": "0x12765b0",
       "references": [
         {
           "file": "Code/client/SkyrimVM64.cpp",
@@ -3518,8 +3520,8 @@
         }
       ],
       "resolvedId": 53926,
-      "source": "addrlib",
-      "status": "addrlib",
+      "source": "commonlib_vtable",
+      "status": "exact_vr_vtable",
       "translation": "direct"
     },
     {

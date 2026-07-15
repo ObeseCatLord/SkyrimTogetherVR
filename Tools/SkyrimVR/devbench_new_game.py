@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Drive Skyrim VR from Main Menu to Realm of Lorkhan through DevBench.
 
-The host keyboard input is used only to select New Game and request RaceSex
-confirmation. DevBench provides state checks and invokes the confirmation callback,
+The host keyboard input is used only to select New Game. Monado controller
+actions request and accept RaceSex confirmation. DevBench provides state checks,
 so the script never relies on fixed sleeps alone.
 """
 
@@ -26,7 +26,7 @@ import vr_paths
 
 KEY_END = 107
 KEY_ENTER = 28
-KEY_R = 19
+KEY_N = 49
 KEY_P = 25
 
 GAME_PROCESS: subprocess.Popen | None = None
@@ -319,7 +319,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--monado-window-search",
-        default="^Monado!$",
+        default="^Monado!.*$",
         help="Monado Qwerty debug window that receives simulated controller input",
     )
     parser.add_argument("--timeout", type=float, default=120.0, help="timeout for each major game state")
@@ -329,6 +329,11 @@ def main() -> int:
         "--load-save",
         metavar="SAVE_STEM",
         help="load a deterministic save authored after valid character finalization instead of selecting New Game",
+    )
+    parser.add_argument(
+        "--character-name",
+        default="Shezarrine",
+        help="name returned by the opt-in XRizer automation keyboard during New Game",
     )
     parser.add_argument(
         "--vm-update-mode",
@@ -404,6 +409,8 @@ def main() -> int:
         launch_env["STVR_DISABLE_AUTOCONNECT"] = "1"
         launch_env["STVR_FORCE_PROTON"] = "1"
         launch_env["STVR_VM_UPDATE_MODE"] = args.vm_update_mode
+        if not args.load_save:
+            launch_env["STVR_XRIZER_KEYBOARD_TEXT"] = args.character_name
         log_path = args.skyrim_vr / "stvr-devbench-launch.log"
         launch_log = log_path.open("ab")
         try:
@@ -472,8 +479,12 @@ def main() -> int:
             race_state = state
         print(f"RaceSex ready: {race_state.get('openMenus', [])}")
 
-        focus_window(args.window_search)
-        tap_key(args.ydotool, args.ydotool_socket, KEY_R)
+        # Monado's Qwerty controllers negotiate KHR/simple_controller under
+        # XRizer. Its menu click becomes legacy Grip/RaceSex XButton, so N is
+        # the real controller-side Done action. O/squeeze is not exposed by
+        # that interaction profile and host R is not reliable in Skyrim VR.
+        focus_window(args.monado_window_search)
+        tap_key(args.ydotool, args.ydotool_socket, KEY_N)
 
         wait_until(
             "RaceSex confirmation",

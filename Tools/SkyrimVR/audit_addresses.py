@@ -11,7 +11,20 @@ from collections import Counter, defaultdict
 BASE = 0x140000000
 MIN_AE_TO_SE_DATA_ROWS = 50
 MIN_ADDRESS_OVERRIDE_DATA_ROWS = 2800
-VALID_OVERRIDE_SOURCES = {"database", "addrlib", "sse_vr"}
+VALID_OVERRIDE_SOURCES = {"database", "addrlib", "sse_vr", "commonlib_vtable"}
+
+# Curated mappings take precedence over generated address-library translations.
+# ID 53926 is project-local on VR: CommonLibSSE-NG's Skyrim VR VM vtable at
+# RVA 0x18E2148 identifies slot 4 as VirtualMachine::Update(float), and the
+# executable vtable entry points to RVA 0x12765B0.
+VALIDATED_VR_OVERRIDES = {
+    53926: {
+        "offset": 0x12765B0,
+        "source": "commonlib_vtable",
+        "status": "exact_vr_vtable",
+        "name": "BSScript::Internal::VirtualMachine::Update",
+    },
+}
 
 POINTER_RE = re.compile(
     r"POINTER_SKYRIMSE(?:_LEGACY)?\s*\([^,\n]+,\s*[^,\n]+,\s*(\d+)"
@@ -244,6 +257,18 @@ def resolve_id(address_id, ae_to_se, release, database, addrlib, offsets_1597, s
             continue
         seen.add(candidate)
 
+        if candidate in VALIDATED_VR_OVERRIDES:
+            row = VALIDATED_VR_OVERRIDES[candidate]
+            return {
+                "id": address_id,
+                "resolved_id": candidate,
+                "translation": translation,
+                "source": row["source"],
+                "offset": row["offset"],
+                "status": row["status"],
+                "name": row["name"],
+            }
+
         if candidate in release:
             return {
                 "id": address_id,
@@ -312,7 +337,7 @@ def write_runtime_csvs(out_dir, resolved):
         if item["translation"] == "ae_to_se":
             aliases[item["id"]] = item["resolved_id"]
 
-        if item["source"] in {"database", "addrlib", "sse_vr"} and item["offset"] is not None:
+        if item["source"] in VALID_OVERRIDE_SOURCES and item["offset"] is not None:
             overrides[item["resolved_id"]] = item["offset"]
             override_meta[item["resolved_id"]] = item
 

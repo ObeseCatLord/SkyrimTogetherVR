@@ -9,8 +9,10 @@ without headset input:
 4. focuses Skyrim with `kdotool`, selects the top New Game entry with `End`
    (Skyrim VR's Scaleform list is indexed bottom-to-top), and sends the VR
    trigger alias to Monado's Qwerty controller;
-5. requests RaceSex completion with `R`, verifies the affirmative dialog, and
-   activates it through a held Monado controller trigger;
+5. requests RaceSex completion with Monado `N` (the Qwerty
+   `KHR/simple_controller` menu action, exposed by XRizer as legacy Grip /
+   RaceSex `XButton`), verifies the affirmative dialog, and activates it through
+   a held Monado `P` controller trigger;
 5a. while finalizing and waiting to connect, scans for `MessageBoxMenu`; only
    the verified Realm of Lorkhan intro is accepted via `menu accept` when its
    body matches `someplace unknown` and `outside of time and space` and its sole
@@ -32,9 +34,19 @@ to `/dev/uinput`, and the Monado Qwerty aliases from
 focused controller trigger and `O` to squeeze because synthetic pointer
 positioning is not reliable on multi-monitor Wayland.
 
+The automation sets `STVR_XRIZER_KEYBOARD_TEXT` to `Shezarrine` (override with
+`--character-name`) for the locally patched XRizer runtime. That opt-in path
+returns the configured text and emits OpenVR `KeyboardDone` after Skyrim asks
+for its virtual keyboard. XRizer preserves its normal unsupported-keyboard
+behavior when the variable is absent.
+
 The default window expressions are anchored to the exact `Skyrim VR` and
 `Monado!` titles. This prevents browser tabs or other windows containing the
-word Skyrim from receiving automation input.
+word Skyrim from receiving automation input. Do not substitute Monado `O` for
+the RaceSex Done action: Qwerty devices negotiate
+`/interaction_profiles/khr/simple_controller`, whose legacy Grip binding comes
+from `/input/menu/click` (`N`), not the Qwerty WMR squeeze input (`O`). Confirm
+the negotiated profile in `stvr-devbench-launch.log` when changing runtimes.
 
 For an unattended run, let the automation launch Skyrim after its persistent
 input device is ready:
@@ -54,11 +66,12 @@ It also requires `--vm-update-mode active`; the default `observe` mode installs
 the opaque VR VM-update detour for cadence and owner-thread evidence but never
 advances the Skyrim Together client.
 
-If XRizer cannot present Skyrim VR's naming keyboard, the run fails closed after
-the confirmation dialog. It never hides `RaceSex Menu`, accepts a still-open
-RaceSex presentation as finalized, or manually invokes the native tick to bypass
-the paused VM. Generic `kHide` reproduced an access violation and does not
-perform the engine's character-finalization transaction.
+If XRizer cannot present Skyrim VR's naming keyboard and the opt-in automation
+callback is unavailable, the run fails closed after the confirmation dialog. It
+never hides `RaceSex Menu`, accepts a still-open RaceSex presentation as
+finalized, or manually invokes the native tick to bypass the paused VM. Generic
+`kHide` reproduced an access violation and does not perform the engine's
+character-finalization transaction.
 
 For unattended connection testing, author a deterministic post-character save
 once through the valid vanilla confirmation and naming path using the exact

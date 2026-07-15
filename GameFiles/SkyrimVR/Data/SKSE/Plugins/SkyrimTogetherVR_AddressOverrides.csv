@@ -148,7 +148,7 @@ id,offset,source,status,name
 53105,095aa60,addrlib,addrlib,
 53112,095c430,addrlib,addrlib,
 53705,097bd00,addrlib,addrlib,
-53926,09869d0,addrlib,addrlib,
+53926,12765b0,commonlib_vtable,exact_vr_vtable,BSScript::Internal::VirtualMachine::Update
 54425,099b180,addrlib,addrlib,
 55497,09c8200,addrlib,addrlib,
 55674,09d02a0,addrlib,addrlib,

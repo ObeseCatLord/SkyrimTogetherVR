@@ -24,6 +24,12 @@ always forwarding to Skyrim. `active` mode consumes permits and calls
 disabled, the VR VM context is never dereferenced, and the outer main-loop hook
 is observation-only.
 
+For Skyrim VR 1.4.15, project-local ID `53926` maps to RVA `0x12765B0` with the
+`void (this, float)` ABI. This is `BSScript::Internal::VirtualMachine::Update`
+virtual slot 4, derived from CommonLibSSE-NG's VR vtable at RVA `0x18E2148` and
+the corresponding executable vtable entry. The earlier `0x9869D0` override was
+incorrect and is rejected by `audit_bringup_hooks.py`.
+
 The default target installs no flat-client BSScript native-binding,
 registration, or signature detours. As a result, `SkyrimTogetherUtils` and the
 connection-menu spell remain staged future UI source rather than active

@@ -4,6 +4,10 @@ import re
 import sys
 
 
+VR_VM_UPDATE_ADDRESS_ID = "53926"
+VR_VM_UPDATE_RVA = "12765b0"
+
+
 EXPECTED_VR_TARGET_CONFIGS = {
     "SkyrimTogetherVRClient": {
         "connection_only": True,
@@ -317,6 +321,8 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     vr_block = text[vr_block_start:vr_block_end] if vr_block_start >= 0 and vr_block_end >= 0 else ""
 
     for required_token in (
+        "TP_THIS_FUNCTION(TVrVmUpdate, void, VrVmUpdateContext, float);",
+        "void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)",
         "TVrVmUpdate",
         "HookVrVmUpdate",
         "STVR_VM_UPDATE_MODE",
@@ -328,6 +334,8 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
             failures.append(f"Code/client/SkyrimVM64.cpp: VR observer block must contain `{required_token}`")
 
     for forbidden_token in (
+        "TP_THIS_FUNCTION(TVrVmUpdate, int",
+        "int TP_MAKE_THISCALL(HookVrVmUpdate",
         "VMContext",
         "inactive",
         "TVMDestructor",
@@ -346,6 +354,39 @@ def audit_vr_main_loop_observer(root: pathlib.Path) -> list[str]:
     return failures
 
 
+def audit_vr_vm_update_address(root: pathlib.Path) -> list[str]:
+    path = root / "GameFiles" / "SkyrimVR" / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AddressOverrides.csv"
+    failures: list[str] = []
+    rows = []
+    if path.exists():
+        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
+            columns = [column.strip() for column in raw_line.split(",")]
+            if columns and columns[0] == VR_VM_UPDATE_ADDRESS_ID:
+                rows.append((line_number, columns))
+
+    if len(rows) != 1:
+        failures.append(f"{path.relative_to(root)}: expected exactly one address ID {VR_VM_UPDATE_ADDRESS_ID} row, found {len(rows)}")
+        return failures
+
+    line_number, columns = rows[0]
+    actual_rva = columns[1].lower().removeprefix("0x") if len(columns) > 1 else ""
+    if actual_rva != VR_VM_UPDATE_RVA:
+        failures.append(
+            f"{path.relative_to(root)}:{line_number}: address ID {VR_VM_UPDATE_ADDRESS_ID} must map to Skyrim VR "
+            f"VirtualMachine::Update RVA 0x{VR_VM_UPDATE_RVA}, found 0x{actual_rva or 'missing'}"
+        )
+
+    expected_provenance = ("commonlib_vtable", "exact_vr_vtable")
+    actual_provenance = tuple(columns[2:4]) if len(columns) >= 4 else ()
+    if actual_provenance != expected_provenance:
+        failures.append(
+            f"{path.relative_to(root)}:{line_number}: address ID {VR_VM_UPDATE_ADDRESS_ID} must record provenance "
+            f"{expected_provenance}, found {actual_provenance}"
+        )
+
+    return failures
+
+
 def main():
     root = repo_root()
     failures = []
@@ -353,6 +394,8 @@ def main():
     failures.extend(structural_failures)
     observer_failures = audit_vr_main_loop_observer(root)
     failures.extend(observer_failures)
+    vm_address_failures = audit_vr_vm_update_address(root)
+    failures.extend(vm_address_failures)
 
     for relative_path, tokens in REQUIRED_TOKENS.items():
         path = root / relative_path
@@ -371,6 +414,7 @@ def main():
     print(f"Audited bring-up files: {len(REQUIRED_TOKENS)}")
     print(f"VR target config failures: {len(structural_failures)}")
     print(f"VR main-loop observer failures: {len(observer_failures)}")
+    print(f"VR VM-update address failures: {len(vm_address_failures)}")
     print(f"Bring-up hook audit failures: {len(failures)}")
     for failure in failures:
         print(f"- {failure}")

@@ -31,7 +31,7 @@ enum class VrVmUpdateMode
 struct VrVmUpdateContext;
 
 TP_THIS_FUNCTION(TMainLoop, short, Main);
-TP_THIS_FUNCTION(TVrVmUpdate, int, VrVmUpdateContext, float);
+TP_THIS_FUNCTION(TVrVmUpdate, void, VrVmUpdateContext, float);
 static TMainLoop* MainLoop = nullptr;
 static TVrVmUpdate* VrVmUpdate = nullptr;
 static std::once_flag s_mainLoopLogOnce;
@@ -71,7 +71,7 @@ static VrVmUpdateMode ReadVrVmUpdateMode() noexcept
     return VrVmUpdateMode::Observe;
 }
 
-int TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)
+void TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)
 {
     const auto callCount = s_vmUpdateCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto threadId = GetCurrentThreadId();
@@ -94,7 +94,7 @@ int TP_MAKE_THISCALL(HookVrVmUpdate, VrVmUpdateContext, float aDelta)
         g_appInstance->Update();
     }
 
-    return TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);
+    TiltedPhoques::ThisCall(VrVmUpdate, apThis, aDelta);
 }
 
 short TP_MAKE_THISCALL(HookMainLoop, Main)
