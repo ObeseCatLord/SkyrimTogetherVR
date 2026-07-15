@@ -4,7 +4,8 @@
 	branch = stvr-vr-port
 [submodule "Libraries/TiltedUI"]
 	path = Libraries/TiltedUI
-	url = https://github.com/TiltedPhoques/TiltedUI
+	url = https://github.com/ObeseCatLord/TiltedUI.git
+	branch = stvr-directxtk-24
 [submodule "Libraries/TiltedConnect"]
 	path = Libraries/TiltedConnect
 	url = https://github.com/ObeseCatLord/TiltedConnect.git
