@@ -9,7 +9,6 @@
 // - 2021/2/24: Moved TLS routine.
 // - 2021/2/25: Implemented CEG decryption method.
 
-#define SPDLOG_WCHAR_FILENAMES
 #include <fmt/xchar.h>
 #include <TiltedCore/Filesystem.hpp>
 #include <spdlog/formatter.h>

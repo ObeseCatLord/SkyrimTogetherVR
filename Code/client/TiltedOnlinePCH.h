@@ -35,8 +35,6 @@ extern void* RipAllocateN(size_t blockLength);
 #define REVERSE_ALLOC_STUB(x) RipAllocateN(x)
 #include <JitAssembly.hpp>
 
-#define SPDLOG_WCHAR_FILENAMES
-#define SPDLOG_WCHAR_TO_UTF8_SUPPORT
 #include <entt/entt.hpp>
 #include <fmt/xchar.h>
 #include <spdlog/spdlog.h>

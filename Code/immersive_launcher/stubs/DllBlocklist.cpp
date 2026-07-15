@@ -4,7 +4,6 @@
 #include <regex>
 #include <fmt/xchar.h>
 #include <cwctype>
-#define SPDLOG_WCHAR_FILENAMES
 #include <spdlog/formatter.h>
 
 #include "utils/Error.h"        // For Die()
