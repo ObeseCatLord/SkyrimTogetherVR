@@ -1,10 +1,11 @@
 [Unit]
-Description=Weekly Skyrim Together VR build storage cleanup
+Description=Daily Skyrim Together VR build storage cleanup
 
 [Timer]
-OnCalendar=weekly
+OnBootSec=15m
+OnUnitActiveSec=1d
 Persistent=true
-RandomizedDelaySec=30m
+RandomizedDelaySec=15m
 
 [Install]
 WantedBy=timers.target

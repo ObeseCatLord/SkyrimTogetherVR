@@ -53,10 +53,12 @@ Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 7 --trim
 ```
 
 `Tools/SkyrimVR/install_build_cleanup_timer.sh` installs and enables a user
-systemd timer that runs the seven-day cleanup weekly. It skips WinBoat cleanup
-without failing when the VM is offline. Do not expand the cleanup patterns to
-game installs, source checkouts, model caches, handoff archives, Docker
-containers, or unrelated application data.
+systemd timer that runs daily and removes generated outputs older than two
+days. The build helper also removes and retrims prior generated WinBoat
+worktrees before each build. Cleanup uses a process lock and skips WinBoat
+cleanup without failing when the VM is offline. Do not expand the cleanup
+patterns to game installs, source checkouts, model caches, handoff archives,
+Docker containers, or unrelated application data.
 
 ## Runtime Safety
 

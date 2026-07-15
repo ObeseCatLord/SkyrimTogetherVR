@@ -8,6 +8,13 @@ scheduled=0
 local_artifacts=1
 rebuildable_caches=0
 
+lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-cleanup.lock"
+exec 9>"$lock_file"
+if ! flock -n 9; then
+    echo "Another Skyrim Together VR build cleanup is already running; skipping."
+    exit 0
+fi
+
 while (($#)); do
     case $1 in
         --max-age-days)

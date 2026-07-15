@@ -82,7 +82,7 @@ compile must not be reported as full gameplay parity.
 ## Storage Hygiene
 
 `skyrim-together-vr-build-cleanup.timer` is enabled as a persistent user timer
-and runs weekly. It retains recent artifacts for seven days and removes only
+and runs daily. It retains recent artifacts for two days and removes only
 the generated Skyrim Together build paths defined by the checked-in cleanup
 script. The WinBoat build helper also removes previous generated detached
 worktrees before starting a new build. After preserving the package and build

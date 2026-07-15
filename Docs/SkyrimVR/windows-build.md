@@ -21,14 +21,16 @@ before creating the new one, preventing each iteration from permanently adding
 several gigabytes to the VM disk. Set `STVR_WINBOAT_REPO` or `WINBOAT_POWERSHELL` only
 when the local layout differs from the defaults documented in `AGENTS.md`.
 
-Install the weekly seven-day retention job on the Linux host with:
+Install the daily two-day retention job on the Linux host with:
 
 ```bash
 Tools/SkyrimVR/install_build_cleanup_timer.sh
 ```
 
 The timer cleans only generated Skyrim Together worktrees and package output,
-then asks Windows to TRIM its virtual disk. Run
+then asks Windows to TRIM its virtual disk. Cleanup is process-locked, and the
+WinBoat build helper performs an immediate guest cleanup and retrim before each
+build. Run
 `Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 0 --trim` for an
 immediate manual cleanup. If WinBoat is offline, scheduled cleanup skips the VM
 without treating that as a failure.

@@ -3,4 +3,4 @@ Description=Clean stale Skyrim Together VR build storage
 
 [Service]
 Type=oneshot
-ExecStart=%h/Documents/SkyrimModding/SkyrimTogetherVR/Tools/SkyrimVR/cleanup_build_storage.sh --scheduled --max-age-days 7 --trim --rebuildable-caches
+ExecStart=%h/Documents/SkyrimModding/SkyrimTogetherVR/Tools/SkyrimVR/cleanup_build_storage.sh --scheduled --max-age-days 2 --trim --rebuildable-caches

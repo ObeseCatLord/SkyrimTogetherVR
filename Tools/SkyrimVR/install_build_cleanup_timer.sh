@@ -11,5 +11,6 @@ ln -sfn "$repo_root/Tools/SkyrimVR/systemd/skyrim-together-vr-build-cleanup.time
     "$unit_dir/skyrim-together-vr-build-cleanup.timer"
 
 systemctl --user daemon-reload
-systemctl --user enable --now skyrim-together-vr-build-cleanup.timer
+systemctl --user enable skyrim-together-vr-build-cleanup.timer
+systemctl --user restart skyrim-together-vr-build-cleanup.timer
 systemctl --user status --no-pager skyrim-together-vr-build-cleanup.timer
