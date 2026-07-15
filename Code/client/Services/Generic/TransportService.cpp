@@ -271,7 +271,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(0, 0);
 #endif
 
-    spdlog::warn("Disconnected from server {}", aReason);
+    spdlog::warn("Disconnected from server {}", static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
 
     m_dispatcher.trigger(DisconnectedEvent());
 }

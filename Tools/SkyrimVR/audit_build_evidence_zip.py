@@ -47,7 +47,12 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
     ),
     "source/BuildSkyrimTogetherVR-DLL-Windows.bat": (
         "SetupSkyrimTogetherVRBuildEnv-Windows.bat",
-        "SkyrimTogetherVRVrikBridge,SkyrimTogetherVRHiggsBridge,SkyrimTogetherVRPlanckBridge,SkyrimTogetherVRTickBridge,ImmersiveElf",
+        "SkyrimTogetherVRVrikBridge",
+        "SkyrimTogetherVRHiggsBridge",
+        "SkyrimTogetherVRPlanckBridge",
+        "SkyrimTogetherVRTickBridge",
+        "SkyrimTogetherVRGameplayBridge",
+        "ImmersiveElf",
     ),
     "source/BuildSkyrimTogetherVR-DLLs-Windows.bat": (
         "Compatibility alias",
