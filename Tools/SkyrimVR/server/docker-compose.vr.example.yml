@@ -1,0 +1,18 @@
+services:
+  skyrim-together-vr:
+    build:
+      context: ${STVR_SOURCE_DIR:-../../..}
+      dockerfile: Dockerfile
+    image: ${STVR_SERVER_IMAGE:-skyrim-together-vr-server:local}
+    container_name: skyrim-together-vr
+    restart: unless-stopped
+    ports:
+      - "${STVR_SERVER_PORT:-26099}:26099/udp"
+    volumes:
+      - ${STVR_SERVER_ROOT:?Set STVR_SERVER_ROOT}/config:/st-server/config
+      - ${STVR_SERVER_ROOT:?Set STVR_SERVER_ROOT}/Data:/st-server/Data
+      - ${STVR_SERVER_ROOT:?Set STVR_SERVER_ROOT}/logs:/st-server/logs
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    stdin_open: true
+    tty: true

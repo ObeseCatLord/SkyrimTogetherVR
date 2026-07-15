@@ -1,4 +1,21 @@
-# Tilted Online
+# Skyrim Together VR
+
+This repository ports Skyrim Together to Skyrim VR. The `main` branch contains
+the VR work; `original-skyrim-together` preserves the imported upstream source
+for direct comparison.
+
+The current release line is an **alpha connection test**, not a gameplay-ready
+multiplayer release. Start with the
+[Linux/Monado prerelease guide](Docs/SkyrimVR/linux-monado-prerelease-guide.md),
+[Windows build guide](Docs/SkyrimVR/windows-agent-build-guide.md), and
+[server guide](Docs/SkyrimVR/server-deployment.md). Release maturity and tag
+rules are documented in
+[prerelease-versioning.md](Docs/SkyrimVR/prerelease-versioning.md).
+
+## Upstream project
+
+The port is derived from Tilted Online / Skyrim Together Reborn:
+
 ![Build status](https://github.com/tiltedphoques/TiltedEvolution/workflows/Build%20windows/badge.svg?branch=master) [![Build linux](https://github.com/tiltedphoques/TiltedEvolution/actions/workflows/linux.yml/badge.svg)](https://github.com/tiltedphoques/TiltedEvolution/actions/workflows/linux.yml)  [![Discord](https://img.shields.io/discord/247835175860305931.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/skyrimtogether)
 
 <img src="https://avatars.githubusercontent.com/u/52131158?s=200&v=4" align="right"

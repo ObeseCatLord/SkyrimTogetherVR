@@ -1,0 +1,554 @@
+diff --git a/src/compositor.rs b/src/compositor.rs
+index 6eaebd6..65b1057 100644
+--- a/src/compositor.rs
++++ b/src/compositor.rs
+@@ -582,8 +582,12 @@ impl vr::IVRCompositor029_Interface for Compositor {
+         crate::warn_unimplemented!("GetFrameTimeRemaining");
+         0.0
+     }
+-    fn GetFrameTimings(&self, _pTiming: *mut vr::Compositor_FrameTiming, _nFrames: u32) -> u32 {
+-        todo!()
++    fn GetFrameTimings(&self, timing: *mut vr::Compositor_FrameTiming, n_frames: u32) -> u32 {
++        if n_frames == 0 {
++            return 0;
++        }
++
++        u32::from(self.GetFrameTiming(timing, 0))
+     }
+     fn GetFrameTiming(&self, timing: *mut vr::Compositor_FrameTiming, _frames_ago: u32) -> bool {
+         if timing.is_null() || !timing.is_aligned() {
+@@ -1755,6 +1759,23 @@ mod tests {
+         assert!(!f.comp.GetFrameTiming(timing.as_mut_ptr(), 1));
+     }
+
++    #[test]
++    fn get_frame_timings() {
++        let f = Fixture::new();
++        assert_eq!(f.wait_get_poses(), None);
++        assert_eq!(f.submit(vr::EVREye::Left), None);
++        assert_eq!(f.submit(vr::EVREye::Right), None);
++
++        let mut timing = MaybeUninit::new(vr::Compositor_FrameTiming::default());
++        unsafe {
++            (&raw mut (*timing.as_mut_ptr()).m_nSize)
++                .write(std::mem::size_of::<vr::Compositor_FrameTiming>() as u32);
++        }
++        assert_eq!(f.comp.GetFrameTimings(timing.as_mut_ptr(), 1), 1);
++        assert_eq!(f.comp.GetFrameTimings(timing.as_mut_ptr(), 0), 0);
++        assert_eq!(f.comp.GetFrameTimings(std::ptr::null_mut(), 1), 0);
++    }
++
+     #[test]
+     fn zero_dims_texture() {
+         let f = Fixture::new();
+diff --git a/src/input.rs b/src/input.rs
+index 77ab6ed..54cae4b 100644
+--- a/src/input.rs
++++ b/src/input.rs
+@@ -67,7 +67,12 @@ pub struct Input<C: openxr_data::Compositor> {
+ struct InputEvent {
+     ty: vr::EVREventType,
+     index: vr::TrackedDeviceIndex_t,
+-    data: vr::VREvent_Controller_t,
++    data: InputEventData,
++}
++
++enum InputEventData {
++    Controller(vr::VREvent_Controller_t),
++    Keyboard(vr::VREvent_Keyboard_t),
+ }
+
+ #[derive(Debug)]
+@@ -1572,20 +1577,27 @@ impl<C: openxr_data::Compositor> Input<C> {
+                         vr::EVREventType::TrackedDeviceDeactivated
+                     },
+                     index: i as vr::TrackedDeviceIndex_t,
+-                    data: Default::default(),
++                    data: InputEventData::Controller(Default::default()),
+                 });
+             }
+         }
+
+-        if let Some(event) = self.events.lock().unwrap().pop_front() {
+-            const MIN_CONTROLLER_EVENT_SIZE: usize = std::mem::offset_of!(vr::VREvent_t, data)
+-                + std::mem::size_of::<vr::VREvent_Controller_t>();
+-            if size < MIN_CONTROLLER_EVENT_SIZE as u32 {
++        let mut events = self.events.lock().unwrap();
++        if let Some(event) = events.front() {
++            let required_size = std::mem::offset_of!(vr::VREvent_t, data)
++                + match &event.data {
++                    InputEventData::Controller(_) => {
++                        std::mem::size_of::<vr::VREvent_Controller_t>()
++                    }
++                    InputEventData::Keyboard(_) => std::mem::size_of::<vr::VREvent_Keyboard_t>(),
++                };
++            if size < required_size as u32 {
+                 warn!(
+-                    "{FUNC}: Provided event struct size ({size}) is smaller than required ({MIN_CONTROLLER_EVENT_SIZE})."
++                    "{FUNC}: Provided event struct size ({size}) is smaller than required ({required_size})."
+                 );
+                 return false;
+             }
++            let event = events.pop_front().unwrap();
+             // VREvent_t can be different sizes depending on the OpenVR version,
+             // so we use raw pointers to avoid creating a reference, because if the
+             // size doesn't match our VREvent_t's size, we are in UB land
+@@ -1593,13 +1605,36 @@ impl<C: openxr_data::Compositor> Input<C> {
+                 (&raw mut (*out).eventType).write(event.ty as u32);
+                 (&raw mut (*out).trackedDeviceIndex).write(event.index);
+                 (&raw mut (*out).eventAgeSeconds).write(0.0);
+-                (&raw mut (*out).data.controller).write(event.data);
++                match event.data {
++                    InputEventData::Controller(data) => {
++                        (&raw mut (*out).data.controller).write(data);
++                    }
++                    InputEventData::Keyboard(data) => {
++                        (&raw mut (*out).data.keyboard).write(data);
++                    }
++                }
+             }
+             true
+         } else {
+             false
+         }
+     }
++
++    pub(crate) fn enqueue_keyboard_done(
++        &self,
++        user_value: u64,
++        overlay_handle: vr::VROverlayHandle_t,
++    ) {
++        self.events.lock().unwrap().push_back(InputEvent {
++            ty: vr::EVREventType::KeyboardDone,
++            index: vr::k_unTrackedDeviceIndexInvalid,
++            data: InputEventData::Keyboard(vr::VREvent_Keyboard_t {
++                cNewInput: [0; 8],
++                uUserValue: user_value,
++                overlayHandle: overlay_handle,
++            }),
++        });
++    }
+ }
+
+ enum LoadedActions {
+diff --git a/src/input/devices.rs b/src/input/devices.rs
+index ca23250..ffd1445 100644
+--- a/src/input/devices.rs
++++ b/src/input/devices.rs
+@@ -8,6 +8,8 @@ use openvr as vr;
+ use openxr as xr;
+
+ use crate::input::profiles::knuckles::Knuckles;
++use crate::input::profiles::oculus_touch::OculusTouch;
++use crate::input::profiles::vive_controller::ViveWands;
+ #[cfg(feature = "monado")]
+ use crate::input::profiles::vive_tracker::ViveTracker;
+ #[cfg(feature = "monado")]
+@@ -20,6 +22,30 @@ use log::trace;
+
+ use super::{Input, InteractionProfile, profiles::MainAxisType};
+
++/// Some legacy OpenVR games require a controller type for which they ship a
++/// control map. Keep Index OpenXR bindings while changing only that facade.
++#[derive(Clone, Copy)]
++enum KnucklesLegacyFacade {
++    Native,
++    OculusTouch,
++    ViveWands,
++}
++
++fn knuckles_legacy_facade() -> KnucklesLegacyFacade {
++    if std::env::var_os("XRIZER_OPENVR_KNUCKLES_AS_OCULUS_TOUCH").is_some_and(|value| value == "1")
++    {
++        KnucklesLegacyFacade::OculusTouch
++    } else if std::env::var_os("XRIZER_OPENVR_KNUCKLES_AS_VIVE").is_some_and(|value| value == "1") {
++        KnucklesLegacyFacade::ViveWands
++    } else {
++        KnucklesLegacyFacade::Native
++    }
++}
++
++pub(crate) fn knuckles_as_oculus_touch() -> bool {
++    matches!(knuckles_legacy_facade(), KnucklesLegacyFacade::OculusTouch)
++}
++
+ pub enum TrackedDeviceType {
+     Hmd,
+     Controller {
+@@ -61,8 +87,20 @@ pub struct ProfileData {
+
+ impl ProfileData {
+     pub fn new<P: InteractionProfile>() -> Self {
++        let properties = if TypeId::of::<P>() == TypeId::of::<Knuckles>() {
++            match knuckles_legacy_facade() {
++                KnucklesLegacyFacade::Native => P::properties(),
++                KnucklesLegacyFacade::OculusTouch => OculusTouch::properties(),
++                KnucklesLegacyFacade::ViveWands => ViveWands::properties(),
++            }
++        } else {
++            P::properties()
++        };
++
+         Self {
+-            properties: P::properties(),
++            // P remains Knuckles, so binding suggestions still target the
++            // active Valve Index OpenXR interaction profile.
++            properties,
+             get_hand_offset: P::offset_grip_pose,
+             force_estimated_thumb: TypeId::of::<P>() == TypeId::of::<Knuckles>(),
+         }
+diff --git a/src/input/legacy.rs b/src/input/legacy.rs
+index 9610aa8..ae0b03b 100644
+--- a/src/input/legacy.rs
++++ b/src/input/legacy.rs
+@@ -238,7 +238,9 @@ impl<C: openxr_data::Compositor> Input<C> {
+                                 vr::EVREventType::ButtonUntouch
+                             },
+                             index: device_index,
+-                            data: vr::VREvent_Controller_t { button: id as u32 },
++                            data: super::InputEventData::Controller(vr::VREvent_Controller_t {
++                                button: id as u32,
++                            }),
+                         });
+                     }
+                     if click_state.changed_since_last_sync {
+@@ -249,7 +251,9 @@ impl<C: openxr_data::Compositor> Input<C> {
+                                 vr::EVREventType::ButtonUnpress
+                             },
+                             index: device_index,
+-                            data: vr::VREvent_Controller_t { button: id as u32 },
++                            data: super::InputEventData::Controller(vr::VREvent_Controller_t {
++                                button: id as u32,
++                            }),
+                         });
+                     }
+                 }
+diff --git a/src/input/profiles/knuckles.rs b/src/input/profiles/knuckles.rs
+index 4b297d5..269cc23 100644
+--- a/src/input/profiles/knuckles.rs
++++ b/src/input/profiles/knuckles.rs
+@@ -3,6 +3,7 @@ use super::{
+     legal_paths, paths::*,
+ };
+ use crate::button_mask_from_ids;
++use crate::input::devices::knuckles_as_oculus_touch;
+ use crate::input::legacy::{self, LegacyBindings, button_mask_from_id};
+ use crate::input::profiles::DynInputPath;
+ use crate::openxr_data::Hand;
+@@ -97,7 +98,14 @@ impl InteractionProfile for Knuckles {
+             app_menu: c.leftright::<B, Click, _, _>(),
+             a: c.leftright::<A, Click, _, _>(),
+             trigger: c.leftright::<Trigger, Value, _, _>(),
+-            trigger_click: c.leftright::<Trigger, Click, _, _>(),
++            // The Oculus Touch facade is used by legacy games such as Skyrim
++            // VR that consume Axis1 as a pressed trigger. Monado's Index
++            // profile reliably supplies trigger value, but not its click bit.
++            trigger_click: if knuckles_as_oculus_touch() {
++                c.leftright::<Trigger, Value, _, _>()
++            } else {
++                c.leftright::<Trigger, Click, _, _>()
++            },
+             squeeze: c.leftright::<Squeeze, Value, _, _>(),
+             squeeze_click: c.leftright::<Squeeze, Value, _, _>(),
+             main_xy: c.leftright::<Thumbstick, (), _, _>(),
+diff --git a/src/input/tests.rs b/src/input/tests.rs
+index c2160e7..d9ae598 100644
+--- a/src/input/tests.rs
++++ b/src/input/tests.rs
+@@ -1029,6 +1029,44 @@ fn empty_manifest() {
+     assert!(f.input.action_map.read().unwrap().is_empty());
+ }
+
++#[test]
++fn keyboard_done_event_survives_an_undersized_poll() {
++    let f = Fixture::new();
++    f.input.events.lock().unwrap().clear();
++    f.input.enqueue_keyboard_done(0x1234, 0x5678);
++
++    let required_size =
++        std::mem::offset_of!(vr::VREvent_t, data) + std::mem::size_of::<vr::VREvent_Keyboard_t>();
++    let mut event = vr::VREvent_t::default();
++    assert!(
++        !f.input
++            .get_next_event((required_size - 1) as u32, &mut event)
++    );
++    assert!(matches!(
++        f.input
++            .events
++            .lock()
++            .unwrap()
++            .front()
++            .map(|event| &event.data),
++        Some(super::InputEventData::Keyboard(_))
++    ));
++
++    assert!(
++        f.input
++            .get_next_event(std::mem::size_of::<vr::VREvent_t>() as u32, &mut event)
++    );
++    let event_type = unsafe { (&raw const event.eventType).read_unaligned() };
++    let device_index = unsafe { (&raw const event.trackedDeviceIndex).read_unaligned() };
++    let keyboard = unsafe { (&raw const event.data.keyboard).read_unaligned() };
++    assert_eq!(event_type, vr::EVREventType::KeyboardDone as u32);
++    assert_eq!(device_index, vr::k_unTrackedDeviceIndexInvalid);
++    assert_eq!(keyboard.cNewInput, [0; 8]);
++    assert_eq!(keyboard.uUserValue, 0x1234);
++    assert_eq!(keyboard.overlayHandle, 0x5678);
++    f.input.events.lock().unwrap().clear();
++}
++
+ #[test]
+ fn load_actions_race() {
+     let mut f = Fixture::new();
+diff --git a/src/overlay.rs b/src/overlay.rs
+index 528d8fd..63e5e5f 100644
+--- a/src/overlay.rs
++++ b/src/overlay.rs
+@@ -2,6 +2,7 @@ use crate::{
+     clientcore::{Injected, Injector},
+     compositor::{Compositor, is_usable_swapchain},
+     graphics_backends::{GraphicsBackend, SupportedBackend, supported_apis_enum},
++    input::Input,
+     openxr_data::{GraphicalSession, OpenXrData, Session, SessionData},
+ };
+ use glam::{Quat, Vec3, vec3};
+@@ -12,7 +13,10 @@ use slotmap::{Key, KeyData, SecondaryMap, SlotMap, new_key_type};
+ use std::f32::consts::{FRAC_1_SQRT_2, PI};
+ use std::ffi::{CStr, CString, c_char, c_void};
+ use std::sync::{Arc, Mutex, RwLock};
+-use std::{collections::HashMap, ops::Deref};
++use std::{
++    collections::{HashMap, VecDeque},
++    ops::Deref,
++};
+
+ // OpenVR overlays are allowed to use ≥ 0
+ pub const SKYBOX_Z_ORDER: i64 = -1;
+@@ -30,6 +34,7 @@ pub struct OverlayMan {
+     overlays: RwLock<SlotMap<OverlayKey, Overlay>>,
+     key_to_overlay: RwLock<HashMap<CString, OverlayKey>>,
+     skybox: RwLock<Vec<OverlayKey>>,
++    keyboard_text: Mutex<Option<CString>>,
+ }
+
+ #[derive(derive_more::Deref)]
+@@ -44,6 +49,7 @@ impl OverlayMan {
+             overlays: Default::default(),
+             key_to_overlay: Default::default(),
+             skybox: Default::default(),
++            keyboard_text: Default::default(),
+         }
+     }
+
+@@ -478,6 +484,50 @@ struct Overlay {
+     transform: Option<(vr::ETrackingUniverseOrigin, vr::HmdMatrix34_t)>,
+     compositor: Option<SupportedBackend>,
+     rect: Option<xr::Rect2Di>,
++    events: VecDeque<OverlayEvent>,
++}
++
++#[derive(Clone, Copy)]
++struct OverlayEvent {
++    ty: vr::EVREventType,
++    data: vr::VREvent_Keyboard_t,
++}
++
++impl OverlayEvent {
++    fn keyboard_done(user_value: u64, overlay_handle: vr::VROverlayHandle_t) -> Self {
++        Self {
++            ty: vr::EVREventType::KeyboardDone,
++            data: vr::VREvent_Keyboard_t {
++                cNewInput: [0; 8],
++                uUserValue: user_value,
++                overlayHandle: overlay_handle,
++            },
++        }
++    }
++}
++
++fn poll_overlay_event(
++    events: &mut VecDeque<OverlayEvent>,
++    out: *mut vr::VREvent_t,
++    size: u32,
++) -> bool {
++    if out.is_null() {
++        return false;
++    }
++    let required_size =
++        std::mem::offset_of!(vr::VREvent_t, data) + std::mem::size_of::<vr::VREvent_Keyboard_t>();
++    if size < required_size as u32 || events.is_empty() {
++        return false;
++    }
++
++    let event = events.pop_front().unwrap();
++    unsafe {
++        (&raw mut (*out).eventType).write(event.ty as u32);
++        (&raw mut (*out).trackedDeviceIndex).write(vr::k_unTrackedDeviceIndexInvalid);
++        (&raw mut (*out).eventAgeSeconds).write(0.0);
++        (&raw mut (*out).data.keyboard).write(event.data);
++    }
++    true
+ }
+
+ impl Overlay {
+@@ -499,6 +549,7 @@ impl Overlay {
+             transform: None,
+             compositor: None,
+             rect: None,
++            events: Default::default(),
+         }
+     }
+
+@@ -801,22 +852,85 @@ impl vr::IVROverlay028_Interface for OverlayMan {
+     fn HideKeyboard(&self) {
+         crate::warn_unimplemented!("HideKeyboard");
+     }
+-    fn GetKeyboardText(&self, _: *mut c_char, _: u32) -> u32 {
+-        todo!()
++    fn GetKeyboardText(&self, text_out: *mut c_char, text_capacity: u32) -> u32 {
++        let keyboard_text = self.keyboard_text.lock().unwrap();
++        let Some(text) = keyboard_text.as_ref() else {
++            todo!()
++        };
++
++        let bytes = text.as_bytes();
++        let required_size = u32::try_from(bytes.len() + 1).unwrap_or(u32::MAX);
++        if text_out.is_null() || text_capacity == 0 {
++            return required_size;
++        }
++
++        let utf8 = text
++            .to_str()
++            .expect("automation keyboard text was validated as UTF-8");
++        let mut copy_len = bytes.len().min(text_capacity.saturating_sub(1) as usize);
++        while !utf8.is_char_boundary(copy_len) {
++            copy_len -= 1;
++        }
++
++        unsafe {
++            std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), text_out, copy_len);
++            text_out.add(copy_len).write(0);
++        }
++        required_size
+     }
+     fn ShowKeyboardForOverlay(
+         &self,
+-        _: vr::VROverlayHandle_t,
++        overlay_handle: vr::VROverlayHandle_t,
+         _: vr::EGamepadTextInputMode,
+         _: vr::EGamepadTextInputLineMode,
+         _: u32,
+         _: *const c_char,
+-        _: u32,
++        char_max: u32,
+         _: *const c_char,
+-        _: u64,
++        user_value: u64,
+     ) -> vr::EVROverlayError {
+-        crate::warn_unimplemented!("ShowKeyboardForOverlay");
+-        vr::EVROverlayError::RequestFailed
++        let text = match std::env::var("STVR_XRIZER_KEYBOARD_TEXT") {
++            Ok(text) => text,
++            Err(std::env::VarError::NotPresent) => {
++                crate::warn_unimplemented!("ShowKeyboardForOverlay");
++                return vr::EVROverlayError::RequestFailed;
++            }
++            Err(std::env::VarError::NotUnicode(_)) => {
++                log::warn!("STVR_XRIZER_KEYBOARD_TEXT is not valid UTF-8");
++                return vr::EVROverlayError::RequestFailed;
++            }
++        };
++
++        if text.chars().count() > char_max as usize {
++            log::warn!("STVR_XRIZER_KEYBOARD_TEXT exceeds the requested character limit");
++            return vr::EVROverlayError::RequestFailed;
++        }
++        let text = match CString::new(text) {
++            Ok(text) => text,
++            Err(_) => {
++                log::warn!("STVR_XRIZER_KEYBOARD_TEXT contains an interior NUL");
++                return vr::EVROverlayError::RequestFailed;
++            }
++        };
++        if u32::try_from(text.as_bytes_with_nul().len()).is_err() {
++            return vr::EVROverlayError::RequestFailed;
++        }
++
++        let overlay_key = OverlayKey::from(KeyData::from_ffi(overlay_handle));
++        let overlay_event = OverlayEvent::keyboard_done(user_value, overlay_handle);
++        let mut overlays = self.overlays.write().unwrap();
++        let Some(overlay) = overlays.get_mut(overlay_key) else {
++            return vr::EVROverlayError::UnknownOverlay;
++        };
++
++        *self.keyboard_text.lock().unwrap() = Some(text);
++        overlay.events.push_back(overlay_event);
++        drop(overlays);
++        self.openxr
++            .input
++            .force(|_| Input::new(self.openxr.clone()))
++            .enqueue_keyboard_done(user_value, overlay_handle);
++        vr::EVROverlayError::None
+     }
+     fn ShowKeyboard(
+         &self,
+@@ -1001,11 +1115,16 @@ impl vr::IVROverlay028_Interface for OverlayMan {
+     }
+     fn PollNextOverlayEvent(
+         &self,
+-        _: vr::VROverlayHandle_t,
+-        _: *mut vr::VREvent_t,
+-        _: u32,
++        overlay_handle: vr::VROverlayHandle_t,
++        event: *mut vr::VREvent_t,
++        event_size: u32,
+     ) -> bool {
+-        false
++        let overlay_key = OverlayKey::from(KeyData::from_ffi(overlay_handle));
++        let mut overlays = self.overlays.write().unwrap();
++        let Some(overlay) = overlays.get_mut(overlay_key) else {
++            return false;
++        };
++        poll_overlay_event(&mut overlay.events, event, event_size)
+     }
+     fn WaitFrameSync(&self, _: u32) -> vr::EVROverlayError {
+         todo!()
+@@ -1593,3 +1712,38 @@ impl vr::IVROverlay007On010 for OverlayMan {
+         todo!()
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn keyboard_done_overlay_event_survives_an_undersized_poll() {
++        let mut events = VecDeque::from([OverlayEvent::keyboard_done(0x1234, 0x5678)]);
++        let required_size = std::mem::offset_of!(vr::VREvent_t, data)
++            + std::mem::size_of::<vr::VREvent_Keyboard_t>();
++        let mut event = vr::VREvent_t::default();
++
++        assert!(!poll_overlay_event(
++            &mut events,
++            &mut event,
++            (required_size - 1) as u32,
++        ));
++        assert_eq!(events.len(), 1);
++        assert!(poll_overlay_event(
++            &mut events,
++            &mut event,
++            std::mem::size_of::<vr::VREvent_t>() as u32,
++        ));
++
++        let event_type = unsafe { (&raw const event.eventType).read_unaligned() };
++        let device_index = unsafe { (&raw const event.trackedDeviceIndex).read_unaligned() };
++        let keyboard = unsafe { (&raw const event.data.keyboard).read_unaligned() };
++        assert_eq!(event_type, vr::EVREventType::KeyboardDone as u32);
++        assert_eq!(device_index, vr::k_unTrackedDeviceIndexInvalid);
++        assert_eq!(keyboard.cNewInput, [0; 8]);
++        assert_eq!(keyboard.uUserValue, 0x1234);
++        assert_eq!(keyboard.overlayHandle, 0x5678);
++        assert!(events.is_empty());
++    }
++}
