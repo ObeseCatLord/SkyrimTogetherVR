@@ -330,6 +330,17 @@ def write_runtime_csvs(out_dir, resolved):
             overrides[item["resolved_id"]] = item["offset"]
             override_meta[item["resolved_id"]] = item
 
+    # Curated contracts are package requirements even when an ID is referenced
+    # only by the CommonLib VR bridge rather than the legacy desktop wrappers
+    # scanned by find_source_refs(). They also take precedence over generated
+    # translations by definition.
+    aliases.update(
+        {desktop_id: metadata["vr_id"] for desktop_id, metadata in VALIDATED_COMMONLIB_VR_ALIASES.items()}
+    )
+    for address_id, metadata in VALIDATED_VR_ADDRESS_OVERRIDES.items():
+        overrides[address_id] = metadata["offset"]
+        override_meta[address_id] = metadata
+
     alias_path = out_dir / "SkyrimTogetherVR_AE_to_SE.csv"
     alias_temp_path = alias_path.with_name(f"{alias_path.name}.{os.getpid()}.tmp")
     with alias_temp_path.open("w", newline="", encoding="utf-8") as handle:
@@ -357,6 +368,7 @@ def validate_runtime_csvs(alias_path, override_path, release):
     alias_rows = []
     override_rows = []
     override_offsets = {}
+    override_metadata = {}
 
     with alias_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -429,11 +441,27 @@ def validate_runtime_csvs(alias_path, override_path, release):
             override_rows.append(address_id)
             if offset is not None:
                 override_offsets[address_id] = offset
+                override_metadata[address_id] = (
+                    offset,
+                    source,
+                    row.get("status", ""),
+                    row.get("name", ""),
+                )
 
     if len(override_rows) < MIN_ADDRESS_OVERRIDE_DATA_ROWS:
         failures.append(
             f"{override_path}: expected at least {MIN_ADDRESS_OVERRIDE_DATA_ROWS} data rows, found {len(override_rows)}"
         )
+
+    for address_id, expected in sorted(VALIDATED_VR_ADDRESS_OVERRIDES.items()):
+        actual = override_metadata.get(address_id)
+        wanted = (expected["offset"], expected["source"], expected["status"], expected["name"])
+        if actual is None:
+            failures.append(f"{override_path}: missing validated VR address override {address_id} ({expected['name']})")
+        elif actual != wanted:
+            failures.append(
+                f"{override_path}: validated VR address override {address_id} is {actual!r}, expected {wanted!r}"
+            )
 
     for se_id, ae_id in alias_rows:
         source_offset = override_offsets.get(se_id, release.get(se_id))

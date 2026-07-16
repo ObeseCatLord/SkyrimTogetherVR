@@ -92,7 +92,7 @@ None.
 - `GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv`
 - `GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv`
 - AE-to-SE helper CSV data rows: 77
-- Address override helper CSV data rows: 2969
+- Address override helper CSV data rows: 2972
 - Helper CSV validation failures: 0
 
 The override CSV is generated from VR database/addrlib rows and exact `offsets-1.5.97.0.csv` plus `sse_vr.csv` matches that are not present in the public release CSV. Entries from `addrlib.csv` are partially automated and must be validated before enabling gameplay hooks.

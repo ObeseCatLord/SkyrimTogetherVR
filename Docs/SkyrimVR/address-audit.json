@@ -5138,7 +5138,7 @@
     }
   ],
   "runtimeHelperCsvs": {
-    "addressOverrideDataRows": 2969,
+    "addressOverrideDataRows": 2972,
     "addressOverrides": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AddressOverrides.csv",
     "aeToSe": "GameFiles/SkyrimVR/Data/SKSE/Plugins/SkyrimTogetherVR_AE_to_SE.csv",
     "aeToSeDataRows": 77,
@@ -5146,7 +5146,7 @@
   },
   "schema": "skyrim_together_vr_address_audit_v1",
   "summary": {
-    "addressOverrideHelperCsvRows": 2969,
+    "addressOverrideHelperCsvRows": 2972,
     "aeToSeHelperCsvRows": 77,
     "helperCsvValidationFailures": 0,
     "missingIdsIncludingRtti": 47,
