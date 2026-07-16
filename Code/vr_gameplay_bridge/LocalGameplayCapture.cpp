@@ -1255,11 +1255,17 @@ void CaptureAppearance(RE::PlayerCharacter& a_player, Snapshot& a_current) noexc
         }
     }
 
-    constexpr auto skinTone = static_cast<std::size_t>(RE::TintMask::Type::kSkinTone);
+    constexpr auto skinToneType = RE::TintMask::Type::kSkinTone;
+    constexpr auto skinTone = static_cast<std::size_t>(skinToneType);
     static_assert(skinTone == kSupportedSkinTintType);
     for (std::size_t index = skinTone; index <= skinTone; ++index) {
-        const auto count = a_player.GetNumTints(static_cast<std::uint32_t>(index));
-        const auto* tint = count != 0 ? a_player.GetTintMask(static_cast<std::uint32_t>(index), 0) : nullptr;
+        const RE::TintMask* tint = nullptr;
+        for (const auto* candidate : a_player.GetVRPlayerRuntimeData().tintMasks) {
+            if (candidate && candidate->type == skinToneType) {
+                tint = candidate;
+                break;
+            }
+        }
         if (!tint || !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F)
             continue;
         const auto alphaBits = std::bit_cast<std::uint32_t>(tint->alpha);
