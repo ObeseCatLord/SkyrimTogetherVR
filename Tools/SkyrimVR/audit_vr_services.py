@@ -4192,11 +4192,46 @@ def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     transport_path = root / "Code/client/Services/Generic/TransportService.cpp"
     player_path = root / "Code/client/Services/Generic/PlayerService.cpp"
+    discovery_path = root / "Code/client/Services/Generic/DiscoveryService.cpp"
     transport_text = transport_path.read_text(encoding="utf-8", errors="replace") if transport_path.exists() else ""
     player_text = player_path.read_text(encoding="utf-8", errors="replace") if player_path.exists() else ""
+    discovery_text = discovery_path.read_text(encoding="utf-8", errors="replace") if discovery_path.exists() else ""
 
-    if "TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE" in player_text:
-        errors.append("Connection-only PlayerService safety must not depend on the player-cell diagnostics flag")
+    required_player_gate = (
+        "constexpr bool kVrNetworkOnlyPlayerService = "
+        "TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE;"
+    )
+    if required_player_gate not in player_text:
+        errors.append("Every VR player-cell package must force PlayerService into network-only mode")
+    if "kVrCellOnlyPlayerService" in player_text or (
+        "TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY" in player_text
+        and "kVrNetworkOnlyPlayerService" in player_text
+    ):
+        errors.append("VR PlayerService network-only safety must not depend on the connection-only package flavor")
+
+    constructor = extract_cpp_function(
+        player_text,
+        "PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept",
+    )
+    network_only_branch = constructor.find("if constexpr (kVrNetworkOnlyPlayerService)")
+    early_return = constructor.find("return;", network_only_branch)
+    connected_subscription = constructor.find("sink<ConnectedEvent>()")
+    settings_subscription = constructor.find("sink<ServerSettings>()")
+    if (
+        network_only_branch < 0
+        or early_return < 0
+        or connected_subscription < 0
+        or settings_subscription < 0
+        or not (network_only_branch < early_return < connected_subscription < settings_subscription)
+    ):
+        errors.append("VR PlayerService must return before desktop ConnectedEvent and ServerSettings subscriptions")
+
+    required_discovery_gate = (
+        "constexpr bool kVrSkipStrictConnectionEnforcement = "
+        "TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE;"
+    )
+    if required_discovery_gate not in discovery_text:
+        errors.append("VR discovery strict connection bypass must remain gated by the discovery service")
 
     connected = extract_cpp_function(transport_text, "void TransportService::OnConnected()")
     vr_auth_start = connected.find("#if TP_SKYRIM_VR\n    // The stable lifecycle gate")
@@ -4220,11 +4255,56 @@ def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
             errors.append(f"Connection-only function `{signature}` must not call `GetLevel()`")
 
     update = extract_cpp_function(player_text, "void PlayerService::OnUpdate(const UpdateEvent& acEvent) noexcept")
-    vr_cell_only = update.find("if constexpr (kVrCellOnlyPlayerService)")
+    vr_cell_only = update.find("if constexpr (kVrNetworkOnlyPlayerService)")
     early_return = update.find("return;", vr_cell_only)
     desktop_level_update = update.find("RunLevelUpdates();")
     if vr_cell_only < 0 or early_return < 0 or desktop_level_update < 0 or not (vr_cell_only < early_return < desktop_level_update):
-        errors.append("PlayerService::OnUpdate must return from connection-only VR handling before desktop level polling")
+        errors.append("PlayerService::OnUpdate must return from network-only VR handling before desktop level polling")
+
+    required_checkpoints = {
+        "Code/client/Services/Generic/TransportService.cpp": (
+            "auth.accept.begin",
+            "auth.identity.done",
+            "auth.settings.begin",
+            "auth.settings.done",
+            "auth.connected_dispatch.begin",
+            "auth.connected_dispatch.done",
+        ),
+        "Code/client/Services/Generic/DiscoveryService.cpp": (
+            "connected.discovery.begin",
+            "connected.discovery.done",
+        ),
+        "Code/client/Services/Generic/VRConnectionService.cpp": (
+            "connected.connection_service.begin",
+            "connected.connection_service.done",
+        ),
+        "Code/client/Services/Generic/VRSaveLoadService.cpp": (
+            "connected.saveload.begin",
+            "connected.saveload.done",
+        ),
+        "Code/client/Services/Generic/StringCacheService.cpp": (
+            "connected.string_cache.begin",
+            "connected.string_cache.done",
+        ),
+        "Code/client/Services/Generic/VRAvatarService.cpp": (
+            "connected.avatar.begin",
+            "connected.avatar.done",
+            "avatar.assignment_send.begin",
+            "avatar.assignment_send.done",
+        ),
+    }
+    for relative_path, tokens in required_checkpoints.items():
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        for token in tokens:
+            if token not in text:
+                errors.append(f"Missing flushed authentication checkpoint `{token}` in {relative_path}")
+
+    diagnostics_path = root / "Code/client/VRRuntimeDiagnostics.h"
+    diagnostics_text = diagnostics_path.read_text(encoding="utf-8", errors="replace") if diagnostics_path.exists() else ""
+    for token in ("LogRuntimeCheckpoint", "default_logger_raw", "pLogger->flush()"):
+        if token not in diagnostics_text:
+            errors.append(f"VR runtime checkpoint helper is missing `{token}`")
 
     return errors
 

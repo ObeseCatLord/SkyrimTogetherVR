@@ -17,6 +17,7 @@
 #include <World.h>
 #include <VRCanonicalEntityIdentity.h>
 #include <VRGameplayBridge.h>
+#include <VRRuntimeDiagnostics.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <algorithm>
@@ -221,6 +222,7 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.avatar.begin");
     m_remoteAvatars.clear();
     m_pendingSpawns.clear();
     ResetStatusCounters();
@@ -234,6 +236,7 @@ void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
     m_capabilityWarningLogged = false;
     m_statusDirty = true;
     TryRequestLocalAssignment();
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.avatar.done");
 }
 
 void VRAvatarService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
@@ -784,8 +787,10 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
     m_assignmentCookie = request.Cookie;
     m_assignmentPending = true;
     m_assignmentElapsed = 0.0;
+    SkyrimTogetherVR::LogRuntimeCheckpoint("avatar.assignment_send.begin");
     if (!m_transport.Send(request))
         spdlog::warn("VR avatar assignment request was not queued; retry is bounded to {} seconds", kAssignmentRetrySeconds);
+    SkyrimTogetherVR::LogRuntimeCheckpoint("avatar.assignment_send.done");
 }
 
 void VRAvatarService::SendLocalMovement() noexcept

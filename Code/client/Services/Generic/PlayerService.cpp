@@ -42,17 +42,13 @@
 #define TP_SKYRIM_VR 0
 #endif
 
-#ifndef TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY
-#define TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY 0
-#endif
-
 #ifndef TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE
 #define TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE 0
 #endif
 
 namespace
 {
-constexpr bool kVrCellOnlyPlayerService = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY;
+constexpr bool kVrNetworkOnlyPlayerService = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE;
 constexpr bool kVrPlayerCellStatusEnabled = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE;
 constexpr uint16_t kVrFallbackLevel = 1;
 constexpr double kVrPlayerCellStatusWriteInterval = 1.0;
@@ -88,7 +84,7 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, Trans
         spdlog::info("SkyrimTogetherVR player cell handoff status file: {}", m_vrPlayerCellStatusPath.string());
     }
 
-    if constexpr (kVrCellOnlyPlayerService)
+    if constexpr (kVrNetworkOnlyPlayerService)
     {
         spdlog::info("SkyrimTogetherVR PlayerService network-only mode: sending cell/grid changes; level reads are disabled");
         m_updateConnection = m_dispatcher.sink<UpdateEvent>().connect<&PlayerService::OnUpdate>(this);
@@ -112,7 +108,7 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, Trans
 
 void PlayerService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
-    if constexpr (kVrCellOnlyPlayerService)
+    if constexpr (kVrNetworkOnlyPlayerService)
     {
         RunVrLevelUpdates(acEvent.Delta);
         RunVrPlayerCellStatusWrite(acEvent.Delta);
@@ -181,7 +177,7 @@ void PlayerService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) 
 
 void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) noexcept
 {
-    if constexpr (kVrCellOnlyPlayerService)
+    if constexpr (kVrNetworkOnlyPlayerService)
     {
         if (!m_transport.IsOnline())
         {
@@ -232,7 +228,7 @@ void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) no
 
 void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
 {
-    if constexpr (kVrCellOnlyPlayerService)
+    if constexpr (kVrNetworkOnlyPlayerService)
     {
         if (!m_transport.IsOnline())
         {

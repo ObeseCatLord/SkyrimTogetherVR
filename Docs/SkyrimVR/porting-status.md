@@ -490,7 +490,7 @@ Current result:
 - `VRHiggsService.cpp` contains the expected `SkyrimTogetherVR.higgs` reader and `SkyrimTogetherVR.higgsnet` handoff fields and contains no forbidden HIGGS API, mutating HIGGS callback/control, object-sync, projectile, equipment, or gameplay mutation tokens.
 - `Tools/SkyrimVR/audit_vr_higgs.py` passes and confirms the HIGGS state payload, observer gating, relay protocol, handoff file, companion/Papyrus readouts, and no-mutation boundary.
 - `VRSaveLoadService.cpp` contains the expected `SkyrimTogetherVR.saveload` handoff fields, including raw and server-mapped player/cell/worldspace identities, and contains no forbidden save/load manager, reconnect/disconnect, gameplay service, actor mutation, or projectile-sync tokens.
-- `PlayerService.cpp` contains the expected `SkyrimTogetherVR.playercell` handoff fields for the VR network-only player cell/grid/level request path and keeps the same telemetry file active when the gameplay package runs the normal `PlayerService` path.
+- `PlayerService.cpp` contains the expected `SkyrimTogetherVR.playercell` handoff fields for the VR network-only player cell/grid/level request path. Every VR package with `TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE=1`, including gameplay, returns before subscribing desktop death, difficulty, respawn, dialogue, party, and beast-form callbacks.
 - Inventory prerequisite layouts have required static assertion/accessor tokens for `ExtraContainerChanges`, `TESContainer`, `InventoryEntry`, `ExtraDataList`, `AIProcess`, `MiddleProcess`, and the local equip hook payloads, including the middle-high process pointer plus active-effects, commanding-actor, direction, equipped-object, and equip-payload accessors.
 - `TESObjectREFR::GetItemCountInInventory()` and `TESObjectREFR::GetInventory()` use the local CommonLib-style `InventoryChanges`, `TESContainer`, and `ExtraDataList` wrappers instead of raw `GetContainerChanges()->entries`, base-container `entries/count`, or extra-data-list storage traversal.
 - The stale oversized `ExtraContainerChanges::Entry` padding token is absent.
@@ -597,14 +597,19 @@ Current result:
 - `SkyrimTogetherServer` builds and includes `VRPoseRelayService`, `VRMovementRelayService`, `VREquipmentRelayService`, `VRActivationRelayService`, `VRMagicRelayService`, `VRCombatRelayService`, `VRProjectileRelayService`, `VRGrabRelayService`, and `VRHiggsRelayService`.
 - `SkyrimTogetherServer` builds with player exterior-cell state updates that do not require a spawned character.
 - Final source-side compile checks on this Linux host pass. The newest clean
-  WinBoat/MSVC gameplay build is runtime-gate commit `6f9cb845`; its 503-file
-  package and paired evidence archive passed independent audits, and a fresh
-  runtime proved the CommonLib bridge accepts SKSEVR 2.0.12/release 60 without
-  the former owner-thread bootstrap failure. End-to-end connection acceptance
-  remains open because the simulated-runtime process exits after the valid
-  RaceSex finalization transaction. See
-  `windows-gameplay-build-result-20260715-runtime-gate.md`. This supersedes the
-  older `94544550` package for the next runtime test.
+  WinBoat/MSVC gameplay build is discovery/handshake commit `3cf4aa0e`; its
+  503-file package and paired evidence archive passed independent audits and
+  embed network version `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`. The preceding
+  `5f7943c2` runtime proved player-only discovery completes in Realm and reaches
+  the dedicated server, then exposed an invalid WinBoat-generated client
+  version `none`. The build now fetches tags and fails if generated or packaged
+  network provenance is invalid. The exact `3cf4aa0e` server then admitted the
+  client, proving the handshake; PDB-assisted Wine SEH tracing isolated the
+  immediate client exit to the gameplay package incorrectly enabling desktop
+  PlayerService death-system callbacks. The network-only predicate now follows
+  the VR player-cell service flag and flushed stage checkpoints cover the next
+  acceptance run. See
+  `windows-gameplay-build-result-20260716-discovery-handshake.md`.
 - `Tools/SkyrimVR/vr_handoff.py self-test` passes for temp-directory command writing, readout parsing, remote-player proxy aggregation, and consolidated remote-player table generation.
 - `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, strict staged gameplay relay checks with semantic local and remote payload fields, and avatar-sync handoff validation; rerun it during the final validation phase after the source-only work is complete.
 - `Tools/SkyrimVR/collect_runtime_evidence.py --self-test` and `Tools/SkyrimVR/audit_runtime_evidence_zip.py --self-test` are included in `audit_vr_readiness.py`; their fixtures now require `SkyrimTogetherVR_BuildManifest.json`, validate the package build manifest against avatar-sync mode, embed it in `manifest.json`, include it under `package/` in the evidence zip, and enforce manifest-requested runtime checklist lanes such as `requiredRemotePlayer`, `requiredWeaponPose`, `requiredMovementRelay`, and `avatarSyncAudit` even when the zip audit is run without repeating strict CLI flags. `avatarSyncAudit` itself now requires connection, local VRIK API, HIGGS bridge, remote-player proxy, remote VRIK avatar readiness, remote VRIK/HIGGS avatar readiness, and actor-target checklist lanes, so a two-client VRIK/HIGGS avatar evidence zip cannot be relaxed by omitting `requiredRemotePlayer`.

@@ -1,6 +1,6 @@
 # Skyrim Together VR Original Gameplay Parity Checklist
 
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 ## Goal And Status Rules
 
@@ -48,6 +48,22 @@ The canonical implementation boundary is fixed:
   SKSEVR 2.0.12/release 60 and the mapped client reached recurring owner-thread
   dispatch without the former endpoint-bootstrap failure. See
   `windows-gameplay-build-result-20260715-runtime-gate.md`.
+- [x] Runtime/build: commit `5f7943c2` proved player-only VR discovery reaches
+  Realm with exactly the local actor and reaches the server; commit `3cf4aa0e`
+  then repaired the `BUILD_COMMIT=none` WinBoat provenance defect and produced
+  an audited 503-file package with embedded network version
+  `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`. See
+  `windows-gameplay-build-result-20260716-discovery-handshake.md`.
+- [x] Runtime: exact-version `3cf4aa0e` client/server pair proves transport,
+  version equality, authentication acceptance, expected ten-mod load order, and
+  a healthy zero-restart server.
+- [x] Source: PDB-symbolized the immediate post-authentication crash to the
+  gameplay package enabling desktop PlayerService callbacks, made every VR
+  player-cell package network-only, and added flushed acceptance checkpoints
+  plus an audit that rejects package-flavor-dependent safety.
+- [ ] Runtime: the corrected exact-version client/server pair proves local
+  `online=1`, nonzero player ID, current-cell request, sustained connection, and
+  clean disconnect.
 - [ ] Runtime: two clients prove unique spawn, move, turn, stop, leave, despawn.
 - [ ] Runtime: repeat reconnect, load, cell transition, and entity reuse ten
   times with no duplicate/stale actor, leaked handle, or queue corruption.
@@ -221,13 +237,12 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Resolve and classify the reproducible simulated-runtime process exit after
-   the valid RaceSex finish/name transaction on exact build `6f9cb845`; retain
-   process-exit evidence and do not treat transient Realm readiness as a
-   successful connection.
-2. Prove one automated client remains in Realm of Lorkhan, reaches a stable
-   ready lifecycle, and receives a nonzero server player ID before establishing
-   the isolated second client.
+1. Build and deploy the PlayerService gate correction, then prove the matching
+   automated client passes every flushed authentication/listener checkpoint,
+   remains in Realm of Lorkhan, and receives a nonzero server player ID plus
+   current-cell response for at least 30 seconds.
+2. Retain the corrected exact-version single-client connection/disconnect evidence before
+   establishing the isolated second client.
 3. Run the Phase 0 plus movement/graph two-client acceptance matrix against
    that exact client/server source revision.
 4. Fix any actor lifecycle, spatial-transfer, or graph-application defect found

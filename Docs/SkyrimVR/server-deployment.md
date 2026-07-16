@@ -94,28 +94,27 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:f9d32cd0`.
+- Image tag: `skyrim-together-vr-server:3cf4aa0e`.
 - Image ID:
-  `sha256:dfed40c8b8061ff25f57dcfaffc0e9f51e6669981c96ef0f0989d636959b9631`.
+  `sha256:3f0967165e0fd39f7da68d253eacbc61696bc9bb130bd51e07610d4206856fff`.
 - Runtime executable SHA-256:
-  `8c3e5bf19e523f065169513ac878281d233206b676a2684039d1878c782a8cb6`.
+  `3a54131f667b8e7a5f9e9b70f716c51944e2b1a218d18d88846fc1c75c329246`.
 - Runtime core SHA-256:
-  `6963ca3348abe5f886803fe44ba9b7112ffac09604dc6186185973183911f361`.
-- Server binary source revision: `d201a3f8`; startup reports
-  `stvr-v0.1.0-alpha.1-27-gd201a3f8`.
-- Linux dependency/build configuration revision: `f9d32cd0`.
-- Packaged client binary source revision: `d201a3f8`.
+  `06a6fdbfa1d5512862247fc83b04de9f214fbf3cad7fe2c3f4e85d714a6ceb51`.
+- Server binary source revision: `3cf4aa0e`; startup reports
+  `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`.
+- Packaged client binary source revision: `3cf4aa0e`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server binaries use the same `d201a3f8` gameplay/protocol source.
-The newer server image tag records Linux-only xmake dependency declarations;
-those changes do not alter shared messages, encoding, or runtime gameplay code.
-The container was recreated through the existing Compose project on 2026-07-15
-and verified with one container, zero restarts, host networking, UDP 26099
-listening, and the existing public-zone `26001-27000/udp` firewall allowance.
+The client and server binaries use the same `3cf4aa0e` source and exact network
+version. The container was recreated through the existing Compose project on
+2026-07-16 and verified with one container, zero restarts, host networking, UDP
+26099 listening, and the existing public-zone `26001-27000/udp` firewall
+allowance. The first exact-version runtime attempt was admitted by this server;
+the remaining failure was a client-side post-authentication PlayerService call.
 Rebuild and redeploy whenever shared message definitions, encoding, or server
 code changes.
 

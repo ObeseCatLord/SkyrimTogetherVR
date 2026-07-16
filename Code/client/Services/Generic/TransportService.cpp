@@ -25,6 +25,7 @@
 
 #include <ScriptExtender.h>
 #include <VRGameplayBridge.h>
+#include <VRRuntimeDiagnostics.h>
 #include <Services/DiscordService.h>
 #include <Services/VRLifecycleService.h>
 
@@ -287,7 +288,9 @@ void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 
 void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
 {
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.transport.begin");
     m_localPlayerId = acEvent.PlayerId;
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.transport.done");
 }
 
 void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noexcept
@@ -300,6 +303,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     using AR = AuthenticationResponse::ResponseType;
     if (acMessage.Type == AR::kAccepted)
     {
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.accept.begin");
         const auto expectedNegotiatedCapabilities =
             acMessage.ServerCapabilities & m_requestedGameplayCapabilities;
         const bool validProtocol =
@@ -352,12 +356,19 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             m_serverInstanceNonce,
             m_connectionGeneration);
 #endif
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.identity.done");
 
         m_world.SetServerSettings(acMessage.Settings);
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.world_settings.done");
 
         m_dispatcher.trigger(acMessage.UserMods);
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.user_mods.done");
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.settings.begin");
         m_dispatcher.trigger(acMessage.Settings);
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.settings.done");
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.connected_dispatch.begin");
         m_dispatcher.trigger(ConnectedEvent(acMessage.PlayerId));
+        SkyrimTogetherVR::LogRuntimeCheckpoint("auth.connected_dispatch.done");
         return; // quit the function here.
     }
 

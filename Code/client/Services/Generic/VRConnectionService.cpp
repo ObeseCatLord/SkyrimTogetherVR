@@ -14,6 +14,7 @@
 #include <Events/UpdateEvent.h>
 #include <Services/TransportService.h>
 #include <Services/VRLifecycleService.h>
+#include <VRRuntimeDiagnostics.h>
 #include <World.h>
 
 namespace
@@ -114,15 +115,18 @@ void VRConnectionService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRConnectionService::OnConnected(const ConnectedEvent&) noexcept
 {
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.begin");
     if (!IsVrPlayerReadyForConnection(m_world))
     {
         spdlog::warn("SkyrimTogetherVR connection completed outside a ready lifecycle epoch; closing it");
         m_transport.Close();
+        SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.closed_not_ready");
         return;
     }
 
     m_connectInFlight = false;
     SetStatus("online");
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.done");
 }
 
 void VRConnectionService::OnDisconnected(const DisconnectedEvent&) noexcept

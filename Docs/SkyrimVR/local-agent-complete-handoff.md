@@ -15,11 +15,13 @@ Nexus, cloud storage, or a public issue.
   bundle is retained only as release/history context.
   `LOCAL-MANIFEST.json` binds both archives to one build manifest and records
   the built source revision separately from the newer documentation HEAD. The
-  current pair is the `6f9cb845` runtime-gate build: 503 packaged files, zero
-  package/evidence audit failures, and runtime proof that the CommonLib bridge
-  validates SKSEVR 2.0.12/release 60 and no longer fails owner-thread
-  bootstrap. End-to-end connection acceptance remains open; see
-  `source/Docs/SkyrimVR/windows-gameplay-build-result-20260715-runtime-gate.md`.
+  current pair is the `3cf4aa0e` discovery/handshake build: 503 packaged files,
+  zero package/evidence audit failures, embedded network build version
+  `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`, and runtime proof that player-only VR
+  discovery reaches Realm and exact-version server admission. The resulting
+  post-authentication PlayerService crash is PDB-symbolized and corrected in
+  source; a new audited build/runtime pass is the current acceptance gate. See
+  `source/Docs/SkyrimVR/windows-gameplay-build-result-20260716-discovery-handshake.md`.
 - `dependencies/fus-mods/`: pristine FUS mod directories for SKSE scripts, VR
   Address Library, VRIK, HIGGS, PLANCK, Controller Fix VR, SkyUI/VR Tools,
   Realm of Lorkhan, controller bindings, and related configuration fixes.

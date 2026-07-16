@@ -14,6 +14,7 @@
 #include <Services/TransportService.h>
 #include <Structs/GameId.h>
 #include <World.h>
+#include <VRRuntimeDiagnostics.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <fstream>
@@ -134,11 +135,13 @@ void VRSaveLoadService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRSaveLoadService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.saveload.begin");
     TP_UNUSED(acEvent);
 
     m_connectionState = "online";
     m_lastConnectionError.clear();
     m_statusDirty = true;
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.saveload.done");
 }
 
 void VRSaveLoadService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept

@@ -22,6 +22,7 @@
 
 #include <World.h>
 #include <Services/VRLifecycleService.h>
+#include <VRRuntimeDiagnostics.h>
 #include <vr_common/VRHandoffPath.h>
 
 #include <fstream>
@@ -387,9 +388,13 @@ void DiscoveryService::OnUpdate(const PreUpdateEvent& acUpdateEvent) noexcept
 
 void DiscoveryService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.discovery.begin");
 #if TP_SKYRIM_VR
     if (!m_world.ctx().at<VRLifecycleService>().IsReady())
+    {
+        SkyrimTogetherVR::LogRuntimeCheckpoint("connected.discovery.skipped_not_ready");
         return;
+    }
 #endif
 
     if constexpr (kVrSkipStrictConnectionEnforcement)
@@ -397,6 +402,7 @@ void DiscoveryService::OnConnected(const ConnectedEvent& acEvent) noexcept
         TP_UNUSED(acEvent);
         VisitCell(true);
         WriteVrDiscoveryStatusFile();
+        SkyrimTogetherVR::LogRuntimeCheckpoint("connected.discovery.done");
         return;
     }
 
@@ -411,6 +417,7 @@ void DiscoveryService::OnConnected(const ConnectedEvent& acEvent) noexcept
     }
 
     VisitCell(true);
+    SkyrimTogetherVR::LogRuntimeCheckpoint("connected.discovery.done");
 }
 
 BSTEventResult DiscoveryService::OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*)
