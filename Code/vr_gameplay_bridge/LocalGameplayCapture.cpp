@@ -667,7 +667,7 @@ void CaptureObservedNpcs() noexcept
 }
 
 [[nodiscard]] bool CaptureWornEquipment(
-    const RE::PlayerCharacter& a_player, std::vector<WornEquipmentEntry>& ar_entries) noexcept
+    RE::PlayerCharacter& a_player, std::vector<WornEquipmentEntry>& ar_entries) noexcept
 {
     ar_entries.clear();
     for (const auto& [object, data] : a_player.GetInventory()) {

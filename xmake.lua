@@ -64,6 +64,7 @@ add_requires(
 )
 if is_plat("windows") then
     add_requires("fmt 11.2.0")
+    add_requires("minhook v1.3.3")
     add_requires(
         "discord 3.2.1", 
         "imgui v1.89.7"
