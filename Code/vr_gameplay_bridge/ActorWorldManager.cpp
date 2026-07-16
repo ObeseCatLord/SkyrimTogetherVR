@@ -109,7 +109,7 @@ bool g_postRespawnEnabledGodMode{};
 
     player->Resurrect(false, true);
     if (destination)
-        TP_UNUSED(player->CenterOnCell(destination));
+        static_cast<void>(player->CenterOnCell(destination));
 
     if (auto* equipManager = RE::ActorEquipManager::GetSingleton()) {
         const auto* rightSlot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId);
@@ -249,6 +249,7 @@ bool g_postRespawnEnabledGodMode{};
         actor->Resurrect(false, true);
         return actor->IsDead() ? CommandStatus::EngineRejected : CommandStatus::Success;
     case GameplayAction::Mount:
+    {
         if (payload.SecondaryHandle.Value == 0) {
             actor->SetLastRiddenMount({});
             return actor->NotifyAnimationGraph(RE::BSFixedString{"HorseExit"}) ?
@@ -261,6 +262,7 @@ bool g_postRespawnEnabledGodMode{};
             return mountStatus;
         actor->SetLastRiddenMount(mount->GetHandle());
         return actor->PutActorOnMountQuick() ? CommandStatus::Success : CommandStatus::EngineRejected;
+    }
     case GameplayAction::SetLevel:
     {
         auto* base = actor->GetActorBase();

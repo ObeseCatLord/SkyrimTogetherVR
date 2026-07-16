@@ -199,7 +199,7 @@ void PublishCurrentLocalAnimationStateImpl() noexcept
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(integers[start + index]);
     }
-    TP_UNUSED(endpoint.TryPushEvents(records.data(), records.size()));
+    static_cast<void>(endpoint.TryPushEvents(records.data(), records.size()));
 }
 } // namespace
 

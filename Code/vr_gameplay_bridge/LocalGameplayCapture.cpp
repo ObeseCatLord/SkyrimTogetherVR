@@ -964,7 +964,7 @@ void OnEquipEvent(const RE::TESEquipEvent& a_event) noexcept
 {
     // Full typed inventory snapshots own local equipment replication. Do not
     // emit a second bare TESEquip event with less authoritative state.
-    TP_UNUSED(a_event);
+    static_cast<void>(a_event);
 }
 
 void OnLockChangedEvent(const RE::TESLockChangedEvent& a_event) noexcept
@@ -1007,7 +1007,7 @@ void OnDeathEvent(const RE::TESDeathEvent& a_event) noexcept
     try {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player && a_event.actorDying.get() == player)
-            TP_UNUSED(PublishDeathState(*player, a_event.dead));
+            static_cast<void>(PublishDeathState(*player, a_event.dead));
     } catch (...) {
     }
 }

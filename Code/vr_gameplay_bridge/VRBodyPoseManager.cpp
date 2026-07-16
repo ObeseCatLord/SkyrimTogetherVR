@@ -210,8 +210,8 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
 [[nodiscard]] bool IsPhysicsControlled(const RE::Actor& a_actor, RE::NiAVObject& a_node,
                                        const RE::NiAVObject& a_root) noexcept
 {
-    TP_UNUSED(a_node);
-    TP_UNUSED(a_root);
+    static_cast<void>(a_node);
+    static_cast<void>(a_root);
     // Ordinary humanoid nodes and their ancestors commonly have collision
     // objects, so collision presence is not evidence that PLANCK owns this
     // pose. PLANCK-controlled full ragdolls are reflected by Actor state; only
