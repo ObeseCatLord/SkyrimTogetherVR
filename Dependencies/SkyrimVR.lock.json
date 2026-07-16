@@ -30,7 +30,7 @@
     "sha256": "2c2ad2630d9500dd62683f99bfb75f7f17dcfd39bf21eec60749de908851a558"
   },
   "gameplayBridge": {
-    "abiVersion": 1,
-    "protocolCapabilityRevision": 1
+    "abiVersion": 12,
+    "protocolCapabilityRevision": 20
   }
 }

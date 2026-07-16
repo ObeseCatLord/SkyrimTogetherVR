@@ -30,7 +30,6 @@ private:
     void OnVREquipmentUpdate(const NotifyVREquipmentUpdate& acMessage) noexcept;
     void OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
-    void SendEquipmentUpdate() noexcept;
     [[nodiscard]] bool CaptureLocalEquipment(VREquipmentUpdate& aUpdate) noexcept;
     void WriteInventoryStatusFile() noexcept;
 
@@ -41,10 +40,8 @@ private:
     TiltedPhoques::Map<uint32_t, VREquipmentUpdate> m_remoteEquipment{};
     VREquipmentUpdate m_lastEquipment{};
     bool m_hasEquipment{false};
-    double m_sendTimer{0.0};
     double m_statusTimer{0.0};
     bool m_statusDirty{true};
-    uint32_t m_sequence{0};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_vrEquipmentUpdateConnection;
     entt::scoped_connection m_playerLeftConnection;

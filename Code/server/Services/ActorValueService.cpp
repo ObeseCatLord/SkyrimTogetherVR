@@ -11,6 +11,37 @@
 #include <Messages/NotifyHealthChangeBroadcast.h>
 #include <Messages/NotifyDeathStateChange.h>
 
+#include <cmath>
+
+namespace
+{
+constexpr std::uint32_t kHealthActorValue = 24;
+constexpr std::uint32_t kDragonSoulsActorValue = 133;
+constexpr std::uint32_t kActorValueCount = 164;
+constexpr float kMaximumActorValueMagnitude = 1'000'000.0F;
+
+[[nodiscard]] bool IsValidActorValue(const std::uint32_t aId, const float aValue) noexcept
+{
+    return aId < kActorValueCount && aId != kDragonSoulsActorValue && std::isfinite(aValue) &&
+           std::abs(aValue) <= kMaximumActorValueMagnitude;
+}
+
+template <class TMap>
+[[nodiscard]] TMap FilterActorValues(const TMap& acValues) noexcept
+{
+    TMap values{};
+    if (acValues.size() > kActorValueCount)
+        return values;
+
+    for (const auto& [id, value] : acValues)
+    {
+        if (IsValidActorValue(id, value))
+            values.emplace(id, value);
+    }
+    return values;
+}
+} // namespace
+
 ActorValueService::ActorValueService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
 {
@@ -28,18 +59,20 @@ void ActorValueService::OnActorValueChanges(const PacketEvent<RequestActorValueC
 
     auto it = actorValuesView.find(static_cast<entt::entity>(message.Id));
 
-    if (it != actorValuesView.end())
-    {
-        auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
-        for (auto& [id, value] : message.Values)
-        {
-            actorValuesComponent.CurrentActorValues.ActorValuesList[id] = value;
-        }
-    }
+    if (it == actorValuesView.end() || actorValuesView.get<OwnerComponent>(*it).GetOwner() != acMessage.pPlayer)
+        return;
+
+    auto values = FilterActorValues(message.Values);
+    if (values.empty())
+        return;
+
+    auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
+    for (const auto& [id, value] : values)
+        actorValuesComponent.CurrentActorValues.ActorValuesList[id] = value;
 
     NotifyActorValueChanges notify;
     notify.Id = acMessage.Packet.Id;
-    notify.Values = acMessage.Packet.Values;
+    notify.Values = std::move(values);
 
     const entt::entity cEntity = static_cast<entt::entity>(message.Id);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
@@ -54,18 +87,20 @@ void ActorValueService::OnActorMaxValueChanges(const PacketEvent<RequestActorMax
 
     auto it = actorValuesView.find(static_cast<entt::entity>(message.Id));
 
-    if (it != actorValuesView.end())
-    {
-        auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
-        for (auto& [id, value] : message.Values)
-        {
-            actorValuesComponent.CurrentActorValues.ActorMaxValuesList[id] = value;
-        }
-    }
+    if (it == actorValuesView.end() || actorValuesView.get<OwnerComponent>(*it).GetOwner() != acMessage.pPlayer)
+        return;
+
+    auto values = FilterActorValues(message.Values);
+    if (values.empty())
+        return;
+
+    auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
+    for (const auto& [id, value] : values)
+        actorValuesComponent.CurrentActorValues.ActorMaxValuesList[id] = value;
 
     NotifyActorMaxValueChanges notify;
     notify.Id = message.Id;
-    notify.Values = message.Values;
+    notify.Values = std::move(values);
 
     const entt::entity cEntity = static_cast<entt::entity>(message.Id);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
@@ -81,12 +116,19 @@ void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthC
 
     auto it = actorValuesView.find(static_cast<entt::entity>(message.Id));
 
-    if (it != actorValuesView.end())
-    {
-        auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
-        auto currentHealth = actorValuesComponent.CurrentActorValues.ActorValuesList[24];
-        actorValuesComponent.CurrentActorValues.ActorValuesList[24] = currentHealth - message.DeltaHealth;
-    }
+    if (it == actorValuesView.end() || actorValuesView.get<OwnerComponent>(*it).GetOwner() != acMessage.pPlayer)
+        return;
+
+    if (!std::isfinite(message.DeltaHealth) || message.DeltaHealth == 0.0F ||
+        std::abs(message.DeltaHealth) > kMaximumActorValueMagnitude)
+        return;
+
+    auto& actorValuesComponent = actorValuesView.get<ActorValuesComponent>(*it);
+    const auto currentHealth = actorValuesComponent.CurrentActorValues.ActorValuesList[kHealthActorValue];
+    const auto newHealth = currentHealth + message.DeltaHealth;
+    if (!std::isfinite(newHealth) || std::abs(newHealth) > kMaximumActorValueMagnitude)
+        return;
+    actorValuesComponent.CurrentActorValues.ActorValuesList[kHealthActorValue] = newHealth;
 
     NotifyHealthChangeBroadcast notify;
     notify.Id = message.Id;
@@ -105,12 +147,12 @@ void ActorValueService::OnDeathStateChange(const PacketEvent<RequestDeathStateCh
 
     const auto it = characterView.find(static_cast<entt::entity>(message.Id));
 
-    if (it != characterView.end())
-    {
-        auto& characterComponent = characterView.get<CharacterComponent>(*it);
-        characterComponent.SetDead(message.IsDead);
-        spdlog::debug("Updating death state {:x}:{}", message.Id, message.IsDead);
-    }
+    if (it == characterView.end() || characterView.get<OwnerComponent>(*it).GetOwner() != acMessage.pPlayer)
+        return;
+
+    auto& characterComponent = characterView.get<CharacterComponent>(*it);
+    characterComponent.SetDead(message.IsDead);
+    spdlog::debug("Updating death state {:x}:{}", message.Id, message.IsDead);
 
     NotifyDeathStateChange notify;
     notify.Id = message.Id;

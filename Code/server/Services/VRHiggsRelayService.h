@@ -19,8 +19,10 @@ private:
     struct PlayerHiggsRelayState
     {
         uint32_t LastSequence{0};
+        uint32_t LastActionSequence{0};
         uint64_t LastRelayTick{0};
         bool HasSequence{false};
+        bool HasActionSequence{false};
     };
 
     void OnVRHiggsState(const PacketEvent<RequestVRHiggsState>& acMessage) noexcept;

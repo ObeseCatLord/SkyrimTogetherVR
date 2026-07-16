@@ -37,33 +37,25 @@ the evidence archive. It never installs files or launches Skyrim. Caprica is
 resolved from `-PapyrusCompiler`, `CAPRICA`, `PATH`, `C:\Tools\Caprica`, or the
 repository-adjacent `_refs` locations, in that order.
 
-The WinBoat helper prints `STVR_BUILD_WORKTREE`, `STVR_GAMEPLAY_PACKAGE`, and
-`STVR_BUILD_EVIDENCE` on success. Do not build from the long-lived primary
-Windows checkout: generated PEX and package files make rebuild provenance
-ambiguous. If a build exposes a source error, fix all related occurrences,
-commit and push the next revision, then rerun the same helper. Do not delete old
-worktrees without explicit cleanup intent.
+The WinBoat helper prints the retained Windows result paths and then uses the
+private WinBoat SCP channel to import the exact result. It creates a deterministic
+Linux gameplay ZIP, independently validates the gameplay manifest, evidence,
+hashes, flavor, and source revision, and regenerates and audits the complete
+local-agent handoff ZIP. The final paths are printed as
+`STVR_LINUX_GAMEPLAY_PACKAGE`, `STVR_LINUX_BUILD_EVIDENCE`, and
+`STVR_LOCAL_HANDOFF`. Do not manually select a different package/evidence pair
+afterward. The handoff generator requires the same clean committed worktree and
+includes the current checklist/documentation without raw Codex/session telemetry
+or unredacted runtime logs.
 
-After every successful client build, complete the post-build handoff gate before
-starting another build: transfer and independently audit the exact package and
-build-evidence archive, deploy and run the applicable acceptance test, update
-the build-result notes and gameplay parity checklist, commit those notes, then
-regenerate and audit the local-agent handoff ZIP. Use:
-
-```bash
-python3 Tools/SkyrimVR/create_local_agent_handoff.py \
-  --gameplay-package /path/to/exact-gameplay-package.zip \
-  --build-evidence /path/to/exact-build-evidence.zip \
-  --output /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
-python3 Tools/SkyrimVR/audit_local_agent_handoff.py \
-  /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
-unzip -tq /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
-sha256sum /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
-```
-
-The generator requires a clean committed worktree. The archive must contain the
-current checklist and documentation, but must not include raw Codex/session
-telemetry or unredacted runtime logs.
+Do not build from the long-lived primary Windows checkout: generated PEX and
+package files make rebuild provenance ambiguous. The helper exports the audited
+package/evidence pair, removes its detached Windows worktree in a `finally`
+path, removes its temporary Linux import, and runs bounded cleanup on exit. If
+a build exposes a source error, fix all related occurrences, commit and push the
+next revision, then rerun the same helper. After a successful build, deploy and
+run the applicable acceptance test, update the build-result notes and parity
+checklist, then commit and push those evidence notes before further source work.
 
 Overrides are available when the WinBoat layout differs:
 
@@ -97,13 +89,31 @@ rebuildable caches:
 Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 7 --trim
 ```
 
+The scheduled cleanup also removes ignored `build/.objs` and `build/linux`
+output and repository-local Python bytecode caches when `/` is at or above the
+configured pressure threshold. Before a WinBoat build,
+`build_winboat_gameplay.sh` removes those reproducible local outputs explicitly.
+Do not extend this cleanup to source, the current
+prerelease/handoff bundle, runtime evidence, game installs, or unrelated user
+data.
+
 `Tools/SkyrimVR/install_build_cleanup_timer.sh` installs and enables a user
-systemd timer that runs daily and removes generated outputs older than two
-days. The timer also removes only `/tmp/stvr-*` temporary test/build paths
+systemd timer that runs every three hours and removes generated outputs older
+than two days. A transient service failure is retried after five minutes. Every
+WinBoat build runs the same bounded cleanup before and after the build. If root
+reaches 93% use or falls below 160 GiB free, scheduled cleanup reduces retention
+to zero days for those generated paths and purges only the explicitly listed
+rebuildable caches. The timer also removes only
+`/tmp/stvr-*` temporary test/build paths
 older than two days; it does not scan unrelated temporary content. The build
-helper also removes prior generated WinBoat worktrees before each build; it
-does not request a synchronous volume retrim. Cleanup uses a process lock and
-skips WinBoat cleanup without failing when the VM is offline. Do not expand the cleanup
+helper holds a shared activity lock for its entire run, and scheduled cleanup
+skips its pass while that lock is held. This prevents cleanup from deleting an
+active build's reproducible output. The build helper removes its detached
+WinBoat worktree immediately after exporting the
+package/evidence pair. The timer always retains the newest exported result and
+expires older result directories after two days. It does not request a
+synchronous volume retrim. Cleanup uses a process lock and skips WinBoat
+cleanup without failing when the VM is offline. Do not expand the cleanup
 patterns to game installs, source checkouts, model caches, handoff archives,
 Docker containers, or unrelated application data.
 

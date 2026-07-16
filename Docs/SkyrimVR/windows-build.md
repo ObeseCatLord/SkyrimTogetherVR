@@ -15,22 +15,29 @@ It verifies that the Linux worktree is clean and its commit is on
 `github/main`, creates a fresh detached worktree in WinBoat, initializes every
 pinned submodule, and runs the gameplay build, package audit, build-evidence
 collector, and evidence audit. The helper does not install files and does not
-launch Skyrim. On success it prints the Windows worktree, gameplay package, and
-evidence archive paths. It removes previous generated WinBoat build worktrees
-before creating the new one, preventing each iteration from permanently adding
-several gigabytes to the VM disk. Set `STVR_WINBOAT_REPO` or `WINBOAT_POWERSHELL` only
-when the local layout differs from the defaults documented in `AGENTS.md`.
+launch Skyrim. On success it copies the exact gameplay package and evidence to
+Linux, validates their revision and hashes, creates and audits the private local
+agent handoff, and prints `STVR_LINUX_GAMEPLAY_PACKAGE`,
+`STVR_LINUX_BUILD_EVIDENCE`, and `STVR_LOCAL_HANDOFF`. It removes previous
+generated WinBoat build worktrees before creating the new one, preventing each
+iteration from permanently adding several gigabytes to the VM disk. Set
+`STVR_WINBOAT_REPO`, `WINBOAT_POWERSHELL`, or `WINBOAT_SCP` only when the local
+layout differs from the defaults documented in `AGENTS.md`.
 
-Install the daily two-day retention job on the Linux host with:
+Install the three-hour cleanup job with two-day normal retention on the Linux
+host with:
 
 ```bash
 Tools/SkyrimVR/install_build_cleanup_timer.sh
 ```
 
-The timer cleans only generated Skyrim Together worktrees and package output,
-then asks Windows to TRIM its virtual disk. Cleanup is process-locked, and the
-WinBoat build helper performs an immediate guest cleanup and retrim before each
-build. Run
+The timer cleans only generated Skyrim Together worktrees, package output,
+bounded project temporary files, and explicitly rebuildable caches, then asks
+Windows to TRIM its virtual disk when worktrees were removed. Cleanup is
+process-locked, and the WinBoat build helper holds that activity lock for its
+entire build and performs cleanup before and after each build. Under root-disk
+pressure (93% used or less than 160 GiB free), the scheduled pass tightens
+generated-output retention automatically. Run
 `Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 0 --trim` for an
 immediate manual cleanup. If WinBoat is offline, scheduled cleanup skips the VM
 without treating that as a failure.

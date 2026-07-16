@@ -15,6 +15,11 @@ CombatService::CombatService(World& aWorld, entt::dispatcher& aDispatcher) noexc
 void CombatService::OnProjectileLaunchRequest(const PacketEvent<ProjectileLaunchRequest>& acMessage) const noexcept
 {
     auto& packet = acMessage.Packet;
+    const auto shooter = static_cast<entt::entity>(packet.ShooterID);
+    if (packet.ShooterID == 0 ||
+        !m_world.all_of<CharacterComponent, OwnerComponent>(shooter) ||
+        m_world.get<OwnerComponent>(shooter).GetOwner() != acMessage.pPlayer)
+        return;
 
     NotifyProjectileLaunch notify{};
 
@@ -50,7 +55,6 @@ void CombatService::OnProjectileLaunchRequest(const PacketEvent<ProjectileLaunch
     notify.UnkBool1 = packet.UnkBool1;
     notify.UnkBool2 = packet.UnkBool2;
 
-    const auto cShooterEntity = static_cast<entt::entity>(packet.ShooterID);
-    if (!GameServer::Get()->SendToPlayersInRange(notify, cShooterEntity, acMessage.GetSender()))
+    if (!GameServer::Get()->SendToPlayersInRange(notify, shooter, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }

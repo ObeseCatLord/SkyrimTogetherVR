@@ -761,6 +761,59 @@ bool GameServer::SendToPlayersInRange(const ServerMessage& acServerMessage, cons
     return true;
 }
 
+bool GameServer::SendToPlayersWithCapabilitiesInRange(
+    const ServerMessage& acServerMessage,
+    const entt::entity acOrigin,
+    const std::uint64_t aRequiredCapabilities,
+    const Player* apExcludedPlayer) const
+{
+    if (!m_pWorld->valid(acOrigin) || aRequiredCapabilities == 0)
+        return false;
+    const auto view = m_pWorld->view<CellIdComponent>();
+    const auto it = view.find(acOrigin);
+    if (it == view.end())
+        return false;
+
+    const auto& cell = view.get<CellIdComponent>(*it);
+    bool isDragon = false;
+    if (const auto* character = m_pWorld->try_get<CharacterComponent>(acOrigin))
+        isDragon = character->IsDragon();
+    for (Player* player : m_pWorld->GetPlayerManager()) {
+        if (player == apExcludedPlayer ||
+            (player->GetGameplayCapabilities() & aRequiredCapabilities) != aRequiredCapabilities)
+            continue;
+        if (cell.IsInRange(player->GetCellComponent(), isDragon))
+            player->Send(acServerMessage);
+    }
+    return true;
+}
+
+bool GameServer::SendToPlayersWithoutCapabilitiesInRange(
+    const ServerMessage& acServerMessage,
+    const entt::entity acOrigin,
+    const std::uint64_t aExcludedCapabilities,
+    const Player* apExcludedPlayer) const
+{
+    if (!m_pWorld->valid(acOrigin) || aExcludedCapabilities == 0)
+        return false;
+    const auto view = m_pWorld->view<CellIdComponent>();
+    const auto it = view.find(acOrigin);
+    if (it == view.end())
+        return false;
+
+    const auto& cell = view.get<CellIdComponent>(*it);
+    bool isDragon = false;
+    if (const auto* character = m_pWorld->try_get<CharacterComponent>(acOrigin))
+        isDragon = character->IsDragon();
+    for (Player* player : m_pWorld->GetPlayerManager()) {
+        if (player == apExcludedPlayer || (player->GetGameplayCapabilities() & aExcludedCapabilities) != 0)
+            continue;
+        if (cell.IsInRange(player->GetCellComponent(), isDragon))
+            player->Send(acServerMessage);
+    }
+    return true;
+}
+
 void GameServer::SendToParty(const ServerMessage& acServerMessage, const PartyComponent& acPartyComponent, const Player* apExcludeSender) const
 {
     if (!acPartyComponent.JoinedPartyId.has_value())

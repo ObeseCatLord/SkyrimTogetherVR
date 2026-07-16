@@ -86,7 +86,7 @@ REQUIRED_TOKENS = {
         "m_playerHiggsRelayState.erase",
         "notify.PlayerId = playerId;",
         "notify.State = acMessage.Packet.State;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRHiggsRelayService.h": (
         "PlayerHiggsRelayState",

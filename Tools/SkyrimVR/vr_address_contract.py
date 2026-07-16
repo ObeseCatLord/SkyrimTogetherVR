@@ -26,6 +26,40 @@ VALIDATED_COMMONLIB_VR_ALIASES = {
 # Curated function targets whose Skyrim VR ABI and executable RVA have been
 # independently established. These rows override generated translations.
 VALIDATED_VR_ADDRESS_OVERRIDES = {
+    33742: {
+        "offset": 0x5579C0,
+        "prologue": "40 55 53 56 57 41 56 48 8b ec 48 81 ec 80 00 00",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "MagicTarget::AddTarget",
+        "signature": "bool(RE::MagicTarget*, RE::MagicTarget::AddTargetData&)",
+        "ownership": "both arguments are non-owning and remain valid only for the synchronous call",
+        "evidence": "VR Address Library ID/RVA, exact entry bytes, CommonLib typed declaration, and VR callee argument access",
+    },
+    36541: {
+        "offset": 0x5F0E20,
+        "prologue": "48 8b c4 44 89 48 20 48 89 50 10 55 56 57 41 54",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "Actor::SpeakSound",
+        "signature": "float(RE::Actor*, const char*, uint32_t*, uint32_t, uint32_t, uint32_t, uint64_t, uint64_t, uint64_t, bool, uint64_t, bool, bool, bool)",
+        "ownership": "resource path and handle buffer are borrowed for the synchronous call",
+        "evidence": "VR Address Library ID/RVA, exact entry bytes, four direct callsites with fourteen arguments, and float return consumed from XMM0",
+    },
+    37772: {
+        "offset": 0x6385F0,
+        "prologue": "40 56 57 41 56 48 83 ec 20 45 32 f6 48 8b fa 48",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "Actor::RemoveSpell",
+    },
+    38949: {
+        "offset": 0x643F20,
+        "prologue": "48 89 5c 24 10 56 48 83 ec 20 48 8b f1 48 8b da",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "ActorMediator::PerformAction",
+    },
     35545: {
         "offset": 0x5B4290,
         "prologue": "48 83 ec 28 48 89 0d 1d 75 a3 02 4c 89 05 1e 75",

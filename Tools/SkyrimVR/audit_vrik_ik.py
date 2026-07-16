@@ -185,7 +185,7 @@ REQUIRED_TOKENS = {
         "now - state.LastRelayTick < kMinPoseRelayIntervalMs",
         "mutableState.LastSequence = pose.Sequence",
         "m_playerPoseRelayState.erase",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/client/Games/PapyrusFunctions.cpp": (
         "AppendVrikSummary",

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <cstdint>
 
 struct ConnectedEvent;
 struct ConnectionErrorEvent;
@@ -27,7 +28,14 @@ private:
     {
         None,
         Connect,
-        Disconnect
+        Disconnect,
+        Chat,
+        CreateParty,
+        LeaveParty,
+        InviteToParty,
+        AcceptPartyInvite,
+        KickPartyMember,
+        ChangePartyLeader
     };
 
     struct Command
@@ -35,7 +43,10 @@ private:
         CommandAction Action{CommandAction::None};
         std::string Endpoint;
         std::string Password;
+        std::string Message;
         std::string Error;
+        uint32_t PlayerId{};
+        bool HasPlayerId{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -46,10 +57,13 @@ private:
     void PollEnvironmentAutoconnect() noexcept;
     void PollCommandFile() noexcept;
     Command ParseCommandFile(const std::string& acContents) const noexcept;
+    static bool IsPartyTargetAction(CommandAction aAction) noexcept;
     void TryRunPendingCommand() noexcept;
     void RunCommand(const Command& acCommand) noexcept;
     void QueueConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     void QueueDisconnect() noexcept;
+    void SendChat(const std::string& acMessage) noexcept;
+    void RunPartyCommand(const Command& acCommand) noexcept;
     void ArchiveCommandFile(const char* apSuffix) noexcept;
     void SetStatus(std::string aState, std::string aError = {}) noexcept;
     void WriteStatusFile() noexcept;

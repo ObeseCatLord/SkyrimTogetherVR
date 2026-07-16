@@ -25,6 +25,7 @@
 #include <Services/VRProjectileRelayService.h>
 #include <Services/VRGrabRelayService.h>
 #include <Services/VRHiggsRelayService.h>
+#include <Services/VRAppearanceRelayService.h>
 
 #include <es_loader/ESLoader.h>
 
@@ -59,6 +60,7 @@ World::World()
     ctx().emplace<VRProjectileRelayService>(*this, m_dispatcher);
     ctx().emplace<VRGrabRelayService>(*this, m_dispatcher);
     ctx().emplace<VRHiggsRelayService>(*this, m_dispatcher);
+    ctx().emplace<VRAppearanceRelayService>(*this, m_dispatcher);
 
     ESLoader::ESLoader loader;
     // emplace loaded mods into modscomponent.

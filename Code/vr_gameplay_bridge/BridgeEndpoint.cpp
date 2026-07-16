@@ -15,7 +15,18 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
     static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
     static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
-    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
+    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::AnimationEvents) |
+    static_cast<CapabilityMask>(Capability::Appearance) |
+    static_cast<CapabilityMask>(Capability::EquipmentAndInventory) |
+    static_cast<CapabilityMask>(Capability::ActorState) |
+    static_cast<CapabilityMask>(Capability::WorldReferences) |
+    static_cast<CapabilityMask>(Capability::CombatAndMagic) |
+    static_cast<CapabilityMask>(Capability::QuestAndDialogue) |
+    static_cast<CapabilityMask>(Capability::WorldState) |
+    static_cast<CapabilityMask>(Capability::VrBodyPose) |
+    static_cast<CapabilityMask>(Capability::HiggsInteraction) |
+    static_cast<CapabilityMask>(Capability::NpcOwnership);
 
 [[nodiscard]] bool ParseMappingHandle(HANDLE& a_handle) noexcept
 {
@@ -147,6 +158,16 @@ bool BridgeEndpoint::TryPushEvent(const EventRecord& a_record) noexcept
     return true;
 }
 
+bool BridgeEndpoint::TryPushEvents(const EventRecord* ap_records, const std::size_t a_count) noexcept
+{
+    if (!IsOperational() || !ap_records || a_count == 0 ||
+        !TryPushBatch(_mapping->Events, ap_records, a_count))
+        return false;
+
+    _mapping->Header.ProducedEventCount.fetch_add(a_count, std::memory_order_relaxed);
+    return true;
+}
+
 BridgeIdentity BridgeEndpoint::SnapshotIdentity(const std::uint64_t a_sequenceId) const noexcept
 {
     BridgeIdentity identity{};
@@ -172,9 +193,21 @@ void BridgeEndpoint::PublishCapabilities() noexcept
         return;
 
     auto& header = _mapping->Header;
-    header.AvailableCapabilities.store(kAvailableCapabilities, std::memory_order_release);
+    const auto available = kAvailableCapabilities | _optionalCapabilities.load(std::memory_order_acquire);
+    header.AvailableCapabilities.store(available, std::memory_order_release);
     const auto requested = header.RequestedCapabilities.load(std::memory_order_acquire);
-    header.ActiveCapabilities.store(requested & kAvailableCapabilities, std::memory_order_release);
+    header.ActiveCapabilities.store(requested & available, std::memory_order_release);
+}
+
+void BridgeEndpoint::SetOptionalCapability(const Capability a_capability, const bool a_available) noexcept
+{
+    const auto mask = static_cast<CapabilityMask>(a_capability);
+    if (a_available)
+        _optionalCapabilities.fetch_or(mask, std::memory_order_acq_rel);
+    else
+        _optionalCapabilities.fetch_and(~mask, std::memory_order_acq_rel);
+    if (_mapping)
+        PublishCapabilities();
 }
 
 void BridgeEndpoint::Fault(const char* a_reason) noexcept
@@ -206,9 +239,10 @@ bool BridgeEndpoint::ValidateHeader(const MappingHeader& a_header) const noexcep
     if (state == EndpointState::Ready) {
         const auto available = a_header.AvailableCapabilities.load(std::memory_order_acquire);
         const auto requested = a_header.RequestedCapabilities.load(std::memory_order_acquire);
+        const auto expectedAvailable = kAvailableCapabilities | _optionalCapabilities.load(std::memory_order_acquire);
         return a_header.EventConsumerThreadId.load(std::memory_order_acquire) != 0 &&
                a_header.CommandExecutionThreadId.load(std::memory_order_acquire) != 0 &&
-               available == kAvailableCapabilities &&
+               available == expectedAvailable &&
                a_header.ActiveCapabilities.load(std::memory_order_acquire) == (requested & available);
     }
 

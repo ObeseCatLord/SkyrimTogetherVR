@@ -5,6 +5,7 @@
 #include <Events/PlayerLeaveEvent.h>
 #include <Messages/NotifyVRActivationEvent.h>
 #include <Messages/RequestVRActivationEvent.h>
+#include <Structs/GameplayCapabilities.h>
 #include <Structs/VRActivationEvent.h>
 
 namespace
@@ -44,6 +45,10 @@ void VRActivationRelayService::OnVRActivationEvent(const PacketEvent<RequestVRAc
         return;
     }
 
+    if (!SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(), SkyrimTogether::Protocol::GameplayCapability::VRActivationRelay))
+        return;
+
     const auto playerId = acMessage.pPlayer->GetId();
     if (!ShouldRelayActivation(playerId, acMessage.Packet))
         return;
@@ -52,7 +57,12 @@ void VRActivationRelayService::OnVRActivationEvent(const PacketEvent<RequestVRAc
     notify.PlayerId = playerId;
     notify.Activation = acMessage.Packet.Activation;
 
-    GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);
+    const auto character = acMessage.pPlayer->GetCharacter();
+    if (!character || !GameServer::Get()->SendToPlayersWithCapabilitiesInRange(
+            notify, *character,
+            SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRActivationRelay),
+            acMessage.pPlayer))
+        spdlog::warn("VR relay dropped because sender has no routable character");
 }
 
 void VRActivationRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept

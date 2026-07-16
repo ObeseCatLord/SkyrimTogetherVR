@@ -4,6 +4,7 @@ void RequestOwnershipClaim::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter)
 {
     Serialization::WriteVarInt(aWriter, ServerId);
     NewActorData.Serialize(aWriter);
+    Serialization::WriteVarInt(aWriter, GrantToken);
 }
 
 void RequestOwnershipClaim::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -12,4 +13,5 @@ void RequestOwnershipClaim::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReade
 
     ServerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     NewActorData.Deserialize(aReader);
+    GrantToken = Serialization::ReadVarInt(aReader);
 }

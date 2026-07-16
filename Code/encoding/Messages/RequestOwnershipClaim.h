@@ -17,8 +17,13 @@ struct RequestOwnershipClaim final : ClientMessage
     void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
     void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
 
-    bool operator==(const RequestOwnershipClaim& achRhs) const noexcept { return ServerId == achRhs.ServerId && GetOpcode() == achRhs.GetOpcode(); }
+    bool operator==(const RequestOwnershipClaim& achRhs) const noexcept
+    {
+        return ServerId == achRhs.ServerId && GrantToken == achRhs.GrantToken &&
+               NewActorData == achRhs.NewActorData && GetOpcode() == achRhs.GetOpcode();
+    }
 
     uint32_t ServerId{};
+    uint64_t GrantToken{};
     ActorData NewActorData{};
 };

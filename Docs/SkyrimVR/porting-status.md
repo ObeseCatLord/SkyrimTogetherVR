@@ -2,6 +2,51 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
+## 2026-07-16 Full Gameplay Source Tranche
+
+The active gameplay target is no longer connection-only or observation-only.
+The mapped client translates original Skyrim Together protocol messages while
+the maintained alandtse CommonLib SKSEVR plugin owns validated Skyrim VR events,
+retained actor handles, object references, and game mutation. Historical stage
+notes below describe how the port reached this boundary; they are not the
+current feature gate.
+
+Current source includes canonical remote actor lifecycle and movement,
+animation graph snapshots, appearance, equipment and inventory,
+actor values, death/respawn, owned NPCs, objects, combat, projectiles, magic,
+quests, dialogue, packages, party/world state, HMD/hands/FBT pose, HIGGS object
+compatibility, and PLANCK damage/ragdoll deduplication. Multi-record command and
+event producers now reserve complete contiguous ring transactions, and
+transient network text, respawn, and local package changes retain bounded retry
+state across queue backpressure but never across session/lifecycle identity.
+Stateful and inventory retries preserve one global order while last-value state
+coalescing moves to the newest position. Client messages are serialized into a
+bounded generation-scoped owner-thread transport queue, and NPC ownership uses
+an expiring, session-bound, single-use server grant followed by an explicit
+completion acknowledgement.
+
+Gameplay protocol revision 7 carries token-bound ownership and one final-state
+VR equipment transaction. Worn inventory plus selected spells/shout are
+validated before one server mutation and one compatible-client notify; the
+receiver publishes the complete staged CommonLib command sequence with one
+bridge-ring reservation and clears staging at lifecycle boundaries. Desktop
+recipients do not yet receive VR-owned final equipment because translating the
+transaction back into several legacy notifications would reintroduce partial
+mutation. VR recipients continue to handle desktop transaction-zero updates.
+
+The current source tranche has not yet been compiled or runtime-tested. The
+remaining deliberate source limitations are full remote face tint/morph/texture
+generation, native respawn fade, remote VRIK finger/calibration application,
+direct PLANCK physical grab/ragdoll replay, exact `ActorMediator::PerformAction`
+capture/replay, and Vivox voice. Exact actions remain fail-closed until form
+translation, capability renegotiation, and `TESActionData` lifetime are proven
+for Skyrim VR. The upstream
+scripted-object-animation producer is also compiled out on the original branch;
+VR supports incoming replay but does not install a guessed hook against its
+Address Library registration rows. See
+`Docs/SkyrimVR/original-gameplay-parity-checklist.md` for the authoritative
+source/build/runtime matrix and next-stage order.
+
 ## 2026-07-14 FBT Networking Stage
 
 - Added body-pose format 1 to the matched VR pose protocol: pelvis local translation/rotation plus six leg-bone local rotations, capture sequence, and skeleton-root generation.
@@ -11,9 +56,11 @@ This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together
 - Reviewed the supplied SkyrimVR-FBT source as an interoperability reference. Its archive has no redistribution license or build project, so it is not vendored or packaged. The installed VRIK `0x69277C5C` profile is documented in `fbt-compatibility.md` with timestamp mismatch disabled.
 - The body schema is fixed-order and requires matched client/server builds. Body `FormatVersion` is validation for the nested lane, not protocol negotiation.
 
-## Current Default Runtime Boundary
+## Historical Connection-Only Bring-up Boundary
 
-The default package is a connection-only VR bring-up build. A normal SKSEVR
+This section records the former connection-only VR bring-up build and is kept
+only for implementation-history traceability. It is not the current gameplay
+target or package boundary. In that former build, a normal SKSEVR
 Papyrus native requests a coalesced one-shot `SKSETaskInterface` task from the
 quest's 50 ms timer. That task validates a process-local launcher endpoint and
 publishes one atomic permit; it never calls the client. Exact Skyrim VR
@@ -39,7 +86,7 @@ wraps that inner function so `EndMain()` and endpoint retirement run before the
 mapped CRT exit path. The wrapper is idempotent with the existing startup IAT
 callback and leaves detours/mappings resident until process exit.
 
-The default target installs no flat-client BSScript native-binding,
+That former default target installed no flat-client BSScript native-binding,
 registration, or signature detours. As a result, `SkyrimTogetherUtils` and the
 connection-menu spell remain staged future UI source rather than active
 connection controls. After the observer gate passes, launch with
@@ -648,6 +695,27 @@ Current result:
 - The launcher-side companion link is implemented in source and audited statically, including selected Skyrim VR install propagation. The launcher also exports `STVR_GAME_PATH`, and the client plus SKSEVR bridge DLLs use `Code/vr_common/VRHandoffPath.h` to resolve `Data\SkyrimTogetherReborn` from that selected install before falling back to executable/current-directory paths. This still needs Windows artifact build and runtime validation.
 
 Windows/MSVC through the checked-in WinBoat helper is the supported client build path. The Linux xmake graph exposes Wine wrapper targets, but native Wine package/toolchain probing remains less reliable than the clean detached WinBoat workflow. Use `Tools/SkyrimVR/build_winboat_gameplay.sh` after committing and pushing the exact source revision.
+
+## Unbuilt Gameplay Source Review Closure (2026-07-16)
+
+The post-fix Sol max review found no P0 or confirmed ABI/wire blocker. Its P1
+capture/transport findings are implemented through bridge ABI 12, capability
+revision 20, authenticated `ArmLocalCapture`, accepted native baselines, mapped
+FIFO/coalesced transport retry, and owner-thread enforcement. Final equipment
+now waits for a correlated successful CommonLib end result before committing
+its replay ledger; dropped bridge acknowledgements time out into bounded,
+idempotent equipment or spawn-state retries. Server equipment ledgers fail
+closed at capacity and clean up on player/entity lifecycle events; appearance
+replay uses normal range
+interest in both directions after committed cell transitions. The complete
+disposition is
+`full-gameplay-source-postfix-senior-disposition-20260716.md`.
+The subsequent main integration and follow-up review provenance are recorded in
+`full-gameplay-source-integration-disposition-20260716.md`.
+
+This tranche remains intentionally unbuilt. Address artifact regeneration,
+static/source checks, commit/push, the single WinBoat gameplay build, package
+audit, handoff refresh, and exact client/server deployment are the next stage.
 
 ## Remaining High-Risk Work
 

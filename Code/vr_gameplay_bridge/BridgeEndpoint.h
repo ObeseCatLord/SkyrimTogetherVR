@@ -20,9 +20,11 @@ public:
         std::uint32_t a_callerThreadId,
         std::uint64_t a_lifecycleEpoch) noexcept;
     [[nodiscard]] bool TryPushEvent(const EventRecord& a_record) noexcept;
+    [[nodiscard]] bool TryPushEvents(const EventRecord* ap_records, std::size_t a_count) noexcept;
     [[nodiscard]] BridgeIdentity SnapshotIdentity(std::uint64_t a_sequenceId) const noexcept;
     [[nodiscard]] std::uint64_t NextEventSequence() noexcept;
 
+    void SetOptionalCapability(Capability a_capability, bool a_available) noexcept;
     void PublishCapabilities() noexcept;
     void Fault(const char* a_reason) noexcept;
 
@@ -33,6 +35,7 @@ private:
 
     GameplayBridgeMapping* _mapping{};
     std::atomic<std::uint64_t> _eventSequence{};
+    std::atomic<CapabilityMask> _optionalCapabilities{};
     std::atomic_bool _attachAttempted{};
 };
 } // namespace SkyrimTogetherVR::GameplayAdapter

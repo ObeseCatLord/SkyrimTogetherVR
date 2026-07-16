@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <vr_common/VRGameplayBridge.h>
@@ -42,5 +43,10 @@ void UpdateSessionIdentity(std::uint64_t aServerInstanceNonce, std::uint64_t aCo
 
 [[nodiscard]] bool TryConsumeEvent(GameplayBridge::EventRecord& arEvent) noexcept;
 [[nodiscard]] bool TrySubmitCommand(GameplayBridge::CommandRecord& arCommand) noexcept;
+// Submits one logical multi-record transaction under a shared ActionId. The
+// caller retains semantic IDs such as TextId; actor-action staging IDs are
+// normalized to the allocated ActionId before publication.
+[[nodiscard]] bool TrySubmitCommandBatch(GameplayBridge::CommandRecord* apCommands,
+                                         std::size_t aCommandCount) noexcept;
 [[nodiscard]] GameplayBridge::CommandPumpResult PumpCommands(std::uint32_t aMaxCommands) noexcept;
 } // namespace SkyrimTogetherVR::GameplayBridgeClient

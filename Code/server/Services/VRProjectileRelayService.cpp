@@ -5,6 +5,7 @@
 #include <Events/PlayerLeaveEvent.h>
 #include <Messages/NotifyVRProjectileEvent.h>
 #include <Messages/RequestVRProjectileEvent.h>
+#include <Structs/GameplayCapabilities.h>
 #include <Structs/VRProjectileEvent.h>
 
 namespace
@@ -47,6 +48,10 @@ void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRPr
         return;
     }
 
+    if (!SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(), SkyrimTogether::Protocol::GameplayCapability::VRProjectileRelay))
+        return;
+
     const auto playerId = acMessage.pPlayer->GetId();
     if (!ShouldRelayProjectile(playerId, acMessage.Packet))
         return;
@@ -55,7 +60,12 @@ void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRPr
     notify.PlayerId = playerId;
     notify.Projectile = acMessage.Packet.Projectile;
 
-    GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);
+    const auto character = acMessage.pPlayer->GetCharacter();
+    if (!character || !GameServer::Get()->SendToPlayersWithCapabilitiesInRange(
+            notify, *character,
+            SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRProjectileRelay),
+            acMessage.pPlayer))
+        spdlog::warn("VR relay dropped because sender has no routable character");
 }
 
 void VRProjectileRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept

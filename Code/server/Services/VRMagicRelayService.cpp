@@ -5,6 +5,7 @@
 #include <Events/PlayerLeaveEvent.h>
 #include <Messages/NotifyVRMagicEffectEvent.h>
 #include <Messages/RequestVRMagicEffectEvent.h>
+#include <Structs/GameplayCapabilities.h>
 #include <Structs/VRMagicEffectEvent.h>
 
 namespace
@@ -46,6 +47,10 @@ void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicE
         return;
     }
 
+    if (!SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(), SkyrimTogether::Protocol::GameplayCapability::VRMagicRelay))
+        return;
+
     const auto playerId = acMessage.pPlayer->GetId();
     if (!ShouldRelayMagicEffect(playerId, acMessage.Packet))
         return;
@@ -54,7 +59,12 @@ void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicE
     notify.PlayerId = playerId;
     notify.MagicEffect = acMessage.Packet.MagicEffect;
 
-    GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);
+    const auto character = acMessage.pPlayer->GetCharacter();
+    if (!character || !GameServer::Get()->SendToPlayersWithCapabilitiesInRange(
+            notify, *character,
+            SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRMagicRelay),
+            acMessage.pPlayer))
+        spdlog::warn("VR relay dropped because sender has no routable character");
 }
 
 void VRMagicRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept

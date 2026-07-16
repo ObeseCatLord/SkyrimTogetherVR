@@ -3,11 +3,23 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 max_age_days=7
+min_free_gib=160
+max_used_percent=93
 trim=0
 scheduled=0
 local_artifacts=1
 rebuildable_caches=0
 temp_artifacts=0
+local_build_output=0
+
+if [[ ${STVR_BUILD_LOCK_HELD:-0} != 1 ]]; then
+    build_lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-active.lock"
+    exec 8>"$build_lock_file"
+    if ! flock -n 8; then
+        echo "A Skyrim Together VR build is active; skipping cleanup."
+        exit 0
+    fi
+fi
 
 lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-cleanup.lock"
 exec 9>"$lock_file"
@@ -26,6 +38,14 @@ while (($#)); do
             trim=1
             shift
             ;;
+        --min-free-gib)
+            min_free_gib=${2:?--min-free-gib requires a nonnegative integer}
+            shift 2
+            ;;
+        --max-used-percent)
+            max_used_percent=${2:?--max-used-percent requires an integer from 1 to 100}
+            shift 2
+            ;;
         --scheduled)
             scheduled=1
             shift
@@ -42,6 +62,10 @@ while (($#)); do
             temp_artifacts=1
             shift
             ;;
+        --local-build-output)
+            local_build_output=1
+            shift
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 2
@@ -49,9 +73,35 @@ while (($#)); do
     esac
 done
 
-if [[ ! $max_age_days =~ ^[0-9]+$ ]]; then
-    echo "--max-age-days must be a nonnegative integer." >&2
+if [[ ! $max_age_days =~ ^[0-9]+$ || ! $min_free_gib =~ ^[0-9]+$ ||
+      ! $max_used_percent =~ ^[0-9]+$ || $max_used_percent -lt 1 || $max_used_percent -gt 100 ]]; then
+    echo "Cleanup retention and disk-pressure arguments are invalid." >&2
     exit 2
+fi
+
+read -r root_used_percent root_available_bytes < <(
+    df -B1 --output=pcent,avail / | awk 'NR == 2 { gsub(/%/, "", $1); print $1, $2 }'
+)
+min_free_bytes=$((min_free_gib * 1024 * 1024 * 1024))
+if ((scheduled && (root_used_percent >= max_used_percent || root_available_bytes < min_free_bytes))); then
+    echo "Root filesystem is under pressure (${root_used_percent}% used); tightening generated-output retention."
+    max_age_days=0
+    temp_artifacts=1
+    rebuildable_caches=1
+    local_build_output=1
+fi
+
+if ((local_build_output)); then
+    for build_path in "$repo_root/build/.objs" "$repo_root/build/linux"; do
+        if [[ -e $build_path ]]; then
+            echo "Removing reproducible local build output: $build_path"
+            rm -rf -- "$build_path"
+        fi
+    done
+    while IFS= read -r -d '' python_cache; do
+        echo "Removing reproducible project Python cache: $python_cache"
+        rm -rf -- "$python_cache"
+    done < <(find "$repo_root" -xdev -type d -name __pycache__ -print0)
 fi
 
 if ((local_artifacts)); then
@@ -105,6 +155,7 @@ $repo = '__WINBOAT_REPO__'
 $cutoff = (Get-Date).ToUniversalTime().AddDays(-__MAX_AGE_DAYS__)
 $trim = __TRIM__ -eq 1
 $buildRoot = Split-Path -Parent $repo
+$resultRoot = "$repo-build-results"
 
 $active = @(Get-CimInstance Win32_Process | Where-Object {
     $_.ProcessId -ne $PID -and
@@ -128,7 +179,8 @@ foreach ($line in @(git -C $repo worktree list --porcelain)) {
 if ($LASTEXITCODE -ne 0) { throw "Could not list WinBoat worktrees." }
 
 $removed = 0
-$buildDirs = @(Get-ChildItem -LiteralPath $buildRoot -Directory -Filter 'SkyrimTogetherVR-build-*' -ErrorAction SilentlyContinue)
+$buildDirs = @(Get-ChildItem -LiteralPath $buildRoot -Directory -Filter 'SkyrimTogetherVR-build-*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $resultRoot })
 foreach ($dir in $buildDirs) {
     if ($dir.LastWriteTimeUtc -gt $cutoff) { continue }
     $key = $dir.FullName.ToLowerInvariant()
@@ -141,9 +193,22 @@ foreach ($dir in $buildDirs) {
     $removed++
 }
 
+$removedResults = 0
+if (Test-Path -LiteralPath $resultRoot) {
+    $resultDirs = @(Get-ChildItem -LiteralPath $resultRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending)
+    for ($index = 1; $index -lt $resultDirs.Count; $index++) {
+        $dir = $resultDirs[$index]
+        if ($dir.LastWriteTimeUtc -gt $cutoff) { continue }
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+        $removedResults++
+    }
+}
+
 git -C $repo worktree prune
 if ($LASTEXITCODE -ne 0) { throw "Failed to prune WinBoat worktree metadata." }
 "Removed WinBoat build directories: $removed"
+"Removed expired WinBoat build result directories: $removedResults"
 if ($trim -and $removed -gt 0) {
     try {
         Optimize-Volume -DriveLetter C -ReTrim -ErrorAction Stop | Out-Null

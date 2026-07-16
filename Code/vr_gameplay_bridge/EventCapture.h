@@ -17,6 +17,7 @@ void PublishRemoteAvatarState(
     CommandStatus a_status,
     std::uint32_t a_localCellFormId,
     std::uint32_t a_localWorldspaceFormId,
+    std::uint32_t a_localActorReferenceFormId,
     const RootTransform& a_root) noexcept;
 void PublishRemoteAnimationGraphState(
     const BridgeIdentity& a_identity,
@@ -31,5 +32,12 @@ void PublishRemoteSpatialTransferState(
     std::uint32_t a_sourceWorldspaceFormId,
     std::uint32_t a_targetCellFormId,
     std::uint32_t a_targetWorldspaceFormId,
+    CommandStatus a_status) noexcept;
+void PublishRemoteGameplayActionState(
+    const BridgeIdentity& a_identity,
+    AdapterHandle a_targetHandle,
+    GameplayDomain a_domain,
+    GameplayAction a_action,
+    std::uint32_t a_targetLocalFormId,
     CommandStatus a_status) noexcept;
 } // namespace SkyrimTogetherVR::GameplayAdapter

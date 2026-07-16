@@ -36,6 +36,11 @@
 #include <Services/VRSaveLoadService.h>
 #include <Services/VRLifecycleService.h>
 #include <Services/VRAvatarService.h>
+#include <Services/VRActorReplicationService.h>
+#include <Services/VRDeathRespawnService.h>
+#include <Services/VRLocalGameplayService.h>
+#include <Services/VRNpcOwnershipService.h>
+#include <Services/VRWorldReplicationService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -124,7 +129,7 @@ World::World()
     spdlog::warn("SkyrimTogetherVR connection-only mode: gameplay sync services are disabled");
 #endif
 #else
-    spdlog::warn("SkyrimTogetherVR staged gameplay mode: CommonLib avatar sync and observation services are enabled; unported legacy mutations remain disabled");
+    spdlog::warn("SkyrimTogetherVR gameplay mode: CommonLib native replication is enabled; desktop-only hooks remain disabled");
 #endif
 #if TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE
     spdlog::warn("SkyrimTogetherVR discovery service is enabled in observation-only mode");
@@ -183,6 +188,14 @@ World::World()
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
     ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
     ctx().emplace<VRAvatarService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<VRLocalGameplayService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<VRNpcOwnershipService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<VRDeathRespawnService>(
+        *this, m_dispatcher, m_transport, ctx().at<VRAvatarService>(), ctx().at<VRLocalGameplayService>());
+    ctx().emplace<VRActorReplicationService>(
+        *this, m_dispatcher, m_transport, ctx().at<VRAvatarService>(), ctx().at<VRNpcOwnershipService>());
+    ctx().emplace<VRWorldReplicationService>(
+        *this, m_dispatcher, m_transport, ctx().at<VRAvatarService>());
 #endif
 #else
     ctx().emplace<DiscoveryService>(*this, m_dispatcher);
@@ -239,6 +252,11 @@ void World::Shutdown() noexcept
 
 #if TP_SKYRIM_VR
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+    ctx().erase<VRWorldReplicationService>();
+    ctx().erase<VRActorReplicationService>();
+    ctx().erase<VRDeathRespawnService>();
+    ctx().erase<VRNpcOwnershipService>();
+    ctx().erase<VRLocalGameplayService>();
     ctx().erase<VRAvatarService>();
     ctx().erase<PartyService>();
 #endif

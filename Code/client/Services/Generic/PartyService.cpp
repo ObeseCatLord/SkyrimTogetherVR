@@ -123,8 +123,10 @@ void PartyService::OnPartyInfo(const NotifyPartyInfo& acPartyInfo) noexcept
         // TODO: this can be done a bit prettier
         if (m_isLeader)
         {
+#if !TP_SKYRIM_VR
             TESGlobal* pWorldEncountersEnabled = Cast<TESGlobal>(TESForm::GetById(0xB8EC1));
             pWorldEncountersEnabled->SetValueData(1.f);
+#endif
         }
 
         if (auto* pOverlayService = m_world.ctx().find<OverlayService>())

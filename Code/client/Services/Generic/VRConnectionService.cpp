@@ -4,14 +4,19 @@
 #include <vr_common/VRHandoffPath.h>
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
+#include <string_view>
 
 #include <Events/ConnectedEvent.h>
 #include <Events/ConnectionErrorEvent.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
+#include <Messages/SendChatMessageRequest.h>
+#include <Services/PartyService.h>
 #include <Services/TransportService.h>
 #include <Services/VRLifecycleService.h>
 #include <VRRuntimeDiagnostics.h>
@@ -23,6 +28,10 @@ constexpr double kCommandPollInterval = 0.5;
 constexpr double kStatusWriteInterval = 1.0;
 constexpr char kCommandFileName[] = "SkyrimTogetherVR.command";
 constexpr char kStatusFileName[] = "SkyrimTogetherVR.status";
+constexpr std::size_t kMaximumCommandBytes = 2 * 1024;
+constexpr std::size_t kMaximumEndpointBytes = 255;
+constexpr std::size_t kMaximumPasswordBytes = 256;
+constexpr std::size_t kMaximumChatBytes = 512;
 
 bool IsVrPlayerReadyForConnection(World& aWorld) noexcept
 {
@@ -56,12 +65,57 @@ bool ReadTextFile(const std::filesystem::path& acPath, std::string& aOut)
     if (!file)
         return false;
 
-    std::ostringstream stream;
-    stream << file.rdbuf();
-    aOut = stream.str();
-    return true;
+    aOut.clear();
+    std::array<char, 256> buffer{};
+    while (file)
+    {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto read = file.gcount();
+        if (read <= 0)
+            break;
+
+        if (aOut.size() + static_cast<std::size_t>(read) > kMaximumCommandBytes)
+            return false;
+
+        aOut.append(buffer.data(), static_cast<std::size_t>(read));
+    }
+
+    return !file.bad();
 }
 
+bool HasControlCharacter(const std::string_view acValue) noexcept
+{
+    return std::any_of(acValue.begin(), acValue.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; });
+}
+
+bool IsValidEndpoint(const std::string_view acEndpoint) noexcept
+{
+    return !acEndpoint.empty() && acEndpoint.size() <= kMaximumEndpointBytes && !HasControlCharacter(acEndpoint) &&
+           std::none_of(acEndpoint.begin(), acEndpoint.end(), [](unsigned char c) { return std::isspace(c) != 0; });
+}
+
+bool IsValidPassword(const std::string_view acPassword) noexcept
+{
+    return acPassword.size() <= kMaximumPasswordBytes && !HasControlCharacter(acPassword);
+}
+
+bool ParsePlayerId(const std::string_view acValue, uint32_t& aOut) noexcept
+{
+    if (acValue.empty() || acValue.size() > 10)
+        return false;
+
+    const auto* begin = acValue.data();
+    const auto* end = begin + acValue.size();
+    const auto [position, error] = std::from_chars(begin, end, aOut);
+    return error == std::errc{} && position == end && aOut != 0;
+}
+
+}
+
+bool VRConnectionService::IsPartyTargetAction(const CommandAction aAction) noexcept
+{
+    return aAction == CommandAction::InviteToParty || aAction == CommandAction::AcceptPartyInvite ||
+           aAction == CommandAction::KickPartyMember || aAction == CommandAction::ChangePartyLeader;
 }
 
 VRConnectionService::VRConnectionService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
@@ -147,9 +201,9 @@ void VRConnectionService::OnConnectionError(const ConnectionErrorEvent& acEvent)
 bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept
 {
     const auto endpoint = Trim(acEndpoint);
-    if (endpoint.empty())
+    if (!IsValidEndpoint(endpoint) || !IsValidPassword(acPassword))
     {
-        SetStatus("error", "connect command is missing endpoint");
+        SetStatus("error", "connect command has an invalid endpoint or password");
         return false;
     }
 
@@ -265,7 +319,13 @@ void VRConnectionService::PollCommandFile() noexcept
 
     std::string contents;
     if (!ReadTextFile(m_commandPath, contents))
+    {
+        spdlog::warn("SkyrimTogetherVR connection handoff rejected because its command file is unavailable or exceeds {} bytes", kMaximumCommandBytes);
+        m_commandQueuedThisUpdate = true;
+        SetStatus("error", "command file is unavailable or too large");
+        ArchiveCommandFile(".error");
         return;
+    }
 
     if (contents == m_lastCommandContents)
         return;
@@ -346,6 +406,22 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
                 command.Action = CommandAction::Connect;
             else if (lowerValue == "disconnect")
                 command.Action = CommandAction::Disconnect;
+            else if (lowerValue == "chat")
+                command.Action = CommandAction::Chat;
+            else if (lowerValue == "party_create")
+                command.Action = CommandAction::CreateParty;
+            else if (lowerValue == "party_leave")
+                command.Action = CommandAction::LeaveParty;
+            else if (lowerValue == "party_invite")
+                command.Action = CommandAction::InviteToParty;
+            else if (lowerValue == "party_accept")
+                command.Action = CommandAction::AcceptPartyInvite;
+            else if (lowerValue == "party_kick")
+                command.Action = CommandAction::KickPartyMember;
+            else if (lowerValue == "party_change_leader")
+                command.Action = CommandAction::ChangePartyLeader;
+            else
+                command.Error = "command file contains an unsupported action";
         }
         else if (key == "endpoint" || key == "address" || key == "server")
         {
@@ -355,13 +431,31 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
         {
             command.Password = value;
         }
+        else if (key == "message" || key == "text")
+        {
+            command.Message = value;
+        }
+        else if (key == "playerid" || key == "player_id" || key == "inviterid" || key == "inviter_id")
+        {
+            command.HasPlayerId = ParsePlayerId(value, command.PlayerId);
+            if (!command.HasPlayerId)
+                command.Error = "party command has an invalid player id";
+        }
     }
+
+    if (!command.Error.empty())
+        return command;
 
     if (command.Action == CommandAction::None && !command.Endpoint.empty())
         command.Action = CommandAction::Connect;
 
-    if (command.Action == CommandAction::Connect && command.Endpoint.empty())
-        command.Error = "connect command is missing endpoint";
+    if (command.Action == CommandAction::Connect && (!IsValidEndpoint(command.Endpoint) || !IsValidPassword(command.Password)))
+        command.Error = "connect command has an invalid endpoint or password";
+    else if (command.Action == CommandAction::Chat &&
+             (command.Message.empty() || command.Message.size() > kMaximumChatBytes || HasControlCharacter(command.Message)))
+        command.Error = "chat message is empty or too long";
+    else if (IsPartyTargetAction(command.Action) && !command.HasPlayerId)
+        command.Error = "party command is missing player id";
     else if (command.Action == CommandAction::None)
         command.Error = "command file did not contain a supported action";
 
@@ -390,6 +484,13 @@ void VRConnectionService::RunCommand(const Command& acCommand) noexcept
     {
     case CommandAction::Connect: QueueConnect(acCommand.Endpoint, acCommand.Password); break;
     case CommandAction::Disconnect: QueueDisconnect(); break;
+    case CommandAction::Chat: SendChat(acCommand.Message); break;
+    case CommandAction::CreateParty:
+    case CommandAction::LeaveParty:
+    case CommandAction::InviteToParty:
+    case CommandAction::AcceptPartyInvite:
+    case CommandAction::KickPartyMember:
+    case CommandAction::ChangePartyLeader: RunPartyCommand(acCommand); break;
     default: break;
     }
 }
@@ -454,6 +555,41 @@ void VRConnectionService::QueueDisconnect() noexcept
     m_connectInFlight = false;
     SetStatus("disconnecting");
     m_world.GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
+}
+
+void VRConnectionService::SendChat(const std::string& acMessage) noexcept
+{
+    if (!m_transport.IsOnline() || acMessage.empty() || acMessage.size() > kMaximumChatBytes || HasControlCharacter(acMessage))
+    {
+        spdlog::warn("SkyrimTogetherVR chat command rejected because the client is offline or the message is invalid");
+        return;
+    }
+    SendChatMessageRequest request{};
+    request.MessageType = ChatMessageType::kGlobalChat;
+    request.ChatMessage = acMessage;
+    m_transport.Send(request);
+}
+
+void VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
+{
+    if (!m_transport.IsOnline())
+    {
+        SetStatus("offline", "party command requires an online connection");
+        spdlog::warn("SkyrimTogetherVR party command rejected because the client is offline");
+        return;
+    }
+
+    auto& party = m_world.GetPartyService();
+    switch (acCommand.Action)
+    {
+    case CommandAction::CreateParty: party.CreateParty(); break;
+    case CommandAction::LeaveParty: party.LeaveParty(); break;
+    case CommandAction::InviteToParty: party.CreateInvite(acCommand.PlayerId); break;
+    case CommandAction::AcceptPartyInvite: party.AcceptInvite(acCommand.PlayerId); break;
+    case CommandAction::KickPartyMember: party.KickPartyMember(acCommand.PlayerId); break;
+    case CommandAction::ChangePartyLeader: party.ChangePartyLeader(acCommand.PlayerId); break;
+    default: break;
+    }
 }
 
 void VRConnectionService::ArchiveCommandFile(const char* apSuffix) noexcept

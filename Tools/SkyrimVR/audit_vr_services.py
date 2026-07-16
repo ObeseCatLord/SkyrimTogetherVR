@@ -129,9 +129,8 @@ REQUIRED_INVENTORY_OBSERVER_TOKENS = (
     "remoteEquipmentMutation=0",
     "normalInventoryPackets=0",
     "IsNewerSequence",
-    "RequestVREquipmentUpdate",
     "NotifyVREquipmentUpdate",
-    "m_lastEquipment.Sequence = ++m_sequence;",
+    "equipment.Sequence = m_lastEquipment.Sequence;",
     "weaponDrawn",
     "weaponFullyDrawn",
     "leftWeapon",
@@ -379,7 +378,7 @@ REQUIRED_MOVEMENT_RELAY_TOKENS = {
         "state.LastSequence = movement.Sequence",
         "m_playerMovementRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRMovementRelayService.h": (
         "PlayerMovementRelayState",
@@ -523,7 +522,7 @@ REQUIRED_EQUIPMENT_RELAY_TOKENS = {
         "state.LastSequence = equipment.Sequence",
         "m_playerEquipmentRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VREquipmentRelayService.h": (
         "PlayerEquipmentRelayState",
@@ -651,8 +650,6 @@ FORBIDDEN_REMOTE_AVATAR_COMPONENT_TOKENS = {
         "SetAngle",
         "SetScale",
         "GetObjectByName",
-        "ServerId == 0",
-        "serverId == 0",
         ">> 20",
         "ToBridgeEntityId",
         "ToBridgeEntityGeneration",
@@ -1000,7 +997,7 @@ REQUIRED_ACTIVATION_RELAY_TOKENS = {
         "state.LastSequence = activation.Sequence",
         "m_playerActivationRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRActivationRelayService.h": (
         "PlayerActivationRelayState",
@@ -1072,7 +1069,7 @@ REQUIRED_MAGIC_RELAY_TOKENS = {
         "state.LastSequence = magicEffect.Sequence",
         "m_playerMagicRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRMagicRelayService.h": (
         "PlayerMagicRelayState",
@@ -1147,7 +1144,7 @@ REQUIRED_COMBAT_RELAY_TOKENS = {
         "state.LastSequence = hit.Sequence",
         "m_playerCombatRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRCombatRelayService.h": (
         "PlayerCombatRelayState",
@@ -1221,7 +1218,7 @@ REQUIRED_PROJECTILE_RELAY_TOKENS = {
         "state.LastSequence = projectile.Sequence",
         "m_playerProjectileRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRProjectileRelayService.h": (
         "PlayerProjectileRelayState",
@@ -1291,7 +1288,7 @@ REQUIRED_GRAB_RELAY_TOKENS = {
         "state.LastSequence = grab.Sequence",
         "m_playerGrabRelayState.erase",
         "notify.PlayerId = playerId;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRGrabRelayService.h": (
         "PlayerGrabRelayState",

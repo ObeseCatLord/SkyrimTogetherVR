@@ -655,8 +655,10 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher,
     m_notifyRespawnConnection = m_dispatcher.sink<NotifyRespawn>().connect<&CharacterService::OnNotifyRespawn>(this);
     m_beastFormChangeConnection = m_dispatcher.sink<BeastFormChangeEvent>().connect<&CharacterService::OnBeastFormChange>(this);
 
+#if !TP_SKYRIM_VR
     m_addExperienceEventConnection = m_dispatcher.sink<AddExperienceEvent>().connect<&CharacterService::OnAddExperienceEvent>(this);
     m_syncExperienceConnection = m_dispatcher.sink<NotifySyncExperience>().connect<&CharacterService::OnNotifySyncExperience>(this);
+#endif
 
     m_dialogueEventConnection = m_dispatcher.sink<DialogueEvent>().connect<&CharacterService::OnDialogueEvent>(this);
     m_dialogueSyncConnection = m_dispatcher.sink<NotifyDialogue>().connect<&CharacterService::OnNotifyDialogue>(this);
@@ -677,8 +679,18 @@ void CharacterService::DeleteRemoteEntityComponents(entt::entity aEntity) const 
                    PlayerComponent>(aEntity);
 }
 
-bool CharacterService::TakeOwnership(const uint32_t acFormId, const uint32_t acServerId, const entt::entity acEntity) const noexcept
+bool CharacterService::TakeOwnership(const uint32_t acFormId, const uint32_t acServerId,
+                                     const entt::entity acEntity, const uint64_t aGrantToken) const noexcept
 {
+#if TP_SKYRIM_VR
+    TP_UNUSED(acFormId);
+    TP_UNUSED(acServerId);
+    TP_UNUSED(acEntity);
+    TP_UNUSED(aGrantToken);
+    // VR NPC ownership is completed only by VRNpcOwnershipService after a
+    // mapped CommonLib snapshot and a server grant acknowledgement.
+    return false;
+#else
     Actor* pActor = Cast<Actor>(TESForm::GetById(acFormId));
     if (!pActor)
     {
@@ -710,11 +722,13 @@ bool CharacterService::TakeOwnership(const uint32_t acFormId, const uint32_t acS
 
     RequestOwnershipClaim request;
     request.ServerId = acServerId;
+    request.GrantToken = aGrantToken;
     request.NewActorData = BuildActorData(pActor);
 
     m_transport.Send(request);
 
     return true;
+#endif
 }
 
 void CharacterService::DeleteTempActor(const uint32_t aFormId) noexcept
@@ -1197,6 +1211,13 @@ void CharacterService::OnFactionsChanges(const NotifyFactionsChanges& acEvent) c
 
 void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMessage) const noexcept
 {
+#if TP_SKYRIM_VR
+    // The tokenized VR handshake and its zero-token completion acknowledgement
+    // are consumed by VRNpcOwnershipService. Running this legacy path as well
+    // would mutate ownership before the server accepts the mapped snapshot.
+    TP_UNUSED(acMessage);
+    return;
+#else
     // TODO(cosideci): handle case if no one has it, therefore no RemoteComponent
     auto view = m_world.view<RemoteComponent, FormIdComponent>();
 
@@ -1206,7 +1227,7 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
     {
         auto& formIdComponent = view.get<FormIdComponent>(*itor);
 
-        if (TakeOwnership(formIdComponent.Id, acMessage.ServerId, *itor))
+        if (TakeOwnership(formIdComponent.Id, acMessage.ServerId, *itor, acMessage.GrantToken))
         {
             spdlog::info("Ownership claimed {:X}", acMessage.ServerId);
             return;
@@ -1219,6 +1240,7 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
     request.ServerId = acMessage.ServerId;
 
     m_transport.Send(request);
+#endif
 }
 
 void CharacterService::OnRemoveCharacter(const NotifyRemoveCharacter& acMessage) const noexcept

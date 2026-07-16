@@ -10,13 +10,16 @@
 #include <Events/UpdateEvent.h>
 #include <Events/CharacterRemoveEvent.h>
 #include <Events/OwnershipTransferEvent.h>
+#include <Events/PlayerLeaveEvent.h>
 
 #include <Game/OwnerView.h>
+#include <Game/Player.h>
 
 #include <Messages/AssignCharacterRequest.h>
 #include <Messages/AssignCharacterResponse.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Messages/ClientReferencesMoveRequest.h>
+#include <Messages/ClientActorActionRequest.h>
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/RequestFactionsChanges.h>
 #include <Messages/NotifyFactionsChanges.h>
@@ -40,11 +43,25 @@
 #include <Messages/NotifyActorTeleport.h>
 #include <Messages/NotifyRelinquishControl.h>
 #include <Structs/MovementOrdering.h>
+#include <Structs/GameplayCapabilities.h>
+#include <vr_common/VRAnimationGraphProtocol.h>
 
 #include <Setting.h>
+
+#include <cmath>
 namespace
 {
 Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Syncs combat XP within the party", true};
+constexpr auto kOwnershipGrantLifetime = std::chrono::seconds(5);
+
+[[nodiscard]] bool MatchesOwnershipGrantSession(const Player* apPlayer, const ConnectionId_t aConnectionId,
+                                                const std::uint64_t aConnectionGeneration,
+                                                const std::uint64_t aSessionNonce) noexcept
+{
+    return apPlayer && apPlayer->GetConnectionId() == aConnectionId &&
+           apPlayer->GetConnectionGeneration() == aConnectionGeneration &&
+           apPlayer->GetClientSessionNonce() == aSessionNonce;
+}
 }
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
@@ -57,8 +74,10 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
     , m_ownershipTransferEventConnection(aDispatcher.sink<OwnershipTransferEvent>().connect<&CharacterService::OnOwnershipTransferEvent>(this))
     , m_claimOwnershipConnection(aDispatcher.sink<PacketEvent<RequestOwnershipClaim>>().connect<&CharacterService::OnOwnershipClaimRequest>(this))
     , m_removeCharacterConnection(aDispatcher.sink<CharacterRemoveEvent>().connect<&CharacterService::OnCharacterRemoveEvent>(this))
+    , m_playerLeaveConnection(aDispatcher.sink<PlayerLeaveEvent>().connect<&CharacterService::OnPlayerLeave>(this))
     , m_characterSpawnedConnection(aDispatcher.sink<CharacterSpawnedEvent>().connect<&CharacterService::OnCharacterSpawned>(this))
     , m_referenceMovementSnapshotConnection(aDispatcher.sink<PacketEvent<ClientReferencesMoveRequest>>().connect<&CharacterService::OnReferencesMoveRequest>(this))
+    , m_actorActionRequestConnection(aDispatcher.sink<PacketEvent<ClientActorActionRequest>>().connect<&CharacterService::OnActorActionRequest>(this))
     , m_factionsChangesConnection(aDispatcher.sink<PacketEvent<RequestFactionsChanges>>().connect<&CharacterService::OnFactionsChanges>(this))
     , m_mountConnection(aDispatcher.sink<PacketEvent<MountRequest>>().connect<&CharacterService::OnMountRequest>(this))
     , m_newPackageConnection(aDispatcher.sink<PacketEvent<NewPackageRequest>>().connect<&CharacterService::OnNewPackageRequest>(this))
@@ -127,6 +146,7 @@ void CharacterService::Serialize(World& aRegistry, entt::entity aEntity, Charact
 
 void CharacterService::OnUpdate(const UpdateEvent&) const noexcept
 {
+    ExpireOwnershipGrants();
     ProcessFactionsChanges();
     ProcessMovementChanges();
 }
@@ -182,6 +202,12 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
 
     const auto isPlayer = (refId.ModId == 0 && refId.BaseId == 0x14);
     const auto isCustom = isPlayer || refId.ModId == std::numeric_limits<uint32_t>::max();
+    if (!isPlayer && !SkyrimTogether::Protocol::CanOwnNpc(acMessage.pPlayer->GetGameplayCapabilities()))
+    {
+        spdlog::warn("VR client {:X} attempted NPC assignment without negotiated NPC ownership capability",
+                     acMessage.pPlayer->GetConnectionId());
+        return;
+    }
 
     // Check if id is the player
     if (!isCustom)
@@ -258,27 +284,43 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
 void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwnershipTransfer>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
-
     const entt::entity cEntity = static_cast<entt::entity>(message.ServerId);
 
-    if (!m_world.valid(cEntity))
+    if (!acMessage.pPlayer || message.ServerId == 0 || !m_world.valid(cEntity) ||
+        !m_world.all_of<OwnerComponent, CharacterComponent, CellIdComponent, ActorValuesComponent, InventoryComponent>(cEntity))
     {
-        spdlog::warn("Client {:X} requested ownership transfer of an entity that doesn't exist, server id: {:X}", acMessage.pPlayer->GetConnectionId(), message.ServerId);
+        if (acMessage.pPlayer)
+            spdlog::warn("Client {:X} requested ownership transfer of an invalid entity, server id: {:X}",
+                         acMessage.pPlayer->GetConnectionId(), message.ServerId);
         return;
     }
 
-    if (auto* pCharacterComponent = m_world.try_get<CharacterComponent>(cEntity))
+    auto& characterOwnerComponent = m_world.get<OwnerComponent>(cEntity);
+    auto& characterComponent = m_world.get<CharacterComponent>(cEntity);
+    if (characterOwnerComponent.GetOwner() != acMessage.pPlayer)
     {
-        if (pCharacterComponent->IsPlayerSummon())
-        {
-            spdlog::info("Client {:X} requested ownership transfer of an orphaned summon, serverid id: {:X}", acMessage.pPlayer->GetConnectionId(), message.ServerId);
-            m_world.GetDispatcher().trigger(CharacterRemoveEvent(message.ServerId));
-            return;
-        }
+        spdlog::warn("Client {:X} requested ownership transfer of entity {:X} without ownership",
+                     acMessage.pPlayer->GetConnectionId(), message.ServerId);
+        return;
+    }
+    if (characterComponent.IsPlayerSummon())
+    {
+        spdlog::info("Client {:X} requested ownership transfer of an orphaned summon, serverid id: {:X}", acMessage.pPlayer->GetConnectionId(), message.ServerId);
+        m_pendingOwnershipGrants.erase(message.ServerId);
+        m_world.GetDispatcher().trigger(CharacterRemoveEvent(message.ServerId));
+        return;
+    }
+    if (!characterComponent.IsPlayer() && !SkyrimTogether::Protocol::CanOwnNpc(acMessage.pPlayer->GetGameplayCapabilities()))
+    {
+        spdlog::warn("Client {:X} requested NPC ownership transfer without negotiated capability",
+                     acMessage.pPlayer->GetConnectionId());
+        return;
     }
 
     if (message.WorldSpaceId || message.CellId)
     {
+        if (!m_world.all_of<FormIdComponent, MovementComponent>(cEntity))
+            return;
         auto& formIdComponent = m_world.get<FormIdComponent>(cEntity);
 
         NotifyActorTeleport notify{};
@@ -299,27 +341,38 @@ void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwner
         GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);
     }
 
-    auto& characterOwnerComponent = m_world.get<OwnerComponent>(cEntity);
-    characterOwnerComponent.InvalidOwners.push_back(acMessage.pPlayer);
+    if (std::find(characterOwnerComponent.InvalidOwners.begin(), characterOwnerComponent.InvalidOwners.end(), acMessage.pPlayer) ==
+        characterOwnerComponent.InvalidOwners.end())
+        characterOwnerComponent.InvalidOwners.push_back(acMessage.pPlayer);
+    m_pendingOwnershipGrants.erase(message.ServerId);
 
     m_world.GetDispatcher().trigger(OwnershipTransferEvent(cEntity));
 }
 
 void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& acEvent) const noexcept
 {
-    const auto view = m_world.view<OwnerComponent, CharacterComponent, CellIdComponent>();
+    const auto serverId = World::ToInteger(acEvent.Entity);
+    m_pendingOwnershipGrants.erase(serverId);
+    if (!m_world.valid(acEvent.Entity) ||
+        !m_world.all_of<OwnerComponent, CharacterComponent, CellIdComponent, ActorValuesComponent, InventoryComponent>(acEvent.Entity))
+        return;
 
-    auto& characterComponent = view.get<CharacterComponent>(acEvent.Entity);
-    auto& ownerComponent = view.get<OwnerComponent>(acEvent.Entity);
-    auto& cellIdComponent = view.get<CellIdComponent>(acEvent.Entity);
+    auto& characterComponent = m_world.get<CharacterComponent>(acEvent.Entity);
+    auto& ownerComponent = m_world.get<OwnerComponent>(acEvent.Entity);
+    auto& cellIdComponent = m_world.get<CellIdComponent>(acEvent.Entity);
+    auto* const pCurrentOwner = ownerComponent.GetOwner();
+    if (!pCurrentOwner)
+        return;
 
     NotifyOwnershipTransfer response;
-    response.ServerId = World::ToInteger(acEvent.Entity);
+    response.ServerId = serverId;
 
     bool foundOwner = false;
     for (auto pPlayer : m_world.GetPlayerManager())
     {
         if (ownerComponent.GetOwner() == pPlayer)
+            continue;
+        if (!SkyrimTogether::Protocol::CanOwnNpc(pPlayer->GetGameplayCapabilities()))
             continue;
 
         bool isPlayerInvalid = false;
@@ -336,9 +389,34 @@ void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& ac
         if (!pPlayer->GetCellComponent().IsInRange(cellIdComponent, characterComponent.IsDragon()))
             continue;
 
-        ownerComponent.SetOwner(pPlayer);
-        if (auto* movementComponent = m_world.try_get<MovementComponent>(acEvent.Entity))
-            movementComponent->HasTick = false;
+        if (characterComponent.IsPlayer())
+        {
+            ownerComponent.SetOwner(pPlayer);
+            if (auto* movementComponent = m_world.try_get<MovementComponent>(acEvent.Entity))
+                movementComponent->HasTick = false;
+            pPlayer->Send(response);
+            foundOwner = true;
+            break;
+        }
+
+        PendingOwnershipGrant grant{};
+        grant.pCurrentOwner = pCurrentOwner;
+        grant.pSelectedPlayer = pPlayer;
+        grant.CurrentOwnerConnectionId = pCurrentOwner->GetConnectionId();
+        grant.CurrentOwnerConnectionGeneration = pCurrentOwner->GetConnectionGeneration();
+        grant.CurrentOwnerSessionNonce = pCurrentOwner->GetClientSessionNonce();
+        grant.SelectedConnectionId = pPlayer->GetConnectionId();
+        grant.SelectedConnectionGeneration = pPlayer->GetConnectionGeneration();
+        grant.SelectedSessionNonce = pPlayer->GetClientSessionNonce();
+        grant.ExpiresAt = std::chrono::steady_clock::now() + kOwnershipGrantLifetime;
+        do {
+            grant.Token = m_nextOwnershipGrantToken++;
+            if (m_nextOwnershipGrantToken == 0)
+                m_nextOwnershipGrantToken = 1;
+        } while (grant.Token == 0 || std::any_of(m_pendingOwnershipGrants.begin(), m_pendingOwnershipGrants.end(),
+                                                  [&grant](const auto& acEntry) { return acEntry.second.Token == grant.Token; }));
+        m_pendingOwnershipGrants.emplace(serverId, grant);
+        response.GrantToken = grant.Token;
 
         pPlayer->Send(response);
 
@@ -352,11 +430,13 @@ void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& ac
 
 void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept
 {
-    const auto view = m_world.view<OwnerComponent>();
-    const auto it = view.find(static_cast<entt::entity>(acEvent.ServerId));
-    const auto& characterOwnerComponent = view.get<OwnerComponent>(*it);
+    m_pendingOwnershipGrants.erase(acEvent.ServerId);
+    const auto entity = static_cast<entt::entity>(acEvent.ServerId);
+    if (!m_world.valid(entity) || !m_world.all_of<OwnerComponent>(entity))
+        return;
+    const auto& characterOwnerComponent = m_world.get<OwnerComponent>(entity);
 
-    GameServer::Get()->GetWorld().GetScriptService().HandleCharacterDestoy(*it);
+    GameServer::Get()->GetWorld().GetScriptService().HandleCharacterDestoy(entity);
 
     NotifyRemoveCharacter response;
     response.ServerId = acEvent.ServerId;
@@ -369,13 +449,72 @@ void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEven
         pPlayer->Send(response);
     }
 
-    m_world.destroy(*it);
+    m_world.destroy(entity);
     spdlog::debug("Character destroyed {:X}", acEvent.ServerId);
 }
 
 void CharacterService::OnOwnershipClaimRequest(const PacketEvent<RequestOwnershipClaim>& acMessage) const noexcept
 {
-    TransferOwnership(acMessage.pPlayer, acMessage.Packet.ServerId, acMessage.Packet.NewActorData);
+    const auto& message = acMessage.Packet;
+    const auto entity = static_cast<entt::entity>(message.ServerId);
+    if (!acMessage.pPlayer || message.ServerId == 0 || !m_world.valid(entity) ||
+        !m_world.all_of<OwnerComponent, CharacterComponent>(entity))
+        return;
+
+    const auto& characterComponent = m_world.get<CharacterComponent>(entity);
+    if (characterComponent.IsPlayer())
+    {
+        // Player-character ownership keeps the legacy protocol behavior.
+        TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData);
+        return;
+    }
+
+    const auto grantIt = m_pendingOwnershipGrants.find(message.ServerId);
+    if (message.GrantToken == 0 || grantIt == m_pendingOwnershipGrants.end())
+        return;
+    const auto grant = grantIt->second;
+    if (grant.Token != message.GrantToken ||
+        grant.pSelectedPlayer != acMessage.pPlayer ||
+        !MatchesOwnershipGrantSession(acMessage.pPlayer, grant.SelectedConnectionId,
+                                      grant.SelectedConnectionGeneration, grant.SelectedSessionNonce))
+        return;
+    if (grant.ExpiresAt <= std::chrono::steady_clock::now())
+    {
+        m_pendingOwnershipGrants.erase(grantIt);
+        return;
+    }
+
+    // Once the selected session presents the exact grant, consume it even if
+    // subsequent entity/range/old-owner validation fails.
+    m_pendingOwnershipGrants.erase(grantIt);
+    const auto* pGrantOwner = m_world.GetPlayerManager().GetByConnectionId(grant.CurrentOwnerConnectionId);
+    if (!pGrantOwner || pGrantOwner != grant.pCurrentOwner ||
+        !MatchesOwnershipGrantSession(pGrantOwner, grant.CurrentOwnerConnectionId,
+                                      grant.CurrentOwnerConnectionGeneration,
+                                      grant.CurrentOwnerSessionNonce))
+        return;
+
+    if (!m_world.all_of<OwnerComponent, CharacterComponent, CellIdComponent, ActorValuesComponent, InventoryComponent>(entity))
+        return;
+    const auto& ownerComponent = m_world.get<OwnerComponent>(entity);
+    if (ownerComponent.GetOwner() != grant.pCurrentOwner ||
+        !SkyrimTogether::Protocol::CanOwnNpc(acMessage.pPlayer->GetGameplayCapabilities()) ||
+        !acMessage.pPlayer->GetCellComponent().IsInRange(m_world.get<CellIdComponent>(entity), characterComponent.IsDragon()))
+        return;
+
+    TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData);
+}
+
+void CharacterService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noexcept
+{
+    if (!acEvent.pPlayer)
+        return;
+    for (auto it = m_pendingOwnershipGrants.begin(); it != m_pendingOwnershipGrants.end();) {
+        if (it->second.pCurrentOwner == acEvent.pPlayer || it->second.pSelectedPlayer == acEvent.pPlayer)
+            it = m_pendingOwnershipGrants.erase(it);
+        else
+            ++it;
+    }
 }
 
 void CharacterService::OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept
@@ -446,6 +585,48 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
     }
 }
 
+void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionRequest>& acMessage) const noexcept
+{
+    const auto& message = acMessage.Packet;
+    const auto& action = message.Action;
+    if (!acMessage.pPlayer ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::ExactAnimationActions) ||
+        message.ServerId == 0 || action.ActionId == 0 || (action.Type & ~0x7u) != 0 ||
+        action.EventName.size() > 127 || action.TargetEventName.size() > 127 ||
+        action.Variables.Booleans.size() != SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount ||
+        action.Variables.Floats.size() != SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount ||
+        action.Variables.Integers.size() != SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount ||
+        !std::all_of(action.Variables.Floats.begin(), action.Variables.Floats.end(),
+                     [](const float a_value) { return std::isfinite(a_value); }))
+        return;
+
+    const auto entity = static_cast<entt::entity>(message.ServerId);
+    if (!m_world.valid(entity))
+    {
+        spdlog::debug("{:x} requested action for an invalid entity {:x}", acMessage.pPlayer->GetConnectionId(), message.ServerId);
+        return;
+    }
+
+    OwnerView<CharacterComponent, AnimationComponent> view(m_world, acMessage.GetSender());
+    const auto itor = view.find(entity);
+    if (itor == std::end(view))
+    {
+        spdlog::debug("{:x} requested action for {:x} but it is not an owned character", acMessage.pPlayer->GetConnectionId(), message.ServerId);
+        return;
+    }
+
+    auto [canceled, reason] = GameServer::Get()->GetWorld().GetScriptService().HandleCharacterMove(entity);
+    if (canceled)
+        return;
+
+    auto& animationComponent = view.get<AnimationComponent>(*itor);
+    animationComponent.CurrentAction = message.Action;
+    animationComponent.Actions.push_back(animationComponent.CurrentAction);
+    animationComponent.ActionsReplayCache.AppendAll(Vector<ActionEvent>{animationComponent.CurrentAction});
+}
+
 void CharacterService::OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept
 {
     OwnerView<CharacterComponent> view(m_world, acMessage.GetSender());
@@ -469,6 +650,19 @@ void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage
 {
     auto& message = acMessage.Packet;
 
+    const auto rider = static_cast<entt::entity>(message.RiderId);
+    const auto mount = static_cast<entt::entity>(message.MountId);
+    if (!acMessage.pPlayer || message.RiderId == 0 || message.MountId == 0 || rider == mount ||
+        !m_world.valid(rider) || !m_world.valid(mount) ||
+        !m_world.all_of<CharacterComponent, OwnerComponent>(rider) ||
+        !m_world.all_of<CharacterComponent, OwnerComponent>(mount) ||
+        !m_world.all_of<CellIdComponent>(rider) || !m_world.all_of<CellIdComponent>(mount) ||
+        m_world.get<OwnerComponent>(rider).GetOwner() != acMessage.pPlayer ||
+        m_world.get<OwnerComponent>(mount).GetOwner() != acMessage.pPlayer ||
+        !m_world.get<CharacterComponent>(mount).IsMount() ||
+        !m_world.get<CellIdComponent>(rider).IsInRange(m_world.get<CellIdComponent>(mount), false))
+        return;
+
     NotifyMount notify;
     notify.RiderId = message.RiderId;
     notify.MountId = message.MountId;
@@ -481,13 +675,17 @@ void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage
 void CharacterService::OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
+    const auto actor = static_cast<entt::entity>(message.ActorId);
+    if (!acMessage.pPlayer || message.ActorId == 0 || !message.PackageId || !m_world.valid(actor) ||
+        !m_world.all_of<CharacterComponent, OwnerComponent>(actor) ||
+        m_world.get<OwnerComponent>(actor).GetOwner() != acMessage.pPlayer)
+        return;
 
     NotifyNewPackage notify;
     notify.ActorId = message.ActorId;
     notify.PackageId = message.PackageId;
 
-    const entt::entity cEntity = static_cast<entt::entity>(message.ActorId);
-    if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
+    if (!GameServer::Get()->SendToPlayersInRange(notify, actor, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
 
@@ -532,7 +730,8 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
 
 void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept
 {
-    if (!bEnableXpSync)
+    if (!bEnableXpSync || !acMessage.pPlayer || !std::isfinite(acMessage.Packet.Experience) ||
+        acMessage.Packet.Experience <= 0.0F || acMessage.Packet.Experience > 100000.0F)
         return;
 
     NotifySyncExperience notify;
@@ -562,6 +761,7 @@ void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acM
     NotifySubtitle notify{};
     notify.ServerId = message.ServerId;
     notify.Text = message.Text;
+    notify.TopicFormId = message.TopicFormId;
 
     const entt::entity cEntity = static_cast<entt::entity>(message.ServerId);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
@@ -662,7 +862,8 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
 void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServerId,
                                          const ActorData& acActorData) const noexcept
 {
-    // const OwnerView<CharacterComponent, CellIdComponent> view(m_world, acMessage.GetSender());
+    if (!apPlayer)
+        return;
     auto view = m_world.view<OwnerComponent>();
     const auto it = view.find(static_cast<entt::entity>(acServerId));
     if (it == view.end())
@@ -671,9 +872,18 @@ void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
         return;
     }
 
+    const auto* character = m_world.try_get<CharacterComponent>(*it);
+    if (character && !character->IsPlayer() &&
+        !SkyrimTogether::Protocol::CanOwnNpc(apPlayer->GetGameplayCapabilities()))
+    {
+        spdlog::warn("VR client {:X} attempted NPC ownership claim without negotiated capability",
+                     apPlayer->GetConnectionId());
+        return;
+    }
+
     auto& characterOwnerComponent = view.get<OwnerComponent>(*it);
 
-    if (characterOwnerComponent.GetOwner() != apPlayer)
+    if (characterOwnerComponent.GetOwner() && characterOwnerComponent.GetOwner() != apPlayer)
     {
         NotifyRelinquishControl notify;
         notify.ServerId = acServerId;
@@ -687,7 +897,30 @@ void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
 
     BroadcastActorData(apPlayer, *it, acActorData);
 
+    if (character && !character->IsPlayer() &&
+        SkyrimTogether::Protocol::HasCapability(
+            apPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::NpcOwnership))
+    {
+        NotifyOwnershipTransfer completion{};
+        completion.ServerId = acServerId;
+        // A zero token is the explicit completion acknowledgment, never a grant.
+        completion.GrantToken = 0;
+        apPlayer->Send(completion);
+    }
+
     spdlog::debug("\tOwnership claimed {:X}", acServerId);
+}
+
+void CharacterService::ExpireOwnershipGrants() const noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = m_pendingOwnershipGrants.begin(); it != m_pendingOwnershipGrants.end();) {
+        if (it->second.ExpiresAt <= now)
+            it = m_pendingOwnershipGrants.erase(it);
+        else
+            ++it;
+    }
 }
 
 ActorData CharacterService::BuildActorData(const entt::entity acEntity) const noexcept
@@ -831,7 +1064,7 @@ void CharacterService::ProcessMovementChanges() const noexcept
         auto& animationComponent = characterView.get<AnimationComponent>(entity);
 
         // If we have nothing new to send skip this
-        if (movementComponent.Sent == true)
+        if (movementComponent.Sent == true && animationComponent.Actions.empty())
             continue;
 
         for (auto pPlayer : m_world.GetPlayerManager())

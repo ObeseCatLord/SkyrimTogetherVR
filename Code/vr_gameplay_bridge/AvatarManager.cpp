@@ -4,7 +4,9 @@
 
 #include <vr_common/VRCanonicalEntity.h>
 
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace SkyrimTogetherVR::GameplayAdapter
@@ -16,6 +18,11 @@ constexpr float kMaximumScale = 10.0f;
 constexpr std::size_t kMaximumRemoteAvatars = 64;
 constexpr double kMinimumQuaternionNormSquared = 1.0e-12;
 constexpr double kPiOverTwo = 1.57079632679489661923;
+constexpr std::uint64_t kMoveToVrRva = 0x09E90E0;
+constexpr std::array<std::uint8_t, 16> kMoveToVrPrologue{
+    0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57,
+    0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+};
 
 [[nodiscard]] bool ResolveLocation(
     const std::uint32_t a_cellFormId,
@@ -45,14 +52,14 @@ constexpr double kPiOverTwo = 1.57079632679489661923;
 class PendingActorCleanup final
 {
 public:
-    explicit PendingActorCleanup(RE::Actor* a_actor) noexcept
-        : _actor(a_actor)
+    explicit PendingActorCleanup(RE::Actor* a_actor, const bool a_owned) noexcept
+        : _actor(a_actor), _owned(a_owned)
     {
     }
 
     ~PendingActorCleanup() noexcept
     {
-        if (_actor) {
+        if (_actor && _owned) {
             _actor->Disable();
             _actor->SetDelete(true);
         }
@@ -62,6 +69,23 @@ public:
 
 private:
     RE::Actor* _actor;
+    bool _owned;
+};
+
+class PendingFormCleanup final
+{
+public:
+    explicit PendingFormCleanup(RE::TESForm* a_form) noexcept : _form(a_form) {}
+    ~PendingFormCleanup() noexcept
+    {
+        if (_form)
+            _form->SetDelete(true);
+    }
+    void Reset(RE::TESForm* a_form) noexcept { _form = a_form; }
+    void Release() noexcept { _form = nullptr; }
+
+private:
+    RE::TESForm* _form;
 };
 } // namespace
 
@@ -125,38 +149,57 @@ AvatarCommandResult AvatarManager::CreateRemoteAvatar(const CommandRecord& a_com
             return result;
         }
 
-        auto* base = RE::TESForm::LookupByID<RE::TESNPC>(payload.LocalActorBaseFormId);
-        if (!base) {
+        auto* templateBase = RE::TESForm::LookupByID<RE::TESNPC>(payload.LocalActorBaseFormId);
+        if (!templateBase) {
             result.Status = CommandStatus::MissingForm;
             return result;
         }
-        auto* dataHandler = RE::TESDataHandler::GetSingleton();
-        if (!dataHandler) {
-            result.Status = CommandStatus::Inactive;
-            return result;
-        }
-        const auto placedHandle = dataHandler->CreateReferenceAtLocation(
-            base,
-            {normalized.PositionX, normalized.PositionY, normalized.PositionZ},
-            angles,
-            cell,
-            worldspace,
-            nullptr,
-            nullptr,
-            RE::ObjectRefHandle{},
-            false,
-            true);
-        const auto placed = placedHandle.get();
-        auto* actor = placed ? placed->As<RE::Actor>() : nullptr;
-        if (!actor) {
-            if (placed) {
-                placed->Disable();
-                placed->SetDelete(true);
+        const bool useExisting = (payload.CreateFlags & UseExistingReference) != 0;
+        RE::TESNPC* base{};
+        RE::Actor* actor{};
+        PendingFormCleanup pendingForm{nullptr};
+        if (useExisting) {
+            actor = RE::TESForm::LookupByID<RE::Actor>(payload.LocalReferenceFormId);
+            if (!actor || actor->GetActorBase() != templateBase) {
+                result.Status = CommandStatus::MissingForm;
+                return result;
             }
-            result.Status = CommandStatus::EngineRejected;
-            return result;
+        } else {
+            auto* duplicateForm = templateBase->CreateDuplicateForm(false, nullptr);
+            base = duplicateForm ? duplicateForm->As<RE::TESNPC>() : nullptr;
+            if (!base || base == templateBase) {
+                result.Status = CommandStatus::EngineRejected;
+                return result;
+            }
+            pendingForm.Reset(base);
+            auto* dataHandler = RE::TESDataHandler::GetSingleton();
+            if (!dataHandler) {
+                result.Status = CommandStatus::Inactive;
+                return result;
+            }
+            const auto placedHandle = dataHandler->CreateReferenceAtLocation(
+                base,
+                {normalized.PositionX, normalized.PositionY, normalized.PositionZ},
+                angles,
+                cell,
+                worldspace,
+                nullptr,
+                nullptr,
+                RE::ObjectRefHandle{},
+                false,
+                true);
+            const auto placed = placedHandle.get();
+            actor = placed ? placed->As<RE::Actor>() : nullptr;
+            if (!actor) {
+                if (placed) {
+                    placed->Disable();
+                    placed->SetDelete(true);
+                }
+                result.Status = CommandStatus::EngineRejected;
+                return result;
+            }
         }
-        PendingActorCleanup pendingActor{actor};
+        PendingActorCleanup pendingActor{actor, !useExisting};
 
         RE::ActorHandle actorHandle{actor};
         if (!actorHandle) {
@@ -174,9 +217,13 @@ AvatarCommandResult AvatarManager::CreateRemoteAvatar(const CommandRecord& a_com
         AvatarRecord record{};
         record.Token = {_nextToken};
         record.Actor = actorHandle;
+        record.VisualBase = base;
+        record.OwnsActor = !useExisting;
+        record.IsPlayer = (payload.CreateFlags & PlayerAvatar) != 0;
         record.LastAction = identity.ActionId;
         record.LocalCellFormId = payload.LocalCellFormId;
         record.LocalWorldspaceFormId = payload.LocalWorldspaceFormId;
+        record.LocalActorReferenceFormId = resolvedActor->GetFormID();
         record.Root = normalized;
         const auto [it, inserted] = _avatars.emplace(key, std::move(record));
         if (!inserted) {
@@ -194,6 +241,7 @@ AvatarCommandResult AvatarManager::CreateRemoteAvatar(const CommandRecord& a_com
         else
             ++_nextToken;
         pendingActor.Release();
+        pendingForm.Release();
         return ResultFor(it->second, CommandStatus::Success);
     } catch (...) {
         result.Status = CommandStatus::EngineRejected;
@@ -281,6 +329,103 @@ AvatarCommandResult AvatarManager::UpdateRemoteRootTransform(const CommandRecord
         result.Status = CommandStatus::EngineRejected;
         return result;
     }
+}
+
+CommandStatus AvatarManager::ResolveGameplayActor(
+    const CommandRecord& a_command,
+    RE::NiPointer<RE::Actor>& ar_actor) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return CommandStatus::WrongThread;
+
+    const auto& identity = a_command.Header.Identity;
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    if (payload.TargetHandle.Value == kLocalPlayerHandle.Value) {
+        const auto* mapping = BridgeEndpoint::Get().Mapping();
+        if (!mapping || identity.Reserved0 != 0 || identity.SequenceId != 0 || identity.ActionId == 0 ||
+            !CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration) ||
+            identity.ServerInstanceNonce != mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire) ||
+            identity.ConnectionGeneration != mapping->Header.ConnectionGeneration.load(std::memory_order_acquire) ||
+            identity.LifecycleEpoch != mapping->Header.LifecycleEpoch.load(std::memory_order_acquire))
+            return CommandStatus::StaleEntity;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player)
+            return CommandStatus::InvalidHandle;
+        ar_actor = player;
+        return CommandStatus::Success;
+    }
+
+    const auto it = _avatars.find(MakeAvatarKey(identity));
+    if (it == _avatars.end() || payload.TargetHandle.Value == 0 ||
+        it->second.Token.Value != payload.TargetHandle.Value)
+        return CommandStatus::InvalidHandle;
+
+    auto& record = it->second;
+    if (identity.ActionId == 0 || identity.ActionId <= record.LastAction)
+        return CommandStatus::StaleEntity;
+
+    ar_actor = record.Actor.get();
+    if (!ar_actor)
+        return CommandStatus::InvalidHandle;
+
+    record.LastAction = identity.ActionId;
+    return CommandStatus::Success;
+}
+
+CommandStatus AvatarManager::ResolveActorByHandle(
+    const BridgeIdentity& a_identity,
+    const AdapterHandle a_handle,
+    RE::NiPointer<RE::Actor>& ar_actor) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return CommandStatus::WrongThread;
+    if (a_handle.Value < kFirstRemoteAvatarHandle)
+        return CommandStatus::InvalidHandle;
+
+    for (auto& [key, record] : _avatars) {
+        if (key.ServerInstanceNonce != a_identity.ServerInstanceNonce ||
+            key.ConnectionGeneration != a_identity.ConnectionGeneration ||
+            key.LifecycleEpoch != a_identity.LifecycleEpoch || record.Token.Value != a_handle.Value)
+            continue;
+        ar_actor = record.Actor.get();
+        return ar_actor ? CommandStatus::Success : CommandStatus::InvalidHandle;
+    }
+    return CommandStatus::InvalidHandle;
+}
+
+bool AvatarManager::IsManagedRemoteActor(const RE::Actor* a_actor) const noexcept
+{
+    if (!a_actor)
+        return false;
+    for (const auto& [key, record] : _avatars) {
+        (void)key;
+        const auto actor = record.Actor.get();
+        if (actor && actor.get() == a_actor)
+            return true;
+    }
+    return false;
+}
+
+bool AvatarManager::IsPlayerAvatar(const BridgeIdentity& a_identity, const AdapterHandle a_handle) const noexcept
+{
+    if (a_handle.Value == 0 || a_handle.Value == kLocalPlayerHandle.Value)
+        return a_handle.Value == kLocalPlayerHandle.Value;
+    const auto found = _avatars.find(MakeAvatarKey(a_identity));
+    return found != _avatars.end() && found->second.Token.Value == a_handle.Value && found->second.IsPlayer;
+}
+
+CommandStatus AvatarManager::ApplyAnimationSnapshotToActor(
+    RE::Actor& a_actor,
+    const AnimationGraphProtocol::SnapshotBuffer& a_snapshot) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return CommandStatus::WrongThread;
+    if (!a_snapshot.IsComplete())
+        return CommandStatus::Malformed;
+    if (!ValidateAnimationGraph(a_actor))
+        return CommandStatus::EngineRejected;
+    return ApplyAnimationSnapshot(a_actor, a_snapshot) ? CommandStatus::Success : CommandStatus::EngineRejected;
 }
 
 AvatarCommandResult AvatarManager::ApplyRemoteAnimationGraphChunk(const CommandRecord& a_command) noexcept
@@ -487,7 +632,8 @@ bool AvatarManager::NormalizeRoot(const RootTransform& a_root, RootTransform& a_
 
 AvatarCommandResult AvatarManager::ResultFor(const AvatarRecord& a_record, const CommandStatus a_status) noexcept
 {
-    return {a_status, a_record.Token, a_record.LocalCellFormId, a_record.LocalWorldspaceFormId, a_record.Root};
+    return {a_status, a_record.Token, a_record.LocalCellFormId, a_record.LocalWorldspaceFormId,
+            a_record.LocalActorReferenceFormId, a_record.Root};
 }
 
 bool AvatarManager::MoveActorToLocation(
@@ -501,6 +647,10 @@ bool AvatarManager::MoveActorToLocation(
         using MoveTo = void(RE::TESObjectREFR*, const RE::ObjectRefHandle&, RE::TESObjectCELL*, RE::TESWorldSpace*,
                             const RE::NiPoint3&, const RE::NiPoint3&);
         static REL::Relocation<MoveTo> moveTo{RELOCATION_ID(56227, 56626)};
+        if (moveTo.offset() != kMoveToVrRva ||
+            std::memcmp(reinterpret_cast<const void*>(moveTo.address()),
+                        kMoveToVrPrologue.data(), kMoveToVrPrologue.size()) != 0)
+            return false;
         moveTo(&a_actor, RE::ObjectRefHandle{}, &a_cell, a_worldspace, a_position, a_angles);
         return a_actor.GetParentCell() == &a_cell && a_actor.GetWorldspace() == a_worldspace;
     } catch (...) {
@@ -627,9 +777,15 @@ AvatarManager::PendingAnimationResult AvatarManager::TryApplyPendingAnimation(Av
 
 void AvatarManager::DestroyRecord(AvatarRecord& a_record) noexcept
 {
-    if (const auto actor = a_record.Actor.get()) {
-        actor->Disable();
-        actor->SetDelete(true);
+    if (a_record.OwnsActor) {
+        const auto actor = a_record.Actor.get();
+        if (actor) {
+            actor->Disable();
+            actor->SetDelete(true);
+        }
     }
+    if (a_record.VisualBase)
+        a_record.VisualBase->SetDelete(true);
+    a_record.VisualBase = nullptr;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

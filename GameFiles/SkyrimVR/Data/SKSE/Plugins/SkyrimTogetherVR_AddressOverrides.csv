@@ -115,7 +115,7 @@ id,offset,source,status,name
 38933,068a7f0,addrlib,addrlib,
 38934,068a910,addrlib,addrlib,
 38935,068aab0,addrlib,addrlib,
-38949,068ae90,addrlib,addrlib,
+38949,0643f20,database,exact_vr_disassembly,ActorMediator::PerformAction
 38952,068aef0,addrlib,addrlib,
 38953,068af10,addrlib,addrlib,
 38959,068afe0,addrlib,addrlib,

@@ -5,6 +5,9 @@
 
 #include <atomic>
 #include <Client.hpp>
+#include <deque>
+#include <thread>
+#include <vector>
 
 struct ImguiService;
 struct UpdateEvent;
@@ -31,7 +34,10 @@ struct TransportService : Client
 
     TP_NOCOPYMOVE(TransportService);
 
-    bool Send(const ClientMessage& acMessage) const noexcept;
+    // Success means the serialized packet was accepted into this service's
+    // bounded owner-thread queue. TiltedConnect's void send API cannot report
+    // the later Steam Networking Sockets result.
+    bool Send(const ClientMessage& acMessage) noexcept;
 
     void OnConsume(const void* apData, uint32_t aSize) override;
     void OnConnected() override;
@@ -60,6 +66,17 @@ protected:
     void HandleNotifySettingsChange(const NotifySettingsChange& acMessage) noexcept;
 
 private:
+    struct PendingOutboundPacket
+    {
+        std::vector<std::uint8_t> Data{};
+        TiltedPhoques::EPacketFlags Flags{TiltedPhoques::kReliable};
+        std::uint64_t ConnectionAttempt{};
+        std::uint64_t ConnectionGeneration{};
+    };
+
+    void DrainOutboundQueue() noexcept;
+    void ClearOutboundQueue() noexcept;
+
     World& m_world;
     entt::dispatcher& m_dispatcher;
     bool m_connected = false;
@@ -72,6 +89,10 @@ private:
     uint64_t m_negotiatedGameplayCapabilities = 0;
     uint64_t m_requestedGameplayCapabilities = 0;
     bool m_gameplayCleanupRequired = false;
+    std::deque<PendingOutboundPacket> m_outboundQueue{};
+    std::size_t m_outboundQueueBytes{};
+    bool m_drainingOutboundQueue{};
+    const std::thread::id m_ownerThreadId;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_sendServerMessageConnection;

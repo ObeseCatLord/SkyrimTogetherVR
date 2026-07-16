@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <bit>
+#include <iterator>
 #include <limits>
 #include <thread>
 
@@ -38,27 +39,38 @@ EventRecord MakeEvent(const std::uint64_t a_sequence) noexcept
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 2);
-    REQUIRE(kCapabilityRevision == 2);
+    REQUIRE(kMappingAbiVersion == 12);
+    REQUIRE(kCapabilityRevision == 20);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
     REQUIRE(kMinimumSkseVrVersion == 0x020000C0);
     REQUIRE(kMinimumSkseVrReleaseIndex == 60);
-    REQUIRE(kFixedPayloadBytes == 64);
-    REQUIRE(kDefaultEventRingCapacity == 64);
-    REQUIRE(kDefaultCommandRingCapacity == 64);
+    REQUIRE(kFixedPayloadBytes == 80);
+    REQUIRE(kDefaultEventRingCapacity == 2048);
+    REQUIRE(kDefaultCommandRingCapacity == 1024);
     REQUIRE(kLocalPlayerHandle.Value == 1);
     REQUIRE(kFirstRemoteAvatarHandle == 2);
     REQUIRE(sizeof(MessageHeader) == 0x40);
-    REQUIRE(sizeof(EventRecord) == 0x80);
-    REQUIRE(sizeof(CommandRecord) == 0x80);
+    REQUIRE(sizeof(EventRecord) == 0x90);
+    REQUIRE(sizeof(CommandRecord) == 0x90);
+    REQUIRE(sizeof(ApplyProjectileLaunchPayload) == kFixedPayloadBytes);
+    REQUIRE(sizeof(ActorActionPayload) == kFixedPayloadBytes);
+    REQUIRE(sizeof(ActorActionGraphChunkPayload) == kFixedPayloadBytes);
+    REQUIRE(offsetof(RemoteAvatarStatePayload, LocalActorReferenceFormId) == 0x18);
+    REQUIRE(offsetof(RemoteAvatarStatePayload, Root) == 0x1C);
+    REQUIRE(offsetof(ApplyProjectileLaunchPayload, LocalParentCellFormId) == 0x18);
+    REQUIRE(offsetof(ApplyProjectileLaunchPayload, LaunchFlags) == 0x40);
+    REQUIRE(offsetof(ActorActionPayload, SnapshotId) == 0x28);
+    REQUIRE(offsetof(ActorActionPayload, TextId) == 0x30);
+    REQUIRE(offsetof(ActorActionGraphChunkPayload, Values) == 0x2C);
+    REQUIRE(kProjectileLaunchKnownFlags == 0x3F);
     REQUIRE(sizeof(MappingHeader) == 0x90);
-    REQUIRE(sizeof(EventRing) == 0x2220);
-    REQUIRE(sizeof(CommandRing) == 0x2220);
-    REQUIRE(sizeof(GameplayBridgeMapping) == 0x44D0);
+    REQUIRE(sizeof(EventRing) == 0x4C020);
+    REQUIRE(sizeof(CommandRing) == 0x26020);
+    REQUIRE(sizeof(GameplayBridgeMapping) == 0x720D0);
     REQUIRE(offsetof(GameplayBridgeMapping, Events) == 0x90);
-    REQUIRE(offsetof(GameplayBridgeMapping, Commands) == 0x22B0);
+    REQUIRE(offsetof(GameplayBridgeMapping, Commands) == 0x4C0B0);
     REQUIRE(HasCapability(kInitialCapabilities, Capability::Lifecycle));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalPlayerDiscovery));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalPlayerSnapshot));
@@ -67,6 +79,9 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteSpatialTransfer));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteAnimationGraphSnapshot));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
+    REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ArmLocalCapture));
+    REQUIRE_FALSE(IsActionInDomain(GameplayDomain::Animation, GameplayAction::ArmLocalCapture));
 }
 
 TEST_CASE("VR gameplay bridge records preserve identity and payloads", "[skyrim-vr][gameplay-bridge]")
@@ -115,6 +130,64 @@ TEST_CASE("VR gameplay bridge records preserve identity and payloads", "[skyrim-
     REQUIRE(commandRoundTrip.Payload.UpdateRemoteRootTransform.UpdateFlags == 2);
     REQUIRE(commandRoundTrip.Payload.UpdateRemoteRootTransform.LocalCellFormId == 0x1234);
     REQUIRE(commandRoundTrip.Payload.UpdateRemoteRootTransform.LocalWorldspaceFormId == 0x5678);
+
+    EventRecord avatarCreated{};
+    avatarCreated.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteAvatarState);
+    avatarCreated.Header.PayloadSize = kFixedPayloadBytes;
+    avatarCreated.Payload.RemoteAvatarState.AvatarHandle.Value = 2;
+    avatarCreated.Payload.RemoteAvatarState.State = static_cast<std::uint32_t>(RemoteAvatarState::Created);
+    avatarCreated.Payload.RemoteAvatarState.Status = static_cast<std::uint32_t>(CommandStatus::Success);
+    avatarCreated.Payload.RemoteAvatarState.LocalActorReferenceFormId = 0xFF001234;
+    avatarCreated.Payload.RemoteAvatarState.Root.RotationW = 1.0F;
+    avatarCreated.Payload.RemoteAvatarState.Root.Scale = 1.0F;
+    const auto avatarCreatedRoundTrip = avatarCreated;
+    REQUIRE(avatarCreatedRoundTrip.Payload.RemoteAvatarState.LocalActorReferenceFormId == 0xFF001234);
+
+    CommandRecord projectileCommand{};
+    projectileCommand.Header.Kind = static_cast<std::uint16_t>(CommandKind::ApplyProjectileLaunch);
+    projectileCommand.Header.PayloadSize = kFixedPayloadBytes;
+    projectileCommand.Header.Identity.EntityId = 84;
+    projectileCommand.Header.Identity.EntityGeneration = 4;
+    projectileCommand.Header.Identity.ActionId = 58;
+    projectileCommand.Payload.ApplyProjectileLaunch.TargetHandle.Value = 0xDEADBEEF;
+    projectileCommand.Payload.ApplyProjectileLaunch.LocalProjectileBaseFormId = 0x101;
+    projectileCommand.Payload.ApplyProjectileLaunch.LocalWeaponFormId = 0x102;
+    projectileCommand.Payload.ApplyProjectileLaunch.LocalAmmoFormId = 0x103;
+    projectileCommand.Payload.ApplyProjectileLaunch.LocalParentCellFormId = 0x104;
+    projectileCommand.Payload.ApplyProjectileLaunch.OriginX = 1.0F;
+    projectileCommand.Payload.ApplyProjectileLaunch.OriginY = 2.0F;
+    projectileCommand.Payload.ApplyProjectileLaunch.OriginZ = 3.0F;
+    projectileCommand.Payload.ApplyProjectileLaunch.AngleX = 0.25F;
+    projectileCommand.Payload.ApplyProjectileLaunch.AngleZ = 0.5F;
+    projectileCommand.Payload.ApplyProjectileLaunch.Power = 4.0F;
+    projectileCommand.Payload.ApplyProjectileLaunch.Scale = 1.0F;
+    projectileCommand.Payload.ApplyProjectileLaunch.CastingSource = 1;
+    projectileCommand.Payload.ApplyProjectileLaunch.Area = 5;
+    projectileCommand.Payload.ApplyProjectileLaunch.LaunchFlags = ProjectileAlwaysHit | ProjectileNoDamageOutsideCombat |
+                                                                  ProjectileAutoAim | ProjectileChainShatter |
+                                                                  ProjectileDeferInitialization | ProjectileForceConeOfFire;
+    const auto projectileRoundTrip = projectileCommand;
+
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LocalProjectileBaseFormId == 0x101);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LocalWeaponFormId == 0x102);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LocalAmmoFormId == 0x103);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LocalSpellFormId == 0);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LocalParentCellFormId == 0x104);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.AngleX == 0.25F);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.AngleZ == 0.5F);
+    REQUIRE(projectileRoundTrip.Payload.ApplyProjectileLaunch.LaunchFlags == kProjectileLaunchKnownFlags);
+
+    EventRecord npcProjectile{};
+    npcProjectile.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalProjectileLaunch);
+    npcProjectile.Header.PayloadSize = kFixedPayloadBytes;
+    npcProjectile.Header.Identity.SequenceId = 59;
+    npcProjectile.Payload.LocalProjectileLaunch.LocalShooterFormId = 0x205;
+    npcProjectile.Payload.LocalProjectileLaunch.LocalProjectileBaseFormId = 0x101;
+    npcProjectile.Payload.LocalProjectileLaunch.LocalParentCellFormId = 0x104;
+    npcProjectile.Payload.LocalProjectileLaunch.Scale = 1.0F;
+    const auto npcProjectileRoundTrip = npcProjectile;
+    REQUIRE(npcProjectileRoundTrip.Payload.LocalProjectileLaunch.TargetHandle.Value == 0);
+    REQUIRE(npcProjectileRoundTrip.Payload.LocalProjectileLaunch.LocalShooterFormId == 0x205);
 }
 
 TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values", "[skyrim-vr][gameplay-bridge]")
@@ -234,6 +307,34 @@ TEST_CASE("VR gameplay bridge ring rejects full pushes and wraps", "[skyrim-vr][
     REQUIRE(TryPush(ring, MakeEvent(4)));
     REQUIRE(TryPop(ring, output));
     REQUIRE(output.Header.Identity.SequenceId == 4);
+}
+
+TEST_CASE("VR gameplay bridge ring batch publication is all-or-nothing", "[skyrim-vr][gameplay-bridge]")
+{
+    BoundedMpmcRing<EventRecord, 4> ring{};
+    InitializeRing(ring);
+
+    const EventRecord firstBatch[] = {MakeEvent(0), MakeEvent(1), MakeEvent(2)};
+    REQUIRE(TryPushBatch(ring, firstBatch, std::size(firstBatch)));
+
+    const EventRecord rejectedBatch[] = {MakeEvent(3), MakeEvent(4)};
+    REQUIRE_FALSE(TryPushBatch(ring, rejectedBatch, std::size(rejectedBatch)));
+    REQUIRE(ring.DroppedPushCount.load() == 1);
+
+    EventRecord output{};
+    for (std::uint64_t sequence = 0; sequence < 3; ++sequence)
+    {
+        REQUIRE(TryPop(ring, output));
+        REQUIRE(output.Header.Identity.SequenceId == sequence);
+    }
+    REQUIRE_FALSE(TryPop(ring, output));
+
+    REQUIRE(TryPushBatch(ring, rejectedBatch, std::size(rejectedBatch)));
+    for (std::uint64_t sequence = 3; sequence < 5; ++sequence)
+    {
+        REQUIRE(TryPop(ring, output));
+        REQUIRE(output.Header.Identity.SequenceId == sequence);
+    }
 }
 
 TEST_CASE("VR gameplay bridge ring retains each MPMC record once", "[skyrim-vr][gameplay-bridge]")

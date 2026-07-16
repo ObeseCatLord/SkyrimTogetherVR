@@ -5,11 +5,13 @@
 #include <filesystem>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 #include <entt/entt.hpp>
 
 #include <vr_common/VRGameplayBridge.h>
 #include <Messages/CharacterSpawnRequest.h>
+#include <Structs/ActionEvent.h>
 
 struct AssignCharacterResponse;
 struct AnimationVariables;
@@ -34,12 +36,40 @@ struct VRAvatarService
 
     TP_NOCOPYMOVE(VRAvatarService);
 
+    [[nodiscard]] bool BuildLocalGameplayCommand(
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
+    [[nodiscard]] bool BuildRemoteGameplayCommand(
+        std::uint32_t aPlayerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
+    [[nodiscard]] bool BuildRemoteGameplayCommandForServerId(
+        std::uint32_t aServerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
+    [[nodiscard]] SkyrimTogetherVR::GameplayBridge::AdapterHandle GetRemoteAvatarHandleForServerId(
+        std::uint32_t aServerId) const noexcept;
+    [[nodiscard]] std::uint32_t GetRemoteServerIdForHandle(
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle aHandle) const noexcept;
+    [[nodiscard]] std::uint32_t GetPersistentLocalReferenceForServerId(
+        std::uint32_t aServerId) const noexcept;
+    [[nodiscard]] std::uint32_t GetRemoteServerIdForLocalReference(
+        std::uint32_t aLocalReferenceFormId) const noexcept;
+    [[nodiscard]] std::uint32_t GetLocalServerId() const noexcept { return m_localServerId.value_or(0); }
+    [[nodiscard]] bool QueueLocalAnimationEvent(std::uint32_t aEventId) noexcept;
+
 private:
     using AnimationSnapshot = SkyrimTogetherVR::AnimationGraphProtocol::SnapshotBuffer;
 
     struct RemoteAvatar
     {
         std::uint32_t PlayerId{0};
+        std::uint32_t LocalActorBaseFormId{0};
+        std::uint32_t LocalReferenceFormId{0};
+        std::uint32_t RuntimeActorReferenceFormId{0};
         SkyrimTogetherVR::GameplayBridge::AdapterHandle Handle{0};
         SkyrimTogetherVR::GameplayBridge::RootTransform CurrentRoot{};
         SkyrimTogetherVR::GameplayBridge::RootTransform TargetRoot{};
@@ -71,6 +101,7 @@ private:
         bool HasPendingAnimation{false};
         bool AnimationFaulted{false};
         bool SpatialTransferPending{false};
+        bool IsPlayer{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -88,6 +119,7 @@ private:
     void HandleBridgeLocalAnimationGraphChunk(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeRemoteAnimationGraphState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeRemoteSpatialTransferState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeRemoteGameplayActionState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
 
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
@@ -115,12 +147,14 @@ private:
                                     SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
 
     World& m_world;
+    entt::dispatcher& m_dispatcher;
     TransportService& m_transport;
     SkyrimTogetherVR::GameplayBridge::LocalPlayerStatePayload m_localSnapshot{};
     AnimationSnapshot m_localAnimationSnapshot{};
     AnimationSnapshot m_pendingLocalAnimationSnapshot{};
     std::unordered_map<std::uint32_t, RemoteAvatar> m_remoteAvatars{};
     std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_pendingSpawns{};
+    std::vector<ActionEvent> m_pendingLocalAnimationEvents{};
     std::uint32_t m_localPlayerId{0};
     std::optional<std::uint32_t> m_localServerId{};
     std::uint32_t m_assignmentCookie{0};

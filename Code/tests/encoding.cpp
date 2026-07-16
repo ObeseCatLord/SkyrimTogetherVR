@@ -14,6 +14,10 @@
 #include <catch2/catch.hpp>
 
 #include <Messages/ClientMessageFactory.h>
+#include <Messages/NotifyEquipmentChanges.h>
+#include <Messages/NotifyOwnershipTransfer.h>
+#include <Messages/RequestEquipmentChanges.h>
+#include <Messages/RequestOwnershipClaim.h>
 #include <Messages/ServerMessageFactory.h>
 #include <Structs/Vector2_NetQuantize.h>
 #include <Structs/VRActivationEvent.h>
@@ -1248,6 +1252,89 @@ TEST_CASE("Packets", "[encoding.packets]")
         uint64_t trash;
         reader.ReadBits(trash, 8); // pop opcode
 
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("RequestOwnershipClaim")
+    {
+        Buffer buff(4096);
+        RequestOwnershipClaim sendMessage, recvMessage;
+        sendMessage.ServerId = 0x1234;
+        sendMessage.GrantToken = 0x1122334455667788ull;
+        sendMessage.NewActorData.IsDead = true;
+        sendMessage.NewActorData.IsWeaponDrawn = true;
+        sendMessage.NewActorData.InitialInventory.CurrentMagicEquipment.LeftHandSpell = BuildGameId(1, 0x4567);
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        uint64_t trash;
+        reader.ReadBits(trash, 8);
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("NotifyOwnershipTransfer")
+    {
+        Buffer buff(128);
+        NotifyOwnershipTransfer sendMessage, recvMessage;
+        sendMessage.ServerId = 0x2345;
+        sendMessage.GrantToken = 0x8877665544332211ull;
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        uint64_t trash;
+        reader.ReadBits(trash, 8);
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("RequestEquipmentChanges final transaction")
+    {
+        Buffer buff(4096);
+        RequestEquipmentChanges sendMessage, recvMessage;
+        sendMessage.ServerId = 0x3456;
+        sendMessage.TransactionId = 0x0102030405060708ull;
+        auto& entry = sendMessage.CurrentInventory.Entries.emplace_back();
+        entry.BaseId = BuildGameId(2, 0x5678);
+        entry.Count = 1;
+        entry.ExtraWorn = true;
+        entry.ExtraWornLeft = true;
+        sendMessage.CurrentInventory.CurrentMagicEquipment.RightHandSpell = BuildGameId(3, 0x6789);
+        sendMessage.CurrentInventory.CurrentMagicEquipment.Shout = BuildGameId(4, 0x789A);
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        uint64_t trash;
+        reader.ReadBits(trash, 8);
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("NotifyEquipmentChanges final transaction")
+    {
+        Buffer buff(4096);
+        NotifyEquipmentChanges sendMessage, recvMessage;
+        sendMessage.ServerId = 0x4567;
+        sendMessage.TransactionId = 0x1020304050607080ull;
+        auto& entry = sendMessage.FinalEquipment.Entries.emplace_back();
+        entry.BaseId = BuildGameId(5, 0x89AB);
+        entry.Count = 2;
+        entry.ExtraWornLeft = true;
+        sendMessage.FinalEquipment.CurrentMagicEquipment.LeftHandSpell = BuildGameId(6, 0x9ABC);
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        uint64_t trash;
+        reader.ReadBits(trash, 8);
         recvMessage.DeserializeRaw(reader);
 
         REQUIRE(sendMessage == recvMessage);

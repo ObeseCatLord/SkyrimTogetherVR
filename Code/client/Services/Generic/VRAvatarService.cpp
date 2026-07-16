@@ -4,6 +4,8 @@
 
 #include <Events/ConnectedEvent.h>
 #include <Events/DisconnectedEvent.h>
+#include <Events/LocalGameplayBridgeEvent.h>
+#include <Events/RemoteGameplayBridgeResultEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Messages/AssignCharacterRequest.h>
 #include <Messages/AssignCharacterResponse.h>
@@ -12,6 +14,7 @@
 #include <Messages/NotifyRemoveCharacter.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Services/TransportService.h>
+#include <Services/VRLocalGameplayService.h>
 #include <Structs/GameplayCapabilities.h>
 #include <Structs/MovementOrdering.h>
 #include <World.h>
@@ -35,6 +38,18 @@ namespace AnimationGraphProtocol = SkyrimTogetherVR::AnimationGraphProtocol;
 
 namespace
 {
+constexpr std::size_t kMaximumPendingLocalAnimationEvents = 32;
+
+[[nodiscard]] const char* LocalAnimationEventName(const std::uint32_t aEventId) noexcept
+{
+    constexpr std::array names{
+        "", "IdleForceDefaultState", "IdleReturnToDefault", "ReturnDefaultState", "ReturnToDefault",
+        "ForceFurnExit", "IdleStop", "IdleStopInstant", "GetUpBegin", "JumpUp", "JumpDown", "JumpLand",
+        "SneakStart", "SneakStop", "SprintStart", "SprintStop", "Ragdoll", "GetUpEnd", "ChairEnter",
+        "ChairExit", "HorseEnter", "HorseExit", "weaponDraw", "weaponSheathe"};
+    return aEventId < names.size() ? names[aEventId] : nullptr;
+}
+
 constexpr double kAssignmentRetrySeconds = 5.0;
 constexpr double kLocalMovementIntervalSeconds = 0.1;
 constexpr double kMaxInterpolationDeltaSeconds = 0.1;
@@ -165,8 +180,24 @@ void InterpolateRoot(GameplayBridge::RootTransform& arCurrent, const GameplayBri
 }
 } // namespace
 
+bool VRAvatarService::QueueLocalAnimationEvent(const std::uint32_t aEventId) noexcept
+{
+    const auto* eventName = LocalAnimationEventName(aEventId);
+    if (!eventName || eventName[0] == '\0' || !m_connected || !m_transport.IsOnline() || !m_localServerId ||
+        m_pendingLocalAnimationEvents.size() >= kMaximumPendingLocalAnimationEvents)
+        return false;
+
+    ActionEvent action{};
+    action.Tick = m_world.GetTick();
+    action.ActorId = *m_localServerId;
+    action.EventName = TiltedPhoques::String{eventName};
+    m_pendingLocalAnimationEvents.push_back(std::move(action));
+    return true;
+}
+
 VRAvatarService::VRAvatarService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
     : m_world(aWorld)
+    , m_dispatcher(aDispatcher)
     , m_transport(aTransport)
     , m_statusPath(SkyrimTogetherVR::Handoff::GetFile("SkyrimTogetherVR.avatar"))
 {
@@ -257,6 +288,8 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
     }
 
     m_localServerId = acMessage.ServerId;
+    if (auto* localGameplay = m_world.ctx().find<VRLocalGameplayService>())
+        localGameplay->SetLocalServerId(acMessage.ServerId);
     if (m_remoteAvatars.erase(*m_localServerId) != 0)
         spdlog::warn("VR avatar canonical server-id conflict cleared for local server id {}", *m_localServerId);
     m_assignmentPending = false;
@@ -267,8 +300,9 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
 
 void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept
 {
-    if (!m_connected || !acMessage.IsPlayer || acMessage.PlayerId == 0 ||
-        acMessage.PlayerId == m_localPlayerId || (m_localServerId && acMessage.ServerId == *m_localServerId))
+    if (!m_connected || acMessage.ServerId == 0 ||
+        (acMessage.IsPlayer && (acMessage.PlayerId == 0 || acMessage.PlayerId == m_localPlayerId)) ||
+        (m_localServerId && acMessage.ServerId == *m_localServerId))
         return;
 
     if (!HasValidLocalSnapshot() || !CanSubmitAvatarCommands())
@@ -282,7 +316,7 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
     const auto localWorldspaceId = m_localSnapshot.LocalWorldspaceFormId;
     if (!acMessage.CellId || localCellId == 0 ||
         (localCellId != m_localSnapshot.LocalCellFormId && localWorldspaceId == 0) ||
-        !IsFinite(acMessage.Position) || !IsFinite(acMessage.Rotation) || m_localSnapshot.LocalActorBaseFormId == 0)
+        !IsFinite(acMessage.Position) || !IsFinite(acMessage.Rotation))
     {
         if (!IsFinite(acMessage.Position) || !IsFinite(acMessage.Rotation))
         {
@@ -340,7 +374,7 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
 
     for (const auto& [serverId, avatar] : m_remoteAvatars)
     {
-        if (avatar.PlayerId == acMessage.PlayerId)
+        if (acMessage.PlayerId != 0 && avatar.PlayerId == acMessage.PlayerId)
         {
             spdlog::warn("VR avatar spawn rejected for player id {} with conflicting server id {}", acMessage.PlayerId, serverId);
             return;
@@ -349,11 +383,26 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
 
     RemoteAvatar avatar{};
     avatar.PlayerId = acMessage.PlayerId;
+    avatar.IsPlayer = acMessage.IsPlayer;
+    avatar.LocalActorBaseFormId = acMessage.IsPlayer ? m_localSnapshot.LocalActorBaseFormId :
+        m_world.GetModSystem().GetGameId(acMessage.BaseId);
+    avatar.LocalReferenceFormId = acMessage.IsPlayer ? 0 : m_world.GetModSystem().GetGameId(acMessage.FormId);
+    if (avatar.LocalActorBaseFormId == 0)
+    {
+        spdlog::warn("VR avatar spawn rejected for server id {} because its actor base is unavailable", acMessage.ServerId);
+        return;
+    }
     avatar.CurrentRoot = root;
     avatar.TargetRoot = root;
     avatar.TargetCellFormId = localCellId;
     avatar.TargetWorldspaceFormId = localWorldspaceId;
     avatar.HasTarget = false;
+    if (HasAnimationCapabilities() && !acMessage.ActionsToReplay.Actions.empty())
+    {
+        const auto& latestAction = acMessage.ActionsToReplay.Actions.back();
+        if (!StageRemoteAnimationSnapshot(avatar, latestAction.Variables, 0.0F))
+            ++m_animationSnapshotRejectedCount;
+    }
     const auto [it, inserted] = m_remoteAvatars.emplace(acMessage.ServerId, avatar);
     if (inserted)
     {
@@ -481,6 +530,17 @@ void VRAvatarService::ConsumeBridgeEvents() noexcept
         case GameplayBridge::EventKind::RemoteSpatialTransferState:
             HandleBridgeRemoteSpatialTransferState(event);
             break;
+        case GameplayBridge::EventKind::RemoteGameplayActionState:
+            HandleBridgeRemoteGameplayActionState(event);
+            break;
+        case GameplayBridge::EventKind::LocalGameplayAction:
+        case GameplayBridge::EventKind::LocalGameplayTextChunk:
+        case GameplayBridge::EventKind::LocalProjectileLaunch:
+        case GameplayBridge::EventKind::LocalActorActionMetadata:
+        case GameplayBridge::EventKind::LocalActorActionGraphChunk:
+        case GameplayBridge::EventKind::LocalActorActionTextChunk:
+            m_dispatcher.trigger(SkyrimTogetherVR::LocalGameplayBridgeEvent{event});
+            break;
         default:
             break;
         }
@@ -493,6 +553,11 @@ void VRAvatarService::HandleBridgeLifecycle(const GameplayBridge::EventRecord& a
     if (state == GameplayBridge::LifecycleState::NewGame || state == GameplayBridge::LifecycleState::PreLoadGame ||
         state == GameplayBridge::LifecycleState::CellChanged || state == GameplayBridge::LifecycleState::EpochRetired)
         ResetLifecycleState();
+}
+
+void VRAvatarService::HandleBridgeRemoteGameplayActionState(const GameplayBridge::EventRecord& acEvent) noexcept
+{
+    m_dispatcher.trigger(SkyrimTogetherVR::RemoteGameplayBridgeResultEvent{acEvent});
 }
 
 void VRAvatarService::HandleBridgeLocalPlayerState(const GameplayBridge::EventRecord& acEvent) noexcept
@@ -542,6 +607,7 @@ void VRAvatarService::HandleBridgeRemoteAvatarState(const GameplayBridge::EventR
         avatar.CreatePendingElapsed = 0.0;
         avatar.PendingCreateActionId = 0;
         avatar.Handle = acEvent.Payload.RemoteAvatarState.AvatarHandle;
+        avatar.RuntimeActorReferenceFormId = acEvent.Payload.RemoteAvatarState.LocalActorReferenceFormId;
         avatar.AppliedCellFormId = avatar.TargetCellFormId;
         avatar.AppliedWorldspaceFormId = avatar.TargetWorldspaceFormId;
         ++m_createSucceededCount;
@@ -558,6 +624,7 @@ void VRAvatarService::HandleBridgeRemoteAvatarState(const GameplayBridge::EventR
         if (avatar.RespawnRequested)
         {
             avatar.Handle = {};
+            avatar.RuntimeActorReferenceFormId = 0;
             avatar.CreatePending = false;
             avatar.DestroyPending = false;
             avatar.RemovalRequested = false;
@@ -731,6 +798,7 @@ void VRAvatarService::ResetSessionState() noexcept
     m_localSnapshot = {};
     m_localAnimationSnapshot = {};
     m_pendingLocalAnimationSnapshot = {};
+    m_pendingLocalAnimationEvents.clear();
     m_localPlayerId = 0;
     m_localServerId.reset();
     m_assignmentCookie = 0;
@@ -750,6 +818,7 @@ void VRAvatarService::ResetLifecycleState() noexcept
     m_localSnapshot = {};
     m_localAnimationSnapshot = {};
     m_pendingLocalAnimationSnapshot = {};
+    m_pendingLocalAnimationEvents.clear();
     m_localMovementElapsed = 0.0;
     m_hasLocalSnapshot = false;
     m_statusDirty = true;
@@ -810,6 +879,7 @@ void VRAvatarService::SendLocalMovement() noexcept
     ClientReferencesMoveRequest request{};
     request.Tick = m_world.GetTick();
     auto& movement = request.Updates[*m_localServerId].UpdatedMovement;
+    auto& update = request.Updates[*m_localServerId];
     movement.CellId = cellId;
     movement.WorldSpaceId = worldspaceId;
     movement.Position = glm::vec3{m_localSnapshot.Root.PositionX, m_localSnapshot.Root.PositionY, m_localSnapshot.Root.PositionZ};
@@ -827,7 +897,10 @@ void VRAvatarService::SendLocalMovement() noexcept
             movement.Variables.Integers[index] = std::bit_cast<std::uint32_t>(m_localAnimationSnapshot.Integers[index]);
         movement.Direction = m_localAnimationSnapshot.Direction;
     }
-    m_transport.Send(request);
+    for (const auto& action : m_pendingLocalAnimationEvents)
+        update.ActionEvents.push_back(action);
+    if (m_transport.Send(request))
+        m_pendingLocalAnimationEvents.clear();
 }
 
 void VRAvatarService::UpdateRemoteAvatars(const double aDelta) noexcept
@@ -984,9 +1057,11 @@ void VRAvatarService::SubmitCreateRemoteAvatar(const std::uint32_t aServerId, Re
     if (!BuildCommand(GameplayBridge::CommandKind::CreateRemoteAvatar, aServerId, command))
         return;
 
-    // Player spawn messages do not carry a usable NPC base yet. The local
-    // player's base is an explicit visual-template fallback, not appearance parity.
-    command.Payload.CreateRemoteAvatar.LocalActorBaseFormId = m_localSnapshot.LocalActorBaseFormId;
+    command.Payload.CreateRemoteAvatar.LocalActorBaseFormId = arAvatar.LocalActorBaseFormId;
+    command.Payload.CreateRemoteAvatar.LocalReferenceFormId = arAvatar.LocalReferenceFormId;
+    command.Payload.CreateRemoteAvatar.CreateFlags =
+        (arAvatar.LocalReferenceFormId != 0 ? GameplayBridge::UseExistingReference : 0u) |
+        (arAvatar.IsPlayer ? GameplayBridge::PlayerAvatar : 0u);
     command.Payload.CreateRemoteAvatar.LocalCellFormId = arAvatar.TargetCellFormId;
     command.Payload.CreateRemoteAvatar.LocalWorldspaceFormId = arAvatar.TargetWorldspaceFormId;
     command.Payload.CreateRemoteAvatar.InitialRoot = arAvatar.CurrentRoot;
@@ -1341,4 +1416,114 @@ bool VRAvatarService::BuildCommand(const GameplayBridge::CommandKind aKind, cons
     arCommand.Header.Identity.EntityId = entityIdentity.EntityId;
     arCommand.Header.Identity.EntityGeneration = entityIdentity.EntityGeneration;
     return true;
+}
+
+bool VRAvatarService::BuildLocalGameplayCommand(
+    const GameplayBridge::GameplayDomain aDomain,
+    const GameplayBridge::GameplayAction aAction,
+    GameplayBridge::CommandRecord& arCommand) const noexcept
+{
+    arCommand = {};
+    if (!m_connected || !m_transport.IsOnline() || !m_localServerId || *m_localServerId == 0 ||
+        !SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
+        SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == 0 ||
+        !GameplayBridge::IsActionInDomain(aDomain, aAction))
+        return false;
+
+    if (!BuildCommand(GameplayBridge::CommandKind::ApplyGameplayAction, *m_localServerId, arCommand))
+        return false;
+
+    arCommand.Payload.ApplyGameplayAction.TargetHandle = GameplayBridge::kLocalPlayerHandle;
+    arCommand.Payload.ApplyGameplayAction.Domain = static_cast<std::uint16_t>(aDomain);
+    arCommand.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(aAction);
+    return true;
+}
+
+bool VRAvatarService::BuildRemoteGameplayCommand(
+    const std::uint32_t aPlayerId,
+    const GameplayBridge::GameplayDomain aDomain,
+    const GameplayBridge::GameplayAction aAction,
+    GameplayBridge::CommandRecord& arCommand) const noexcept
+{
+    if (!GameplayBridge::IsActionInDomain(aDomain, aAction))
+        return false;
+
+    for (const auto& [serverId, avatar] : m_remoteAvatars)
+    {
+        if (avatar.PlayerId != aPlayerId || avatar.Handle.Value == 0 || avatar.DestroyPending || avatar.RemovalRequested)
+            continue;
+
+        if (!BuildCommand(GameplayBridge::CommandKind::ApplyGameplayAction, serverId, arCommand))
+            return false;
+
+        arCommand.Payload.ApplyGameplayAction.TargetHandle = avatar.Handle;
+        arCommand.Payload.ApplyGameplayAction.Domain = static_cast<std::uint16_t>(aDomain);
+        arCommand.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(aAction);
+        return true;
+    }
+    return false;
+}
+
+bool VRAvatarService::BuildRemoteGameplayCommandForServerId(
+    const std::uint32_t aServerId,
+    const GameplayBridge::GameplayDomain aDomain,
+    const GameplayBridge::GameplayAction aAction,
+    GameplayBridge::CommandRecord& arCommand) const noexcept
+{
+    if (!GameplayBridge::IsActionInDomain(aDomain, aAction))
+        return false;
+
+    const auto it = m_remoteAvatars.find(aServerId);
+    if (it == m_remoteAvatars.end() || it->second.Handle.Value == 0 ||
+        it->second.DestroyPending || it->second.RemovalRequested ||
+        !BuildCommand(GameplayBridge::CommandKind::ApplyGameplayAction, aServerId, arCommand))
+        return false;
+
+    arCommand.Payload.ApplyGameplayAction.TargetHandle = it->second.Handle;
+    arCommand.Payload.ApplyGameplayAction.Domain = static_cast<std::uint16_t>(aDomain);
+    arCommand.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(aAction);
+    return true;
+}
+
+GameplayBridge::AdapterHandle VRAvatarService::GetRemoteAvatarHandleForServerId(
+    const std::uint32_t aServerId) const noexcept
+{
+    const auto it = m_remoteAvatars.find(aServerId);
+    if (it == m_remoteAvatars.end() || it->second.DestroyPending || it->second.RemovalRequested)
+        return {};
+    return it->second.Handle;
+}
+
+std::uint32_t VRAvatarService::GetRemoteServerIdForHandle(
+    const GameplayBridge::AdapterHandle aHandle) const noexcept
+{
+    if (aHandle.Value == 0)
+        return 0;
+    for (const auto& [serverId, avatar] : m_remoteAvatars) {
+        if (avatar.Handle.Value == aHandle.Value && !avatar.DestroyPending && !avatar.RemovalRequested)
+            return serverId;
+    }
+    return 0;
+}
+
+std::uint32_t VRAvatarService::GetPersistentLocalReferenceForServerId(
+    const std::uint32_t aServerId) const noexcept
+{
+    const auto it = m_remoteAvatars.find(aServerId);
+    if (it == m_remoteAvatars.end() || it->second.RemovalRequested)
+        return 0;
+    return it->second.LocalReferenceFormId;
+}
+
+std::uint32_t VRAvatarService::GetRemoteServerIdForLocalReference(
+    const std::uint32_t aLocalReferenceFormId) const noexcept
+{
+    if (aLocalReferenceFormId == 0)
+        return 0;
+    for (const auto& [serverId, avatar] : m_remoteAvatars) {
+        if (avatar.RuntimeActorReferenceFormId == aLocalReferenceFormId &&
+            !avatar.DestroyPending && !avatar.RemovalRequested)
+            return serverId;
+    }
+    return 0;
 }

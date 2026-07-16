@@ -7,7 +7,6 @@
 #include <Forms/TESForm.h>
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyVREquipmentUpdate.h>
-#include <Messages/RequestVREquipmentUpdate.h>
 #include <PlayerCharacter.h>
 #include <VR/VRPlayerReadiness.h>
 #include <Services/TransportService.h>
@@ -19,7 +18,6 @@
 
 namespace
 {
-constexpr double kEquipmentSendInterval = 1.0;
 constexpr double kInventoryStatusWriteInterval = 1.0;
 constexpr char kInventoryStatusFileName[] = "SkyrimTogetherVR.inventory";
 
@@ -111,13 +109,6 @@ void VRInventoryService::OnUpdate(const UpdateEvent& acEvent) noexcept
         }
     }
 
-    m_sendTimer += acEvent.Delta;
-    if (m_sendTimer >= kEquipmentSendInterval)
-    {
-        m_sendTimer = 0.0;
-        SendEquipmentUpdate();
-    }
-
     m_statusTimer += acEvent.Delta;
     if (!m_statusDirty && m_statusTimer < kInventoryStatusWriteInterval)
         return;
@@ -172,17 +163,6 @@ bool VRInventoryService::CaptureLocalEquipment(VREquipmentUpdate& aUpdate) noexc
     aUpdate.RightSpell = ToServerId(m_world, GetFormId(pPlayer->GetSelectedSpellData(1)));
     aUpdate.PowerOrShout = ToServerId(m_world, GetFormId(pPlayer->GetSelectedPowerOrShoutData()));
     return true;
-}
-
-void VRInventoryService::SendEquipmentUpdate() noexcept
-{
-    if (!m_transport.IsOnline() || !m_hasEquipment)
-        return;
-
-    RequestVREquipmentUpdate request{};
-    m_lastEquipment.Sequence = ++m_sequence;
-    request.Equipment = m_lastEquipment;
-    m_transport.Send(request);
 }
 
 void VRInventoryService::WriteInventoryStatusFile() noexcept

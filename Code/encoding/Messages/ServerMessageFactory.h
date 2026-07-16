@@ -69,6 +69,7 @@
 #include <Messages/NotifyVRProjectileEvent.h>
 #include <Messages/NotifyVRGrabEvent.h>
 #include <Messages/NotifyVRHiggsState.h>
+#include <Messages/NotifyVRAppearance.h>
 
 using TiltedPhoques::UniquePtr;
 
@@ -84,7 +85,7 @@ struct ServerMessageFactory
             NotifyProjectileLaunch, NotifyInterruptCast, NotifyAddTarget, NotifyScriptAnimation, NotifyDrawWeapon, NotifyMount, NotifyNewPackage, NotifyRespawn, NotifySyncExperience, NotifyEquipmentChanges, NotifyChatMessageBroadcast, TeleportCommandResponse, NotifyPlayerRespawn, NotifyDialogue,
             NotifySubtitle, NotifyPlayerDialogue, NotifyActorTeleport, NotifyRelinquishControl, NotifyPlayerLeft, NotifyPlayerJoined, NotifyPlayerLevel, NotifyPlayerCellChanged, NotifyTeleport, NotifyPlayerHealthUpdate, NotifySettingsChange,
             NotifyWeatherChange, NotifySetWaypoint, NotifyRemoveWaypoint, NotifySetTimeResult, NotifyRemoveSpell, NotifyVRPoseUpdate, NotifyVRMovementUpdate, NotifyVREquipmentUpdate, NotifyVRActivationEvent, NotifyVRMagicEffectEvent, NotifyVRCombatHitEvent, NotifyVRProjectileEvent, NotifyVRGrabEvent,
-            NotifyVRHiggsState>;
+            NotifyVRHiggsState, NotifyVRAppearance>;
 
         return s_visitor(std::forward<T>(func));
     }

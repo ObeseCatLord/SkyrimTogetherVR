@@ -1,11 +1,11 @@
 [Unit]
-Description=Daily Skyrim Together VR build storage cleanup
+Description=Regular Skyrim Together VR build storage cleanup
 
 [Timer]
-OnBootSec=15m
-OnUnitActiveSec=1d
+OnBootSec=10m
+OnUnitActiveSec=3h
 Persistent=true
-RandomizedDelaySec=15m
+RandomizedDelaySec=10m
 
 [Install]
 WantedBy=timers.target

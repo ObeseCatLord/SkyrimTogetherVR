@@ -20,4 +20,5 @@ target("SkyrimTogetherVRGameplayBridge")
         },
     })
     add_files("*.cpp")
+    add_packages("minhook")
     add_syslinks("kernel32")

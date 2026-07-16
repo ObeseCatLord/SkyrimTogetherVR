@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <new>
+#include <vector>
 
 #ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
 #define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
@@ -26,14 +27,7 @@ std::atomic<std::uint64_t> s_rejectedSubmissionCount{0};
 constexpr CapabilityMask kRequestedCapabilities =
     static_cast<CapabilityMask>(Capability::Lifecycle)
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
-    |
-    static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
-    static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
-    static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
-    static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
-    static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
-    static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
-    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot)
+    | kInitialCapabilities
 #endif
     ;
 
@@ -150,6 +144,27 @@ constexpr CapabilityMask kRequestedCapabilities =
     return aValue <= static_cast<std::uint32_t>(CommandStatus::QueueOverflow);
 }
 
+[[nodiscard]] bool IsValidProjectilePayload(const ApplyProjectileLaunchPayload& acPayload) noexcept
+{
+    const auto bounded = [](const float aValue, const float aLimit) noexcept {
+        return std::isfinite(aValue) && aValue >= -aLimit && aValue <= aLimit;
+    };
+    return acPayload.LocalProjectileBaseFormId != 0 &&
+           acPayload.LocalParentCellFormId != 0 &&
+           bounded(acPayload.OriginX, kMaximumProjectileCoordinate) &&
+           bounded(acPayload.OriginY, kMaximumProjectileCoordinate) &&
+           bounded(acPayload.OriginZ, kMaximumProjectileCoordinate) &&
+           bounded(acPayload.AngleX, kMaximumProjectileAngle) &&
+           bounded(acPayload.AngleZ, kMaximumProjectileAngle) &&
+           std::isfinite(acPayload.Power) && acPayload.Power >= 0.0F &&
+           acPayload.Power <= kMaximumProjectilePower && std::isfinite(acPayload.Scale) &&
+           acPayload.Scale >= 0.0F && acPayload.Scale <= kMaximumProjectileScale &&
+           acPayload.CastingSource >= 0 && acPayload.CastingSource <= 3 && acPayload.Area >= 0 &&
+           acPayload.Area <= kMaximumProjectileArea &&
+           (acPayload.LaunchFlags & ~kProjectileLaunchKnownFlags) == 0 &&
+           IsZero(acPayload.ReservedTail, sizeof(acPayload.ReservedTail));
+}
+
 [[nodiscard]] bool ValidateEvent(const EventRecord& acEvent) noexcept
 {
     const auto& header = acEvent.Header;
@@ -182,7 +197,10 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto required = static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
                               static_cast<CapabilityMask>(Capability::RemoteRootTransform);
         return header.Identity.EntityId != 0 && header.Identity.EntityGeneration != 0 && IsKnownRemoteAvatarState(payload.State) &&
-               IsKnownCommandStatus(payload.Status) && IsFinite(payload.Root) && IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               IsKnownCommandStatus(payload.Status) && IsFinite(payload.Root) &&
+               (static_cast<RemoteAvatarState>(payload.State) != RemoteAvatarState::Created ||
+                payload.LocalActorReferenceFormId != 0) &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
                HasActiveCapabilities(required);
     }
     case EventKind::LocalAnimationGraphChunk:
@@ -193,6 +211,7 @@ constexpr CapabilityMask kRequestedCapabilities =
                header.Identity.ActionId == 0 && payload.AvatarHandle.Value == kLocalPlayerHandle.Value && payload.SnapshotId != 0 &&
                payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 &&
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
                AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot));
@@ -215,6 +234,111 @@ constexpr CapabilityMask kRequestedCapabilities =
                IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer));
     }
+    case EventKind::LocalGameplayAction:
+    {
+        const auto& payload = acEvent.Payload.LocalGameplayAction;
+        const auto domain = static_cast<GameplayDomain>(payload.Domain);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const auto capability = CapabilityForDomain(domain);
+        const bool objectSnapshot = domain == GameplayDomain::Object &&
+            action >= GameplayAction::ObjectSnapshotBegin && action <= GameplayAction::ObjectSnapshotEnd;
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               ((objectSnapshot && payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0) ||
+                (!objectSnapshot && payload.TargetHandle.Value == kLocalPlayerHandle.Value)) &&
+               IsActionInDomain(domain, action) &&
+               capability != static_cast<Capability>(0) && std::isfinite(payload.ScalarA) &&
+               std::isfinite(payload.ScalarB) && std::isfinite(payload.ScalarC) &&
+               std::isfinite(payload.ScalarD) && payload.Reserved0 == 0 &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(capability));
+    }
+    case EventKind::RemoteGameplayActionState:
+    {
+        const auto& payload = acEvent.Payload.RemoteGameplayActionState;
+        const auto domain = static_cast<GameplayDomain>(payload.Domain);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const auto capability = CapabilityForDomain(domain);
+        return header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               IsActionInDomain(domain, action) && IsKnownCommandStatus(payload.Status) &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               capability != static_cast<Capability>(0) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(capability));
+    }
+    case EventKind::LocalGameplayTextChunk:
+    {
+        const auto& payload = acEvent.Payload.LocalGameplayTextChunk;
+        const auto domain = static_cast<GameplayDomain>(payload.Domain);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const auto capability = CapabilityForDomain(domain);
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.TextId != 0 &&
+               IsActionInDomain(domain, action) && capability != static_cast<Capability>(0) &&
+               payload.ChunkCount != 0 && payload.ChunkCount <= kMaximumGameplayTextChunks &&
+               payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= kGameplayTextBytesPerChunk &&
+               payload.Reserved0 == 0 && payload.AuxiliaryLocalFormId == 0 &&
+               IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
+                      kGameplayTextBytesPerChunk - payload.ByteCount) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(capability));
+    }
+    case EventKind::LocalProjectileLaunch:
+    {
+        const auto& payload = acEvent.Payload.LocalProjectileLaunch;
+        const bool localPlayer = payload.TargetHandle.Value == kLocalPlayerHandle.Value &&
+                                 payload.LocalShooterFormId == 0;
+        const bool localNpc = payload.TargetHandle.Value == 0 && payload.LocalShooterFormId != 0;
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId != 0 && header.Identity.ActionId == 0 &&
+               (localPlayer || localNpc) && IsValidProjectilePayload(payload) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::CombatAndMagic));
+    }
+    case EventKind::LocalActorActionMetadata:
+    {
+        const auto& payload = acEvent.Payload.LocalActorActionMetadata;
+        const bool localActor = payload.TargetHandle.Value == kLocalPlayerHandle.Value ||
+                                payload.TargetHandle.Value == 0;
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 && localActor &&
+               payload.ActorLocalFormId != 0 && payload.ActionLocalFormId != 0 &&
+               payload.SnapshotId == header.Identity.ActionId && payload.TextId == header.Identity.ActionId &&
+               (payload.Type & ~0x7u) == 0 && payload.ActionFlags == 0 &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::ExactAnimationActions));
+    }
+    case EventKind::LocalActorActionGraphChunk:
+    {
+        const auto& payload = acEvent.Payload.LocalActorActionGraphChunk;
+        const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               (payload.TargetHandle.Value == kLocalPlayerHandle.Value || payload.TargetHandle.Value == 0) &&
+               payload.ActorLocalFormId != 0 && payload.SnapshotId == header.Identity.ActionId &&
+               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion &&
+               payload.Reserved0 == 0 && payload.Reserved1 == 0 &&
+               payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
+               AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::ExactAnimationActions));
+    }
+    case EventKind::LocalActorActionTextChunk:
+    {
+        const auto& payload = acEvent.Payload.LocalActorActionTextChunk;
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               (payload.TargetHandle.Value == kLocalPlayerHandle.Value || payload.TargetHandle.Value == 0) &&
+               payload.TargetLocalFormId != 0 &&
+               payload.Domain == static_cast<std::uint16_t>(GameplayDomain::Animation) &&
+               payload.Action == static_cast<std::uint16_t>(GameplayAction::ActorAction) &&
+               payload.TextId == header.Identity.ActionId && payload.ChunkCount != 0 &&
+               payload.ChunkCount <= kMaximumGameplayTextChunks && payload.ChunkIndex < payload.ChunkCount &&
+               payload.ByteCount <= kGameplayTextBytesPerChunk && payload.Reserved0 == 0 &&
+               payload.AuxiliaryLocalFormId == 0 &&
+               IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
+                      kGameplayTextBytesPerChunk - payload.ByteCount) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::ExactAnimationActions));
+    }
     default:
         return false;
     }
@@ -234,6 +358,16 @@ constexpr CapabilityMask kRequestedCapabilities =
         return static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot);
     case CommandKind::RetireEpoch:
         return static_cast<CapabilityMask>(Capability::Lifecycle);
+    case CommandKind::ApplyGameplayAction:
+        return 0;
+    case CommandKind::ApplyGameplayTextChunk:
+        return 0;
+    case CommandKind::ApplyProjectileLaunch:
+        return static_cast<CapabilityMask>(Capability::CombatAndMagic);
+    case CommandKind::StageActorActionGraphChunk:
+    case CommandKind::StageActorActionTextChunk:
+    case CommandKind::ApplyActorAction:
+        return static_cast<CapabilityMask>(Capability::ExactAnimationActions);
     default:
         return 0;
     }
@@ -248,8 +382,12 @@ constexpr CapabilityMask kRequestedCapabilities =
     case CommandKind::CreateRemoteAvatar:
     {
         const auto& payload = acCommand.Payload.CreateRemoteAvatar;
+        const auto knownFlags = GameplayBridge::UseExistingReference | GameplayBridge::PlayerAvatar;
         return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
                payload.LocalActorBaseFormId != 0 && payload.LocalCellFormId != 0 && IsFinite(payload.InitialRoot) &&
+               (payload.CreateFlags & ~knownFlags) == 0 &&
+               (((payload.CreateFlags & GameplayBridge::UseExistingReference) != 0) ==
+                (payload.LocalReferenceFormId != 0)) &&
                IsZero(payload.Reserved, sizeof(payload.Reserved));
     }
     case CommandKind::DestroyRemoteAvatar:
@@ -274,8 +412,92 @@ constexpr CapabilityMask kRequestedCapabilities =
                payload.AvatarHandle.Value != 0 && payload.SnapshotId != 0 &&
                payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 &&
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
                AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values);
+    }
+    case CommandKind::ApplyGameplayAction:
+    {
+        const auto& payload = acCommand.Payload.ApplyGameplayAction;
+        const auto domain = static_cast<GameplayDomain>(payload.Domain);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const bool actorTarget = payload.TargetHandle.Value != 0;
+        if (action == GameplayAction::ArmLocalCapture &&
+            (domain != GameplayDomain::ActorState ||
+             payload.TargetHandle.Value != kLocalPlayerHandle.Value || payload.SecondaryHandle.Value != 0 ||
+             payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+             payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+             payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+             payload.ScalarD != 0.0F || payload.ActionFlags != 0))
+            return false;
+        return identity.SequenceId == 0 &&
+               ((actorTarget && identity.EntityId != 0 && identity.EntityGeneration != 0) ||
+                (!actorTarget && identity.EntityId == 0 && identity.EntityGeneration == 0)) &&
+               IsActionInDomain(domain, action) && CapabilityForDomain(domain) != static_cast<Capability>(0) &&
+               std::isfinite(payload.ScalarA) && std::isfinite(payload.ScalarB) &&
+               std::isfinite(payload.ScalarC) && std::isfinite(payload.ScalarD) && payload.Reserved0 == 0 &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail));
+    }
+    case CommandKind::ApplyGameplayTextChunk:
+    {
+        const auto& payload = acCommand.Payload.ApplyGameplayTextChunk;
+        const auto domain = static_cast<GameplayDomain>(payload.Domain);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const bool actorTarget = payload.TargetHandle.Value != 0;
+        const bool textAction = action == GameplayAction::AnimationEvent || action == GameplayAction::SetName ||
+                                action == GameplayAction::ScriptAnimation || action == GameplayAction::Dialogue ||
+                                action == GameplayAction::Subtitle;
+        return identity.SequenceId == 0 && payload.TextId != 0 && textAction &&
+               ((actorTarget && identity.EntityId != 0 && identity.EntityGeneration != 0) ||
+                (!actorTarget && identity.EntityId == 0 && identity.EntityGeneration == 0)) &&
+               IsActionInDomain(domain, action) && CapabilityForDomain(domain) != static_cast<Capability>(0) &&
+               payload.ChunkCount != 0 && payload.ChunkCount <= kMaximumGameplayTextChunks &&
+               payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= kGameplayTextBytesPerChunk &&
+               payload.Reserved0 == 0 &&
+               (action == GameplayAction::Subtitle || payload.AuxiliaryLocalFormId == 0) &&
+               IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
+                      kGameplayTextBytesPerChunk - payload.ByteCount);
+    }
+    case CommandKind::ApplyProjectileLaunch:
+    {
+        const auto& payload = acCommand.Payload.ApplyProjectileLaunch;
+        return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
+               payload.LocalShooterFormId == 0 && IsValidProjectilePayload(payload);
+    }
+    case CommandKind::StageActorActionGraphChunk:
+    {
+        const auto& payload = acCommand.Payload.StageActorActionGraphChunk;
+        const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
+        return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
+               payload.TargetHandle.Value != 0 && payload.ActorLocalFormId == 0 && payload.SnapshotId != 0 &&
+               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion &&
+               payload.Reserved0 == 0 && payload.Reserved1 == 0 &&
+               payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
+               IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
+               AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values);
+    }
+    case CommandKind::StageActorActionTextChunk:
+    {
+        const auto& payload = acCommand.Payload.StageActorActionTextChunk;
+        return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
+               payload.TargetHandle.Value != 0 && payload.TargetLocalFormId == 0 && payload.TextId != 0 &&
+               payload.Domain == static_cast<std::uint16_t>(GameplayDomain::Animation) &&
+               payload.Action == static_cast<std::uint16_t>(GameplayAction::ActorAction) &&
+               payload.ChunkCount != 0 && payload.ChunkCount <= kMaximumGameplayTextChunks &&
+               payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= kGameplayTextBytesPerChunk &&
+               payload.Reserved0 == 0 && payload.AuxiliaryLocalFormId == 0 &&
+               IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
+                      kGameplayTextBytesPerChunk - payload.ByteCount);
+    }
+    case CommandKind::ApplyActorAction:
+    {
+        const auto& payload = acCommand.Payload.ApplyActorAction;
+        return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
+               payload.TargetHandle.Value != 0 && payload.ActorLocalFormId == 0 &&
+               payload.ActionLocalFormId != 0 && payload.SnapshotId != 0 && payload.TextId == payload.SnapshotId &&
+               (payload.Type & ~0x7u) == 0 && payload.ActionFlags == 0 &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved));
     }
     case CommandKind::RetireEpoch:
     {
@@ -292,6 +514,43 @@ constexpr CapabilityMask kRequestedCapabilities =
 void RejectSubmission() noexcept
 {
     s_rejectedSubmissionCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[nodiscard]] std::uint64_t ClaimNextCounter(std::atomic<std::uint64_t>& arCounter) noexcept
+{
+    auto value = arCounter.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (value == 0)
+        value = arCounter.fetch_add(1, std::memory_order_acq_rel) + 1;
+    return value;
+}
+
+[[nodiscard]] bool IsBatchCommand(const CommandKind aKind) noexcept
+{
+    return aKind == CommandKind::ApplyGameplayAction ||
+           aKind == CommandKind::ApplyGameplayTextChunk ||
+           aKind == CommandKind::StageActorActionGraphChunk ||
+           aKind == CommandKind::StageActorActionTextChunk ||
+           aKind == CommandKind::ApplyActorAction;
+}
+
+void NormalizeBatchTransactionId(CommandRecord& arCommand, const std::uint64_t aActionId) noexcept
+{
+    arCommand.Header.Identity.ActionId = aActionId;
+    switch (static_cast<CommandKind>(arCommand.Header.Kind))
+    {
+    case CommandKind::StageActorActionGraphChunk:
+        arCommand.Payload.StageActorActionGraphChunk.SnapshotId = aActionId;
+        break;
+    case CommandKind::StageActorActionTextChunk:
+        arCommand.Payload.StageActorActionTextChunk.TextId = aActionId;
+        break;
+    case CommandKind::ApplyActorAction:
+        arCommand.Payload.ApplyActorAction.SnapshotId = aActionId;
+        arCommand.Payload.ApplyActorAction.TextId = aActionId;
+        break;
+    default:
+        break;
+    }
 }
 
 [[nodiscard]] CommandPumpResult MapPumpResult(const std::uint32_t aResult) noexcept
@@ -540,7 +799,12 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
     }
 
     const auto kind = static_cast<CommandKind>(arCommand.Header.Kind);
-    const auto requiredCapability = RequiredCapability(kind);
+    const auto requiredCapability = (kind == CommandKind::ApplyGameplayAction ||
+                                     kind == CommandKind::ApplyGameplayTextChunk) ?
+        static_cast<CapabilityMask>(CapabilityForDomain(
+            static_cast<GameplayDomain>(kind == CommandKind::ApplyGameplayAction ?
+                arCommand.Payload.ApplyGameplayAction.Domain : arCommand.Payload.ApplyGameplayTextChunk.Domain))) :
+        RequiredCapability(kind);
     if (requiredCapability == 0 || !HasActiveCapabilities(requiredCapability) || !ValidateCommandPayload(arCommand))
     {
         RejectSubmission();
@@ -557,22 +821,137 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
                                    kind == CommandKind::ApplyRemoteAnimationGraphChunk;
     auto& lastCounter = isSequencedUpdate ? s_lastBridgeSequence : s_lastBridgeAction;
     auto& suppliedCounter = isSequencedUpdate ? identity.SequenceId : identity.ActionId;
-    const auto previousCounter = lastCounter.load(std::memory_order_acquire);
-    if (suppliedCounter != 0 && suppliedCounter <= previousCounter)
+    if (suppliedCounter != 0)
     {
-        RejectSubmission();
-        return false;
+        auto previousCounter = lastCounter.load(std::memory_order_acquire);
+        while (suppliedCounter > previousCounter &&
+               !lastCounter.compare_exchange_weak(previousCounter, suppliedCounter,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire))
+        {
+        }
+        if (suppliedCounter <= previousCounter)
+        {
+            RejectSubmission();
+            return false;
+        }
     }
-    suppliedCounter = suppliedCounter != 0 ? suppliedCounter : previousCounter + 1;
+    else
+    {
+        suppliedCounter = ClaimNextCounter(lastCounter);
+    }
     if (suppliedCounter == 0 || !TryPush(s_mapping->Commands, command))
     {
         RejectSubmission();
         return false;
     }
 
-    lastCounter.store(suppliedCounter, std::memory_order_release);
     s_mapping->Header.SubmittedCommandCount.fetch_add(1, std::memory_order_relaxed);
     arCommand = command;
+    return true;
+}
+
+bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept
+{
+    if (!apCommands || aCommandCount == 0 || aCommandCount > kDefaultCommandRingCapacity || !IsOperational())
+    {
+        RejectSubmission();
+        return false;
+    }
+
+    std::vector<CommandRecord> commands;
+    commands.reserve(aCommandCount);
+    const auto nonce = s_mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire);
+    const auto generation = s_mapping->Header.ConnectionGeneration.load(std::memory_order_acquire);
+    const auto epoch = s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire);
+    BridgeIdentity transactionIdentity{};
+    AdapterHandle transactionTarget{};
+    GameplayDomain transactionDomain{};
+    bool gameplayActionBatch{};
+
+    for (std::size_t index = 0; index < aCommandCount; ++index)
+    {
+        auto command = apCommands[index];
+        const auto kind = static_cast<CommandKind>(command.Header.Kind);
+        if (!IsBatchCommand(kind) || command.Header.PayloadSize != kFixedPayloadBytes || command.Header.Flags != 0 ||
+            command.Header.Identity.ActionId != 0 || !IdentityIsCurrentOrUnspecified(command.Header.Identity))
+        {
+            RejectSubmission();
+            return false;
+        }
+
+        const bool gameplayAction = kind == CommandKind::ApplyGameplayAction;
+        if (index == 0)
+            gameplayActionBatch = gameplayAction;
+        else if (gameplayAction != gameplayActionBatch)
+        {
+            RejectSubmission();
+            return false;
+        }
+        if (gameplayAction)
+        {
+            const auto& payload = command.Payload.ApplyGameplayAction;
+            const auto domain = static_cast<GameplayDomain>(payload.Domain);
+            if (payload.TargetHandle.Value == 0 || payload.TargetHandle.Value == kLocalPlayerHandle.Value ||
+                (index != 0 && (payload.TargetHandle.Value != transactionTarget.Value || domain != transactionDomain)))
+            {
+                RejectSubmission();
+                return false;
+            }
+            if (index == 0)
+            {
+                transactionTarget = payload.TargetHandle;
+                transactionDomain = domain;
+            }
+        }
+
+        const auto requiredCapability = (kind == CommandKind::ApplyGameplayAction ||
+                                         kind == CommandKind::ApplyGameplayTextChunk) ?
+            static_cast<CapabilityMask>(CapabilityForDomain(
+                static_cast<GameplayDomain>(kind == CommandKind::ApplyGameplayAction ?
+                    command.Payload.ApplyGameplayAction.Domain :
+                    command.Payload.ApplyGameplayTextChunk.Domain))) :
+            RequiredCapability(kind);
+        if (requiredCapability == 0 || !HasActiveCapabilities(requiredCapability) || !ValidateCommandPayload(command))
+        {
+            RejectSubmission();
+            return false;
+        }
+
+        auto& identity = command.Header.Identity;
+        identity.ServerInstanceNonce = nonce;
+        identity.ConnectionGeneration = generation;
+        identity.LifecycleEpoch = epoch;
+        if (index == 0)
+            transactionIdentity = identity;
+        else if (identity.EntityId != transactionIdentity.EntityId ||
+                 identity.EntityGeneration != transactionIdentity.EntityGeneration ||
+                 identity.SequenceId != transactionIdentity.SequenceId)
+        {
+            RejectSubmission();
+            return false;
+        }
+        commands.push_back(command);
+    }
+
+    const auto actionId = ClaimNextCounter(s_lastBridgeAction);
+    if (actionId == 0)
+    {
+        RejectSubmission();
+        return false;
+    }
+    for (auto& command : commands)
+        NormalizeBatchTransactionId(command, actionId);
+
+    if (!TryPushBatch(s_mapping->Commands, commands.data(), commands.size()))
+    {
+        RejectSubmission();
+        return false;
+    }
+
+    for (std::size_t index = 0; index < commands.size(); ++index)
+        apCommands[index] = commands[index];
+    s_mapping->Header.SubmittedCommandCount.fetch_add(commands.size(), std::memory_order_relaxed);
     return true;
 }
 

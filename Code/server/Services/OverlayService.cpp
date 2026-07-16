@@ -70,6 +70,9 @@ void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>
 
 void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& acMessage) const noexcept
 {
+    if (!acMessage.pPlayer || acMessage.Packet.Text.empty() || acMessage.Packet.Text.size() > 512 ||
+        !acMessage.pPlayer->GetParty().JoinedPartyId.has_value())
+        return;
     sendPlayerMessage(kPlayerDialogue, acMessage.Packet.Text, acMessage.pPlayer);
 }
 

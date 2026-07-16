@@ -8,6 +8,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <vector>
 
 namespace SkyrimTogetherVR::GameplayAdapter
 {
@@ -74,15 +75,6 @@ void PublishCurrentLocalPlayerStateImpl() noexcept
     const auto* worldspace = player ? player->GetWorldspace() : nullptr;
     const auto cellFormId = cell ? cell->GetFormID() : 0;
     const auto worldspaceFormId = worldspace ? worldspace->GetFormID() : 0;
-    if (cellFormId != 0 && g_lastLocalCellFormId != 0 &&
-        (cellFormId != g_lastLocalCellFormId || worldspaceFormId != g_lastLocalWorldspaceFormId)) {
-        AvatarManager::Get().RetireAllOnCommandPumpOwner();
-        endpoint.Mapping()->Header.LifecycleEpoch.fetch_add(1, std::memory_order_acq_rel);
-        PublishLifecycle(LifecycleState::CellChanged, cellFormId);
-    }
-    g_lastLocalCellFormId = cellFormId;
-    g_lastLocalWorldspaceFormId = worldspaceFormId;
-
     EventRecord record{};
     PopulateHeader(record, EventKind::LocalPlayerState);
 
@@ -179,34 +171,35 @@ void PublishCurrentLocalAnimationStateImpl() noexcept
         return;
 
     const auto snapshotId = ++g_animationSnapshotId;
-    EventRecord booleanChunk{};
+    constexpr auto graphRecordCount = 1u +
+        (AnimationGraphProtocol::kFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk +
+        (AnimationGraphProtocol::kIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk;
+    std::vector<EventRecord> records;
+    records.reserve(graphRecordCount);
+    auto& booleanChunk = records.emplace_back();
     PopulateAnimationChunk(booleanChunk, snapshotId, AnimationGraphProtocol::ValueType::BooleanBits, 0,
                            AnimationGraphProtocol::kBooleanCount, floats[1]);
     for (std::size_t index = 0; index < booleans.size(); ++index) {
         if (booleans[index])
             booleanChunk.Payload.LocalAnimationGraphChunk.Values[index / 32] |= 1u << (index % 32);
     }
-    if (!endpoint.TryPushEvent(booleanChunk))
-        return;
-
     for (std::uint16_t start = 0; start < floats.size(); start += AnimationGraphProtocol::kValuesPerChunk) {
         const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(AnimationGraphProtocol::kValuesPerChunk, floats.size() - start));
-        EventRecord chunk{};
+        auto& chunk = records.emplace_back();
         PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Float, start, count, floats[1]);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(floats[start + index]);
-        if (!endpoint.TryPushEvent(chunk))
-            return;
     }
     for (std::uint16_t start = 0; start < integers.size(); start += AnimationGraphProtocol::kValuesPerChunk) {
         const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(AnimationGraphProtocol::kValuesPerChunk, integers.size() - start));
-        EventRecord chunk{};
+        auto& chunk = records.emplace_back();
         PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Integer, start, count, floats[1]);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(integers[start + index]);
-        if (!endpoint.TryPushEvent(chunk))
-            return;
     }
+    TP_UNUSED(endpoint.TryPushEvents(records.data(), records.size()));
 }
 } // namespace
 
@@ -253,11 +246,33 @@ void HandleSkseMessage(SKSE::MessagingInterface::Message* a_message) noexcept
 bool ProcessPendingLifecycleTransitions() noexcept
 {
     const auto pending = g_pendingLifecycleTransitions.exchange(0, std::memory_order_acq_rel);
-    if (pending == 0)
-        return false;
-
     auto& endpoint = BridgeEndpoint::Get();
     if (!endpoint.IsOperational())
+        return false;
+
+    LifecycleState state{};
+    std::uint32_t reason{};
+    bool transitionPending = pending != 0;
+    if (transitionPending) {
+        state = (pending & kPendingPreLoadGame) != 0 ? LifecycleState::PreLoadGame : LifecycleState::NewGame;
+    } else {
+        const auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto* cell = player ? player->GetParentCell() : nullptr;
+        const auto* worldspace = player ? player->GetWorldspace() : nullptr;
+        const auto cellFormId = cell ? cell->GetFormID() : 0;
+        const auto worldspaceFormId = worldspace ? worldspace->GetFormID() : 0;
+        transitionPending = g_lastLocalCellFormId != 0 &&
+                            (cellFormId == 0 || cellFormId != g_lastLocalCellFormId ||
+                             worldspaceFormId != g_lastLocalWorldspaceFormId);
+        g_lastLocalCellFormId = cellFormId;
+        g_lastLocalWorldspaceFormId = worldspaceFormId;
+        if (transitionPending) {
+            state = LifecycleState::CellChanged;
+            reason = cellFormId;
+        }
+    }
+
+    if (!transitionPending)
         return false;
 
     AvatarManager::Get().RetireAllOnCommandPumpOwner();
@@ -265,8 +280,7 @@ bool ProcessPendingLifecycleTransitions() noexcept
     g_lastLocalWorldspaceFormId = 0;
     g_lastAnimationSnapshotTime = {};
     endpoint.Mapping()->Header.LifecycleEpoch.fetch_add(1, std::memory_order_acq_rel);
-    const auto state = (pending & kPendingPreLoadGame) != 0 ? LifecycleState::PreLoadGame : LifecycleState::NewGame;
-    PublishLifecycle(state, 0);
+    PublishLifecycle(state, reason);
     return true;
 }
 
@@ -287,6 +301,7 @@ void PublishRemoteAvatarState(
     const CommandStatus a_status,
     const std::uint32_t a_localCellFormId,
     const std::uint32_t a_localWorldspaceFormId,
+    const std::uint32_t a_localActorReferenceFormId,
     const RootTransform& a_root) noexcept
 {
     auto& endpoint = BridgeEndpoint::Get();
@@ -304,6 +319,7 @@ void PublishRemoteAvatarState(
     payload.Status = static_cast<std::uint32_t>(a_status);
     payload.LocalCellFormId = a_localCellFormId;
     payload.LocalWorldspaceFormId = a_localWorldspaceFormId;
+    payload.LocalActorReferenceFormId = a_localActorReferenceFormId;
     payload.Root = EventSafeRoot(a_root);
     endpoint.TryPushEvent(record);
 }
@@ -354,6 +370,30 @@ void PublishRemoteSpatialTransferState(
     payload.TargetCellFormId = a_targetCellFormId;
     payload.TargetWorldspaceFormId = a_targetWorldspaceFormId;
     payload.Status = static_cast<std::uint32_t>(a_status);
+    endpoint.TryPushEvent(record);
+}
+
+void PublishRemoteGameplayActionState(
+    const BridgeIdentity& a_identity,
+    const AdapterHandle a_targetHandle,
+    const GameplayDomain a_domain,
+    const GameplayAction a_action,
+    const std::uint32_t a_targetLocalFormId,
+    const CommandStatus a_status) noexcept
+{
+    auto& endpoint = BridgeEndpoint::Get();
+    if (!endpoint.IsOperational())
+        return;
+    EventRecord record{};
+    record.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteGameplayActionState);
+    record.Header.PayloadSize = kFixedPayloadBytes;
+    record.Header.Identity = a_identity;
+    auto& payload = record.Payload.RemoteGameplayActionState;
+    payload.TargetHandle = a_targetHandle;
+    payload.Domain = static_cast<std::uint16_t>(a_domain);
+    payload.Action = static_cast<std::uint16_t>(a_action);
+    payload.Status = static_cast<std::uint32_t>(a_status);
+    payload.TargetLocalFormId = a_targetLocalFormId;
     endpoint.TryPushEvent(record);
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

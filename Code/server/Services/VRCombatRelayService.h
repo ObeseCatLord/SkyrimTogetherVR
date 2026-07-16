@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <Events/PacketEvent.h>
 #include <TiltedCore/Stl.hpp>
@@ -18,9 +19,18 @@ struct VRCombatRelayService
 private:
     struct PlayerCombatRelayState
     {
+        struct SemanticSignature
+        {
+            uint64_t Value{0};
+            uint64_t Tick{0};
+            bool Valid{false};
+        };
+
         uint32_t LastSequence{0};
         uint64_t LastRelayTick{0};
         bool HasSequence{false};
+        std::array<SemanticSignature, 32> RecentSignatures{};
+        uint8_t NextSignature{0};
     };
 
     void OnVRCombatHitEvent(const PacketEvent<RequestVRCombatHitEvent>& acMessage) noexcept;

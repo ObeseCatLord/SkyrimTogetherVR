@@ -14,6 +14,7 @@ struct AvatarCommandResult
     AdapterHandle AvatarHandle{};
     std::uint32_t LocalCellFormId{};
     std::uint32_t LocalWorldspaceFormId{};
+    std::uint32_t LocalActorReferenceFormId{};
     RootTransform Root{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
     std::uint64_t AnimationSnapshotId{};
     bool AnimationApplied{};
@@ -31,6 +32,18 @@ public:
     [[nodiscard]] AvatarCommandResult CreateRemoteAvatar(const CommandRecord& a_command) noexcept;
     [[nodiscard]] AvatarCommandResult UpdateRemoteRootTransform(const CommandRecord& a_command) noexcept;
     [[nodiscard]] AvatarCommandResult ApplyRemoteAnimationGraphChunk(const CommandRecord& a_command) noexcept;
+    [[nodiscard]] CommandStatus ResolveGameplayActor(
+        const CommandRecord& a_command,
+        RE::NiPointer<RE::Actor>& ar_actor) noexcept;
+    [[nodiscard]] CommandStatus ResolveActorByHandle(
+        const BridgeIdentity& a_identity,
+        AdapterHandle a_handle,
+        RE::NiPointer<RE::Actor>& ar_actor) noexcept;
+    [[nodiscard]] bool IsManagedRemoteActor(const RE::Actor* a_actor) const noexcept;
+    [[nodiscard]] bool IsPlayerAvatar(const BridgeIdentity& a_identity, AdapterHandle a_handle) const noexcept;
+    [[nodiscard]] CommandStatus ApplyAnimationSnapshotToActor(
+        RE::Actor& a_actor,
+        const AnimationGraphProtocol::SnapshotBuffer& a_snapshot) noexcept;
     void ProcessPendingAnimationSnapshots() noexcept;
     [[nodiscard]] AvatarCommandResult DestroyRemoteAvatar(const CommandRecord& a_command) noexcept;
     void RetireAllOnCommandPumpOwner() noexcept;
@@ -79,15 +92,19 @@ private:
 
         AdapterHandle Token{};
         RE::ActorHandle Actor;
+        RE::TESNPC* VisualBase{};
         std::uint64_t LastRootSequence{};
         std::uint64_t LastAnimationSequence{};
         std::uint64_t LastAnimationSnapshot{};
         std::uint64_t LastAction{};
         std::uint32_t LocalCellFormId{};
         std::uint32_t LocalWorldspaceFormId{};
+        std::uint32_t LocalActorReferenceFormId{};
         RootTransform Root{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
         PendingAnimationSnapshot PendingAnimation{};
         bool AnimationGraphValidated{};
+        bool OwnsActor{};
+        bool IsPlayer{};
     };
 
     struct EntityLedger

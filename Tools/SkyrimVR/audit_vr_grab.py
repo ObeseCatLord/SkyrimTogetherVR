@@ -103,7 +103,7 @@ REQUIRED_TOKENS = {
         "m_playerGrabRelayState.erase",
         "notify.PlayerId = playerId;",
         "notify.Grab = acMessage.Packet.Grab;",
-        "GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);",
+        "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
     ),
     "Code/server/Services/VRGrabRelayService.h": (
         "PlayerGrabRelayState",

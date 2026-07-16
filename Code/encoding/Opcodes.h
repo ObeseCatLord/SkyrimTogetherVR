@@ -63,6 +63,8 @@ enum ClientOpcode : unsigned char
     kRequestVRProjectileEvent,
     kRequestVRGrabEvent,
     kRequestVRHiggsState,
+    kRequestVRAppearance,
+    kClientActorActionRequest,
     kClientOpcodeMax
 };
 
@@ -133,5 +135,6 @@ enum ServerOpcode : unsigned char
     kNotifyVRProjectileEvent,
     kNotifyVRGrabEvent,
     kNotifyVRHiggsState,
+    kNotifyVRAppearance,
     kServerOpcodeMax
 };

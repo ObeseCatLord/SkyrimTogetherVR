@@ -83,7 +83,7 @@ void Inventory::Entry::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexc
 
 bool Inventory::operator==(const Inventory& acRhs) const noexcept
 {
-    return Entries == acRhs.Entries;
+    return Entries == acRhs.Entries && CurrentMagicEquipment == acRhs.CurrentMagicEquipment;
 }
 
 bool Inventory::operator!=(const Inventory& acRhs) const noexcept

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <unordered_map>
+
 #include <Events/PacketEvent.h>
 #include <Structs/ActorData.h>
 
@@ -10,6 +14,7 @@ struct World;
 struct AssignCharacterRequest;
 struct CharacterSpawnRequest;
 struct ClientReferencesMoveRequest;
+struct ClientActorActionRequest;
 struct RequestFactionsChanges;
 struct GridCellCoords;
 struct RequestOwnershipTransfer;
@@ -23,6 +28,8 @@ struct RequestRespawn;
 struct SyncExperienceRequest;
 struct DialogueRequest;
 struct SubtitleRequest;
+struct Player;
+struct PlayerLeaveEvent;
 
 /**
  * @brief Manages player and actor state.
@@ -45,8 +52,10 @@ protected:
     void OnOwnershipTransferEvent(const OwnershipTransferEvent& acEvent) const noexcept;
     void OnOwnershipClaimRequest(const PacketEvent<RequestOwnershipClaim>& acMessage) const noexcept;
     void OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept;
+    void OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noexcept;
     void OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept;
     void OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept;
+    void OnActorActionRequest(const PacketEvent<ClientActorActionRequest>& acMessage) const noexcept;
     void OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept;
     void OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept;
     void OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept;
@@ -57,6 +66,7 @@ protected:
 
     void CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept;
     void TransferOwnership(Player* apPlayer, const uint32_t acServerId, const ActorData& acActorData) const noexcept;
+    void ExpireOwnershipGrants() const noexcept;
     ActorData BuildActorData(const entt::entity acEntity) const noexcept;
     void ApplyActorData(const entt::entity acEntity, const ActorData& acActorData) const noexcept;
     void BroadcastActorData(Player* apPlayer, const entt::entity acEntity, const ActorData& acActorData) const noexcept;
@@ -65,7 +75,23 @@ protected:
     void ProcessMovementChanges() const noexcept;
 
 private:
+    struct PendingOwnershipGrant
+    {
+        Player* pCurrentOwner{};
+        Player* pSelectedPlayer{};
+        std::uint64_t Token{};
+        ConnectionId_t CurrentOwnerConnectionId{};
+        std::uint64_t CurrentOwnerConnectionGeneration{};
+        std::uint64_t CurrentOwnerSessionNonce{};
+        ConnectionId_t SelectedConnectionId{};
+        std::uint64_t SelectedConnectionGeneration{};
+        std::uint64_t SelectedSessionNonce{};
+        std::chrono::steady_clock::time_point ExpiresAt{};
+    };
+
     World& m_world;
+    mutable std::unordered_map<std::uint32_t, PendingOwnershipGrant> m_pendingOwnershipGrants{};
+    mutable std::uint64_t m_nextOwnershipGrantToken{1};
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_exteriorCellChangeEventConnection;
@@ -75,8 +101,10 @@ private:
     entt::scoped_connection m_ownershipTransferEventConnection;
     entt::scoped_connection m_claimOwnershipConnection;
     entt::scoped_connection m_removeCharacterConnection;
+    entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_characterSpawnedConnection;
     entt::scoped_connection m_referenceMovementSnapshotConnection;
+    entt::scoped_connection m_actorActionRequestConnection;
     entt::scoped_connection m_factionsChangesConnection;
     entt::scoped_connection m_mountConnection;
     entt::scoped_connection m_newPackageConnection;

@@ -527,16 +527,16 @@
   ],
   "missingRttiUsedByCast": [],
   "nonRttiResolutionSources": {
-    "addrlib": 180,
+    "addrlib": 179,
     "commonlib_vtable": 1,
-    "database": 2,
+    "database": 3,
     "release": 74,
     "sse_vr": 27
   },
   "resolutionSources": {
-    "addrlib": 180,
+    "addrlib": 179,
     "commonlib_vtable": 1,
-    "database": 2,
+    "database": 3,
     "missing": 47,
     "release": 75,
     "sse_vr": 2786
@@ -2895,8 +2895,8 @@
     },
     {
       "id": 38949,
-      "name": "",
-      "offset": "0x68ae90",
+      "name": "ActorMediator::PerformAction",
+      "offset": "0x643f20",
       "references": [
         {
           "file": "Code/client/Games/Animation.cpp",
@@ -2905,8 +2905,8 @@
         }
       ],
       "resolvedId": 38949,
-      "source": "addrlib",
-      "status": "addrlib",
+      "source": "database",
+      "status": "exact_vr_disassembly",
       "translation": "direct"
     },
     {

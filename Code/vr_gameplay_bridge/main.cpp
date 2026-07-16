@@ -1,5 +1,9 @@
 #include "CommandExecutor.h"
+#include "DialogueHooks.h"
 #include "EventCapture.h"
+#include "MagicHooks.h"
+#include "PapyrusBindings.h"
+#include "ProjectileHooks.h"
 
 #include <cstdio>
 #include <memory>
@@ -61,6 +65,11 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             skseVersion,
             releaseIndex);
 
+        if (!SkyrimTogetherVR::GameplayAdapter::RegisterPapyrusBindings()) {
+            SKSE::log::error("SkyrimTogetherVRGameplayBridge: Papyrus registration failed");
+            return false;
+        }
+
         auto& endpoint = SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get();
         if (!endpoint.Attach())
             return false;
@@ -70,11 +79,34 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             endpoint.Fault("SKSE messaging listener registration failed");
             return false;
         }
+        if (!SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Install()) {
+            endpoint.Fault("exact Actor::SpeakSound hook installation failed");
+            return false;
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Install()) {
+            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
+            endpoint.Fault("exact Projectile::Launch hook installation failed");
+            return false;
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::MagicHooks::Install()) {
+            SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
+            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
+            endpoint.Fault("exact magic hook installation failed");
+            return false;
+        }
+        endpoint.SetOptionalCapability(
+            SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions,
+            false);
+        SKSE::log::info(
+            "SkyrimTogetherVRGameplayBridge: exact ActorMediator action lane is disabled pending GameId translation and verified TESActionData lifetime");
 
         SkyrimTogetherVR::GameplayAdapter::PublishPluginLoaded();
         SKSE::log::info("SkyrimTogetherVRGameplayBridge loaded");
         return true;
     } catch (...) {
+        SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall();
+        SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
+        SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
         SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get().Fault("exception during SKSEPluginLoad");
         return false;
     }

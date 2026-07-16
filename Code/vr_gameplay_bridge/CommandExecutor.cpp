@@ -1,7 +1,16 @@
 #include "CommandExecutor.h"
 
+#include "ActorActionHooks.h"
 #include "AvatarManager.h"
+#include "ActorWorldManager.h"
+#include "AnimationAppearanceManager.h"
+#include "CombatMagicManager.h"
 #include "EventCapture.h"
+#include "GameplayTextManager.h"
+#include "LocalGameplayCapture.h"
+#include "QuestDialogueManager.h"
+#include "VRBodyPoseManager.h"
+#include "VRInteractionManager.h"
 
 #include <vr_common/VRCanonicalEntity.h>
 
@@ -12,6 +21,9 @@ namespace SkyrimTogetherVR::GameplayAdapter
 namespace
 {
 std::atomic<std::uint64_t> g_lastRetireActionId{};
+std::atomic<std::uint64_t> g_lastLocalActionId{};
+std::atomic<std::uint64_t> g_lastWorldActionId{};
+std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
 
 [[nodiscard]] bool IsZero(const std::uint8_t* a_bytes, const std::size_t a_size) noexcept
 {
@@ -65,11 +77,17 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
 
     switch (static_cast<CommandKind>(a_command.Header.Kind)) {
     case CommandKind::CreateRemoteAvatar:
+    {
+        const auto& payload = a_command.Payload.CreateRemoteAvatar;
+        const auto knownFlags = GameplayBridge::UseExistingReference | GameplayBridge::PlayerAvatar;
         if (a_command.Header.Identity.SequenceId != 0 || a_command.Header.Identity.ActionId == 0 ||
-            a_command.Payload.CreateRemoteAvatar.LocalActorBaseFormId == 0 || a_command.Payload.CreateRemoteAvatar.CreateFlags != 0 ||
-            !IsZero(a_command.Payload.CreateRemoteAvatar.Reserved, sizeof(a_command.Payload.CreateRemoteAvatar.Reserved)))
+            payload.LocalActorBaseFormId == 0 || (payload.CreateFlags & ~knownFlags) != 0 ||
+            (((payload.CreateFlags & GameplayBridge::UseExistingReference) != 0) ==
+             (payload.LocalReferenceFormId == 0)) ||
+            !IsZero(payload.Reserved, sizeof(payload.Reserved)))
             return CommandStatus::Malformed;
         break;
+    }
     case CommandKind::DestroyRemoteAvatar:
         if (a_command.Header.Identity.SequenceId != 0 || a_command.Header.Identity.ActionId == 0 ||
             a_command.Payload.DestroyRemoteAvatar.AvatarHandle.Value == 0 || a_command.Payload.DestroyRemoteAvatar.DestroyFlags != 0 ||
@@ -92,6 +110,7 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
             payload.AvatarHandle.Value == 0 || payload.SnapshotId == 0 ||
             payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved0 != 0 ||
             payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !std::isfinite(payload.Direction) ||
+            !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) ||
             !AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||
             !AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values))
             return CommandStatus::Malformed;
@@ -139,6 +158,7 @@ void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarComm
         a_result.Status,
         a_result.LocalCellFormId,
         a_result.LocalWorldspaceFormId,
+        a_result.LocalActorReferenceFormId,
         a_result.Root);
 }
 
@@ -200,6 +220,143 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     }
 }
 
+[[nodiscard]] CommandStatus ValidateGameplayCommand(
+    const MappingHeader& a_header,
+    const CommandRecord& a_command) noexcept
+{
+    const auto common = ValidateCommon(a_header, a_command);
+    if (common != CommandStatus::Success)
+        return common;
+    if (a_command.Header.Identity.SequenceId != 0 || a_command.Header.Identity.ActionId == 0)
+        return CommandStatus::Malformed;
+
+    GameplayDomain domain{};
+    GameplayAction action{};
+    AdapterHandle targetHandle{};
+    if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayAction) {
+        const auto& payload = a_command.Payload.ApplyGameplayAction;
+        domain = static_cast<GameplayDomain>(payload.Domain);
+        action = static_cast<GameplayAction>(payload.Action);
+        targetHandle = payload.TargetHandle;
+    } else if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayTextChunk) {
+        const auto& payload = a_command.Payload.ApplyGameplayTextChunk;
+        domain = static_cast<GameplayDomain>(payload.Domain);
+        action = static_cast<GameplayAction>(payload.Action);
+        targetHandle = payload.TargetHandle;
+    } else {
+        return CommandStatus::Malformed;
+    }
+
+    if (!IsActionInDomain(domain, action))
+        return CommandStatus::Malformed;
+    if (action == GameplayAction::ArmLocalCapture) {
+        if (static_cast<CommandKind>(a_command.Header.Kind) != CommandKind::ApplyGameplayAction)
+            return CommandStatus::Malformed;
+        const auto& payload = a_command.Payload.ApplyGameplayAction;
+        if (domain != GameplayDomain::ActorState || targetHandle.Value != kLocalPlayerHandle.Value ||
+            payload.SecondaryHandle.Value != 0 || payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 ||
+            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.ValueA != 0 || payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return CommandStatus::Malformed;
+    }
+    const auto capability = CapabilityForDomain(domain);
+    if (capability == static_cast<Capability>(0) ||
+        !HasCapability(a_header.ActiveCapabilities.load(std::memory_order_acquire), capability))
+        return CommandStatus::Unsupported;
+    const bool textChunk = static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayTextChunk;
+    if (targetHandle.Value == kLocalPlayerHandle.Value) {
+        if (!CanonicalEntity::IsValid(a_command.Header.Identity.EntityId,
+                                      a_command.Header.Identity.EntityGeneration))
+            return CommandStatus::StaleEntity;
+        if (!textChunk && !AdvanceMonotonic(g_lastLocalActionId, a_command.Header.Identity.ActionId))
+            return CommandStatus::StaleEntity;
+    } else if (targetHandle.Value == 0) {
+        if (a_command.Header.Identity.EntityId != 0 || a_command.Header.Identity.EntityGeneration != 0)
+            return CommandStatus::Malformed;
+        if (!textChunk && !AdvanceMonotonic(g_lastWorldActionId, a_command.Header.Identity.ActionId))
+            return CommandStatus::StaleEntity;
+    } else if (!CanonicalEntity::IsValid(a_command.Header.Identity.EntityId,
+                                         a_command.Header.Identity.EntityGeneration)) {
+        return CommandStatus::StaleEntity;
+    }
+    return CommandStatus::Success;
+}
+
+[[nodiscard]] CommandStatus ExecuteGameplayAction(const CommandRecord& a_command) noexcept
+{
+    const auto domain = static_cast<GameplayDomain>(a_command.Payload.ApplyGameplayAction.Domain);
+    const auto action = static_cast<GameplayAction>(a_command.Payload.ApplyGameplayAction.Action);
+    if (domain == GameplayDomain::ActorState && action == GameplayAction::ArmLocalCapture) {
+        LocalGameplayCapture::Arm();
+        return CommandStatus::Success;
+    }
+    switch (domain) {
+    case GameplayDomain::Animation:
+    case GameplayDomain::Appearance:
+    case GameplayDomain::Equipment:
+    case GameplayDomain::Inventory:
+        return AnimationAppearanceManager::Apply(a_command);
+    case GameplayDomain::ActorState:
+    case GameplayDomain::Object:
+    case GameplayDomain::NpcOwnership:
+        return ActorWorldManager::Execute(a_command);
+    case GameplayDomain::Combat:
+    case GameplayDomain::Projectile:
+    case GameplayDomain::Magic:
+        return ExecuteCombatMagicAction(a_command);
+    case GameplayDomain::WorldState:
+    case GameplayDomain::Higgs:
+    case GameplayDomain::Planck:
+        return VRInteractionManager::Execute(a_command);
+    case GameplayDomain::VrBodyPose:
+        return VRBodyPoseManager::Execute(a_command);
+    case GameplayDomain::Quest:
+    case GameplayDomain::Dialogue:
+    case GameplayDomain::Party:
+        return QuestDialogueManager::Execute(a_command);
+    default:
+        return CommandStatus::Malformed;
+    }
+}
+
+[[nodiscard]] CommandStatus ValidateProjectileLaunchCommand(
+    const MappingHeader& a_header,
+    const CommandRecord& a_command) noexcept
+{
+    const auto common = ValidateCommon(a_header, a_command);
+    if (common != CommandStatus::Success)
+        return common;
+
+    const auto& identity = a_command.Header.Identity;
+    const auto& payload = a_command.Payload.ApplyProjectileLaunch;
+    if (identity.SequenceId != 0 || identity.ActionId == 0 ||
+        !CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration) || payload.TargetHandle.Value == 0)
+        return CommandStatus::Malformed;
+    if (!HasCapability(a_header.ActiveCapabilities.load(std::memory_order_acquire), Capability::CombatAndMagic))
+        return CommandStatus::Unsupported;
+    return AdvanceMonotonic(g_lastProjectileLaunchActionId, identity.ActionId) ?
+               CommandStatus::Success :
+               CommandStatus::StaleEntity;
+}
+
+[[nodiscard]] CommandStatus ValidateActorActionCommand(
+    const MappingHeader& a_header,
+    const CommandRecord& a_command) noexcept
+{
+    const auto common = ValidateCommon(a_header, a_command);
+    if (common != CommandStatus::Success)
+        return common;
+    if (a_command.Header.Identity.SequenceId != 0 || a_command.Header.Identity.ActionId == 0 ||
+        !CanonicalEntity::IsValid(a_command.Header.Identity.EntityId,
+                                  a_command.Header.Identity.EntityGeneration))
+        return CommandStatus::Malformed;
+    if (!HasCapability(a_header.ActiveCapabilities.load(std::memory_order_acquire),
+                       Capability::ExactAnimationActions))
+        return CommandStatus::Unsupported;
+    return CommandStatus::Success;
+}
+
 [[nodiscard]] CommandStatus ExecuteCommand(BridgeEndpoint& a_endpoint, const CommandRecord& a_command) noexcept
 {
     auto& header = a_endpoint.Mapping()->Header;
@@ -224,6 +381,51 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
             PublishAnimationCommandResult(a_command, result);
         return result.Status;
     }
+    case CommandKind::ApplyGameplayAction:
+    case CommandKind::ApplyGameplayTextChunk:
+    {
+        const auto validation = ValidateGameplayCommand(header, a_command);
+        CommandStatus status = validation;
+        if (validation == CommandStatus::Success)
+            status = static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayAction ?
+                         ExecuteGameplayAction(a_command) : GameplayTextManager::Execute(a_command);
+
+        const bool text = static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayTextChunk;
+        const auto handle = text ? a_command.Payload.ApplyGameplayTextChunk.TargetHandle :
+                                   a_command.Payload.ApplyGameplayAction.TargetHandle;
+        const auto domain = static_cast<GameplayDomain>(text ? a_command.Payload.ApplyGameplayTextChunk.Domain :
+                                                           a_command.Payload.ApplyGameplayAction.Domain);
+        const auto action = static_cast<GameplayAction>(text ? a_command.Payload.ApplyGameplayTextChunk.Action :
+                                                           a_command.Payload.ApplyGameplayAction.Action);
+        const auto targetForm = text ? a_command.Payload.ApplyGameplayTextChunk.TargetLocalFormId :
+                                       a_command.Payload.ApplyGameplayAction.TargetLocalFormId;
+        PublishRemoteGameplayActionState(a_command.Header.Identity, handle, domain, action, targetForm, status);
+        return status;
+    }
+    case CommandKind::ApplyProjectileLaunch:
+    {
+        const auto validation = ValidateProjectileLaunchCommand(header, a_command);
+        return validation == CommandStatus::Success ? ApplyProjectileLaunch(a_command) : validation;
+    }
+    case CommandKind::StageActorActionGraphChunk:
+    case CommandKind::StageActorActionTextChunk:
+    case CommandKind::ApplyActorAction:
+    {
+        const auto validation = ValidateActorActionCommand(header, a_command);
+        const auto status = validation == CommandStatus::Success ?
+                                ActorActionHooks::Execute(a_command) : validation;
+        if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyActorAction) {
+            const auto& payload = a_command.Payload.ApplyActorAction;
+            PublishRemoteGameplayActionState(
+                a_command.Header.Identity,
+                payload.TargetHandle,
+                GameplayDomain::Animation,
+                GameplayAction::ActorAction,
+                payload.ActorLocalFormId,
+                status);
+        }
+        return status;
+    }
     case CommandKind::RetireEpoch:
     {
         const auto common = ValidateCommon(header, a_command);
@@ -241,11 +443,21 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
             return CommandStatus::StaleEntity;
 
         AvatarManager::Get().RetireAllOnCommandPumpOwner();
+        GameplayTextManager::Reset();
+        ActorActionHooks::Reset();
+        AnimationAppearanceManager::Reset();
+        LocalGameplayCapture::Reset();
+        VRBodyPoseManager::Reset();
+        VRInteractionManager::Reset();
+        ActorWorldManager::Reset();
         std::uint64_t expected = a_command.Header.Identity.LifecycleEpoch;
         if (!header.LifecycleEpoch.compare_exchange_strong(expected, expected + 1, std::memory_order_acq_rel, std::memory_order_acquire))
             return CommandStatus::StaleEpoch;
         PublishEpochRetired(a_command.Payload.RetireEpoch.Reason);
         g_lastRetireActionId.store(0, std::memory_order_release);
+        g_lastLocalActionId.store(0, std::memory_order_release);
+        g_lastWorldActionId.store(0, std::memory_order_release);
+        g_lastProjectileLaunchActionId.store(0, std::memory_order_release);
         return CommandStatus::Success;
     }
     default:
@@ -266,8 +478,19 @@ CommandPumpResult ProcessCommands(
         return precondition;
 
     AvatarManager::Get().BindCommandPumpOwner(a_callerThreadId);
-    if (ProcessPendingLifecycleTransitions())
+    if (ProcessPendingLifecycleTransitions()) {
         g_lastRetireActionId.store(0, std::memory_order_release);
+        g_lastLocalActionId.store(0, std::memory_order_release);
+        g_lastWorldActionId.store(0, std::memory_order_release);
+        g_lastProjectileLaunchActionId.store(0, std::memory_order_release);
+        GameplayTextManager::Reset();
+        ActorActionHooks::Reset();
+        AnimationAppearanceManager::Reset();
+        LocalGameplayCapture::Reset();
+        VRBodyPoseManager::Reset();
+        VRInteractionManager::Reset();
+        ActorWorldManager::Reset();
+    }
 
     auto* mapping = endpoint.Mapping();
     auto& commands = mapping->Commands;
@@ -285,8 +508,12 @@ CommandPumpResult ProcessCommands(
     }
 
     AvatarManager::Get().ProcessPendingAnimationSnapshots();
+    VRBodyPoseManager::ProcessPending();
+    VRInteractionManager::ProcessPeriodic();
+    ActorWorldManager::ProcessPeriodic();
     PublishCurrentLocalPlayerState();
     PublishCurrentLocalAnimationState();
+    LocalGameplayCapture::CapturePeriodic();
     return CommandPumpResult::Success;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

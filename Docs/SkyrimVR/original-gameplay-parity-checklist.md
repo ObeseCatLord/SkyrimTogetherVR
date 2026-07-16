@@ -1,251 +1,264 @@
-# Skyrim Together VR Original Gameplay Parity Checklist
+# Skyrim Together VR Gameplay Parity Checklist
 
 Updated: 2026-07-16
 
-## Goal And Status Rules
+## Status Rules
 
-The target is behavioral parity with the `original-skyrim-together` branch on
-Skyrim VR 1.4.15, plus VRIK/FBT, HIGGS, and PLANCK behavior where VR needs
-state that desktop Skyrim does not have.
+The target is original `original-skyrim-together` gameplay on Skyrim VR
+1.4.15, plus VR embodiment and compatibility with VRIK/FBT, HIGGS, and PLANCK.
 
-- `[x] Source`: implemented and covered by no-launch source/tests.
-- `[x] Build`: compiled in the current audited Windows gameplay package.
-- `[x] Runtime`: proven in Skyrim VR with retained evidence.
-- `[ ]`: still required. A telemetry file or relayed packet does not count as
-  gameplay parity until the remote game state is visibly and semantically
-  applied.
+- `[x] Source` means the native producer, original protocol translation,
+  server path, receiver, validation, and lifecycle behavior are written.
+- `[x] Build` means that exact source revision compiled and passed its static,
+  unit, package, and evidence audits on Windows.
+- `[x] Runtime` means two Skyrim VR clients visibly proved the behavior against
+  the matching dedicated server revision.
+- A diagnostic relay is not gameplay parity. It may supplement, but cannot
+  replace, the original canonical message that owns mutation.
 
-The canonical implementation boundary is fixed:
+The current source tranche has not been built or runtime-tested. Build and
+runtime boxes below therefore remain open even when source is complete.
 
-- mapped client: networking, replicated state, authority, interpolation;
-- CommonLib gameplay bridge: native handles, events, validated game mutation;
-- server: canonical entities, interest routing, ownership, deduplication;
-- no `ActorExtension` append, flat-runtime `Actor::New`, or raw SE layout cast
-  is permitted in the VR path.
+## Native Boundary
 
-## Phase 0: Avatar And Session Foundation
+- [x] Source: maintained alandtse `CommonLibVR` `ng` v4.37.0 is pinned by
+  repository, tag, commit, runtime, SKSEVR, executable hash, and Address Library
+  hash.
+- [x] Source: the mapped client owns networking and canonical entities; the
+  CommonLib SKSEVR plugin exclusively owns game pointers, retained handles,
+  events, and engine mutation; the server owns authority and interest routing.
+- [x] Source: gameplay implemented natively by original Skyrim Together remains
+  native in the mapped client or CommonLib SKSEVR plugin. Papyrus is limited to
+  thin Skyrim UI, quest, and compatibility adapters and never owns replicated
+  state, retries, identity, ordering, authority, or engine-hook behavior.
+- [x] Source: no VR mutation depends on appended desktop `ActorExtension`
+  storage, flat desktop actor construction, or Papyrus-maintained state.
+- [x] Source: the fixed bridge ABI carries nonce, connection generation,
+  lifecycle epoch, entity generation, action ID, and sequence ID.
+- [x] Source: exact-match gameplay protocol revision 7 gates the token-bound NPC
+  ownership and final-equipment wire layouts before either endpoint decodes them.
+- [x] Source: generated CommonLib aliases and curated VR overrides are
+  collision-aware and fail closed on unverified addresses or prologues.
+- [ ] Build: verify the current ABI/capability revision and curated address
+  overlay in the final gameplay package.
+- [ ] Runtime: prove clean attach, owner-thread pumping, disconnect, reconnect,
+  load, new game, and shutdown without stale commands or leaked references.
 
-- [x] Source: Skyrim VR/SKSEVR/CommonLib/address inputs are locked.
-- [x] Source: protocol revision, capability negotiation, server nonce,
-  connection generation, lifecycle epoch, action ID, and sequence ID exist.
-- [x] Source: fixed-width POD gameplay bridge with bounded command/event rings.
-- [x] Source: CommonLib owner-thread command pump and process-lifetime sinks.
-- [x] Source: CommonLib bridge distinguishes SkyrimVR.exe/address-library
-  `1.4.15.0` from SKSEVR's plugin-interface `1.4.15.1`, validates SKSEVR
-  2.0.12/release 60 before CommonLib initialization, and locks the distinction
-  with unit/static audits.
-- [x] Source: checked packed EnTT slot/version identity, including server ID 0.
-- [x] Source: canonical remote humanoid create/root/spatial-transfer/despawn path
-  using `CreateReferenceAtLocation`, retained adapter identity, and post-move
-  cell/worldspace verification.
-- [x] Source: exact result correlation, bounded create recovery, fail-closed
-  retirement, visibility re-spawn, and interpolation convergence.
-- [x] Build: canonical-avatar commit `94544550` compiled on WinBoat; Windows
-  `TPTests` passed 526 assertions in 30 cases and the paired package/evidence
-  audits passed. See `windows-gameplay-build-result-20260715-canonical-avatar.md`.
-- [x] Build: runtime-gate commit `6f9cb845` compiled on WinBoat into an audited
-  503-file gameplay package. The corrected CommonLib bridge loaded under
-  SKSEVR 2.0.12/release 60 and the mapped client reached recurring owner-thread
-  dispatch without the former endpoint-bootstrap failure. See
-  `windows-gameplay-build-result-20260715-runtime-gate.md`.
-- [x] Runtime/build: commit `5f7943c2` proved player-only VR discovery reaches
-  Realm with exactly the local actor and reaches the server; commit `3cf4aa0e`
-  then repaired the `BUILD_COMMIT=none` WinBoat provenance defect and produced
-  an audited 503-file package with embedded network version
-  `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`. See
-  `windows-gameplay-build-result-20260716-discovery-handshake.md`.
-- [x] Runtime: exact-version `3cf4aa0e` client/server pair proves transport,
-  version equality, authentication acceptance, expected ten-mod load order, and
-  a healthy zero-restart server.
-- [x] Source: PDB-symbolized the immediate post-authentication crash to the
-  gameplay package enabling desktop PlayerService callbacks, made every VR
-  player-cell package network-only, and added flushed acceptance checkpoints
-  plus an audit that rejects package-flavor-dependent safety.
-- [ ] Runtime: the corrected exact-version client/server pair proves local
-  `online=1`, nonzero player ID, current-cell request, sustained connection, and
-  clean disconnect.
-- [ ] Runtime: two clients prove unique spawn, move, turn, stop, leave, despawn.
-- [ ] Runtime: repeat reconnect, load, cell transition, and entity reuse ten
-  times with no duplicate/stale actor, leaked handle, or queue corruption.
-- [ ] Runtime: prove `CreateReferenceAtLocation`, player-template clone, and
-  `Disable`/`SetDelete` do not persist unsafe references in saves.
-- [ ] Replace `player_template_fallback` with remote appearance/race/sex data.
+## Original Gameplay
 
-No later mutation capability is release-enabled until the Phase 0 runtime gate
-passes.
+### Actors, Movement, And Animation
 
-## Phase 1: Original Gameplay Semantics
-
-### Movement And Animation
-
-- [x] Source: local/remote movement and pose observation/relay diagnostics.
-- [x] Source: authoritative root movement, heading, stop, and retained-identity
-  cell/worldspace transfer with independent sequence ordering, stale-tick
-  rejection, bounded pending spawns, destination-pinned acknowledgement timeout,
-  and applied/faulted acknowledgements.
-- [x] Source: complete named humanoid animation graph variable snapshots in both
-  directions, with bounded five-chunk assembly, finite-value validation,
-  supersession recovery, preimage rollback, and per-avatar quarantine.
-- [x] Build: bridge ABI v2 commit `d201a3f8` compiled on WinBoat; Windows
-  `TPTests` passed 571 assertions in 33 cases, the 503-file gameplay package
-  passed its package audit, and the paired evidence archive passed with zero
-  warnings or failures. See
-  `windows-gameplay-build-result-20260715-movement-animation.md`.
-- [ ] Port exact graph-event/action replay after `ActorMediator` targets and
-  global pointer shapes are semantically and ABI verified for Skyrim VR.
-- [ ] Port draw/sheath, idle, jump, sneak, sprint, swim, ragdoll, and furniture
-  state without enabling unvalidated desktop hooks.
-- [x] Source: validate the current actor/process/animation CommonLib API and
-  owner-thread contract; runtime semantics remain gated below.
-- [ ] Runtime: two clients prove locomotion and animation state without jitter,
-  stuck movement, duplicate events, or animation feedback loops.
-- [ ] Runtime: prove one retained-handle interior/exterior spatial transfer, one
-  deliberate stale-tick rejection, zero graph/command ring drops, and zero
-  spatial/animation rejection counters.
+- [x] Source: local assignment, remote create/despawn, visibility recovery,
+  retained-handle identity, movement interpolation, stop, heading, and
+  interior/exterior cell and worldspace transfer.
+- [x] Source: named humanoid graph snapshots use bounded assembly, ordering,
+  rollback, stale rejection, and quarantine.
+- [ ] Source: exact `ActorMediator::PerformAction` capture/replay is blocked for
+  the final build. The current prototype lacks `GameId` form translation,
+  generation-bound capability renegotiation, and verified `TESActionData`
+  constructor/callee/destructor ownership on VR.
+- [x] Source: draw/sheath and the supported idle, jump, sneak, sprint,
+  ragdoll, furniture, and mount animation events replay through CommonLib.
+- [x] Source: package changes are captured for both owned NPCs and the local
+  player; local-player package transport retries until accepted.
+- [x] Source: incoming scripted object animations replay through the Skyrim VM.
+  Upstream's outbound producer is compiled out by `OBJECT_ANIM_SYNC=0`; its
+  desktop Address Library IDs are registration code in VR, so no guessed hook
+  is installed.
+- [ ] Build: compile and audit exact-action, movement, graph, and package paths.
+- [ ] Runtime: two clients prove spawn, move, stop, turn, cell transfer,
+  animation, package, leave, and reconnect without jitter, echo, or duplicates.
 
 ### Appearance, Equipment, And Inventory
 
-- [x] Source: equipment observation and VR equipment relay diagnostics.
-- [ ] Apply race, sex, weight, head parts, tint masks, face data, and player name.
-- [ ] Apply equipped weapons, spells, shields, ammo, armor, powers, and draw state.
-- [ ] Port inventory deltas, containers, trading, drops, pickups, and ownership.
-- [ ] Define equip/inventory conflict and rollback behavior under latency.
-- [ ] Keep HIGGS stash/consume/drop events deduplicated against vanilla inventory
-  events.
-- [ ] Runtime: equipment and inventory converge after reconnect, cell change,
-  death, trading, container transfer, and save/load.
+- [x] Source: race, sex, weight, dynamic name, head parts, body skin tint,
+  level, and essential state replicate and replay on dynamic remote actor bases.
+- [x] Source: bounded full worn-equipment snapshots include armor, weapons,
+  shields, ammo, left/right spells, and shout or power state.
+- [x] Source: each VR equipment change is one protocol-revision-7 final-state
+  transaction. The server validates the complete worn inventory and magic
+  selection before one authoritative mutation/notify, and the receiver reserves
+  begin/items/end as one bridge-ring batch before staged CommonLib application.
+- [x] Source: inventory pickup, removal, drop, reconciliation, object inventory,
+  ownership, and quest-item handling use original requests.
+- [x] Source: incoming equipment, inventory, and appearance replay uses typed
+  CommonLib APIs and session-scoped baselines.
+- [ ] Source: full face tint masks, face morphs, texture overlays, and hair
+  color. CommonLib exposes local-player tint data but no verified remote actor
+  face-generation transaction that can safely apply these fields.
+- [ ] Mixed-client source: desktop clients do not yet receive a synthesized
+  legacy equipment delta stream for a VR-owned final-state transaction. That
+  fanout is deliberately fail-closed to avoid partial multi-message mutation;
+  VR clients still consume desktop transaction-zero equipment notifications.
+- [ ] Build: compile and audit appearance/equipment/inventory translation.
+- [ ] Runtime: prove convergence after equip, pickup/drop, container transfer,
+  reconnect, cell change, death, and save/load.
 
 ### Actor State, Death, And Respawn
 
-- [ ] Apply health, magicka, stamina, maximum values, essential/dead state,
-  level, experience, factions, and combat state.
-- [ ] Port death, bleedout, revive, respawn, player summon, and ownership transfer.
-- [ ] Port mount state and rider/mount lifecycle ordering.
-- [ ] Validate actor-value and death APIs through CommonLib, not flat member data.
-- [ ] Runtime: simultaneous damage/death/respawn converges without immortal,
-  duplicated, or permanently disabled actors.
+- [x] Source: health, magicka, stamina, maximum values, health deltas, level,
+  essential/dead state, combat skill experience, factions, and draw state.
+- [x] Source: owned NPC state, inventory, faction, package, movement, death,
+  and ownership snapshots are bounded and transactionally published.
+- [x] Source: local death and respawn preserve original gold-loss chunks,
+  bounty clearing, spell/shout restoration, resurrection, cell centering,
+  delayed knockdown, and temporary god-mode protection.
+- [x] Source: local resurrection happens once; the server respawn request
+  retries independently, and all pending state is lifecycle/session scoped.
+- [x] Source: mount ownership and mount requests preserve actor ordering; zero
+  mount is retained only as local cancellation because the original protocol
+  has no dismount request.
+- [ ] Source: native black fade around respawn. Candidate VR Address Library
+  rows do not identify a verified five-argument callable equivalent.
+- [ ] Build: compile and audit actor-state/death/respawn paths.
+- [ ] Runtime: prove damage, death, gold loss, respawn, simultaneous deaths,
+  mount, disconnect during respawn, and reconnect convergence.
 
-### Objects, Activation, And World References
+### Objects And World References
 
-- [x] Source: activation/grab observation and relay diagnostics.
-- [ ] Port canonical object assignment, reference creation, and interest routing.
-- [ ] Apply activation for doors, levers, harvestables, books, furniture, and
-  containers with action-ID deduplication.
-- [ ] Apply lock state, open state, object inventory, ownership claim/transfer,
-  pickup, drop, and disabled/deleted state.
-- [ ] Define authority for persistent references versus temporary dropped items.
-- [ ] Runtime: object state remains identical after concurrent activation,
-  disconnect, cell unload/reload, and save/load.
+- [x] Source: cell object discovery and bounded assignment for doors and
+  containers, including player-home filtering and complete inventory snapshots.
+- [x] Source: activation, lock/open state, object inventory, ownership,
+  teleport, and temporary reference handling use original protocol messages.
+- [x] Source: object, NPC, equipment, graph, and text producers
+  reserve their complete ring transaction before publishing; queue pressure
+  cannot leave an unrecoverable partial commit.
+- [x] Source: transient incoming text and commands use bounded retry queues with
+  nonce, generation, and epoch validation.
+- [ ] Build: compile and audit object assignment and transaction publication.
+- [ ] Runtime: prove concurrent activation, lock, container, cell reload, and
+  disconnect recovery with zero destructive partial snapshots.
 
 ### Combat, Projectiles, And Magic
 
-- [x] Source: combat-hit, projectile-intent, and magic-effect observation relays.
-- [ ] Apply melee hit intent/result, block, stagger, critical, hostility, and
-  damage exactly once.
-- [ ] Create and reconcile arrows, bolts, missiles, beams, explosions, and impact
-  state using validated VR projectile APIs.
-- [ ] Port spell cast, interrupt, concentration, magic-effect application,
-  shouts/powers, caster/target ownership, and hostile/healing semantics.
-- [ ] Define server authority and prediction so vanilla, PLANCK, and relayed hit
-  events cannot apply damage twice.
-- [ ] Runtime: two clients prove melee, bows, spells, shouts, death, and respawn
-  under latency with no duplicate projectile/effect/damage.
+- [x] Source: health change remains the canonical damage channel; raw VR and
+  PLANCK hit observations never apply a second damage mutation.
+- [x] Source: combat target start/stop, actor-value updates, and PvP policy are
+  validated and replayed through retained remote actor identity.
+- [x] Source: complete projectile launch data is captured from the native launch
+  hook, translated to the original request, and recreated through CommonLib.
+- [x] Source: spell cast, interrupt, target effect, add/remove spell, source,
+  target, hostility, dual-cast, and ownership paths use original messages.
+- [x] Source: local `Actor::RemoveSpell` capture is pinned to exact VR RVA and
+  prologue and suppresses authoritative remote replay echo.
+- [x] Source: HIGGS/PLANCK diagnostics are deduplicated from canonical
+  inventory, actor-value, projectile, and magic mutations.
+- [ ] Build: compile and audit combat/projectile/magic hooks and address pins.
+- [ ] Runtime: prove melee, bow, spell, concentration, shout, healing, hostile
+  effect, death, and respawn under latency without duplicate damage/effects.
 
-### Quests, Dialogue, Party, And Social State
+### Quests, Dialogue, Party, And World State
 
-- [ ] Port quest stage/log synchronization and scripted quest update policy.
-- [ ] Port dialogue requests, subtitles, player dialogue, and package changes.
-- [ ] Runtime-validate party create/invite/join/leave/kick/leader behavior in VR.
-- [ ] Runtime-validate player list, chat, waypoints, teleport/admin commands, and
-  remote player join/leave/cell notifications.
-- [ ] Restore voice/Vivox behavior or document a replacement with equivalent
-  user-visible functionality.
+- [x] Source: quest start/stop/stage policy, suppression, party gating, and
+  original quest requests.
+- [x] Source: dialogue voice, subtitle metadata/text, player dialogue, chat,
+  packages, waypoints, teleport/admin responses, and bounded retries.
+- [x] Source: server calendar, time, timescale, weather, difficulty, greetings,
+  and world-encounter settings apply and restore on lifecycle reset.
+- [x] Source: connect/disconnect, party state, player list, command-file control,
+  and VR companion controls do not require the desktop D3D overlay.
+- [ ] Source/product: restore Vivox voice chat or define a supported equivalent.
+- [ ] Build: compile and audit quest/dialogue/party/world-state paths.
+- [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
+  weather, server restart, save/load, and reconnect behavior.
 
-### World State And Persistence
+## VR Embodiment And Mod Compatibility
 
-- [ ] Apply server time, timescale, calendar, weather, and current-weather sync.
-- [ ] Port exterior grid/interior cell transitions and worldspace interest rules.
-- [ ] Implement connected save/load recovery, resync, reconnect, and stale actor
-  cleanup without serializing adapter handles.
-- [ ] Audit Papyrus/script patches and native bindings used by original gameplay.
-- [ ] Runtime: host/client world state converges across fast travel, interiors,
-  long sessions, save/load, server restart, and client reconnect.
+### VRIK And FBT
 
-## Phase 2: VR Embodiment And Physics
-
-### VRIK And Full Body Tracking
-
-- [x] Source: VRIK detection/interface and local/remote pose relay diagnostics.
-- [x] Source: Skyrim VR FBT protocol/source compatibility has been catalogued.
-- [ ] Apply HMD, hands, weapon offsets, pelvis, feet, spine, and tracker pose to
-  the canonical remote actor behind an explicit update-order barrier.
-- [ ] Blend/fallback cleanly for players without VRIK or FBT.
-- [ ] Network calibration/body-scale changes and seated/standing transitions.
-- [ ] Runtime: mixed VRIK/FBT/non-FBT clients remain stable and visually correct.
+- [x] Source: HMD, hands, pelvis, thighs, calves, and feet are validated,
+  sequenced, relayed, and applied to the canonical remote actor skeleton.
+- [x] Source: world/local-space conversion, orthonormal basis checks, root
+  generation, bounded pending state, and ragdoll write suppression are present.
+- [x] Source: mixed clients without FBT fall back to available head/hand/body
+  nodes without changing actor identity.
+- [ ] Source: remote VRIK finger curls and VRIK calibration. The public VRIK
+  interface has no remote-actor application API; samples remain explicitly
+  unsupported instead of being sent to the local-player API.
+- [ ] Runtime: mixed VRIK, SkyrimVR-FBT, and non-FBT clients prove stable pose,
+  tracker loss/recovery, seated/standing transitions, and save/load.
 
 ### HIGGS
 
-- [x] Source: HIGGS API detection and observation-only relay diagnostics.
-- [ ] Define authoritative grab/pull/drop/stash/consume/two-hand object ownership.
-- [ ] Apply remote HIGGS interactions without invoking unsupported local-player
-  APIs or fighting Skyrim Together object ownership.
-- [ ] Deduplicate HIGGS callbacks against vanilla activation/inventory/projectile
-  events.
-- [ ] Runtime: two clients contend for the same object safely under latency.
+- [x] Source: HIGGS grab, pull, and drop use canonical object identity and
+  keyframed/dynamic motion transitions; stash/consume durable mutation remains
+  owned by canonical inventory deltas.
+- [x] Source: callback ordering and independent action ledgers prevent vanilla
+  inventory/activation events from double-applying HIGGS actions.
+- [ ] Runtime: two clients contend for, pull, drop, stash, and consume the same
+  objects under latency without duplication or stuck motion state.
 
 ### PLANCK
 
-- [x] Source: PLANCK detection/interface and observation-only hit diagnostics.
-- [ ] Validate nontrivial PLANCK hit-data ABI against the installed version.
-- [ ] Map physical hits, grabs, ragdolls, and damage into canonical combat action
-  IDs and authority rules.
-- [ ] Prevent remote pose application from fighting PLANCK ragdoll/physics state.
-- [ ] Runtime: PLANCK and non-PLANCK clients exchange hits without duplicate
-  damage, unstable ragdolls, or crashes.
+- [x] Source: PLANCK-compatible hit classification feeds diagnostics while
+  canonical health/effect messages own damage.
+- [x] Source: network skeleton writes stop while a remote actor is in ragdoll,
+  preventing pose replication from fighting PLANCK physics.
+- [ ] Source: direct remote physical grab/ragdoll replay. No stable public
+  remote-actor PLANCK API is available, and invoking local-player physics entry
+  points for a remote actor is unsafe.
+- [ ] Runtime: PLANCK and non-PLANCK clients prove hit/damage deduplication,
+  ragdoll stability, recovery, and compatibility with HIGGS/VRIK.
 
-## Phase 3: Product And Release Parity
+## Robustness And Delivery
 
-- [x] Source: VR-only launcher targets, package/evidence audits, and WinBoat build
-  automation exist.
-- [x] Runtime baseline: a client has previously authenticated to the dedicated
-  server; every new mutation revision still needs fresh evidence.
-- [ ] Provide original-equivalent connect/disconnect/player-list/chat controls in
-  VR without relying on the flat D3D11 overlay.
-- [ ] Validate keyboard, Index controller, and common community binding profiles.
-- [ ] Validate HIGGS, PLANCK, VRIK, FBT, Realm of Lorkhan, DevBench, and the
-  selected FUS native-DLL set against the final gameplay package.
-- [ ] Validate Windows native launch and Linux Proton/UMU plus Monado launch.
-- [ ] Validate server compatibility, password/mod checks, Docker deployment,
-  restart, logs, and one-server-only operation.
-- [ ] Restore installer/update/release behavior and publish reproducible audited
-  prerelease packages with rollback instructions.
+- [x] Source: multi-record command/event batches reserve contiguous ring ranges;
+  commit records are last and producers cannot interleave transactions.
+- [x] Source: spawn results, text retries, respawn, package changes, equipment
+  baselines, suppression windows, and remote ledgers are bounded and
+  lifecycle-scoped.
+- [x] Source: client messages enter a bounded owner-thread queue whose packets
+  are tagged with the connection attempt and authenticated generation; stale
+  packets are dropped and queue acceptance is explicit to retrying producers.
+- [x] Source: transport latches its owner thread and rejects off-thread sends;
+  mapped stateful and inventory producers retain one global FIFO order across
+  their bounded queues, move coalesced last-value state to the newest order,
+  and force a lifecycle rebase instead of silently dropping a full retry queue.
+- [x] Source: native local capture is explicitly armed only after authenticated
+  canonical local entity assignment. Per-field baselines advance only after
+  event-ring acceptance, including health/experience deltas and complete
+  equipment transactions.
+- [x] Source: remote final equipment tracks CommonLib result action IDs,
+  commits transaction replay state only after a successful end result, and
+  retries failed or acknowledgement-timed-out application a bounded number of
+  times. Spawn-state result tracking uses the same bounded timeout/resync rule.
+- [x] Source: server equipment replay ledgers clean up on player/entity removal
+  and fail closed at capacity; cached VR appearance replay applies normal
+  cell/range interest filtering after every committed grid/interior/exterior
+  transition and replays both sides of newly established interest.
+- [x] Source: NPC ownership transfer uses an expiring, session-bound, single-use
+  server grant. VR waits for a complete mapped snapshot and explicit completion
+  acknowledgement before promoting local ownership; desktop clients echo the
+  same token through their native ownership path.
+- [x] Source: every static native staging owner, including final equipment,
+  clears state on explicit epoch retirement and native lifecycle transition.
+- [x] Source: WinBoat build automation imports the exact package/evidence pair,
+  validates revision and hashes, refreshes the local-agent handoff ZIP, and
+  checks that ZIP after every successful build.
+- [x] Source: host and WinBoat cleanup locks prevent cleanup during a build;
+  scheduled disk-pressure cleanup removes only reproducible project output and
+  bounded caches while preserving source, games, current handoffs, and evidence.
+- [x] Review: the final Sol max architecture, ABI, concurrency, lifecycle,
+  protocol, and crash-surface review is dispositioned in
+  `full-gameplay-source-postfix-senior-disposition-20260716.md`.
+- [ ] Build: commit and push a clean source revision, then run one final WinBoat
+  gameplay build and all unit/static/package/evidence audits.
+- [ ] Deploy: install that exact package locally and deploy the exact matching
+  server revision, with one and only one server container.
+- [ ] Runtime: complete the two-client domain matrix on Windows and Linux
+  Proton/UMU with Monado, including Index bindings and controller navigation.
+- [ ] Compatibility: validate HIGGS, PLANCK, VRIK, SkyrimVR-FBT, Realm of
+  Lorkhan, DevBench, and the selected FUS native DLL set.
+- [ ] Release: publish the audited package as a prerelease with source revision,
+  dependency lock, server instructions, runtime checklist, known limitations,
+  and rollback procedure.
 
-## Per-Domain Definition Of Done
+## Next Stage Order
 
-Every unchecked mutation domain must include all of the following before it is
-marked complete:
-
-1. original-branch behavior trace and protocol inventory;
-2. CommonLib VR read/mutation API with no unsafe flat layout dependency;
-3. server authority, interest, ordering, and deduplication contract;
-4. session/epoch/entity/action or sequence identity validation;
-5. queue overflow, timeout, reconnect, load, and stale-handle behavior;
-6. VRIK/HIGGS/PLANCK interaction policy where relevant;
-7. unit/static tests and a clean audited Windows gameplay build;
-8. two-client semantic runtime evidence on the dedicated server;
-9. documentation and capability promotion only after evidence passes.
-
-## Immediate Next Actions
-
-1. Build and deploy the PlayerService gate correction, then prove the matching
-   automated client passes every flushed authentication/listener checkpoint,
-   remains in Realm of Lorkhan, and receives a nonzero server player ID plus
-   current-cell response for at least 30 seconds.
-2. Retain the corrected exact-version single-client connection/disconnect evidence before
-   establishing the isolated second client.
-3. Run the Phase 0 plus movement/graph two-client acceptance matrix against
-   that exact client/server source revision.
-4. Fix any actor lifecycle, spatial-transfer, or graph-application defect found
-   in retained runtime evidence before adding another mutation domain.
-5. Semantically verify and implement exact animation/action replay, then proceed
-   to appearance/equipment/inventory in the dependency order above.
+1. Finish integration review of the accepted Sol findings without compiling or
+   launching.
+2. Run source/static checks, regenerate address artifacts, commit, and push the
+   reviewed revision.
+3. Run the single WinBoat gameplay build; let the build wrapper refresh and
+   validate the handoff ZIP automatically.
+4. Deploy the exact client/server pair and execute the runtime matrix above.

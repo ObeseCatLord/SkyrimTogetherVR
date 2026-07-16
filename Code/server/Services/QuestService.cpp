@@ -11,6 +11,8 @@
 namespace
 {
 Console::Setting bEnableMiscQuestSync{"Gameplay:bEnableMiscQuestSync", "(Experimental) Syncs miscellaneous quests when possible", false};
+constexpr std::size_t kMaximumQuestLogEntries = 4096;
+constexpr std::uint8_t kMaximumQuestType = 11;
 
 }
 
@@ -25,6 +27,15 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     const auto& message = acMessage.Packet;
 
     auto* pPlayer = acMessage.pPlayer;
+    if (!pPlayer || !message.Id || message.ClientQuestType > kMaximumQuestType ||
+        (message.Status != RequestQuestUpdate::Started &&
+         message.Status != RequestQuestUpdate::StageUpdate &&
+         message.Status != RequestQuestUpdate::Stopped))
+        return;
+
+    const auto& partyComponent = pPlayer->GetParty();
+    if (!partyComponent.JoinedPartyId.has_value())
+        return;
 
     auto& questComponent = pPlayer->GetQuestLogComponent();
     auto& entries = questComponent.QuestContent.Entries;
@@ -52,6 +63,8 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
         // maintain a proper remote questlog state.
         if (questIt == entries.end())
         {
+            if (entries.size() >= kMaximumQuestLogEntries)
+                return;
             auto& newQuest = entries.emplace_back();
             newQuest.Id = message.Id;
             newQuest.Stage = message.Stage;
@@ -89,10 +102,6 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
 
         notify.Status = NotifyQuestUpdate::Stopped;
     }
-
-    const auto& partyComponent = acMessage.pPlayer->GetParty();
-    if (!partyComponent.JoinedPartyId.has_value())
-        return;
 
     GameServer::Get()->SendToParty(notify, partyComponent, acMessage.GetSender());
 }

@@ -53,6 +53,39 @@ Function ShowTelemetry() global
                    + SkyrimTogetherUtils.GetSkyrimTogetherTelemetryReadout())
 EndFunction
 
+Function ShowPlayers() global
+    Debug.MessageBox("Skyrim Together VR Players\n\n" \
+                   + SkyrimTogetherUtils.GetSkyrimTogetherPlayerList())
+EndFunction
+
+bool Function SendChat(string message) global
+    Return SkyrimTogetherUtils.SendSkyrimTogetherChat(message)
+EndFunction
+
+bool Function CreateParty() global
+    Return SkyrimTogetherUtils.CreateSkyrimTogetherParty()
+EndFunction
+
+bool Function LeaveParty() global
+    Return SkyrimTogetherUtils.LeaveSkyrimTogetherParty()
+EndFunction
+
+bool Function InvitePlayer(int playerId) global
+    Return SkyrimTogetherUtils.InviteSkyrimTogetherPartyMember(playerId)
+EndFunction
+
+bool Function AcceptInvite(int inviterId) global
+    Return SkyrimTogetherUtils.AcceptSkyrimTogetherPartyInvite(inviterId)
+EndFunction
+
+bool Function KickPlayer(int playerId) global
+    Return SkyrimTogetherUtils.KickSkyrimTogetherPartyMember(playerId)
+EndFunction
+
+bool Function ChangeLeader(int playerId) global
+    Return SkyrimTogetherUtils.ChangeSkyrimTogetherPartyLeader(playerId)
+EndFunction
+
 Function ShowStatusAndTelemetry() global
     ShowStatus()
     ShowTelemetry()

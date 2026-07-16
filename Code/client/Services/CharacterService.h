@@ -58,7 +58,8 @@ struct CharacterService
 
     static void DeleteTempActor(const uint32_t aFormId) noexcept;
 
-    bool TakeOwnership(const uint32_t acFormId, const uint32_t acServerId, const entt::entity acEntity) const noexcept;
+    bool TakeOwnership(const uint32_t acFormId, const uint32_t acServerId, const entt::entity acEntity,
+                       uint64_t aGrantToken = 0) const noexcept;
 
     void OnActorAdded(const ActorAddedEvent& acEvent) noexcept;
     void OnActorRemoved(const ActorRemovedEvent& acEvent) noexcept;

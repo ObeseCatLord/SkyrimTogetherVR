@@ -1,6 +1,7 @@
 #include "Events/CharacterInteriorCellChangeEvent.h"
 #include "Events/CharacterExteriorCellChangeEvent.h"
 #include "Events/PlayerLeaveCellEvent.h"
+#include "Events/PlayerCellChangedEvent.h"
 
 #include <Services/PlayerService.h>
 #include <Services/CharacterService.h>
@@ -80,6 +81,8 @@ void PlayerService::HandleGridCellShift(const PacketEvent<ShiftGridCellRequest>&
 
         pPlayer->Send(spawnMessage);
     }
+
+    m_world.GetDispatcher().trigger(PlayerCellChangedEvent{pPlayer});
 }
 
 void PlayerService::HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellRequest>& acMessage) const noexcept
@@ -99,6 +102,7 @@ void PlayerService::HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellR
     }
 
     pPlayer->SetCellComponent(cell);
+    m_world.GetDispatcher().trigger(PlayerCellChangedEvent{pPlayer});
     SendPlayerCellChanged(pPlayer);
 }
 
@@ -142,6 +146,7 @@ void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellR
         pPlayer->Send(spawnMessage);
     }
 
+    m_world.GetDispatcher().trigger(PlayerCellChangedEvent{pPlayer});
     SendPlayerCellChanged(pPlayer);
 }
 
@@ -200,6 +205,9 @@ void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnReques
 
 void PlayerService::OnPlayerLevelRequest(const PacketEvent<PlayerLevelRequest>& acMessage) const noexcept
 {
+    if (acMessage.Packet.NewLevel == 0)
+        return;
+
     acMessage.pPlayer->SetLevel(acMessage.Packet.NewLevel);
 
     NotifyPlayerLevel notify{};
