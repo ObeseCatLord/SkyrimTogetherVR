@@ -528,7 +528,8 @@ void VRNpcOwnershipService::RequestAssignment(const Snapshot& acSnapshot) noexce
     request.CellId = acSnapshot.CellId;
     request.WorldSpaceId = acSnapshot.WorldspaceId;
     request.Position = acSnapshot.Position;
-    request.Rotation = {0.0F, acSnapshot.ZRotation};
+    request.Rotation.x = 0.0F;
+    request.Rotation.y = acSnapshot.ZRotation;
     request.CurrentActorData = actorData;
     request.FactionsContent = acSnapshot.FactionData;
     if (!m_transport.Send(request))
@@ -646,7 +647,7 @@ bool VRNpcOwnershipService::RequestOwnershipClaim(const std::uint32_t aServerId,
     ActorData actorData{};
     if (!BuildActorData(acSnapshot, actorData))
         return false;
-    RequestOwnershipClaim request{};
+    ::RequestOwnershipClaim request{};
     request.ServerId = aServerId;
     request.GrantToken = aGrantToken;
     request.NewActorData = actorData;
@@ -771,7 +772,8 @@ void VRNpcOwnershipService::ReplicateOwnedSnapshot(OwnedNpc& arOwned, const Snap
         movement.CellId = acSnapshot.CellId;
         movement.WorldSpaceId = acSnapshot.WorldspaceId;
         movement.Position = acSnapshot.Position;
-        movement.Rotation = {0.0F, acSnapshot.ZRotation};
+        movement.Rotation.x = 0.0F;
+        movement.Rotation.y = acSnapshot.ZRotation;
         if (m_transport.Send(request)) {
             acceptedBaseline.CellId = acSnapshot.CellId;
             acceptedBaseline.WorldspaceId = acSnapshot.WorldspaceId;
