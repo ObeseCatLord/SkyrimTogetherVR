@@ -50,8 +50,8 @@ constexpr char kVrDiscoveryStatusFileName[] = "SkyrimTogetherVR.discovery";
 
 constexpr bool kVrDiscoveryStatusEnabled = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE;
 constexpr bool kVrSkipStrictConnectionEnforcement = TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE;
-constexpr bool kVrSkipActorHandleDiscovery =
-    TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY && !TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC;
+// VR avatar sync uses canonical server entities, not the unverified legacy process-list scan.
+constexpr bool kVrSkipActorHandleDiscovery = TP_SKYRIM_VR;
 
 std::filesystem::path GetHandoffDirectory()
 {

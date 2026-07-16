@@ -15,8 +15,11 @@ Nexus, cloud storage, or a public issue.
   bundle is retained only as release/history context.
   `LOCAL-MANIFEST.json` binds both archives to one build manifest and records
   the built source revision separately from the newer documentation HEAD. The
-  current pair is the `d201a3f8` movement/animation ABI-v2 build: 571 assertions
-  in 33 tests, 503 packaged files, and zero package/evidence audit failures.
+  current pair is the `6f9cb845` runtime-gate build: 503 packaged files, zero
+  package/evidence audit failures, and runtime proof that the CommonLib bridge
+  validates SKSEVR 2.0.12/release 60 and no longer fails owner-thread
+  bootstrap. End-to-end connection acceptance remains open; see
+  `source/Docs/SkyrimVR/windows-gameplay-build-result-20260715-runtime-gate.md`.
 - `dependencies/fus-mods/`: pristine FUS mod directories for SKSE scripts, VR
   Address Library, VRIK, HIGGS, PLANCK, Controller Fix VR, SkyUI/VR Tools,
   Realm of Lorkhan, controller bindings, and related configuration fixes.
@@ -47,8 +50,9 @@ Nexus, cloud storage, or a public issue.
 - `LOCAL-MANIFEST.json`: SHA-256 and size for every payload file.
 
 The archive intentionally does not contain the large base-game BSA/ESM files,
-Steam, Proton, Monado, Docker, or a server password. Those already exist on this
-machine or are system services. No raw runtime/session logs are included.
+Steam, Proton, Monado, or Docker. Those already exist on this machine or are
+system services. The existing test server has no configured password. No raw
+runtime/session logs are included.
 
 DevBench's own generated `lib/` checkout is omitted because the same filtered
 CommonLibSSE-NG source is included once under `source-references/`. Build trees,
@@ -127,8 +131,8 @@ restart policy `unless-stopped`. Its gameplay/protocol binary revision is
 build dependency corrections. See
 `source/Docs/SkyrimVR/server-deployment.md` for the exact image ID and binary
 hashes plus build, Compose, firewall, configuration, and verification
-instructions. The password remains private and must be supplied through
-`STVR_PASSWORD` or the connection UI.
+instructions. No password is currently configured for the existing test
+server. Leave `STVR_PASSWORD` empty unless the server configuration is changed.
 
 ## Test Standard
 

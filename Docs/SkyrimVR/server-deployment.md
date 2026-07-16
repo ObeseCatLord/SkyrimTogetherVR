@@ -105,7 +105,7 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
   `stvr-v0.1.0-alpha.1-27-gd201a3f8`.
 - Linux dependency/build configuration revision: `f9d32cd0`.
 - Packaged client binary source revision: `d201a3f8`.
-- Password-protected; maximum players: 8; auto-party join and experience synchronization enabled;
+- No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
@@ -119,5 +119,6 @@ listening, and the existing public-zone `26001-27000/udp` firewall allowance.
 Rebuild and redeploy whenever shared message definitions, encoding, or server
 code changes.
 
-The server password is deliberately omitted from the repository and handoff.
-Obtain it privately from the operator.
+The existing test server currently has an empty `sPassword`. If a password is
+configured later, keep it outside the repository and handoff and obtain it
+privately from the operator.

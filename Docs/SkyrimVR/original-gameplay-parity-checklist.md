@@ -43,6 +43,11 @@ The canonical implementation boundary is fixed:
 - [x] Build: canonical-avatar commit `94544550` compiled on WinBoat; Windows
   `TPTests` passed 526 assertions in 30 cases and the paired package/evidence
   audits passed. See `windows-gameplay-build-result-20260715-canonical-avatar.md`.
+- [x] Build: runtime-gate commit `6f9cb845` compiled on WinBoat into an audited
+  503-file gameplay package. The corrected CommonLib bridge loaded under
+  SKSEVR 2.0.12/release 60 and the mapped client reached recurring owner-thread
+  dispatch without the former endpoint-bootstrap failure. See
+  `windows-gameplay-build-result-20260715-runtime-gate.md`.
 - [ ] Runtime: two clients prove unique spawn, move, turn, stop, leave, despawn.
 - [ ] Runtime: repeat reconnect, load, cell transition, and entity reuse ten
   times with no duplicate/stale actor, leaked handle, or queue corruption.
@@ -216,10 +221,13 @@ marked complete:
 
 ## Immediate Next Actions
 
-1. Build, audit, and deploy the CommonLib bridge runtime-gate correction that
-   supersedes `d201a3f8`; prove the bridge remains loaded and reaches Ready.
-2. Prove one automated client reaches Realm of Lorkhan and receives a nonzero
-   server player ID before establishing the isolated second client.
+1. Resolve and classify the reproducible simulated-runtime process exit after
+   the valid RaceSex finish/name transaction on exact build `6f9cb845`; retain
+   process-exit evidence and do not treat transient Realm readiness as a
+   successful connection.
+2. Prove one automated client remains in Realm of Lorkhan, reaches a stable
+   ready lifecycle, and receives a nonzero server player ID before establishing
+   the isolated second client.
 3. Run the Phase 0 plus movement/graph two-client acceptance matrix against
    that exact client/server source revision.
 4. Fix any actor lifecycle, spatial-transfer, or graph-application defect found

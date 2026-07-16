@@ -2271,8 +2271,7 @@ REQUIRED_LAYOUT_TOKENS = {
         "GetCurrentGridYData",
         "GetCenterGridXData",
         "GetCenterGridYData",
-        "kVrSkipActorHandleDiscovery",
-        "!TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC",
+        "constexpr bool kVrSkipActorHandleDiscovery = TP_SKYRIM_VR;",
     ),
     "Code/client/Services/Generic/CharacterService.cpp": (
         "GetCenterGridXData",

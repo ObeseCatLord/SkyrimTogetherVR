@@ -596,7 +596,15 @@ Current result:
 - `TPTests` builds and passes on Linux: 371 assertions in 16 test cases.
 - `SkyrimTogetherServer` builds and includes `VRPoseRelayService`, `VRMovementRelayService`, `VREquipmentRelayService`, `VRActivationRelayService`, `VRMagicRelayService`, `VRCombatRelayService`, `VRProjectileRelayService`, `VRGrabRelayService`, and `VRHiggsRelayService`.
 - `SkyrimTogetherServer` builds with player exterior-cell state updates that do not require a spawned character.
-- Final source-side compile checks on this Linux host pass. A clean WinBoat/MSVC gameplay build of canonical-avatar commit `94544550` passed 526 assertions in 30 cases and produced an independently validated gameplay package/evidence pair; see `windows-gameplay-build-result-20260715-canonical-avatar.md`. This supersedes the older `dda9cad8` baseline build for the next runtime test.
+- Final source-side compile checks on this Linux host pass. The newest clean
+  WinBoat/MSVC gameplay build is runtime-gate commit `6f9cb845`; its 503-file
+  package and paired evidence archive passed independent audits, and a fresh
+  runtime proved the CommonLib bridge accepts SKSEVR 2.0.12/release 60 without
+  the former owner-thread bootstrap failure. End-to-end connection acceptance
+  remains open because the simulated-runtime process exits after the valid
+  RaceSex finalization transaction. See
+  `windows-gameplay-build-result-20260715-runtime-gate.md`. This supersedes the
+  older `94544550` package for the next runtime test.
 - `Tools/SkyrimVR/vr_handoff.py self-test` passes for temp-directory command writing, readout parsing, remote-player proxy aggregation, and consolidated remote-player table generation.
 - `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, strict staged gameplay relay checks with semantic local and remote payload fields, and avatar-sync handoff validation; rerun it during the final validation phase after the source-only work is complete.
 - `Tools/SkyrimVR/collect_runtime_evidence.py --self-test` and `Tools/SkyrimVR/audit_runtime_evidence_zip.py --self-test` are included in `audit_vr_readiness.py`; their fixtures now require `SkyrimTogetherVR_BuildManifest.json`, validate the package build manifest against avatar-sync mode, embed it in `manifest.json`, include it under `package/` in the evidence zip, and enforce manifest-requested runtime checklist lanes such as `requiredRemotePlayer`, `requiredWeaponPose`, `requiredMovementRelay`, and `avatarSyncAudit` even when the zip audit is run without repeating strict CLI flags. `avatarSyncAudit` itself now requires connection, local VRIK API, HIGGS bridge, remote-player proxy, remote VRIK avatar readiness, remote VRIK/HIGGS avatar readiness, and actor-target checklist lanes, so a two-client VRIK/HIGGS avatar evidence zip cannot be relaxed by omitting `requiredRemotePlayer`.
