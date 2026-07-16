@@ -52,7 +52,9 @@ bool VRObjectAuthority::AcquireOrRenew(const GameId& acObjectId, uint32_t aPlaye
         if (!IsLeaseExpired(it->second, aTick) && it->second.OwnerPlayerId != aPlayerId)
             return false;
 
-        it->second = {aPlayerId, aTick + kObjectAuthorityLeaseDurationMs};
+        s_objectAuthorityLeases.erase(it);
+        s_objectAuthorityLeases.emplace(
+            acObjectId, ObjectAuthorityLease{aPlayerId, aTick + kObjectAuthorityLeaseDurationMs});
         return true;
     }
 
