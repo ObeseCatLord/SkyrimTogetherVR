@@ -24,8 +24,8 @@ namespace
 Console::Setting bEnableItemDrops{"Gameplay:bEnableItemDrops", "(Experimental) Syncs dropped items by players", false};
 constexpr std::size_t kMaximumEquipmentSnapshotEntries = 64;
 constexpr std::int32_t kMaximumEquipmentCount = 10'000;
-constexpr GameId kRightHandEquipSlot{0, 0x00013F42};
-constexpr GameId kLeftHandEquipSlot{0, 0x00013F43};
+const GameId kRightHandEquipSlot{0, 0x00013F42};
+const GameId kLeftHandEquipSlot{0, 0x00013F43};
 constexpr auto kVREquipmentCapability =
     SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VREquipmentRelay);
 
