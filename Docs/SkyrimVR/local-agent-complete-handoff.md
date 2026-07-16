@@ -15,13 +15,12 @@ Nexus, cloud storage, or a public issue.
   bundle is retained only as release/history context.
   `LOCAL-MANIFEST.json` binds both archives to one build manifest and records
   the built source revision separately from the newer documentation HEAD. The
-  current pair is the `3cf4aa0e` discovery/handshake build: 503 packaged files,
-  zero package/evidence audit failures, embedded network build version
-  `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`, and runtime proof that player-only VR
-  discovery reaches Realm and exact-version server admission. The resulting
-  post-authentication PlayerService crash is PDB-symbolized and corrected in
-  source; a new audited build/runtime pass is the current acceptance gate. See
-  `source/Docs/SkyrimVR/windows-gameplay-build-result-20260716-discovery-handshake.md`.
+  current pair is the `a7b71d90` gameplay build: 503 packaged files, zero
+  package/evidence audit failures, embedded network build version
+  `stvr-v0.1.0-alpha.1-54-ga7b71d90`, and Linux/Monado proof of new-character
+  finalization, exact-version server admission, and interior-cell sync. The
+  remaining shutdown and event-subscription findings are recorded in
+  `source/Docs/SkyrimVR/runtime-connection-result-20260716-a7b71d90.md`.
 - `dependencies/fus-mods/`: pristine FUS mod directories for SKSE scripts, VR
   Address Library, VRIK, HIGGS, PLANCK, Controller Fix VR, SkyUI/VR Tools,
   Realm of Lorkhan, controller bindings, and related configuration fixes.
@@ -127,10 +126,9 @@ the overlay-specific `KeyboardDone` event.
 ## Server
 
 Exactly one server container is expected: `skyrim-together-vr`, image
-`skyrim-together-vr-server:f9d32cd0`, Linux ARM64, host network, UDP 26099,
+`skyrim-together-vr-server:a7b71d90`, Linux ARM64, host network, UDP 26099,
 restart policy `unless-stopped`. Its gameplay/protocol binary revision is
-`d201a3f8`, matching the packaged client; the image tag includes Linux-only
-build dependency corrections. See
+`a7b71d900a72c44e8e31436a245fe448b97d0daa`, matching the packaged client. See
 `source/Docs/SkyrimVR/server-deployment.md` for the exact image ID and binary
 hashes plus build, Compose, firewall, configuration, and verification
 instructions. No password is currently configured for the existing test

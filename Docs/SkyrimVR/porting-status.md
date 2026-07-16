@@ -34,8 +34,19 @@ recipients do not yet receive VR-owned final equipment because translating the
 transaction back into several legacy notifications would reintroduce partial
 mutation. VR recipients continue to handle desktop transaction-zero updates.
 
-The current source tranche has not yet been compiled or runtime-tested. The
-remaining deliberate source limitations are full remote face tint/morph/texture
+Revision `a7b71d90` now has an audited 503-file WinBoat gameplay package, an
+exact-version ARM64 server, a clean installed-package readiness audit, and one
+successful Linux/Monado connection smoke test. The client finalized a new
+character, authenticated as player 1, and synchronized the Realm of Lorkhan
+interior cell. This is connection proof, not two-client gameplay parity.
+
+The run also exposed two shutdown defects: CommonLib gameplay-session
+retirement warned during disconnect, and the outer Proton launcher remained
+alive after Skyrim's WinMain and Skyrim Together teardown completed. Multiple
+gameplay event subscriptions also failed closed as unvalidated
+`BSTEventSource::AddEventSink` requests, so affected producer lanes must be
+validated before their runtime boxes can pass. The remaining deliberate source
+limitations are full remote face tint/morph/texture
 generation, native respawn fade, remote VRIK finger/calibration application,
 direct PLANCK physical grab/ragdoll replay, exact `ActorMediator::PerformAction`
 capture/replay, and Vivox voice. Exact actions remain fail-closed until form
@@ -643,20 +654,16 @@ Current result:
 - `TPTests` builds and passes on Linux: 371 assertions in 16 test cases.
 - `SkyrimTogetherServer` builds and includes `VRPoseRelayService`, `VRMovementRelayService`, `VREquipmentRelayService`, `VRActivationRelayService`, `VRMagicRelayService`, `VRCombatRelayService`, `VRProjectileRelayService`, `VRGrabRelayService`, and `VRHiggsRelayService`.
 - `SkyrimTogetherServer` builds with player exterior-cell state updates that do not require a spawned character.
-- Final source-side compile checks on this Linux host pass. The newest clean
-  WinBoat/MSVC gameplay build is discovery/handshake commit `3cf4aa0e`; its
-  503-file package and paired evidence archive passed independent audits and
-  embed network version `stvr-v0.1.0-alpha.1-39-g3cf4aa0e`. The preceding
-  `5f7943c2` runtime proved player-only discovery completes in Realm and reaches
-  the dedicated server, then exposed an invalid WinBoat-generated client
-  version `none`. The build now fetches tags and fails if generated or packaged
-  network provenance is invalid. The exact `3cf4aa0e` server then admitted the
-  client, proving the handshake; PDB-assisted Wine SEH tracing isolated the
-  immediate client exit to the gameplay package incorrectly enabling desktop
-  PlayerService death-system callbacks. The network-only predicate now follows
-  the VR player-cell service flag and flushed stage checkpoints cover the next
-  acceptance run. See
-  `windows-gameplay-build-result-20260716-discovery-handshake.md`.
+- Final source-side compile checks pass. The newest clean WinBoat/MSVC gameplay
+  build is `a7b71d90`; its 503-file package and paired evidence archive report
+  zero failures and zero warnings and embed network version
+  `stvr-v0.1.0-alpha.1-54-ga7b71d90`. The exact ARM64 server starts with the
+  same version. The 2026-07-16 Linux/Monado run passed character finalization,
+  ESP activation, authentication, server admission, and current interior-cell
+  synchronization. Shutdown reached `endmain.done` and disconnected the server,
+  but warned that the CommonLib gameplay session could not be retired and left
+  the outer launcher process alive. See
+  `runtime-connection-result-20260716-a7b71d90.md`.
 - `Tools/SkyrimVR/vr_handoff.py self-test` passes for temp-directory command writing, readout parsing, remote-player proxy aggregation, and consolidated remote-player table generation.
 - `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, strict staged gameplay relay checks with semantic local and remote payload fields, and avatar-sync handoff validation; rerun it during the final validation phase after the source-only work is complete.
 - `Tools/SkyrimVR/collect_runtime_evidence.py --self-test` and `Tools/SkyrimVR/audit_runtime_evidence_zip.py --self-test` are included in `audit_vr_readiness.py`; their fixtures now require `SkyrimTogetherVR_BuildManifest.json`, validate the package build manifest against avatar-sync mode, embed it in `manifest.json`, include it under `package/` in the evidence zip, and enforce manifest-requested runtime checklist lanes such as `requiredRemotePlayer`, `requiredWeaponPose`, `requiredMovementRelay`, and `avatarSyncAudit` even when the zip audit is run without repeating strict CLI flags. `avatarSyncAudit` itself now requires connection, local VRIK API, HIGGS bridge, remote-player proxy, remote VRIK avatar readiness, remote VRIK/HIGGS avatar readiness, and actor-target checklist lanes, so a two-client VRIK/HIGGS avatar evidence zip cannot be relaxed by omitting `requiredRemotePlayer`.

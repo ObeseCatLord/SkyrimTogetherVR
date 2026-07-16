@@ -16,8 +16,10 @@ The target is original `original-skyrim-together` gameplay on Skyrim VR
 - A diagnostic relay is not gameplay parity. It may supplement, but cannot
   replace, the original canonical message that owns mutation.
 
-The current source tranche has not been built or runtime-tested. Build and
-runtime boxes below therefore remain open even when source is complete.
+Revision `a7b71d90` has passed the final WinBoat gameplay build, package and
+evidence audits, exact ARM64 server build, strict installed-package readiness
+audit, and one Linux/Monado connection smoke test. Build boxes are complete.
+Runtime boxes still require the two-client behavior specified by each domain.
 
 ## Native Boundary
 
@@ -39,7 +41,7 @@ runtime boxes below therefore remain open even when source is complete.
   ownership and final-equipment wire layouts before either endpoint decodes them.
 - [x] Source: generated CommonLib aliases and curated VR overrides are
   collision-aware and fail closed on unverified addresses or prologues.
-- [ ] Build: verify the current ABI/capability revision and curated address
+- [x] Build: verify the current ABI/capability revision and curated address
   overlay in the final gameplay package.
 - [ ] Runtime: prove clean attach, owner-thread pumping, disconnect, reconnect,
   load, new game, and shutdown without stale commands or leaked references.
@@ -65,7 +67,7 @@ runtime boxes below therefore remain open even when source is complete.
   Upstream's outbound producer is compiled out by `OBJECT_ANIM_SYNC=0`; its
   desktop Address Library IDs are registration code in VR, so no guessed hook
   is installed.
-- [ ] Build: compile and audit exact-action, movement, graph, and package paths.
+- [x] Build: compile and audit exact-action, movement, graph, and package paths.
 - [ ] Runtime: two clients prove spawn, move, stop, turn, cell transfer,
   animation, package, leave, and reconnect without jitter, echo, or duplicates.
 
@@ -90,7 +92,7 @@ runtime boxes below therefore remain open even when source is complete.
   legacy equipment delta stream for a VR-owned final-state transaction. That
   fanout is deliberately fail-closed to avoid partial multi-message mutation;
   VR clients still consume desktop transaction-zero equipment notifications.
-- [ ] Build: compile and audit appearance/equipment/inventory translation.
+- [x] Build: compile and audit appearance/equipment/inventory translation.
 - [ ] Runtime: prove convergence after equip, pickup/drop, container transfer,
   reconnect, cell change, death, and save/load.
 
@@ -110,7 +112,7 @@ runtime boxes below therefore remain open even when source is complete.
   has no dismount request.
 - [ ] Source: native black fade around respawn. Candidate VR Address Library
   rows do not identify a verified five-argument callable equivalent.
-- [ ] Build: compile and audit actor-state/death/respawn paths.
+- [x] Build: compile and audit actor-state/death/respawn paths.
 - [ ] Runtime: prove damage, death, gold loss, respawn, simultaneous deaths,
   mount, disconnect during respawn, and reconnect convergence.
 
@@ -125,7 +127,7 @@ runtime boxes below therefore remain open even when source is complete.
   cannot leave an unrecoverable partial commit.
 - [x] Source: transient incoming text and commands use bounded retry queues with
   nonce, generation, and epoch validation.
-- [ ] Build: compile and audit object assignment and transaction publication.
+- [x] Build: compile and audit object assignment and transaction publication.
 - [ ] Runtime: prove concurrent activation, lock, container, cell reload, and
   disconnect recovery with zero destructive partial snapshots.
 
@@ -143,7 +145,7 @@ runtime boxes below therefore remain open even when source is complete.
   prologue and suppresses authoritative remote replay echo.
 - [x] Source: HIGGS/PLANCK diagnostics are deduplicated from canonical
   inventory, actor-value, projectile, and magic mutations.
-- [ ] Build: compile and audit combat/projectile/magic hooks and address pins.
+- [x] Build: compile and audit combat/projectile/magic hooks and address pins.
 - [ ] Runtime: prove melee, bow, spell, concentration, shout, healing, hostile
   effect, death, and respawn under latency without duplicate damage/effects.
 
@@ -158,7 +160,7 @@ runtime boxes below therefore remain open even when source is complete.
 - [x] Source: connect/disconnect, party state, player list, command-file control,
   and VR companion controls do not require the desktop D3D overlay.
 - [ ] Source/product: restore Vivox voice chat or define a supported equivalent.
-- [ ] Build: compile and audit quest/dialogue/party/world-state paths.
+- [x] Build: compile and audit quest/dialogue/party/world-state paths.
 - [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
   weather, server restart, save/load, and reconnect behavior.
 
@@ -241,9 +243,9 @@ runtime boxes below therefore remain open even when source is complete.
 - [x] Review: the final Sol max architecture, ABI, concurrency, lifecycle,
   protocol, and crash-surface review is dispositioned in
   `full-gameplay-source-postfix-senior-disposition-20260716.md`.
-- [ ] Build: commit and push a clean source revision, then run one final WinBoat
+- [x] Build: commit and push a clean source revision, then run one final WinBoat
   gameplay build and all unit/static/package/evidence audits.
-- [ ] Deploy: install that exact package locally and deploy the exact matching
+- [x] Deploy: install that exact package locally and deploy the exact matching
   server revision, with one and only one server container.
 - [ ] Runtime: complete the two-client domain matrix on Windows and Linux
   Proton/UMU with Monado, including Index bindings and controller navigation.
@@ -255,10 +257,11 @@ runtime boxes below therefore remain open even when source is complete.
 
 ## Next Stage Order
 
-1. Finish integration review of the accepted Sol findings without compiling or
-   launching.
-2. Run source/static checks, regenerate address artifacts, commit, and push the
-   reviewed revision.
-3. Run the single WinBoat gameplay build; let the build wrapper refresh and
-   validate the handoff ZIP automatically.
-4. Deploy the exact client/server pair and execute the runtime matrix above.
+1. Fix and retest CommonLib gameplay-session retirement and the outer launcher
+   process hang observed after `qqq`.
+2. Validate or replace the event subscriptions that currently fail closed as
+   unvalidated `BSTEventSource::AddEventSink` requests.
+3. Execute the two-client runtime matrix above on Linux/Monado and Windows,
+   preserving per-domain evidence and controller results.
+4. Implement or explicitly defer the remaining source/product gaps, then
+   publish a new audited prerelease.
