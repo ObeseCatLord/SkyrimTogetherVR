@@ -44,7 +44,7 @@ constexpr std::uint32_t kMagicEffectDualCasted = 1u << 1;
 [[nodiscard]] bool IsMagicEffectCastingSource(const std::int32_t a_value) noexcept
 {
     return IsCastingSource(a_value) ||
-           a_value == static_cast<std::int32_t>(RE::MagicSystem::CastingSource::kTotal);
+           a_value == static_cast<std::int32_t>(RE::MagicSystem::CastingSource::kNone);
 }
 
 [[nodiscard]] RE::MagicSystem::CastingSource ToCastingSource(const std::int32_t a_value) noexcept
