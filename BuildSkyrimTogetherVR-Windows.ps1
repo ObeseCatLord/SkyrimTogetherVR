@@ -623,6 +623,20 @@ function Resolve-PackagedPythonHelpers {
     return @($required | Sort-Object)
 }
 
+function Get-BuildVersion {
+    Write-Host "> git -C $RepoRoot describe --tags"
+    $versionOutput = & git -C $RepoRoot describe --tags 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not derive the network build version with git describe --tags. Fetch the repository tags before building.`n$($versionOutput | Out-String)"
+    }
+
+    $version = ($versionOutput | Select-Object -Last 1).Trim()
+    if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "none" -or $version -like "unknown-*") {
+        throw "Refusing to build with invalid network build version '$version'."
+    }
+    return $version
+}
+
 if ($env:OS -ne "Windows_NT") {
     Write-Warning "This script is intended to run from Windows with Visual Studio/MSVC available."
 }
@@ -644,6 +658,9 @@ if (-not (Get-Command $Xmake -ErrorAction SilentlyContinue)) {
     throw "Could not find xmake. Install xmake first or pass -Xmake C:\path\to\xmake.exe."
 }
 
+$buildVersion = Get-BuildVersion
+Write-Host "Network build version: $buildVersion"
+
 Write-Host "> git -C $RepoRoot submodule update --init --recursive -- Libraries/CommonLibSSE-NG"
 & git -C $RepoRoot submodule update --init --recursive -- "Libraries/CommonLibSSE-NG"
 if ($LASTEXITCODE -ne 0) {
@@ -660,6 +677,16 @@ if (-not $SkipConfigure) {
     }
 
     Invoke-Xmake $configureArgs
+}
+
+$generatedBuildInfo = Join-Path $RepoRoot "build\BuildInfo.h"
+if (-not (Test-Path -LiteralPath $generatedBuildInfo -PathType Leaf)) {
+    throw "Xmake did not generate build provenance: $generatedBuildInfo"
+}
+$expectedBuildCommit = "#define BUILD_COMMIT `"$buildVersion`""
+$generatedBuildInfoText = Get-Content -LiteralPath $generatedBuildInfo -Raw
+if (-not $generatedBuildInfoText.Contains($expectedBuildCommit)) {
+    throw "Generated BuildInfo.h does not contain '$expectedBuildCommit'. Fetch tags, remove the stale Xmake configuration, and configure again."
 }
 
 Write-Host "> $Xmake show -l targets"
@@ -1124,6 +1151,7 @@ if (-not $NoPackage) {
         expectedArtifacts = @($expectedArtifactNames | Sort-Object -Unique)
         artifactSha256 = $artifactSha256
         packageFileSha256 = $packageFileSha256
+        buildVersion = $buildVersion
         sourceRevision = $sourceProvenance["sourceRevision"]
         sourceProvenance = $sourceProvenance
         packageRoot = $packageDir

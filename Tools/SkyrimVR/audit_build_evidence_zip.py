@@ -235,6 +235,16 @@ def package_manifest_errors(manifest: dict[str, object], *, mode: str) -> list[s
     if manifest.get("companionPanel") is not True:
         errors.append("companionPanel is not true")
 
+    build_version = manifest.get("buildVersion")
+    if (
+        not isinstance(build_version, str)
+        or not build_version.strip()
+        or build_version.casefold() == "none"
+        or build_version.casefold().startswith("unknown-")
+        or any(character.isspace() for character in build_version)
+    ):
+        errors.append(f"buildVersion={build_version!r} is invalid")
+
     targets = manifest.get("targets")
     target_set = {str(target) for target in targets} if isinstance(targets, list) else set()
     if not isinstance(targets, list):

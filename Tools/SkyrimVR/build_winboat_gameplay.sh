@@ -12,7 +12,7 @@ fi
 revision=${1:-HEAD}
 commit=$(git rev-parse --verify "${revision}^{commit}")
 short_commit=${commit:0:8}
-git fetch github main
+git fetch --force --tags github main
 if ! git merge-base --is-ancestor "$commit" FETCH_HEAD; then
     echo "Commit $commit is not reachable from github/main. Push it before building." >&2
     exit 2
@@ -43,7 +43,7 @@ $repo = '__WINBOAT_REPO__'
 $build = '__WINBOAT_BUILD__'
 $commit = '__COMMIT__'
 
-git -C $repo fetch origin main
+git -C $repo fetch --force --tags origin main
 if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main in the WinBoat checkout." }
 git -C $repo cat-file -e "$commit`^{commit}"
 if ($LASTEXITCODE -ne 0) { throw "Commit $commit is unavailable in the WinBoat checkout." }

@@ -174,6 +174,7 @@ VR_PREREQUISITE_FILES = {
 
 X64_MACHINE = 0x8664
 MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
+FIXTURE_BUILD_VERSION = "stvr-fixture-1-g00000000"
 IMAGE_DIRECTORY_ENTRY_IMPORT = 1
 IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT = 13
 IMAGE_DELAYLOAD_ATTRIBUTE_RVA = 1
@@ -796,6 +797,28 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
     if manifest.get("companionPanel") is not True:
         failures.append("build manifest says companion panel helpers were not packaged")
 
+    build_version = manifest.get("buildVersion")
+    if (
+        not isinstance(build_version, str)
+        or not build_version.strip()
+        or build_version.casefold() == "none"
+        or build_version.casefold().startswith("unknown-")
+        or any(character.isspace() for character in build_version)
+    ):
+        failures.append(f"build manifest buildVersion is missing or invalid: {build_version!r}")
+    elif not dll_only:
+        launcher_files = launcher_runtime_files(
+            avatar_sync=avatar_sync,
+            dll_only=dll_only,
+            gameplay=gameplay,
+        )
+        for relative_file in launcher_files:
+            launcher_path = package / relative_file
+            if launcher_path.is_file() and build_version.encode("utf-8") not in launcher_path.read_bytes():
+                failures.append(
+                    f"launcher does not contain manifest buildVersion {build_version!r}: {relative_file}"
+                )
+
     targets = manifest.get("targets")
     if not isinstance(targets, list):
         failures.append("build manifest targets field is not a list")
@@ -1122,6 +1145,8 @@ def write_x64_pe(path, normal_imports=(), delay_imports=()):
     if delay_imports:
         struct.pack_into("<II", data, optional_offset + 112 + IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT * 8, 0x1200, (len(delay_imports) + 1) * 32)
     write_import_table(0x1200, delay_imports, 32, next_name_offset, delay=True)
+    build_marker = FIXTURE_BUILD_VERSION.encode("ascii") + b"\0"
+    data[0x900 : 0x900 + len(build_marker)] = build_marker
     write_file(path, bytes(data))
 
 
@@ -1182,6 +1207,7 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
         "artifactSha256": {
             artifact: sha256(manifest_artifact_path(package, artifact)) for artifact in copied_artifacts
         },
+        "buildVersion": FIXTURE_BUILD_VERSION,
         "sourceRevision": "0" * 40,
         "sourceProvenance": {
             "revision": "0" * 40,
@@ -1471,6 +1497,18 @@ def run_self_test():
         failures, *_ = audit_package(tampered_payload_package, skyrim_vr)
         if "build manifest package SHA-256 mismatch: Tools/SkyrimVR/vr_paths.py" not in failures:
             print("Package self-test did not reject a tampered staged helper.")
+            print("\n".join(failures))
+            return 1
+
+        invalid_build_version_package = root / "invalid-build-version"
+        populate_test_package(invalid_build_version_package)
+        manifest_path = invalid_build_version_package / "SkyrimTogetherVR_BuildManifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["buildVersion"] = "none"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        failures, *_ = audit_package(invalid_build_version_package, skyrim_vr)
+        if "build manifest buildVersion is missing or invalid: 'none'" not in failures:
+            print("Package self-test did not reject an invalid network build version.")
             print("\n".join(failures))
             return 1
 

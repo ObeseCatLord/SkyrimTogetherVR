@@ -1198,6 +1198,7 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         AuthenticationRequest sendMessage, recvMessage;
         sendMessage.Token = "TesSt";
+        sendMessage.Version = "stvr-test-1-g12345678";
         sendMessage.GameplayProtocolRevision = 1;
         sendMessage.GameplayCapabilities = 3;
         sendMessage.ClientSessionNonce = 0x1122334455667788ull;
@@ -1217,6 +1218,7 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         recvMessage.DeserializeRaw(reader);
 
+        REQUIRE(recvMessage.Version == "stvr-test-1-g12345678");
         REQUIRE(sendMessage == recvMessage);
     }
 

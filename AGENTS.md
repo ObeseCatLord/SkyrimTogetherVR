@@ -44,6 +44,27 @@ ambiguous. If a build exposes a source error, fix all related occurrences,
 commit and push the next revision, then rerun the same helper. Do not delete old
 worktrees without explicit cleanup intent.
 
+After every successful client build, complete the post-build handoff gate before
+starting another build: transfer and independently audit the exact package and
+build-evidence archive, deploy and run the applicable acceptance test, update
+the build-result notes and gameplay parity checklist, commit those notes, then
+regenerate and audit the local-agent handoff ZIP. Use:
+
+```bash
+python3 Tools/SkyrimVR/create_local_agent_handoff.py \
+  --gameplay-package /path/to/exact-gameplay-package.zip \
+  --build-evidence /path/to/exact-build-evidence.zip \
+  --output /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
+python3 Tools/SkyrimVR/audit_local_agent_handoff.py \
+  /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
+unzip -tq /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
+sha256sum /home/obesecatlord/Documents/SkyrimModding/SkyrimTogetherVR-review-handoff-YYYYMMDD.zip
+```
+
+The generator requires a clean committed worktree. The archive must contain the
+current checklist and documentation, but must not include raw Codex/session
+telemetry or unredacted runtime logs.
+
 Overrides are available when the WinBoat layout differs:
 
 ```bash
