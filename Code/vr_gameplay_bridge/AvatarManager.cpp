@@ -352,7 +352,7 @@ CommandStatus AvatarManager::ResolveGameplayActor(
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player)
             return CommandStatus::InvalidHandle;
-        ar_actor = player;
+        ar_actor = RE::NiPointer<RE::Actor>(player);
         return CommandStatus::Success;
     }
 

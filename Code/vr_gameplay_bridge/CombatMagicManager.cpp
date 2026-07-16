@@ -203,7 +203,7 @@ template <class T>
         if (status != CommandStatus::Success)
             return status;
     } else {
-        target = ResolveLocalForm<RE::Actor>(a_payload.LocalFormIdA);
+        target.reset(ResolveLocalForm<RE::Actor>(a_payload.LocalFormIdA));
     }
     return target && a_actor.StartCombat(target.get()) ? CommandStatus::Success : CommandStatus::MissingForm;
 }

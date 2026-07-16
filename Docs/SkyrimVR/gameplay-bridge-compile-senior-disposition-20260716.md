@@ -16,6 +16,8 @@ included below rather than treating the original review as exhaustive.
 | Remove every bridge use of undefined `TP_UNUSED` | Adapted and adopted | Replaced all six sites in `ActorWorldManager.cpp`, `EventCapture.cpp`, `LocalGameplayCapture.cpp`, and `VRBodyPoseManager.cpp` with `static_cast<void>(...)`; call expressions still execute |
 | Scope the `GameplayAction::Mount` case | Adopted | Added a case-local block around the `RE::NiPointer<RE::Actor>` lifetime |
 | Replace nonexistent `ChunkAcceptResult::Rejected` | Adopted after clean MSVC build | `StageGraph` now maps `ChunkAcceptResult::Malformed` to `CommandStatus::Malformed`; the protocol enum has no `Rejected` member |
+| Explicitly construct the local-player `NiPointer` | Adopted after focused MSVC preflight | `ResolveGameplayActor` now constructs `RE::NiPointer<RE::Actor>` explicitly from the `PlayerCharacter*`, as required by alandtse CommonLib's explicit raw-pointer constructor |
+| Audit all bridge smart-pointer and handle flows | Adopted after focused MSVC preflight | A bounded Terra pass found the only other raw `Actor*` assignment; `CombatMagicManager` now uses `NiPointer::reset`, while `ActorHandle::get()` flows remain valid because they return `NiPointer<T>` |
 | Add a compatibility `TP_UNUSED` macro | Rejected | The CommonLib plugin should not acquire a Tilted-PCH dependency for six ordinary discarded expressions |
 | Speculatively change GLM aggregates, CommonLib calls, exports, or link libraries | Rejected | Full source verification found no concrete blocker in those families |
 | Re-review server/network/gameplay architecture | Not in scope | Prior reviews cover those decisions; this pass was strictly compile/link focused |
@@ -35,6 +37,9 @@ included below rather than treating the original review as exhaustive.
 - Audited all scoped-enum member expressions in `vr_common` and
   `vr_gameplay_bridge` against their declarations after the MSVC failure. The
   `ChunkAcceptResult::Rejected` expression was the only nonexistent member.
+- Added a disposable exact-commit WinBoat bridge preflight after the enum fix.
+  It exposed the raw-pointer assignment in `AvatarManager.cpp` before another
+  complete package build was attempted.
 
 ## Verification Gate
 
