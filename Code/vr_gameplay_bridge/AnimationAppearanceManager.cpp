@@ -414,12 +414,15 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
         const auto unequipSpell = [vm, handle](RE::SpellItem* aSpell, const RE::MagicSystem::CastingSource aSource) noexcept {
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
             return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString("UnequipSpell"),
-                                          RE::MakeFunctionArguments(aSpell, static_cast<std::int32_t>(aSource)), callback);
+                                          RE::MakeFunctionArguments(
+                                              static_cast<RE::SpellItem*>(aSpell),
+                                              static_cast<std::int32_t>(aSource)),
+                                          callback);
         };
         const auto unequipShout = [vm, handle](RE::TESShout* aShout) noexcept {
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
             return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString("UnequipShout"),
-                                          RE::MakeFunctionArguments(aShout), callback);
+                                          RE::MakeFunctionArguments(static_cast<RE::TESShout*>(aShout)), callback);
         };
         if ((needsLeftUnequip && !unequipSpell(currentLeftSpell, RE::MagicSystem::CastingSource::kLeftHand)) ||
             (needsRightUnequip && !unequipSpell(currentRightSpell, RE::MagicSystem::CastingSource::kRightHand)) ||
@@ -501,7 +504,9 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
                    handle,
                    RE::BSFixedString("Actor"),
                    RE::BSFixedString("UnequipSpell"),
-                   RE::MakeFunctionArguments(spell, source),
+                   RE::MakeFunctionArguments(
+                       static_cast<RE::SpellItem*>(spell),
+                       static_cast<std::int32_t>(source)),
                    callback) ?
                    CommandStatus::Success : CommandStatus::EngineRejected;
     }
@@ -529,7 +534,7 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
                    handle,
                    RE::BSFixedString("Actor"),
                    RE::BSFixedString("UnequipShout"),
-                   RE::MakeFunctionArguments(shout),
+                   RE::MakeFunctionArguments(static_cast<RE::TESShout*>(shout)),
                    callback) ?
                    CommandStatus::Success : CommandStatus::EngineRejected;
     }
