@@ -48,6 +48,12 @@ afterward. The handoff generator requires the same clean committed worktree and
 includes the current checklist/documentation without raw Codex/session telemetry
 or unredacted runtime logs.
 
+The helper stages its generated PowerShell driver as a temporary `.ps1` through
+the private SCP channel instead of passing it through `-EncodedCommand`, which
+avoids the Windows command-line length limit. Its exit trap removes that guest
+driver, the Linux copy, and the temporary imported result even when the build
+fails.
+
 Do not build from the long-lived primary Windows checkout: generated PEX and
 package files make rebuild provenance ambiguous. The helper exports the audited
 package/evidence pair, removes its detached Windows worktree in a `finally`
@@ -62,6 +68,7 @@ Overrides are available when the WinBoat layout differs:
 ```bash
 STVR_WINBOAT_REPO='C:\Users\name\Documents\Codex\SkyrimTogetherVR' \
 WINBOAT_POWERSHELL=/path/to/winboat-powershell \
+WINBOAT_SSH=/path/to/winboat-ssh \
 Tools/SkyrimVR/build_winboat_gameplay.sh <commit>
 ```
 

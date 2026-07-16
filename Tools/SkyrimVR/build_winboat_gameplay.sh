@@ -16,7 +16,26 @@ cleanup_after_build() {
     "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
         --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
 }
-trap cleanup_after_build EXIT
+
+import_root=""
+payload_file=""
+guest_payload=""
+guest_payload_uploaded=0
+winboat_powershell=""
+cleanup_runtime() {
+    local status=$?
+    trap - EXIT
+    if [[ $guest_payload_uploaded -eq 1 && -n $guest_payload && -x $winboat_powershell ]]; then
+        "$winboat_powershell" \
+            "Remove-Item -LiteralPath '$guest_payload' -Force -ErrorAction SilentlyContinue" \
+            >/dev/null 2>&1 || true
+    fi
+    [[ -z $payload_file ]] || rm -f -- "$payload_file"
+    [[ -z $import_root ]] || rm -rf -- "$import_root"
+    cleanup_after_build
+    exit "$status"
+}
+trap cleanup_runtime EXIT
 
 if [[ -n $(git status --porcelain=v1 --untracked-files=all) ]]; then
     echo "Refusing WinBoat build from a dirty Linux worktree." >&2
@@ -33,9 +52,14 @@ if ! git merge-base --is-ancestor "$commit" FETCH_HEAD; then
 fi
 
 winboat_powershell=${WINBOAT_POWERSHELL:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-powershell}
+winboat_ssh=${WINBOAT_SSH:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-ssh}
 winboat_scp=${WINBOAT_SCP:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-scp}
 if [[ ! -x $winboat_powershell ]]; then
     echo "WinBoat PowerShell helper is not executable: $winboat_powershell" >&2
+    exit 2
+fi
+if [[ ! -x $winboat_ssh ]]; then
+    echo "WinBoat SSH helper is not executable: $winboat_ssh" >&2
     exit 2
 fi
 if [[ ! -x $winboat_scp ]]; then
@@ -126,13 +150,15 @@ powershell_payload=${powershell_payload//__WINBOAT_BUILD__/$winboat_build}
 powershell_payload=${powershell_payload//__WINBOAT_RESULT__/$winboat_result}
 powershell_payload=${powershell_payload//__COMMIT__/$commit}
 
-"$winboat_powershell" "$powershell_payload"
+payload_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-build-${short_commit}-${timestamp}-XXXXXX.ps1")
+guest_payload="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-build-${short_commit}-${timestamp}.ps1"
+printf '%s\n' "$powershell_payload" >"$payload_file"
+"$winboat_scp" to-guest "$payload_file" "$guest_payload"
+guest_payload_uploaded=1
+"$winboat_ssh" powershell.exe -NoLogo -NoProfile -NonInteractive \
+    -ExecutionPolicy Bypass -File "$guest_payload"
 
 import_root=$(mktemp -d "${TMPDIR:-/tmp}/stvr-winboat-import-${short_commit}-${timestamp}-XXXXXX")
-cleanup_import() {
-    rm -rf -- "$import_root"
-}
-trap 'cleanup_import; cleanup_after_build' EXIT
 
 winboat_result_scp=${winboat_result//\\//}
 "$winboat_scp" from-guest "$winboat_result_scp" "$import_root/result" --recursive
