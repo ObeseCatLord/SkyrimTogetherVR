@@ -86,6 +86,20 @@ modify the tracked Dockerfile, start a container, or stop the running server.
 Use `Docs/SkyrimVR/server-deployment.md` for the one-container deployment and
 verification procedure.
 
+For a fast clean MSVC check of only the CommonLib gameplay bridge after a
+bridge-local compile fix, push the exact commit and run:
+
+```bash
+Tools/SkyrimVR/compile_winboat_gameplay_bridge.sh <commit>
+```
+
+The preflight creates a disposable detached WinBoat worktree, configures the
+same CommonLib runtime matrix as the release build, runs the mandatory unit
+tests, compiles `SkyrimTogetherVRGameplayBridge`, and removes the worktree and
+temporary PowerShell payload on every exit. It does not create a distributable
+package or handoff; follow a successful preflight with
+`build_winboat_gameplay.sh` for the complete audited package and handoff.
+
 ## Build Storage Cleanup
 
 The checked-in cleanup command only targets generated Skyrim Together build
@@ -100,9 +114,8 @@ The scheduled cleanup also removes ignored `build/.objs` and `build/linux`
 output and repository-local Python bytecode caches when `/` is at or above the
 configured pressure threshold. Before a WinBoat build,
 `build_winboat_gameplay.sh` removes those reproducible local outputs explicitly.
-Do not extend this cleanup to source, the current
-prerelease/handoff bundle, runtime evidence, game installs, or unrelated user
-data.
+Do not extend this cleanup to source, the current prerelease/handoff bundle,
+runtime evidence, game installs, or unrelated user data.
 
 `Tools/SkyrimVR/install_build_cleanup_timer.sh` installs and enables a user
 systemd timer that runs every three hours and removes generated outputs older
@@ -110,17 +123,16 @@ than two days. A transient service failure is retried after five minutes. Every
 WinBoat build runs the same bounded cleanup before and after the build. If root
 reaches 93% use or falls below 160 GiB free, scheduled cleanup reduces retention
 to zero days for those generated paths and purges only the explicitly listed
-rebuildable caches. The timer also removes only
-`/tmp/stvr-*` temporary test/build paths
-older than two days; it does not scan unrelated temporary content. The build
-helper holds a shared activity lock for its entire run, and scheduled cleanup
-skips its pass while that lock is held. This prevents cleanup from deleting an
-active build's reproducible output. The build helper removes its detached
-WinBoat worktree immediately after exporting the
-package/evidence pair. The timer always retains the newest exported result and
-expires older result directories after two days. It does not request a
-synchronous volume retrim. Cleanup uses a process lock and skips WinBoat
-cleanup without failing when the VM is offline. Do not expand the cleanup
+rebuildable caches. The timer also removes only `/tmp/stvr-*` temporary
+test/build paths older than two days; it does not scan unrelated temporary
+content. The build helper holds a shared activity lock for its entire run, and
+scheduled cleanup skips its pass while that lock is held. This prevents cleanup
+from deleting an active build's reproducible output. The build helper removes
+its detached WinBoat worktree immediately after exporting the package/evidence
+pair. The timer always retains the newest exported result and expires older
+result directories after two days. It does not request a synchronous volume
+retrim. Cleanup uses a process lock and skips WinBoat cleanup without failing
+when the VM is offline. Do not expand the cleanup
 patterns to game installs, source checkouts, model caches, handoff archives,
 Docker containers, or unrelated application data.
 

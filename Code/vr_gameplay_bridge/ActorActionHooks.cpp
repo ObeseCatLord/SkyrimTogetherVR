@@ -465,7 +465,7 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
     const auto accepted = AnimationGraphProtocol::AcceptChunk(
         pending.Graph, payload.SnapshotId, type, payload.StartIndex, payload.ValueCount,
         payload.TotalCount, payload.Direction, payload.Values);
-    return accepted == AnimationGraphProtocol::ChunkAcceptResult::Rejected ?
+    return accepted == AnimationGraphProtocol::ChunkAcceptResult::Malformed ?
                CommandStatus::Malformed : CommandStatus::Success;
 }
 
