@@ -978,6 +978,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
         partial->LastFactionFormId = payload.LocalFormIdA;
         return;
     case GameplayBridge::GameplayAction::NpcSnapshotEnd:
+    {
         if (!partial->HasAppearance ||
             partial->Data.Appearance.HeadPartCount != partial->ExpectedAppearanceHeadPartCount ||
             partial->NextNameChunkIndex != partial->ExpectedNameChunkCount ||
@@ -1008,6 +1009,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
         if (IsSessionCurrent())
             m_lastCompletedSnapshotActionId = actionId;
         return;
+    }
     default:
         m_partialSnapshots.erase(payload.TargetLocalFormId);
         return;
