@@ -146,7 +146,7 @@ constexpr CapabilityMask kRequestedCapabilities =
 
 [[nodiscard]] bool IsKnownCommandStatus(const std::uint32_t aValue) noexcept
 {
-    return aValue <= static_cast<std::uint32_t>(CommandStatus::QueueOverflow);
+    return aValue <= static_cast<std::uint32_t>(CommandStatus::Degraded);
 }
 
 [[nodiscard]] bool IsKnownAssignmentBootstrapRecordKind(const std::uint16_t aValue) noexcept

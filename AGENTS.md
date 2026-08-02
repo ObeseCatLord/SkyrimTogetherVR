@@ -9,10 +9,59 @@ source, build, or runtime evidence gate has actually passed. Architecture and
 dependency-order rationale are in
 `Docs/SkyrimVR/full-gameplay-parity-senior-disposition-20260715.md`.
 
-## One-Command WinBoat Build
+## Two-Stage WinBoat Build
 
-Commit and push all source and submodule changes before a Windows build. From
-the Linux repository root, run:
+Do not commit or push source changes until their tracked Linux working-tree
+delta has passed the disposable WinBoat candidate build. From the Linux
+repository root, run:
+
+```bash
+Tools/SkyrimVR/build_winboat_candidate.sh
+```
+
+The candidate helper snapshots `HEAD`'s complete tracked delta with
+`git diff --binary --full-index`, including binary changes and staged changes,
+without altering the Linux index or creating a Linux commit. It refuses
+untracked files, dirty/unresolved submodules, and changed submodule pointers;
+this prevents an incomplete overlay from being presented as build proof. The
+current `HEAD` is the required already-pushed base. WinBoat verifies that it
+is an ancestor of `refs/remotes/origin/main`; it fetches only `origin/main`
+once when the cached remote-tracking ref is absent or does not prove that
+ancestry, then fails if the proof is still unavailable.
+
+On WinBoat it removes only stale `SkyrimTogetherVR-candidate-*` output after
+confirming no candidate process is active, creates a detached worktree at that
+base, initializes the pinned submodules, verifies the transferred patch hash,
+applies the snapshot, and makes one guest-local ephemeral commit so the audited
+Windows package wrapper sees a clean provenance revision. It runs:
+
+```bat
+BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```
+
+Candidate artifacts remain inside the disposable guest worktree. The helper
+does not import artifacts to Linux, create/modify a handoff, deploy files, or
+launch Skyrim. Its trap and guest `finally` remove the Linux patch, guest patch,
+temporary PowerShell payload, disposable worktree, and stale candidate output.
+It prints `STVR_CANDIDATE_BASE`, `STVR_CANDIDATE_EPHEMERAL_REVISION`, and
+`STVR_CANDIDATE_BUILD_SUCCESS`; only `true` is build proof. If a disconnected
+guest still has an active candidate process, cleanup leaves that path in place
+rather than deleting a live build; the next candidate run removes it once no
+matching process remains.
+
+Because the candidate helper deliberately refuses untracked files, bootstrap a
+new copy of this helper and its documentation by staging them first; staged
+files are included in the snapshot and the helper itself never changes the
+index. After a successful candidate build, make the persistent commit, push it,
+then run the normal clean build with handoff creation disabled when handoff
+updates are not authorized:
+
+```bash
+Tools/SkyrimVR/build_winboat_gameplay.sh --skip-handoff <commit>
+```
+
+The normal helper requires a clean, pushed revision. From the Linux repository
+root, run:
 
 ```bash
 Tools/SkyrimVR/build_winboat_gameplay.sh
@@ -76,10 +125,12 @@ Do not build from the long-lived primary Windows checkout: generated PEX and
 package files make rebuild provenance ambiguous. The helper exports the audited
 package/evidence pair, removes its detached Windows worktree in a `finally`
 path, removes its temporary Linux import, and runs bounded cleanup on exit. If
-a build exposes a source error, fix all related occurrences, commit and push the
-next revision, then rerun the same helper. After a successful build, deploy and
-run the applicable acceptance test, update the build-result notes and parity
-checklist, then commit and push those evidence notes before further source work.
+a candidate build exposes a source error, fix all related occurrences and rerun
+the candidate build. Only after it reports `STVR_CANDIDATE_BUILD_SUCCESS=true`
+may the persistent revision be committed and pushed, followed by the normal
+clean build. After that successful clean build, deploy and run the applicable
+acceptance test, update the build-result notes and parity checklist, then commit
+and push those evidence notes before further source work.
 
 Overrides are available when the WinBoat layout differs:
 

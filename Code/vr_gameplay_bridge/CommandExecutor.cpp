@@ -609,7 +609,7 @@ CommandPumpResult ProcessCommands(
             break;
 
         const auto status = ExecuteCommand(endpoint, command);
-        if (status == CommandStatus::Success)
+        if (IsSuccessfulCommandResult(status, command))
             mapping->Header.ExecutedCommandCount.fetch_add(1, std::memory_order_relaxed);
         else
             CountRejected(mapping->Header, status);

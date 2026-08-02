@@ -2,6 +2,38 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
+## 2026-08-02 Current Parity-Safety Stage
+
+The only built evidence is the clean WinBoat audited baseline `82c7999a`.
+The current source tree contains unbuilt parity-safety changes and is not yet a
+package, deployment, or runtime candidate. Do not infer current build or
+runtime proof from the historical sections below.
+
+The mapping ABI changed from 19 to 20 for `CommandStatus::Degraded`.
+Tint-bearing appearance commits now validate and apply only the proven race,
+sex, weight, name, headparts, morphs, hair, face texture, and body skin-tone
+fields. Unsafe FaceGen texture-mask composition was removed. That safe subset
+returns `Degraded`, which is accepted only for `Appearance` `CommitAppearance`;
+all other degraded commands remain rejected.
+
+For the first mixed VR final-equipment transaction, the legacy baseline is
+captured before the owner inventory mutation. It is capability-gated and scoped
+to the connection session and entity generation. Pure legacy-equipment diff
+tests exist but have not run. Exact `ActorMediator` actions are instead wholly
+fail-closed: there is no `PerformAction` detour, capture, capability, or remote
+replay because public VR mappings for the upstream `ForceAction` helpers are
+incompatible code/data. The generic animation graph/event fallback remains.
+
+Respawn fade stays within safe Papyrus-equivalent/admission behavior; no native
+VR fade call is guessed. Vivox, remote VRIK finger/calibration application, and
+direct PLANCK physical replay remain blocked by absent, proprietary, or
+insufficient public APIs.
+
+The mandatory order is: candidate WinBoat build, commit/push only if it passes,
+clean `--skip-handoff` build, matching local/server deployment, Monado
+connection proof, then the two-client matrix. No handoff update is authorized
+in this stage. See `parity-safety-stage-20260802.md` and the parity checklist.
+
 ## 2026-07-16 Full Gameplay Source Tranche
 
 The active gameplay target is no longer connection-only or observation-only.
@@ -29,10 +61,10 @@ Gameplay protocol revision 7 carries token-bound ownership and one final-state
 VR equipment transaction. Worn inventory plus selected spells/shout are
 validated before one server mutation and one compatible-client notify; the
 receiver publishes the complete staged CommonLib command sequence with one
-bridge-ring reservation and clears staging at lifecycle boundaries. Desktop
-recipients do not yet receive VR-owned final equipment because translating the
-transaction back into several legacy notifications would reintroduce partial
-mutation. VR recipients continue to handle desktop transaction-zero updates.
+bridge-ring reservation and clears staging at lifecycle boundaries. The current
+unbuilt parity-safety stage captures the first legacy equipment baseline before
+that mutation, rather than relying on post-mutation inventory state; see the
+2026-08-02 stage above for the capability and lifecycle limits.
 
 Revision `a7b71d90` now has an audited 503-file WinBoat gameplay package, an
 exact-version ARM64 server, a clean installed-package readiness audit, and one
@@ -45,13 +77,12 @@ retirement warned during disconnect, and the outer Proton launcher remained
 alive after Skyrim's WinMain and Skyrim Together teardown completed. Multiple
 gameplay event subscriptions also failed closed as unvalidated
 `BSTEventSource::AddEventSink` requests, so affected producer lanes must be
-validated before their runtime boxes can pass. The remaining deliberate source
-limitations are full remote face tint/morph/texture
-generation, native respawn fade, remote VRIK finger/calibration application,
-direct PLANCK physical grab/ragdoll replay, exact `ActorMediator::PerformAction`
-capture/replay, and Vivox voice. Exact actions remain fail-closed until form
-translation, capability renegotiation, and `TESActionData` lifetime are proven
-for Skyrim VR. The upstream
+validated before their runtime boxes can pass. The current deliberate source
+limitations are unsafe FaceGen texture-mask composition, native respawn fade,
+remote VRIK finger/calibration application, direct PLANCK physical
+grab/ragdoll replay, exact `ActorMediator` action capture/replay, and Vivox
+voice. Exact actions are wholly fail-closed because the public VR mappings for
+upstream `ForceAction` helpers are incompatible. The upstream
 scripted-object-animation producer is also compiled out on the original branch;
 VR supports incoming replay but does not install a guessed hook against its
 Address Library registration rows. See

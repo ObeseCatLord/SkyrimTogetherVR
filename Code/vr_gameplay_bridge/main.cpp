@@ -96,14 +96,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             return false;
         }
         if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
-            SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall();
-            SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
-            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
-            endpoint.Fault("exact ActorMediator::PerformAction hook installation failed");
-            return false;
+            SKSE::log::warn(
+                "SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction capture hook is disabled because "
+                "exact ForceAction replay is unavailable; continuing without exact actor actions");
         }
-        SKSE::log::info(
-            "SkyrimTogetherVRGameplayBridge: exact ActorMediator action lane installed; capability remains gated until live semantic validation");
 
         SkyrimTogetherVR::GameplayAdapter::PublishPluginLoaded();
         SKSE::log::info("SkyrimTogetherVRGameplayBridge loaded");

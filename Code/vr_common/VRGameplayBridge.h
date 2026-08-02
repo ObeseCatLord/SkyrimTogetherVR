@@ -17,7 +17,7 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 19;
+inline constexpr std::uint16_t kMappingAbiVersion = 20;
 inline constexpr std::uint32_t kCapabilityRevision = 29;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
@@ -612,6 +612,9 @@ enum class CommandStatus : std::uint32_t
     MissingCell = 10,
     EngineRejected = 11,
     QueueOverflow = 12,
+    // The command committed every ABI-proven field, but intentionally omitted
+    // a non-critical field for which this runtime has no verified native API.
+    Degraded = 13,
 };
 
 enum class CommandPumpResult : std::uint32_t
@@ -1012,6 +1015,33 @@ struct alignas(8) CommandRecord
     MessageHeader Header;
     CommandPayload Payload;
 };
+
+[[nodiscard]] constexpr bool IsSuccessfulCommandResult(
+    const CommandStatus a_status,
+    const GameplayDomain a_domain,
+    const GameplayAction a_action) noexcept
+{
+    return a_status == CommandStatus::Success ||
+           (a_status == CommandStatus::Degraded && a_domain == GameplayDomain::Appearance &&
+            a_action == GameplayAction::CommitAppearance);
+}
+
+[[nodiscard]] constexpr bool IsSuccessfulCommandResult(
+    const CommandStatus a_status,
+    const CommandRecord& a_command) noexcept
+{
+    if (a_status == CommandStatus::Success)
+        return true;
+    if (a_status != CommandStatus::Degraded ||
+        static_cast<CommandKind>(a_command.Header.Kind) != CommandKind::ApplyGameplayAction)
+        return false;
+
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    return IsSuccessfulCommandResult(
+        a_status,
+        static_cast<GameplayDomain>(payload.Domain),
+        static_cast<GameplayAction>(payload.Action));
+}
 
 using AtomicU32 = std::atomic<std::uint32_t>;
 using AtomicU64 = std::atomic<std::uint64_t>;

@@ -518,10 +518,8 @@ void TransportService::OnConnected()
         SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions))
         m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRNpcOwnershipCapabilities;
-    // Protocol support is stable for the connection. Native action replay is
-    // gated separately by the CommonLib bridge's live semantic capability, so
-    // actions can be bounded and queued if that gate opens after authentication.
-    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRExactAnimationActionCapabilities;
+    // Preserve the protocol identifier for future compatibility, but do not
+    // advertise exact actor actions: VR ForceAction replay lacks a proven ABI.
 #endif
     request.GameplayCapabilities = m_requestedGameplayCapabilities;
     request.ClientSessionNonce = m_sessionId;

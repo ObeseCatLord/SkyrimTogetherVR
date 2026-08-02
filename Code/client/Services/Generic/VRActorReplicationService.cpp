@@ -3820,9 +3820,15 @@ void VRActorReplicationService::OnGameplayResult(
         const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
         const auto domain = static_cast<GameplayBridge::GameplayDomain>(result.Domain);
         const auto action = static_cast<GameplayBridge::GameplayAction>(result.Action);
-        if (status != GameplayBridge::CommandStatus::Success ||
-            domain != owner.Domain || action != owner.Action)
+        const auto expectedResult = domain == owner.Domain && action == owner.Action;
+        const auto degradedAppearanceCommit =
+            expectedResult && status == GameplayBridge::CommandStatus::Degraded &&
+            domain == GameplayBridge::GameplayDomain::Appearance &&
+            action == GameplayBridge::GameplayAction::CommitAppearance;
+        if (!expectedResult || !GameplayBridge::IsSuccessfulCommandResult(status, domain, action))
             pending.HadFailure = true;
+        else if (degradedAppearanceCommit)
+            spdlog::warn("VR appearance sequence {} applied with uncomposed face tint masks", owner.Sequence);
         if (owner.RemainingResults > 0)
             --owner.RemainingResults;
         if (owner.RemainingResults == 0)

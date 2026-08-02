@@ -29,13 +29,6 @@ constexpr std::size_t kHeadPartCount =
     static_cast<std::size_t>(RE::BGSHeadPart::HeadPartType::kTotal);
 constexpr std::uint32_t kRightHandEquipSlotFormId = 0x00013F42;
 constexpr std::uint32_t kLeftHandEquipSlotFormId = 0x00013F43;
-constexpr std::uintptr_t kCreateTintTextureVrRva = 0x0CFCFB0;
-constexpr std::uintptr_t kCreateTintsVrRva = 0x04002F0;
-constexpr std::uintptr_t kTextureComponentCtorVrRva = 0x01B8350;
-// NiRenderedTexture extends the 0x40-byte NiTexture base with its renderer
-// buffer as the first derived member. This is the layout used by the original
-// Skyrim Together FaceGen path as well as Skyrim VR 1.4.15.
-constexpr std::size_t kRenderedTextureBufferOffset = sizeof(RE::NiTexture);
 
 // The wire format carries an ID, never a game string or a native pointer.
 // Keep this deliberately small until each additional graph event has VR
@@ -415,7 +408,6 @@ struct AppliedAppearance
     std::uint64_t Digest{};
 };
 std::unordered_map<std::uint64_t, AppliedAppearance> s_appliedAppearances;
-std::unordered_map<std::uint64_t, AppliedAppearance> s_partialAppearances;
 // The engine owns the currently installed array when a dynamic NPC is deleted.
 // Track only arrays allocated by this manager so subsequent swaps never free a
 // possibly shared template array returned by CreateDuplicateForm.
@@ -508,136 +500,6 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
     return true;
 }
 
-[[nodiscard]] bool IsExecutableGameAddress(const std::uintptr_t a_address) noexcept
-{
-    MEMORY_BASIC_INFORMATION memory{};
-    const auto module = GetModuleHandleW(nullptr);
-    if (!module || VirtualQuery(reinterpret_cast<const void*>(a_address), &memory, sizeof(memory)) != sizeof(memory) ||
-        memory.State != MEM_COMMIT || memory.AllocationBase != module)
-        return false;
-    const auto protection = memory.Protect & 0xffu;
-    return protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ ||
-           protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
-}
-
-[[nodiscard]] std::uintptr_t ResolveLockedVrFunction(const std::uintptr_t a_rva) noexcept
-{
-    const auto& module = REL::Module::get();
-    if (!REL::Module::IsVR() || module.version() != REL::Version{1, 4, 15, 0} ||
-        module.base() > std::numeric_limits<std::uintptr_t>::max() - a_rva)
-        return 0;
-    const auto address = module.base() + a_rva;
-    return IsExecutableGameAddress(address) ? address : 0;
-}
-
-[[nodiscard]] bool CanComposeFaceTints()
-{
-    return ResolveLockedVrFunction(kCreateTintTextureVrRva) != 0 &&
-           ResolveLockedVrFunction(kCreateTintsVrRva) != 0 &&
-           ResolveLockedVrFunction(kTextureComponentCtorVrRva) != 0 &&
-           RE::BSGraphics::Renderer::GetSingleton() != nullptr;
-}
-
-[[nodiscard]] CommandStatus ComposeFaceTints(
-    RE::Actor& a_actor, const StagedAppearanceTransaction& a_staged)
-{
-    if (!CanComposeFaceTints())
-        return CommandStatus::Unsupported;
-    auto* faceObject = a_actor.GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
-    auto* geometry = faceObject ? faceObject->AsGeometry() : nullptr;
-    auto* shader = geometry ? geometry->lightingShaderProp_cast() : nullptr;
-    if (!shader || !shader->material ||
-        shader->material->GetFeature() != RE::BSShaderMaterial::Feature::kFaceGen)
-        return CommandStatus::Inactive;
-
-    using CreateTexture = RE::NiTexture*(RE::BSFixedString&);
-    using CreateTints = void(const RE::BSTArray<RE::TintMask*>&, RE::NiTexture*);
-    using TextureCtor = RE::TESTexture*(RE::TESTexture*);
-    const auto createTexture = reinterpret_cast<CreateTexture*>(
-        ResolveLockedVrFunction(kCreateTintTextureVrRva));
-    const auto createTints = reinterpret_cast<CreateTints*>(
-        ResolveLockedVrFunction(kCreateTintsVrRva));
-    const auto textureCtor = reinterpret_cast<TextureCtor*>(
-        ResolveLockedVrFunction(kTextureComponentCtorVrRva));
-    if (!createTexture || !createTints || !textureCtor)
-        return CommandStatus::Unsupported;
-
-    RE::BSTArray<RE::TintMask*> masks;
-    std::vector<RE::TintMask*> ownedMasks;
-    std::vector<RE::TESTexture*> ownedTextures;
-    const auto cleanup = [&]() noexcept {
-        for (auto* texture : ownedTextures) {
-            if (texture) {
-                texture->~TESTexture();
-                RE::free(texture);
-            }
-        }
-        for (auto* mask : ownedMasks)
-            RE::free(mask);
-    };
-
-    try {
-        ownedMasks.reserve(a_staged.ExpectedTintCount);
-        ownedTextures.reserve(a_staged.ExpectedTintCount);
-        masks.reserve(a_staged.ExpectedTintCount);
-        for (std::size_t index = 0; index < a_staged.ExpectedTintCount; ++index) {
-            const auto& source = a_staged.Tints[index];
-            auto* mask = RE::calloc<RE::TintMask>(1);
-            if (!mask) {
-                cleanup();
-                return CommandStatus::EngineRejected;
-            }
-            ownedMasks.push_back(mask);
-            mask->color = RE::Color(source.Color);
-            mask->alpha = source.Alpha;
-            mask->type = static_cast<RE::TintMask::Type>(source.Type);
-            if (!source.TexturePath.empty()) {
-                auto* texture = RE::calloc<RE::TESTexture>(1);
-                if (!texture || !textureCtor(texture)) {
-                    RE::free(texture);
-                    cleanup();
-                    return CommandStatus::EngineRejected;
-                }
-                ownedTextures.push_back(texture);
-                texture->InitializeDataComponent();
-                texture->textureName = source.TexturePath.c_str();
-                mask->texture = texture;
-            }
-            masks.push_back(mask);
-        }
-
-        RE::BSFixedString textureName{""};
-        auto* rendered = createTexture(textureName);
-        if (!rendered) {
-            cleanup();
-            return CommandStatus::EngineRejected;
-        }
-        RE::NiPointer<RE::NiTexture> renderedOwner{rendered};
-        auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-        auto* rendererData = renderer ? renderer->CreateRenderTexture(512, 512) : nullptr;
-        if (!rendererData) {
-            cleanup();
-            return CommandStatus::EngineRejected;
-        }
-        static_assert(sizeof(RE::NiTexture) == 0x40);
-        // CreateTexture returns the NiRenderedTexture subtype used by the
-        // original client. Its renderer buffer is the first derived member.
-        *reinterpret_cast<RE::NiTexture::RendererData**>(
-            reinterpret_cast<std::byte*>(rendered) + kRenderedTextureBufferOffset) = rendererData;
-        createTints(masks, rendered);
-
-        auto* material = static_cast<RE::BSLightingShaderMaterialFacegen*>(shader->material);
-        auto& tintTexture = *reinterpret_cast<RE::NiPointer<RE::NiTexture>*>(
-            std::addressof(material->tintTexture));
-        tintTexture = renderedOwner;
-        cleanup();
-        return CommandStatus::Success;
-    } catch (...) {
-        cleanup();
-        return CommandStatus::EngineRejected;
-    }
-}
-
 [[nodiscard]] CommandStatus StageAppearance(
     const CommandRecord& a_command, const GameplayActionPayload& a_payload)
 {
@@ -694,13 +556,6 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
                 return fail(CommandStatus::Malformed);
             if (staged.Sequence != applied->second.Sequence &&
                 static_cast<std::int32_t>(staged.Sequence - applied->second.Sequence) <= 0)
-                return fail(CommandStatus::StaleEntity);
-        }
-        if (const auto partial = s_partialAppearances.find(target); partial != s_partialAppearances.end()) {
-            if (staged.Sequence == partial->second.Sequence && staged.Digest != partial->second.Digest)
-                return fail(CommandStatus::Malformed);
-            if (staged.Sequence != partial->second.Sequence &&
-                static_cast<std::int32_t>(staged.Sequence - partial->second.Sequence) <= 0)
                 return fail(CommandStatus::StaleEntity);
         }
         staged.ExpectedHeadPartCount = static_cast<std::uint8_t>(a_payload.ValueA);
@@ -873,41 +728,41 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
     for (std::size_t index = 0; index < staged.ExpectedTintCount; ++index)
         if (!staged.Tints[index].Present || !staged.Tints[index].PathSpecified)
             return CommandStatus::Malformed;
+    const auto completionStatus = staged.ExpectedTintCount != 0 ?
+        CommandStatus::Degraded : CommandStatus::Success;
     if (const auto applied = s_appliedAppearances.find(target);
         applied != s_appliedAppearances.end() && applied->second.Sequence == staged.Sequence &&
         applied->second.Digest == staged.Digest)
-        return CommandStatus::Success;
+        return completionStatus;
 
     auto* npc = a_actor.GetActorBase();
     if (!npc || !npc->IsDynamicForm())
         return CommandStatus::EngineRejected;
-    if (staged.ExpectedTintCount != 0 && !CanComposeFaceTints())
-        return CommandStatus::Unsupported;
-    if (const auto partial = s_partialAppearances.find(target);
-        partial != s_partialAppearances.end() && partial->second.Sequence == staged.Sequence &&
-        partial->second.Digest == staged.Digest) {
-        const auto tintStatus = staged.ExpectedTintCount != 0 ?
-            ComposeFaceTints(a_actor, staged) : CommandStatus::Success;
-        if (tintStatus == CommandStatus::Success) {
-            s_partialAppearances.erase(partial);
-            s_appliedAppearances[target] = {staged.Sequence, staged.Digest};
-        }
-        return tintStatus;
-    }
 
+    // Reserve the applied-sequence entry before changing the NPC. This map may
+    // allocate, while assigning the completed sequence below cannot.
+    const auto [appliedEntry, insertedAppliedEntry] = s_appliedAppearances.try_emplace(target);
+    const auto discardPreparedAppliedEntry = [&]() noexcept {
+        if (insertedAppliedEntry)
+            s_appliedAppearances.erase(appliedEntry);
+    };
     const auto headPartCount = staged.HeadPartPresent.count();
     auto** newHeadParts = headPartCount != 0 ? RE::calloc<RE::BGSHeadPart*>(headPartCount) : nullptr;
-    if (headPartCount != 0 && !newHeadParts)
+    if (headPartCount != 0 && !newHeadParts) {
+        discardPreparedAppliedEntry();
         return CommandStatus::EngineRejected;
+    }
     auto* managedHeadParts = FindManagedHeadPartBuffer(target);
     if (!managedHeadParts)
         managedHeadParts = ReserveManagedHeadPartBuffer(target);
     if (!managedHeadParts) {
         RE::free(newHeadParts);
+        discardPreparedAppliedEntry();
         return CommandStatus::QueueOverflow;
     }
     if (managedHeadParts->Target == target && npc->headParts != managedHeadParts->Buffer) {
         RE::free(newHeadParts);
+        discardPreparedAppliedEntry();
         return CommandStatus::EngineRejected;
     }
     RE::TESNPC::FaceData* newFaceData{};
@@ -915,6 +770,7 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
         newFaceData = RE::calloc<RE::TESNPC::FaceData>(1);
         if (!newFaceData) {
             RE::free(newHeadParts);
+            discardPreparedAppliedEntry();
             return CommandStatus::EngineRejected;
         }
     }
@@ -966,16 +822,9 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
         break;
     }
     a_actor.Update3DModel();
-    const auto tintStatus = staged.ExpectedTintCount != 0 ?
-        ComposeFaceTints(a_actor, staged) : CommandStatus::Success;
     RE::free(retiredManagedHeadParts);
-    if (tintStatus == CommandStatus::Success) {
-        s_partialAppearances.erase(target);
-        s_appliedAppearances[target] = {staged.Sequence, staged.Digest};
-    } else {
-        s_partialAppearances[target] = {staged.Sequence, staged.Digest};
-    }
-    return tintStatus;
+    appliedEntry->second = {staged.Sequence, staged.Digest};
+    return completionStatus;
 }
 
 [[nodiscard]] CommandStatus ApplyAppearance(
@@ -2482,7 +2331,6 @@ void AnimationAppearanceManager::Reset() noexcept
 {
     s_stagedAppearances.clear();
     s_appliedAppearances.clear();
-    s_partialAppearances.clear();
     s_stagedEquipment.clear();
     s_stagedInventory.clear();
 }
@@ -2493,7 +2341,6 @@ void AnimationAppearanceManager::ForgetTarget(const AdapterHandle a_target, RE::
         return;
     s_stagedAppearances.erase(a_target.Value);
     s_appliedAppearances.erase(a_target.Value);
-    s_partialAppearances.erase(a_target.Value);
     s_stagedEquipment.erase(a_target.Value);
     for (auto it = s_stagedInventory.begin(); it != s_stagedInventory.end();) {
         if (it->first.TargetHandle == a_target.Value)

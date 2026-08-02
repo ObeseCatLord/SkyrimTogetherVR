@@ -44,9 +44,16 @@ private:
         uint64_t ClientSessionNonce{};
         uint64_t ConnectionGeneration{};
         uint64_t LastTransactionId{};
+        // This begins as the authoritative worn/magic state captured before
+        // the session's first owner inventory mutation, then tracks the last
+        // accepted VR final-equipment snapshot.
         Inventory LastFinalEquipment{};
         bool HasFinalEquipment{};
     };
+
+    [[nodiscard]] EquipmentTransactionLedger* GetOrSeedEquipmentTransaction(
+        uint32_t aPlayerId, uint32_t aServerId, uint64_t aClientSessionNonce,
+        uint64_t aConnectionGeneration, const Inventory& aAuthoritativeInventory);
 
     World& m_world;
 

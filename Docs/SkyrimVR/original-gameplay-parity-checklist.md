@@ -1,6 +1,6 @@
 # Skyrim Together VR Gameplay Parity Checklist
 
-Updated: 2026-07-16
+Updated: 2026-08-02
 
 ## Status Rules
 
@@ -16,10 +16,15 @@ The target is original `original-skyrim-together` gameplay on Skyrim VR
 - A diagnostic relay is not gameplay parity. It may supplement, but cannot
   replace, the original canonical message that owns mutation.
 
-Revision `a7b71d90` has passed the final WinBoat gameplay build, package and
-evidence audits, exact ARM64 server build, strict installed-package readiness
-audit, and one Linux/Monado connection smoke test. Build boxes are complete.
-Runtime boxes still require the two-client behavior specified by each domain.
+Baseline revision `82c7999a` passed a clean WinBoat audited build. It is
+historical evidence only. The current parity-safety source tree is dirty and
+has not been built, package-audited, deployed, or runtime-tested. Every
+current-stage build and runtime gate is pending; no runtime checkbox below is
+evidence for this source tree.
+
+`Docs/SkyrimVR/parity-safety-stage-20260802.md` is the current-stage record.
+It supersedes stale lower-page references to a deployable full-tint path,
+missing mixed-client equipment fanout, or an exact-action prototype.
 
 ## Native Boundary
 
@@ -37,12 +42,15 @@ Runtime boxes still require the two-client behavior specified by each domain.
   storage, flat desktop actor construction, or Papyrus-maintained state.
 - [x] Source: the fixed bridge ABI carries nonce, connection generation,
   lifecycle epoch, entity generation, action ID, and sequence ID.
+- [x] Source: mapping ABI is bumped from 19 to 20 for
+  `CommandStatus::Degraded`; readers distinguish accepted degraded appearance
+  application from rejected commands.
 - [x] Source: exact-match gameplay protocol revision 7 gates the token-bound NPC
   ownership and final-equipment wire layouts before either endpoint decodes them.
 - [x] Source: generated CommonLib aliases and curated VR overrides are
   collision-aware and fail closed on unverified addresses or prologues.
-- [x] Build: verify the current ABI/capability revision and curated address
-  overlay in the final gameplay package.
+- [ ] Build: verify mapping ABI 20, capability behavior, and the curated
+  address overlay in the current WinBoat candidate package.
 - [ ] Runtime: prove clean attach, owner-thread pumping, disconnect, reconnect,
   load, new game, and shutdown without stale commands or leaked references.
 
@@ -55,10 +63,11 @@ Runtime boxes still require the two-client behavior specified by each domain.
   interior/exterior cell and worldspace transfer.
 - [x] Source: named humanoid graph snapshots use bounded assembly, ordering,
   rollback, stale rejection, and quarantine.
-- [ ] Source: exact `ActorMediator::PerformAction` capture/replay is blocked for
-  the final build. The current prototype lacks `GameId` form translation,
-  generation-bound capability renegotiation, and verified `TESActionData`
-  constructor/callee/destructor ownership on VR.
+- [x] Source: exact `ActorMediator` action capture and replay are wholly
+  fail-closed. No `PerformAction` detour/capture, exact-action capability, or
+  remote replay is registered. Public mappings for the upstream `ForceAction`
+  helpers resolve to incompatible VR code or data. Generic animation
+  graph/event fallback remains available.
 - [x] Source: draw/sheath and the supported idle, jump, sneak, sprint,
   ragdoll, furniture, and mount animation events replay through CommonLib.
 - [x] Source: package changes are captured for both owned NPCs and the local
@@ -67,14 +76,21 @@ Runtime boxes still require the two-client behavior specified by each domain.
   Upstream's outbound producer is compiled out by `OBJECT_ANIM_SYNC=0`; its
   desktop Address Library IDs are registration code in VR, so no guessed hook
   is installed.
-- [x] Build: compile and audit exact-action, movement, graph, and package paths.
+- [ ] Build: compile and audit the fail-closed exact-action boundary plus the
+  movement, graph, and package paths.
 - [ ] Runtime: two clients prove spawn, move, stop, turn, cell transfer,
   animation, package, leave, and reconnect without jitter, echo, or duplicates.
 
 ### Appearance, Equipment, And Inventory
 
-- [x] Source: race, sex, weight, dynamic name, head parts, body skin tint,
-  level, and essential state replicate and replay on dynamic remote actor bases.
+- [x] Source: a tint-bearing appearance transaction validates and applies the
+  proven race, sex, weight, dynamic name, head parts, morphs, hair, face
+  texture, and body skin tone fields on dynamic remote actor bases. Unsafe
+  FaceGen texture-mask composition is removed.
+- [x] Source: appearance returns explicit `CommandStatus::Degraded` when that
+  safe subset is applied. `Degraded` counts as executed and accepted only for
+  `Appearance` `CommitAppearance`; it remains rejection for every other
+  command.
 - [x] Source: bounded full worn-equipment snapshots include armor, weapons,
   shields, ammo, left/right spells, and shout or power state.
 - [x] Source: each VR equipment change is one protocol-revision-7 final-state
@@ -85,14 +101,15 @@ Runtime boxes still require the two-client behavior specified by each domain.
   ownership, and quest-item handling use original requests.
 - [x] Source: incoming equipment, inventory, and appearance replay uses typed
   CommonLib APIs and session-scoped baselines.
-- [ ] Source: full face tint masks, face morphs, texture overlays, and hair
-  color. CommonLib exposes local-player tint data but no verified remote actor
-  face-generation transaction that can safely apply these fields.
-- [ ] Mixed-client source: desktop clients do not yet receive a synthesized
-  legacy equipment delta stream for a VR-owned final-state transaction. That
-  fanout is deliberately fail-closed to avoid partial multi-message mutation;
-  VR clients still consume desktop transaction-zero equipment notifications.
-- [x] Build: compile and audit appearance/equipment/inventory translation.
+- [ ] Source: unsafe remote FaceGen texture-mask composition remains omitted;
+  the safe transaction is deliberately degraded rather than represented as a
+  complete face-generation result.
+- [x] Source: the first mixed VR final-equipment legacy baseline is seeded
+  before owner inventory mutation. It is session/generation-bound and gated by
+  the negotiated VR capability so legacy delta fanout starts from the real
+  pre-mutation state. Pure diff tests are written but unrun.
+- [ ] Build: compile and audit the degraded appearance and mixed-client
+  equipment paths, including the new pure diff tests.
 - [ ] Runtime: prove convergence after equip, pickup/drop, container transfer,
   reconnect, cell change, death, and save/load.
 
@@ -110,9 +127,9 @@ Runtime boxes still require the two-client behavior specified by each domain.
 - [x] Source: mount ownership and mount requests preserve actor ordering; zero
   mount is retained only as local cancellation because the original protocol
   has no dismount request.
-- [ ] Source: native black fade around respawn. Candidate VR Address Library
-  rows do not identify a verified five-argument callable equivalent.
-- [x] Build: compile and audit actor-state/death/respawn paths.
+- [x] Source: respawn fade retains safe Papyrus-equivalent/admission behavior.
+  No guessed native fade call is made because a verified VR callable is absent.
+- [ ] Build: compile and audit actor-state/death/respawn paths.
 - [ ] Runtime: prove damage, death, gold loss, respawn, simultaneous deaths,
   mount, disconnect during respawn, and reconnect convergence.
 
@@ -127,7 +144,7 @@ Runtime boxes still require the two-client behavior specified by each domain.
   cannot leave an unrecoverable partial commit.
 - [x] Source: transient incoming text and commands use bounded retry queues with
   nonce, generation, and epoch validation.
-- [x] Build: compile and audit object assignment and transaction publication.
+- [ ] Build: compile and audit object assignment and transaction publication.
 - [ ] Runtime: prove concurrent activation, lock, container, cell reload, and
   disconnect recovery with zero destructive partial snapshots.
 
@@ -145,7 +162,7 @@ Runtime boxes still require the two-client behavior specified by each domain.
   prologue and suppresses authoritative remote replay echo.
 - [x] Source: HIGGS/PLANCK diagnostics are deduplicated from canonical
   inventory, actor-value, projectile, and magic mutations.
-- [x] Build: compile and audit combat/projectile/magic hooks and address pins.
+- [ ] Build: compile and audit combat/projectile/magic hooks and address pins.
 - [ ] Runtime: prove melee, bow, spell, concentration, shout, healing, hostile
   effect, death, and respawn under latency without duplicate damage/effects.
 
@@ -160,7 +177,7 @@ Runtime boxes still require the two-client behavior specified by each domain.
 - [x] Source: connect/disconnect, party state, player list, command-file control,
   and VR companion controls do not require the desktop D3D overlay.
 - [ ] Source/product: restore Vivox voice chat or define a supported equivalent.
-- [x] Build: compile and audit quest/dialogue/party/world-state paths.
+- [ ] Build: compile and audit quest/dialogue/party/world-state paths.
 - [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
   weather, server restart, save/load, and reconnect behavior.
 
@@ -234,19 +251,20 @@ Runtime boxes still require the two-client behavior specified by each domain.
   same token through their native ownership path.
 - [x] Source: every static native staging owner, including final equipment,
   clears state on explicit epoch retirement and native lifecycle transition.
-- [x] Source: WinBoat build automation imports the exact package/evidence pair,
-  validates revision and hashes, refreshes the local-agent handoff ZIP, and
-  checks that ZIP after every successful build.
+- [x] Source: the WinBoat candidate-build helper creates a disposable proof
+  revision before any persistent commit. It does not update a handoff artifact;
+  no handoff update is authorized for the current stage.
 - [x] Source: host and WinBoat cleanup locks prevent cleanup during a build;
   scheduled disk-pressure cleanup removes only reproducible project output and
   bounded caches while preserving source, games, current handoffs, and evidence.
 - [x] Review: the final Sol max architecture, ABI, concurrency, lifecycle,
   protocol, and crash-surface review is dispositioned in
   `full-gameplay-source-postfix-senior-disposition-20260716.md`.
-- [x] Build: commit and push a clean source revision, then run one final WinBoat
-  gameplay build and all unit/static/package/evidence audits.
-- [x] Deploy: install that exact package locally and deploy the exact matching
-  server revision, with one and only one server container.
+- [ ] Build: run the current source through the WinBoat candidate build and its
+  compile, unit/static, package, and evidence audits.
+- [ ] Deploy: after a passing candidate, commit/push only that buildable source,
+  run a clean `--skip-handoff` build, then install and deploy its exact package
+  revision with one and only one server container.
 - [ ] Runtime: complete the two-client domain matrix on Windows and Linux
   Proton/UMU with Monado, including Index bindings and controller navigation.
 - [ ] Compatibility: validate HIGGS, PLANCK, VRIK, SkyrimVR-FBT, Realm of
@@ -257,11 +275,9 @@ Runtime boxes still require the two-client behavior specified by each domain.
 
 ## Next Stage Order
 
-1. Fix and retest CommonLib gameplay-session retirement and the outer launcher
-   process hang observed after `qqq`.
-2. Validate or replace the event subscriptions that currently fail closed as
-   unvalidated `BSTEventSource::AddEventSink` requests.
-3. Execute the two-client runtime matrix above on Linux/Monado and Windows,
-   preserving per-domain evidence and controller results.
-4. Implement or explicitly defer the remaining source/product gaps, then
-   publish a new audited prerelease.
+1. Run the current dirty source through the WinBoat candidate build.
+2. Commit and push only if that candidate passes.
+3. Run a clean `--skip-handoff` build of the committed revision.
+4. Deploy matching local client and dedicated-server revisions.
+5. Prove a Monado connection, then execute the Windows/Linux two-client
+   gameplay matrix.

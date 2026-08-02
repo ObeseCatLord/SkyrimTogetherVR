@@ -34,18 +34,31 @@ EventRecord MakeEvent(const std::uint64_t a_sequence) noexcept
     event.Payload.LocalPlayerState.LocalActorBaseFormId = 0x7;
     return event;
 }
+
+CommandRecord MakeGameplayCommand(
+    const CommandKind a_kind,
+    const GameplayDomain a_domain,
+    const GameplayAction a_action) noexcept
+{
+    CommandRecord command{};
+    command.Header.Kind = static_cast<std::uint16_t>(a_kind);
+    command.Payload.ApplyGameplayAction.Domain = static_cast<std::uint16_t>(a_domain);
+    command.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(a_action);
+    return command;
+}
 } // namespace
 
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 19);
+    REQUIRE(kMappingAbiVersion == 20);
     REQUIRE(kCapabilityRevision == 29);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
     REQUIRE(kMinimumSkseVrVersion == 0x020000C0);
     REQUIRE(kMinimumSkseVrReleaseIndex == 60);
+    REQUIRE(static_cast<std::uint32_t>(CommandStatus::Degraded) == 13);
     REQUIRE(kFixedPayloadBytes == 80);
     REQUIRE(kDefaultEventRingCapacity == 2048);
     REQUIRE(kDefaultCommandRingCapacity == 2048);
@@ -104,6 +117,27 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(IsActionInDomain(GameplayDomain::Inventory, GameplayAction::InventoryTransactionItemEffect));
     REQUIRE(kInventoryTransactionDynamicEnchantmentFormId == std::numeric_limits<std::uint32_t>::max());
     REQUIRE(kInventoryTransactionBeginKnownFlags == kInventoryTransactionReset);
+}
+
+TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-vr][gameplay-bridge]")
+{
+    const auto appearanceCommit = MakeGameplayCommand(
+        CommandKind::ApplyGameplayAction, GameplayDomain::Appearance, GameplayAction::CommitAppearance);
+    REQUIRE(IsSuccessfulCommandResult(CommandStatus::Success, appearanceCommit));
+    REQUIRE(IsSuccessfulCommandResult(CommandStatus::Degraded, appearanceCommit));
+    REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Unsupported, appearanceCommit));
+
+    const auto wrongKind = MakeGameplayCommand(
+        CommandKind::ApplyGameplayTextChunk, GameplayDomain::Appearance, GameplayAction::CommitAppearance);
+    REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongKind));
+
+    const auto wrongDomain = MakeGameplayCommand(
+        CommandKind::ApplyGameplayAction, GameplayDomain::Equipment, GameplayAction::CommitAppearance);
+    REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongDomain));
+
+    const auto wrongAction = MakeGameplayCommand(
+        CommandKind::ApplyGameplayAction, GameplayDomain::Appearance, GameplayAction::SetTint);
+    REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongAction));
 }
 
 TEST_CASE("VR gameplay bridge records preserve identity and payloads", "[skyrim-vr][gameplay-bridge]")
