@@ -1036,7 +1036,7 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
         cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
         cellIdComponent.CenterCoords = centerCoords;
 
-        swap(animationComponent.CurrentAction, currentAction);
+        std::swap(animationComponent.CurrentAction, currentAction);
         animationComponent.Actions.swap(pendingActions);
         animationComponent.ActionsReplayCache.AppendAll(update.ActionEvents);
 
@@ -1099,8 +1099,7 @@ void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionR
     Vector<ActionEvent> pendingActions = animationComponent.Actions;
     pendingActions.push_back(currentAction);
 
-    using std::swap;
-    swap(animationComponent.CurrentAction, currentAction);
+    std::swap(animationComponent.CurrentAction, currentAction);
     animationComponent.Actions.swap(pendingActions);
     animationComponent.ActionsReplayCache.Append(animationComponent.CurrentAction);
 }

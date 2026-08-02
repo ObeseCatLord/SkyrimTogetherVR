@@ -507,7 +507,7 @@ void PartyService::OnPartyInvite(const PacketEvent<PartyInviteRequest>& acPacket
     const uint64_t previousExpiry = hadInvitation ? invitationItor->second : 0;
     if (hadInvitation)
     {
-        invitationItor->second = cExpiryTick;
+        inviteePartyComponent.Invitations.at(pInviter) = cExpiryTick;
     }
     else
     {
@@ -527,7 +527,7 @@ void PartyService::OnPartyInvite(const PacketEvent<PartyInviteRequest>& acPacket
     catch (...)
     {
         if (hadInvitation)
-            invitationItor->second = previousExpiry;
+            inviteePartyComponent.Invitations.at(pInviter) = previousExpiry;
         else
             inviteePartyComponent.Invitations.erase(pInviter);
 
