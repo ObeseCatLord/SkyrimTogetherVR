@@ -1154,6 +1154,7 @@ bool VRLocalGameplayService::ApplyInventoryTransaction(const GameplayBridge::Eve
         return true;
     }
     case GameplayBridge::GameplayAction::InventoryTransactionEnd:
+    {
         if (transaction.Items.size() != transaction.ExpectedItems || transaction.Items.empty() ||
             !transaction.HasOpenItemExtra || transaction.EffectsRemaining != 0 ||
             payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
@@ -1178,6 +1179,7 @@ bool VRLocalGameplayService::ApplyInventoryTransaction(const GameplayBridge::Eve
                                header.Identity.ActionId);
         m_pendingInventoryTransactions.erase(pending);
         return true;
+    }
     default:
         return reject();
     }
