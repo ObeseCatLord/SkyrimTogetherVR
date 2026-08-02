@@ -610,8 +610,8 @@ void VRPoseService::PruneRemotePoses(double aDelta) noexcept
 
     for (auto it = m_remotePoseAges.begin(); it != m_remotePoseAges.end();)
     {
-        it->second += aDelta;
-        if (it->second < kRemotePoseStaleSeconds)
+        it.value() += aDelta;
+        if (it.value() < kRemotePoseStaleSeconds)
         {
             ++it;
             continue;
