@@ -31,12 +31,12 @@ add_rules("mode.debug", "mode.releasedbg", "mode.release")
 -- configure can validate them before platform-conditional subprojects load.
 -- The pinned CommonLib project applies the matching ENABLE_SKYRIM_* defines.
 option("skyrim_se", function()
-    set_default(true)
+    set_default(false)
     set_description("Enable CommonLib runtime support for Skyrim SE")
 end)
 
 option("skyrim_ae", function()
-    set_default(true)
+    set_default(false)
     set_description("Enable CommonLib runtime support for Skyrim AE")
 end)
 

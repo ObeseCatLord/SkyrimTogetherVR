@@ -670,7 +670,7 @@ if ($LASTEXITCODE -ne 0) {
 if (-not $SkipConfigure) {
     $configureArgs = @(
         "f", "-p", "windows", "-a", "x64", "-m", $Mode, "-y",
-        "--skyrim_se=y", "--skyrim_ae=y", "--skyrim_vr=y"
+        "--skyrim_se=n", "--skyrim_ae=n", "--skyrim_vr=y"
     )
     if ($Toolchain.Length -gt 0) {
         $configureArgs += "--toolchain=$Toolchain"

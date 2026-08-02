@@ -306,7 +306,7 @@ struct PoseApplication
         if (!name)
             return false;
         auto& application = applications[applicationCount];
-        application.Node = a_root.GetObjectByName(RE::BSFixedString(name));
+        application.Node.reset(a_root.GetObjectByName(RE::BSFixedString(name)));
         if (!application.Node || IsPhysicsControlled(a_actor, *application.Node, a_root) ||
             !BuildLocalPose(*application.Node, pose, application.Local))
             return false;

@@ -21,5 +21,5 @@
 	url = https://github.com/yhirose/cpp-httplib.git
 [submodule "Libraries/CommonLibSSE-NG"]
 	path = Libraries/CommonLibSSE-NG
-	url = https://github.com/alandtse/CommonLibVR.git
-	branch = ng
+	url = https://github.com/ObeseCatLord/CommonLibSSE-NG.git
+	branch = stvr-exclusive-vr-5.4.2

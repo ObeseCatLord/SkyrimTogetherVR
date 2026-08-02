@@ -61,7 +61,11 @@ DeathSystemPolicyState g_deathSystemPolicy{};
     return vm->DispatchStaticCall(
                RE::BSFixedString{"Game"}, RE::BSFixedString{"FadeOutGame"},
                RE::MakeFunctionArguments(
-                   a_fadingOut, a_blackFade, a_fadeDuration, a_remainVisible, a_secondsToFade), callback) ?
+                   static_cast<bool>(a_fadingOut),
+                   static_cast<bool>(a_blackFade),
+                   static_cast<float>(a_fadeDuration),
+                   static_cast<bool>(a_remainVisible),
+                   static_cast<float>(a_secondsToFade)), callback) ?
                CommandStatus::Success : CommandStatus::EngineRejected;
 }
 

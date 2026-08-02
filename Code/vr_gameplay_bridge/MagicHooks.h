@@ -1,8 +1,6 @@
 #pragma once
 
-#include <RE/M/MagicTarget.h>
-
-#include <cstdint>
+#include "pch.h"
 
 namespace SkyrimTogetherVR::GameplayAdapter::MagicHooks
 {

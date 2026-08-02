@@ -2051,7 +2051,7 @@ void OnContainerChangedEvent(const RE::TESContainerChangedEvent& a_event) noexce
             ScheduleNpcInventorySnapshot(a_event.newContainer, player);
 
         auto* object = RE::TESForm::LookupByID<RE::TESBoundObject>(a_event.baseObj);
-        auto* reference = a_event.reference.get();
+        const auto reference = a_event.reference.get();
         CapturedInventoryStack stack{};
         const auto captureFromOwner = [&](const std::uint32_t a_ownerFormId) {
             if (a_event.uniqueID == 0)
@@ -3538,7 +3538,7 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
             appendFaction(AssignmentBootstrapRecordKind::ExtraFaction, faction);
     }
 
-    const auto* actorBase = player->GetActorBase();
+    auto* actorBase = player->GetActorBase();
     const auto* race = player->GetRace();
     const auto sex = static_cast<std::int32_t>(actorBase->GetSex());
     const auto level = player->GetLevel();

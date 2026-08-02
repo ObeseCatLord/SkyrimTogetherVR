@@ -431,7 +431,7 @@ CommandStatus AvatarManager::ValidateLocalNativeGameplayActor(const CommandRecor
                     RetireLocalNativeGameplayActor(retired);
                     continue;
                 }
-                if (generationOrder == CanonicalEntity::GenerationOrder::Older)
+                if (generationOrder == CanonicalEntity::GenerationOrder::OlderOrAmbiguous)
                     return CommandStatus::StaleEntity;
             }
             ++binding;

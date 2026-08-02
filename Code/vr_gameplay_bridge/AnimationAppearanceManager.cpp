@@ -2091,8 +2091,10 @@ std::unordered_map<InventoryTransactionKey, StagedInventoryTransaction, Inventor
         (ar_prepared.Enchantment && !add(new RE::ExtraEnchantment{
                                       ar_prepared.Enchantment, static_cast<std::uint16_t>(item.EnchantmentCharge),
                                       (item.ExtraFlags & kInventoryTransactionEnchantRemoveUnequip) != 0})) ||
-        ((item.ItemFlags & kInventoryTransactionWorn) != 0 && !add(new RE::ExtraWorn{})) ||
-        ((item.ItemFlags & kInventoryTransactionWornLeft) != 0 && !add(new RE::ExtraWornLeft{})))
+        ((item.ItemFlags & kInventoryTransactionWorn) != 0 &&
+         !add(RE::BSExtraData::Create<RE::ExtraWorn>())) ||
+        ((item.ItemFlags & kInventoryTransactionWornLeft) != 0 &&
+         !add(RE::BSExtraData::Create<RE::ExtraWornLeft>())))
         return CommandStatus::EngineRejected;
     ar_prepared.AdditionExtra = std::move(extra);
     return CommandStatus::Success;
