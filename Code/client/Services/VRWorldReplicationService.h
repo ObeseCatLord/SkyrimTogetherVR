@@ -3,11 +3,14 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include <entt/entt.hpp>
+#include <Structs/Inventory.h>
 #include <vr_common/VRGameplayBridge.h>
 
 struct ConnectedEvent;
@@ -54,6 +57,9 @@ struct VRWorldReplicationService
     TP_NOCOPYMOVE(VRWorldReplicationService);
 
 private:
+    static constexpr std::size_t kMaximumPendingRemoteCommands = 128;
+    static constexpr std::size_t kMaximumPendingWorldInventoryTransactions = 128;
+
     struct RetainedState
     {
         std::uint64_t ServerInstanceNonce{0};
@@ -73,6 +79,36 @@ private:
         bool Valid{false};
         bool Dirty{false};
         bool InFlight{false};
+    };
+
+    struct PendingRemoteCommand
+    {
+        SkyrimTogetherVR::GameplayBridge::CommandRecord Command{};
+        double RetryDelay{0.0};
+        double LifetimeRemaining{0.0};
+        double ResultRemaining{0.0};
+        std::uint8_t Attempts{0};
+        bool AwaitingResult{false};
+        bool Occupied{false};
+    };
+
+    struct PendingWorldInventoryTransaction
+    {
+        GameId TargetId{};
+        std::vector<Inventory::Entry> Entries{};
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+        std::uint64_t LifecycleEpoch{};
+        std::uint64_t FirstActionId{};
+        std::uint64_t EndActionId{};
+        std::uint64_t NextResultActionId{};
+        std::uint32_t TargetLocalFormId{};
+        double RetryDelay{};
+        double ResultRemaining{};
+        std::uint8_t Attempts{};
+        bool Reset{};
+        bool AwaitingResult{};
+        bool Terminal{};
     };
 
     void OnActivate(const NotifyActivate& acMessage) noexcept;
@@ -100,6 +136,7 @@ private:
     void OnPlayerDialogueEvent(const PlayerDialogueEvent& acEvent) noexcept;
     void OnLocalGameplay(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept;
     void OnLocalGameplayText(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    void OnLocalSubtitleText(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     void OnConnected(const ConnectedEvent& acEvent) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -118,9 +155,31 @@ private:
     void DiscardRetainedStateForSession(std::uint64_t aServerInstanceNonce,
                                         std::uint64_t aConnectionGeneration) noexcept;
     void ResetInFlightState() noexcept;
+    void ResetSubtitleTextState() noexcept;
+    void SubmitRemoteCommand(SkyrimTogetherVR::GameplayBridge::CommandRecord aCommand) noexcept;
+    void RetryPendingRemoteCommands(double aDelta) noexcept;
+    void TrySubmitPendingRemoteCommand(PendingRemoteCommand& arPending) noexcept;
+    void HandlePendingRemoteCommandResult(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    [[nodiscard]] bool IsPendingRemoteCommandCurrent(const PendingRemoteCommand& acPending) const noexcept;
+    void QueueWorldInventoryTransaction(const GameId& acTargetId, const Inventory& acInventory,
+                                        bool aReset) noexcept;
+    [[nodiscard]] bool BuildWorldInventoryTransactionCommands(
+        const PendingWorldInventoryTransaction& acPending,
+        std::vector<SkyrimTogetherVR::GameplayBridge::CommandRecord>& arCommands) const noexcept;
+    void TrySubmitPendingWorldInventoryTransaction(PendingWorldInventoryTransaction& arPending) noexcept;
+    void RetryPendingWorldInventoryTransactions(double aDelta) noexcept;
+    void HandlePendingWorldInventoryTransactionResult(
+        const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    [[nodiscard]] bool IsPendingWorldInventoryTransactionCurrent(
+        const PendingWorldInventoryTransaction& acPending) const noexcept;
+    void ClearPendingWorldInventoryTransactions() noexcept;
     void SubmitText(SkyrimTogetherVR::GameplayBridge::CommandRecord aBase,
                     std::uint64_t aTextId, std::string_view acText) noexcept;
     void RetryPendingText() noexcept;
+    template <class T>
+    [[nodiscard]] bool SendOutbound(T&& aRequest, std::size_t aDomainIndex,
+                                    std::uint64_t aActionId) noexcept;
+    void TrySendPendingOutbound() noexcept;
 
     World& m_world;
     TransportService& m_transport;
@@ -131,9 +190,13 @@ private:
     std::uint64_t m_observedLifecycleEpoch{0};
     double m_reconcileTimer{0.0};
     double m_textRetryTimer{0.0};
+    std::array<PendingRemoteCommand, kMaximumPendingRemoteCommands> m_pendingRemoteCommands{};
+    std::unordered_map<GameId, std::deque<PendingWorldInventoryTransaction>> m_pendingWorldInventoryTransactions{};
+    std::size_t m_pendingWorldInventoryTransactionCount{};
     RetainedState m_calendarState{};
     RetainedState m_weatherState{};
     RetainedState m_settingsState{};
+    RetainedState m_deathSystemState{};
     struct WaypointEchoSuppression
     {
         std::uint32_t LocalWorldspaceFormId{0};
@@ -157,6 +220,26 @@ private:
                              SkyrimTogetherVR::GameplayBridge::kGameplayTextBytesPerChunk> Bytes{};
     };
     DialogueTextAssembly m_dialogueText{};
+    struct SubtitleTextAssembly
+    {
+        std::uint64_t ServerInstanceNonce{0};
+        std::uint64_t ConnectionGeneration{0};
+        std::uint64_t LifecycleEpoch{0};
+        std::uint64_t ActionId{0};
+        std::uint64_t TextId{0};
+        std::uint32_t SpeakerLocalFormId{0};
+        std::uint32_t TopicLocalFormId{0};
+        std::uint16_t ChunkCount{0};
+        std::uint16_t ReceivedCount{0};
+        std::uint32_t ReceivedMask{0};
+        std::array<std::uint16_t, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks> Lengths{};
+        std::array<char, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks *
+                             SkyrimTogetherVR::GameplayBridge::kGameplayTextBytesPerChunk> Bytes{};
+        double Remaining{0.0};
+        bool Valid{false};
+    };
+    SubtitleTextAssembly m_subtitleText{};
+    std::uint64_t m_lastSubtitleActionId{0};
     struct PendingTextTransaction
     {
         SkyrimTogetherVR::GameplayBridge::CommandRecord Base{};
@@ -165,6 +248,14 @@ private:
         std::uint8_t Attempts{0};
     };
     std::deque<PendingTextTransaction> m_pendingText{};
+    struct PendingOutbound
+    {
+        std::function<bool()> TrySend{};
+    };
+    std::deque<PendingOutbound> m_pendingOutbound{};
+    std::uint64_t m_pendingOutboundServerInstanceNonce{};
+    std::uint64_t m_pendingOutboundConnectionGeneration{};
+    std::uint64_t m_pendingOutboundLifecycleEpoch{};
     bool m_partyRoleKnown{false};
     bool m_partyLeader{false};
     std::array<std::uint64_t, 18> m_lastLocalActionIdByDomain{};

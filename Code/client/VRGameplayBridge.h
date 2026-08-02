@@ -43,10 +43,17 @@ void UpdateSessionIdentity(std::uint64_t aServerInstanceNonce, std::uint64_t aCo
 
 [[nodiscard]] bool TryConsumeEvent(GameplayBridge::EventRecord& arEvent) noexcept;
 [[nodiscard]] bool TrySubmitCommand(GameplayBridge::CommandRecord& arCommand) noexcept;
-// Submits one logical multi-record transaction under a shared ActionId. The
-// caller retains semantic IDs such as TextId; actor-action staging IDs are
-// normalized to the allocated ActionId before publication.
+// Submits one logical multi-record transaction into contiguous ring slots.
+// Gameplay-action batches receive one strictly increasing ActionId per record
+// because native actor ledgers advance after every mutation. Text and exact
+// actor-action staging records share one ActionId as required by their assembly
+// protocols.
 [[nodiscard]] bool TrySubmitCommandBatch(GameplayBridge::CommandRecord* apCommands,
                                          std::size_t aCommandCount) noexcept;
+// Reserves one grammar-checked mixed fixed/text appearance transaction. Fixed
+// commands and semantic text groups receive consecutive ActionIds; all chunks
+// in one text group share its ActionId.
+[[nodiscard]] bool TrySubmitAppearanceBatch(GameplayBridge::CommandRecord* apCommands,
+                                            std::size_t aCommandCount) noexcept;
 [[nodiscard]] GameplayBridge::CommandPumpResult PumpCommands(std::uint32_t aMaxCommands) noexcept;
 } // namespace SkyrimTogetherVR::GameplayBridgeClient

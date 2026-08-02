@@ -62,7 +62,11 @@ struct PendingActorPose
 {
     RE::ActorHandle Actor{};
     PendingNodes Nodes{};
+    std::uint32_t Sequence{};
+    std::uint32_t RootGeneration{};
+    std::uint32_t ExpectedNodeMask{};
     std::uint16_t Attempts{};
+    bool CommitReceived{};
 };
 std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
 
@@ -166,6 +170,24 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
                                                IsBounded(ar_chunk.Vector, kMaximumWorldPosition);
 }
 
+[[nodiscard]] bool DecodePoseCommit(
+    const GameplayActionPayload& a_payload,
+    std::uint32_t& ar_sequence,
+    std::uint32_t& ar_rootGeneration,
+    std::uint32_t& ar_expectedNodeMask) noexcept
+{
+    if (!HasNoPoseForms(a_payload) || a_payload.ValueA == 0 ||
+        (a_payload.ActionFlags & ~kPoseCommitNodeMask) != 0 || a_payload.ActionFlags == 0 ||
+        a_payload.ScalarA != 0.0F || a_payload.ScalarB != 0.0F ||
+        a_payload.ScalarC != 0.0F || a_payload.ScalarD != 0.0F)
+        return false;
+
+    ar_sequence = static_cast<std::uint32_t>(a_payload.ValueA);
+    ar_rootGeneration = static_cast<std::uint32_t>(a_payload.ValueB);
+    ar_expectedNodeMask = a_payload.ActionFlags;
+    return true;
+}
+
 [[nodiscard]] bool IsVrikFingerPayload(const GameplayActionPayload& a_payload) noexcept
 {
     constexpr std::uint32_t kBothFingerSetsPresent = (1u << 0) | (1u << 1);
@@ -219,47 +241,82 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
     return a_actor.IsInRagdollState();
 }
 
-[[nodiscard]] bool SetLocalPose(RE::NiAVObject& a_node, const PendingPose& a_pose) noexcept
+[[nodiscard]] bool BuildLocalPose(
+    const RE::NiAVObject& a_node,
+    const PendingPose& a_pose,
+    RE::NiTransform& ar_local) noexcept
 {
     if (!IsSafeTransform(a_node.local, kMinimumLocalScale, kMaximumLocalScale))
         return false;
 
-    RE::NiPoint3 localPosition{};
-    float localScale{};
-    RE::NiMatrix3 localRotation{};
-    if (a_pose.Node >= PoseNode::Pelvis) {
-        localPosition = a_pose.Position;
-        localScale = a_pose.Scale;
-        localRotation = a_pose.Rotation;
-    } else {
+    ar_local = a_node.local;
+    if (a_pose.Node < PoseNode::Pelvis) {
         auto* const parent = a_node.parent;
         if (!parent || !IsSafeTransform(parent->world, kMinimumParentScale, kMaximumParentScale))
             return false;
         const auto parentInverse = parent->world.Invert();
-        localPosition = parentInverse * a_pose.Position;
-        localScale = a_pose.Scale / parent->world.scale;
-        localRotation = parent->world.rotate.Transpose() * a_pose.Rotation;
+        ar_local.translate = parentInverse * a_pose.Position;
+        ar_local.scale = a_pose.Scale / parent->world.scale;
+        ar_local.rotate = parent->world.rotate.Transpose() * a_pose.Rotation;
+    } else if (a_pose.Node == PoseNode::Pelvis) {
+        // FBT publishes the pelvis translation and rotation in parent-local
+        // space. Preserve the target skeleton's scale.
+        ar_local.translate = a_pose.Position;
+        ar_local.rotate = a_pose.Rotation;
+    } else {
+        // Limb translations and scales describe the source skeleton's bind
+        // pose, not portable tracker data. Applying their zero/default values
+        // collapses remote leg chains, so only the local rotation is owned by
+        // replication.
+        ar_local.rotate = a_pose.Rotation;
     }
 
-    if (!IsBounded(localPosition, kMaximumLocalPosition) || !IsFinite(localScale) ||
-        localScale < kMinimumLocalScale || localScale > kMaximumLocalScale || !IsOrthonormal(localRotation))
-        return false;
-
-    a_node.local.translate = localPosition;
-    a_node.local.rotate = localRotation;
-    a_node.local.scale = localScale;
-    return true;
+    return IsBounded(ar_local.translate, kMaximumLocalPosition) && IsFinite(ar_local.scale) &&
+           ar_local.scale >= kMinimumLocalScale && ar_local.scale <= kMaximumLocalScale &&
+           IsOrthonormal(ar_local.rotate);
 }
 
-[[nodiscard]] bool ApplyPose(RE::Actor& a_actor, RE::NiAVObject& a_root, const PendingPose& a_pose) noexcept
+struct PoseApplication
 {
-    const auto* const name = SkeletonNodeName(a_pose.Node);
-    if (!name)
+    RE::NiPointer<RE::NiAVObject> Node{};
+    RE::NiTransform Local{};
+};
+
+[[nodiscard]] bool ApplyCommittedPose(
+    RE::Actor& a_actor,
+    RE::NiAVObject& a_root,
+    const PendingActorPose& a_pending) noexcept
+{
+    if (!a_pending.CommitReceived || a_pending.ExpectedNodeMask == 0 || a_actor.IsInRagdollState())
         return false;
 
-    RE::NiPointer<RE::NiAVObject> node{a_root.GetObjectByName(RE::BSFixedString(name))};
-    if (!node || IsPhysicsControlled(a_actor, *node, a_root) || !SetLocalPose(*node, a_pose))
+    std::array<PoseApplication, static_cast<std::size_t>(PoseNode::Count)> applications{};
+    std::size_t applicationCount{};
+    for (std::size_t index = 0; index < a_pending.Nodes.size(); ++index) {
+        const auto nodeBit = 1u << static_cast<std::uint32_t>(index);
+        if ((a_pending.ExpectedNodeMask & nodeBit) == 0)
+            continue;
+
+        const auto& pose = a_pending.Nodes[index];
+        if (!pose.Complete() || pose.Sequence != a_pending.Sequence ||
+            pose.RootGeneration != a_pending.RootGeneration)
+            return false;
+
+        const auto* const name = SkeletonNodeName(pose.Node);
+        if (!name)
+            return false;
+        auto& application = applications[applicationCount];
+        application.Node = a_root.GetObjectByName(RE::BSFixedString(name));
+        if (!application.Node || IsPhysicsControlled(a_actor, *application.Node, a_root) ||
+            !BuildLocalPose(*application.Node, pose, application.Local))
+            return false;
+        ++applicationCount;
+    }
+
+    if (applicationCount == 0)
         return false;
+    for (std::size_t index = 0; index < applicationCount; ++index)
+        applications[index].Node->local = applications[index].Local;
 
     RE::NiUpdateData update{};
     a_root.UpdateDownwardPass(update, 0);
@@ -273,7 +330,7 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
 }
 
 [[nodiscard]] PendingActorPose* GetPendingActor(
-    const std::uint64_t a_handle, RE::Actor& a_actor) noexcept
+    const std::uint64_t a_handle, RE::Actor& a_actor)
 {
     if (const auto existing = s_pendingPoses.find(a_handle); existing != s_pendingPoses.end()) {
         existing->second.Actor = RE::ActorHandle{std::addressof(a_actor)};
@@ -289,50 +346,68 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
     return std::addressof(it->second);
 }
 
-[[nodiscard]] bool MergePoseChunk(PendingPose& ar_pose, const DecodedPoseChunk& a_chunk) noexcept
+[[nodiscard]] bool PreparePendingFrame(
+    PendingActorPose& ar_pending,
+    const std::uint32_t a_sequence,
+    const std::uint32_t a_rootGeneration) noexcept
 {
-    if (ar_pose.Sequence != 0 && ar_pose.Sequence != a_chunk.Sequence &&
-        !IsNewerSequence(a_chunk.Sequence, ar_pose.Sequence))
+    if (ar_pending.Sequence != 0 && ar_pending.Sequence != a_sequence &&
+        !IsNewerSequence(a_sequence, ar_pending.Sequence))
         return false;
-    if (ar_pose.Sequence != a_chunk.Sequence) {
-        ar_pose = {};
-        ar_pose.Node = a_chunk.Node;
-        ar_pose.Sequence = a_chunk.Sequence;
-        ar_pose.RootGeneration = a_chunk.RootGeneration;
-    } else if (ar_pose.RootGeneration != a_chunk.RootGeneration) {
+
+    if (ar_pending.Sequence != a_sequence) {
+        ar_pending.Nodes = {};
+        ar_pending.Sequence = a_sequence;
+        ar_pending.RootGeneration = a_rootGeneration;
+        ar_pending.ExpectedNodeMask = 0;
+        ar_pending.CommitReceived = false;
+    } else if (ar_pending.RootGeneration != a_rootGeneration) {
+        return false;
+    }
+    ar_pending.Attempts = 0;
+    return true;
+}
+
+[[nodiscard]] bool MergePoseChunk(PendingActorPose& ar_pending, const DecodedPoseChunk& a_chunk) noexcept
+{
+    if (!PreparePendingFrame(ar_pending, a_chunk.Sequence, a_chunk.RootGeneration))
+        return false;
+
+    auto& pose = ar_pending.Nodes[static_cast<std::size_t>(a_chunk.Node)];
+    if (pose.Sequence == 0) {
+        pose.Node = a_chunk.Node;
+        pose.Sequence = a_chunk.Sequence;
+        pose.RootGeneration = a_chunk.RootGeneration;
+    } else if (pose.Sequence != a_chunk.Sequence || pose.RootGeneration != a_chunk.RootGeneration) {
         return false;
     }
 
     if (!a_chunk.Basis) {
-        ar_pose.Position = a_chunk.Vector;
-        ar_pose.Scale = a_chunk.Scale;
-        ar_pose.PositionValid = true;
+        pose.Position = a_chunk.Vector;
+        pose.Scale = a_chunk.Scale;
+        pose.PositionValid = true;
         return true;
     }
 
     for (std::size_t component = 0; component < 3; ++component)
-        ar_pose.Rotation.entry[a_chunk.Axis][component] = (&a_chunk.Vector.x)[component];
-    ar_pose.BasisMask = static_cast<std::uint8_t>(ar_pose.BasisMask | (1u << a_chunk.Axis));
+        pose.Rotation.entry[a_chunk.Axis][component] = (&a_chunk.Vector.x)[component];
+    pose.BasisMask = static_cast<std::uint8_t>(pose.BasisMask | (1u << a_chunk.Axis));
     return true;
 }
 
-[[nodiscard]] bool ApplyQueuedPoses(
-    RE::Actor& a_actor, RE::NiAVObject& a_root, PendingActorPose& ar_pending) noexcept
+[[nodiscard]] bool IsCommittedFrameComplete(const PendingActorPose& a_pending) noexcept
 {
-    bool allApplied = true;
-    for (auto& pose : ar_pending.Nodes) {
-        if (!pose.Complete())
+    if (!a_pending.CommitReceived || a_pending.ExpectedNodeMask == 0)
+        return false;
+    for (std::size_t index = 0; index < a_pending.Nodes.size(); ++index) {
+        if ((a_pending.ExpectedNodeMask & (1u << static_cast<std::uint32_t>(index))) == 0)
             continue;
-        if (ApplyPose(a_actor, a_root, pose))
-            pose = {};
-        else
-            allApplied = false;
+        const auto& pose = a_pending.Nodes[index];
+        if (!pose.Complete() || pose.Sequence != a_pending.Sequence ||
+            pose.RootGeneration != a_pending.RootGeneration)
+            return false;
     }
-
-    bool anyPending{};
-    for (const auto& pose : ar_pending.Nodes)
-        anyPending = anyPending || pose.Sequence != 0;
-    return !anyPending || allApplied;
+    return true;
 }
 
 [[nodiscard]] bool ApplyLegacyGraphFloats(RE::Actor& a_actor, const GameplayActionPayload& a_payload,
@@ -384,12 +459,18 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         }
 
         DecodedPoseChunk poseChunk{};
+        std::uint32_t commitSequence{};
+        std::uint32_t commitRootGeneration{};
+        std::uint32_t commitNodeMask{};
         const bool isPoseChunk = action == GameplayAction::VrPoseChunk;
         const bool isPhysicalPose = isPoseChunk && DecodePoseChunk(payload, poseChunk);
+        const bool isPoseCommit = action == GameplayAction::VrPoseCommit;
+        const bool isPhysicalCommit = isPoseCommit &&
+            DecodePoseCommit(payload, commitSequence, commitRootGeneration, commitNodeMask);
         const bool isLegacyPose = isPoseChunk && IsLegacyGraphPayload(payload, 6.28318530717958647692f);
         const bool isLegacyCalibration = action == GameplayAction::VrCalibration && IsLegacyGraphPayload(payload, 10000.0f);
         const bool isVrikFingerPayload = action == GameplayAction::VrCalibration && IsVrikFingerPayload(payload);
-        if (!isPhysicalPose && !isLegacyPose && !isLegacyCalibration && !isVrikFingerPayload) {
+        if (!isPhysicalPose && !isPhysicalCommit && !isLegacyPose && !isLegacyCalibration && !isVrikFingerPayload) {
             // Current VrCalibration carries VRIK finger samples.  VRIK exposes
             // no remote-actor application API, so accepting it as a graph or
             // local-player call would be both unsafe and semantically wrong.
@@ -424,26 +505,25 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         auto* pending = GetPendingActor(payload.TargetHandle.Value, *actor);
         if (!pending)
             return CommandStatus::QueueOverflow;
-        auto& pendingNode = pending->Nodes[static_cast<std::size_t>(poseChunk.Node)];
-        if (!MergePoseChunk(pendingNode, poseChunk))
+
+        if (isPhysicalPose) {
+            if (!MergePoseChunk(*pending, poseChunk))
+                return CommandStatus::StaleEntity;
+            return CommandStatus::Success;
+        }
+
+        if (!PreparePendingFrame(*pending, commitSequence, commitRootGeneration))
             return CommandStatus::StaleEntity;
-        pending->Attempts = 0;
-        if (!pendingNode.Complete())
+        pending->ExpectedNodeMask = commitNodeMask;
+        pending->CommitReceived = true;
+        if (!IsCommittedFrameComplete(*pending))
             return CommandStatus::Success;
 
         RE::NiPointer<RE::NiAVObject> root{actor->Get3D()};
         if (!root)
             return CommandStatus::Success;
 
-        if (!ApplyPose(*actor, *root, pendingNode)) {
-            pendingNode = {};
-            return CommandStatus::Unsupported;
-        }
-        pendingNode = {};
-        bool anyPending{};
-        for (const auto& node : pending->Nodes)
-            anyPending = anyPending || node.Sequence != 0;
-        if (!anyPending)
+        if (ApplyCommittedPose(*actor, *root, *pending))
             s_pendingPoses.erase(payload.TargetHandle.Value);
         return CommandStatus::Success;
     } catch (...) {
@@ -461,6 +541,10 @@ void VRBodyPoseManager::ProcessPending() noexcept
                 continue;
             }
             if (actor->IsInRagdollState()) {
+                it = s_pendingPoses.erase(it);
+                continue;
+            }
+            if (!IsCommittedFrameComplete(it->second)) {
                 ++it;
                 continue;
             }
@@ -469,11 +553,7 @@ void VRBodyPoseManager::ProcessPending() noexcept
                 ++it;
                 continue;
             }
-            ApplyQueuedPoses(*actor, *root, it->second);
-            bool anyPending{};
-            for (const auto& node : it->second.Nodes)
-                anyPending = anyPending || node.Sequence != 0;
-            it = anyPending ? std::next(it) : s_pendingPoses.erase(it);
+            it = ApplyCommittedPose(*actor, *root, it->second) ? s_pendingPoses.erase(it) : std::next(it);
         }
     } catch (...) {
     }

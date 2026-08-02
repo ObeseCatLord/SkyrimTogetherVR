@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "AnimationVariables.h"
 #include "CachedString.h"
+#include "GameId.h"
 
 using TiltedPhoques::String;
 
@@ -10,9 +11,9 @@ struct ActionEvent
 {
     uint64_t Tick{0};
     uint32_t ActorId{0};
-    uint32_t ActionId{0};
-    uint32_t TargetId{0};
-    uint32_t IdleId{0};
+    GameId ActionId{};
+    GameId TargetId{};
+    GameId IdleId{};
     uint32_t State1{0};
     uint32_t State2{0};
     uint32_t Type{0};
@@ -35,4 +36,6 @@ struct ActionEvent
 
     void GenerateDifferential(const ActionEvent& aPrevious, TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
     void ApplyDifferential(TiltedPhoques::Buffer::Reader& aReader) noexcept;
+
+    bool IsDecodedValid{true};
 };

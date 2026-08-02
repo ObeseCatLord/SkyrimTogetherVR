@@ -41,7 +41,7 @@ bool IsLeaseExpired(const ObjectAuthorityLease& acLease, uint64_t aTick) noexcep
 }
 }
 
-bool VRObjectAuthority::AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick) noexcept
+bool VRObjectAuthority::AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick)
 {
     if (!acObjectId || aPlayerId == 0)
         return false;
@@ -118,7 +118,7 @@ VRGrabRelayService::~VRGrabRelayService() noexcept
     VRObjectAuthority::Reset();
 }
 
-void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& acMessage) noexcept
+void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -152,6 +152,10 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR grab relay rejected an update after an allocation or fanout failure");
+}
 
 void VRGrabRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -167,7 +171,7 @@ void VRGrabRelayService::OnUpdate(const UpdateEvent&) noexcept
     VRObjectAuthority::Expire(GameServer::Get()->GetTick());
 }
 
-bool VRGrabRelayService::ShouldRelayGrab(uint32_t aPlayerId, const RequestVRGrabEvent& acRequest) noexcept
+bool VRGrabRelayService::ShouldRelayGrab(uint32_t aPlayerId, const RequestVRGrabEvent& acRequest)
 {
     const auto& grab = acRequest.Grab;
     if (grab.Sequence == 0 || !HasGrabObject(grab))

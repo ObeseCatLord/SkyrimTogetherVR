@@ -15,6 +15,11 @@ struct ActorData
                IsWeaponDrawn == acRhs.IsWeaponDrawn;
     }
 
+    [[nodiscard]] bool IsDecodedValid() const noexcept
+    {
+        return InitialActorValues.IsDecodedValid && InitialInventory.IsDecodedValid;
+    }
+
     ActorValues InitialActorValues{};
     Inventory InitialInventory{};
     bool IsDead{};

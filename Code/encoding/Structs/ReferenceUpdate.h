@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #include <Structs/Movement.h>
 #include <Structs/ActionEvent.h>
 
@@ -8,6 +10,8 @@ using TiltedPhoques::Vector;
 
 struct ReferenceUpdate
 {
+    static constexpr std::size_t kMaximumActionEvents = 0xFF;
+
     ReferenceUpdate() = default;
     ~ReferenceUpdate() = default;
 
@@ -15,8 +19,9 @@ struct ReferenceUpdate
     bool operator!=(const ReferenceUpdate& acRhs) const noexcept;
 
     void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
-    void Deserialize(TiltedPhoques::Buffer::Reader& aReader);
+    void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
 
     Movement UpdatedMovement{};
     Vector<ActionEvent> ActionEvents{};
+    bool IsDecodedValid{true};
 };

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include "MagicEquipment.h"
 
 using TiltedPhoques::Buffer;
@@ -8,6 +10,9 @@ using TiltedPhoques::Vector;
 
 struct Inventory
 {
+    static constexpr std::size_t kMaximumWireEntries = 4096;
+    static constexpr std::size_t kMaximumWireEffects = 4096;
+
     struct EffectItem
     {
         float Magnitude{};
@@ -18,6 +23,9 @@ struct Inventory
 
         void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
         void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
+
+        bool operator==(const EffectItem& acRhs) const noexcept;
+        bool operator!=(const EffectItem& acRhs) const noexcept;
     };
 
     struct EnchantmentData
@@ -28,6 +36,16 @@ struct Inventory
 
     struct Entry
     {
+        static constexpr std::int32_t kMaximumMutationCount = 1'000'000;
+        static constexpr float kMaximumMutationScalarMagnitude = 1'000'000.0F;
+        static constexpr std::size_t kMaximumMutationEffects = kMaximumWireEffects;
+
+        enum EquipmentFlag : std::uint8_t
+        {
+            kEquipmentWeapon = 1u << 0,
+            kEquipmentAmmo = 1u << 1,
+        };
+
         GameId BaseId{};
         int32_t Count{};
 
@@ -48,12 +66,20 @@ struct Inventory
         bool ExtraWorn{};
         bool ExtraWornLeft{};
         bool IsQuestItem{};
+        // Classification is populated by final-equipment snapshots. It remains
+        // zero for ordinary inventory entries and lets the server translate an
+        // atomic snapshot into the original incremental equipment protocol.
+        std::uint8_t EquipmentFlags{};
+        bool IsDecodedValid{true};
 
         bool operator==(const Entry& acRhs) const noexcept;
         bool operator!=(const Entry& acRhs) const noexcept;
 
         void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
         void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
+
+        // Validates the complete payload accepted by AddOrRemoveEntry.
+        [[nodiscard]] bool IsValidMutation() const noexcept;
 
         bool ContainsExtraData() const noexcept { return !IsExtraDataEquals(Entry{}); }
 
@@ -64,8 +90,8 @@ struct Inventory
             // TODO: the whole server side state thing is very flawed
             // since many of these things can and will change, like poison id or charge
             // or the fact that the enchant id can be temp
-            return ExtraCharge == acRhs.ExtraCharge && ExtraEnchantId == acRhs.ExtraEnchantId && ExtraEnchantCharge == acRhs.ExtraEnchantCharge && ExtraEnchantRemoveUnequip == acRhs.ExtraEnchantRemoveUnequip && ExtraHealth == acRhs.ExtraHealth && ExtraPoisonId == acRhs.ExtraPoisonId &&
-                   ExtraPoisonCount == acRhs.ExtraPoisonCount && ExtraSoulLevel == acRhs.ExtraSoulLevel && ExtraWorn == acRhs.ExtraWorn && ExtraWornLeft == acRhs.ExtraWornLeft && IsQuestItem == acRhs.IsQuestItem;
+            return ExtraCharge == acRhs.ExtraCharge && ExtraEnchantId == acRhs.ExtraEnchantId && ExtraEnchantCharge == acRhs.ExtraEnchantCharge && EnchantData.IsWeapon == acRhs.EnchantData.IsWeapon && EnchantData.Effects == acRhs.EnchantData.Effects && ExtraEnchantRemoveUnequip == acRhs.ExtraEnchantRemoveUnequip && ExtraHealth == acRhs.ExtraHealth && ExtraPoisonId == acRhs.ExtraPoisonId &&
+                   ExtraPoisonCount == acRhs.ExtraPoisonCount && ExtraSoulLevel == acRhs.ExtraSoulLevel && ExtraWorn == acRhs.ExtraWorn && ExtraWornLeft == acRhs.ExtraWornLeft && IsQuestItem == acRhs.IsQuestItem && EquipmentFlags == acRhs.EquipmentFlags;
         }
 
         bool IsWorn() const noexcept { return ExtraWorn || ExtraWornLeft; }
@@ -81,10 +107,11 @@ struct Inventory
     int32_t GetEntryCountById(GameId& aItemId) const noexcept;
 
     void RemoveByFilter(std::function<bool(const Entry&)> aFilter) noexcept;
-    void AddOrRemoveEntry(const Entry& acEntry) noexcept;
+    [[nodiscard]] bool AddOrRemoveEntry(const Entry& acEntry) noexcept;
     void UpdateEquipment(const Inventory& acNewInventory) noexcept;
     bool ContainsQuestItems() const noexcept;
 
     Vector<Entry> Entries{};
     MagicEquipment CurrentMagicEquipment{};
+    bool IsDecodedValid{true};
 };

@@ -15,14 +15,43 @@ void ClientReferencesMoveRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aW
 
 void ClientReferencesMoveRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    Updates.clear();
+    IsDecodedValid = true;
     ClientMessage::DeserializeRaw(aReader);
 
     Tick = Serialization::ReadVarInt(aReader);
     const auto count = Serialization::ReadVarInt(aReader);
-
-    for (auto i = 0u; i < count; ++i)
+    if (count > kMaximumUpdates)
     {
-        uint32_t serverId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
-        Updates[serverId].Deserialize(aReader);
+        IsDecodedValid = false;
+        return;
+    }
+
+    try
+    {
+        for (uint64_t i = 0; i < count; ++i)
+        {
+            const uint32_t serverId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+            if (serverId == 0 || Updates.contains(serverId))
+            {
+                IsDecodedValid = false;
+                Updates.clear();
+                return;
+            }
+            ReferenceUpdate update{};
+            update.Deserialize(aReader);
+            if (!update.IsDecodedValid)
+            {
+                IsDecodedValid = false;
+                Updates.clear();
+                return;
+            }
+            Updates.emplace(serverId, std::move(update));
+        }
+    }
+    catch (...)
+    {
+        Updates.clear();
+        IsDecodedValid = false;
     }
 }

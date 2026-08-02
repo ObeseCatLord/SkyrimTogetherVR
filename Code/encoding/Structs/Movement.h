@@ -25,4 +25,5 @@ struct Movement
     Rotator2_NetQuantize Rotation{};
     AnimationVariables Variables{};
     float Direction{};
+    bool IsDecodedValid{true};
 };

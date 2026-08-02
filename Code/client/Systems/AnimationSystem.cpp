@@ -42,11 +42,24 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 
         const auto& first = *it;
 
-        const auto actionId = first.ActionId;
-        const auto targetId = first.TargetId;
+        const auto actionId = aWorld.GetModSystem().GetGameId(first.ActionId);
+        const auto targetId = first.TargetId ? aWorld.GetModSystem().GetGameId(first.TargetId) : 0;
+        const auto idleId = first.IdleId ? aWorld.GetModSystem().GetGameId(first.IdleId) : 0;
+
+        if (actionId == 0 || (first.TargetId && targetId == 0) || (first.IdleId && idleId == 0))
+        {
+            actions.pop_front();
+            return;
+        }
 
         const auto pAction = Cast<BGSAction>(TESForm::GetById(actionId));
         const auto pTarget = Cast<TESObjectREFR>(TESForm::GetById(targetId));
+        const auto pIdle = Cast<TESIdleForm>(TESForm::GetById(idleId));
+        if (!pAction || (targetId != 0 && !pTarget) || (idleId != 0 && !pIdle))
+        {
+            actions.pop_front();
+            return;
+        }
 
         apActor->GetActorStateData().SetFlagsData(first.State1, first.State2);
 
@@ -57,7 +70,8 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
         // Play the animation
         TESActionData actionData(first.Type & 0x3, apActor, pAction, pTarget);
         actionData.eventName = BSFixedString(first.EventName.c_str());
-        actionData.idleForm = Cast<TESIdleForm>(TESForm::GetById(first.IdleId));
+        actionData.targetEventName = BSFixedString(first.TargetEventName.c_str());
+        actionData.idleForm = pIdle;
         actionData.someFlag = ((first.Type & 0x4) != 0) ? 1 : 0;
 
         const auto result = ActorMediator::Get()->ForceAction(&actionData);
@@ -151,14 +165,8 @@ void AnimationSystem::Serialize(World& aWorld, ClientReferencesMoveRequest& aMov
 
 bool AnimationSystem::Serialize(World& aWorld, const ActionEvent& aActionEvent, const ActionEvent& aLastProcessedAction, std::string* apData)
 {
-    uint32_t actionBaseId = 0;
-    uint32_t actionModId = 0;
-    if (!aWorld.GetModSystem().GetServerModId(aActionEvent.ActionId, actionModId, actionBaseId))
-        return false;
-
-    uint32_t targetBaseId = 0;
-    uint32_t targetModId = 0;
-    if (!aWorld.GetModSystem().GetServerModId(aActionEvent.TargetId, targetModId, targetBaseId))
+    TP_UNUSED(aWorld);
+    if (!aActionEvent.ActionId)
         return false;
 
     uint8_t scratch[1 << 14];

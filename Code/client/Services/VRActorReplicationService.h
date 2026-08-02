@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <entt/entt.hpp>
@@ -13,6 +14,7 @@
 #include <vr_common/VRGameplayBridge.h>
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/NotifyAddTarget.h>
+#include <Messages/NotifySpellCast.h>
 #include <Structs/ActionEvent.h>
 #include <Structs/Inventory.h>
 #include <Structs/VRAppearance.h>
@@ -72,11 +74,16 @@ struct VRActorReplicationService
 
     TP_NOCOPYMOVE(VRActorReplicationService);
 
+    [[nodiscard]] bool TryGetLatestLocalActorAction(ActionEvent& arAction) const noexcept;
+    [[nodiscard]] bool TryGetLatestLocalActorAction(std::uint32_t aActorLocalFormId,
+                                                     ActionEvent& arAction) const noexcept;
+
 private:
     struct SequenceLedger
     {
         std::uint32_t LastSequence{0};
         std::uint64_t LastSignature{0};
+        std::uint64_t Revision{0};
         bool HasSequence{false};
         bool HasSignature{false};
     };
@@ -85,10 +92,112 @@ private:
     // dedicated grab observer. Their producer sequence counters are unrelated.
     using DomainLedgers = std::array<SequenceLedger, 36>;
 
+    // This is a snapshot of the committed ledger, not an ActionId. A retry
+    // rebuilds bridge commands and gets new identities while retaining the
+    // original semantic admission.
+    struct AcceptanceToken
+    {
+        std::uint32_t PlayerId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        std::uint32_t Sequence{};
+        std::uint64_t Signature{};
+        std::uint64_t LedgerRevision{};
+        std::uint8_t Channel{};
+        bool Valid{};
+    };
+
+    // Sequence-bearing work is retained by the monotonic domain ledger after
+    // commit. Sequence-zero and post-admission ledger anomalies need an exact
+    // semantic identity so that an older payload cannot be admitted again.
+    struct SemanticTombstone
+    {
+        std::uint32_t PlayerId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        std::uint32_t Sequence{};
+        std::uint64_t Signature{};
+        std::uint8_t Channel{};
+
+        constexpr bool operator==(const SemanticTombstone&) const noexcept = default;
+    };
+
+    struct SemanticTombstoneHash
+    {
+        [[nodiscard]] std::size_t operator()(const SemanticTombstone& acTombstone) const noexcept
+        {
+            auto hash = static_cast<std::uint64_t>(acTombstone.PlayerId);
+            hash = (hash * 0x9e3779b97f4a7c15ull) ^
+                   static_cast<std::uint64_t>(acTombstone.Domain);
+            hash = (hash * 0x9e3779b97f4a7c15ull) ^ acTombstone.Sequence;
+            hash = (hash * 0x9e3779b97f4a7c15ull) ^ acTombstone.Signature;
+            hash = (hash * 0x9e3779b97f4a7c15ull) ^ acTombstone.Channel;
+            return static_cast<std::size_t>(hash ^ (hash >> 32));
+        }
+    };
+
+    struct PendingGameplayWork
+    {
+        std::uint64_t WorkId{};
+        std::uint32_t ServerId{};
+        std::uint32_t PlayerId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayAction> Actions{};
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayActionPayload> Payloads{};
+        SkyrimTogetherVR::GameplayBridge::ApplyProjectileLaunchPayload Projectile{};
+        std::string Text{};
+        std::uint64_t TextId{};
+        AcceptanceToken Acceptance{};
+        double AdmissionWaitElapsed{};
+        double ResultWaitElapsed{};
+        std::uint8_t Attempts{};
+        std::uint16_t NextResultIndex{};
+        bool TargetIsPlayer{};
+        bool IsProjectile{};
+        bool IsText{};
+        bool AwaitingResult{};
+        bool Admitted{};
+        bool AcceptanceCommitted{};
+        bool Terminal{};
+    };
+
+    struct GameplayResultOwner
+    {
+        std::uint64_t WorkId{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
+        std::uint32_t TargetLocalFormId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        SkyrimTogetherVR::GameplayBridge::GameplayAction Action{};
+        std::uint16_t ResultIndex{};
+    };
+
     struct PendingMagicEffect
     {
         NotifyAddTarget Message{};
+        AcceptanceToken Acceptance{};
         std::uint8_t Attempts{0};
+        double RetryElapsed{0.0};
+    };
+
+    struct PendingSpellCast
+    {
+        NotifySpellCast Message{};
+        AcceptanceToken Acceptance{};
+        std::uint8_t Attempts{0};
+        double RetryElapsed{0.0};
+    };
+
+    struct PendingMount
+    {
+        std::uint32_t MountServerId{};
+        AcceptanceToken Acceptance{};
+        std::uint8_t Attempts{};
+        double RetryElapsed{};
+    };
+
+    struct MagicActorReference
+    {
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle Handle{};
+        std::uint32_t LocalReferenceFormId{};
     };
 
     struct LocalActorActionTransaction
@@ -111,6 +220,23 @@ private:
     {
         std::uint32_t ServerId{};
         ActionEvent Action{};
+        std::uint8_t Attempts{};
+    };
+
+    struct RemoteActorActionTracking
+    {
+        std::uint32_t ServerId{};
+        ActionEvent Action{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
+        double ResultWaitElapsed{};
+        std::uint8_t Attempts{};
+    };
+
+    struct CompletedRemoteActorAction
+    {
+        std::uint32_t ServerId{};
+        ActionEvent Action{};
     };
 
     struct SpawnActionTracking
@@ -118,6 +244,10 @@ private:
         std::uint32_t ServerId{0};
         std::uint16_t RemainingResults{0};
         double ResultWaitElapsed{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        SkyrimTogetherVR::GameplayBridge::GameplayAction Action{};
     };
 
     struct PendingEquipmentEntry
@@ -135,6 +265,9 @@ private:
         std::uint32_t Shout{};
         std::vector<PendingEquipmentEntry> Entries{};
         std::uint64_t ActionId{};
+        AcceptanceToken Acceptance{};
+        std::uint16_t ExpectedResults{};
+        std::uint16_t NextResultIndex{};
         std::uint8_t ResultFailures{};
         double ResultWaitElapsed{};
         bool AwaitingResult{};
@@ -144,9 +277,70 @@ private:
     {
         std::uint32_t ServerId{};
         std::uint64_t TransactionId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayAction Action{};
+        std::uint16_t ResultIndex{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
+    };
+
+    struct PendingInventoryTransaction
+    {
+        std::uint32_t ServerId{};
+        std::vector<Inventory::Entry> Entries{};
+        std::vector<std::uint8_t> Drops{};
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayAction> ExpectedActions{};
+        std::vector<std::uint8_t> ResultStates{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
+        std::uint32_t TargetLocalFormId{};
+        std::uint64_t FirstActionId{};
+        std::uint64_t EndActionId{};
+        AcceptanceToken Acceptance{};
+        double RetryWaitElapsed{};
+        double ResultWaitElapsed{};
+        bool Reset{};
+        bool SpawnInventory{};
+        bool HasAcceptance{};
+        bool AwaitingResults{};
+        bool Admitted{};
+        bool AcceptanceCommitted{};
+        bool HadFailure{};
+        bool Terminal{};
+    };
+
+    struct PendingAppearanceApplication
+    {
+        VRAppearance Appearance{};
+        AcceptanceToken Acceptance{};
+        std::vector<std::uint64_t> ActionIds{};
+        std::uint16_t RemainingResults{};
+        std::uint8_t ResultFailures{};
+        std::uint8_t SubmissionFailures{};
+        double ResultWaitElapsed{};
+        double RetryWaitElapsed{};
+        bool AwaitingResult{};
+        bool HadFailure{};
+    };
+
+    struct AppearanceActionTracking
+    {
+        std::uint64_t TargetKey{};
+        std::uint32_t Sequence{};
+        std::uint16_t RemainingResults{};
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
+        SkyrimTogetherVR::GameplayBridge::GameplayAction Action{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        SkyrimTogetherVR::GameplayBridge::AdapterHandle TargetHandle{};
     };
 
     enum class MagicEffectSubmitResult : std::uint8_t
+    {
+        Submitted,
+        AwaitingActor,
+        Rejected,
+    };
+
+    enum class SpellCastSubmitResult : std::uint8_t
     {
         Submitted,
         AwaitingActor,
@@ -187,42 +381,123 @@ private:
     void OnGameplayResult(const SkyrimTogetherVR::RemoteGameplayBridgeResultEvent& acEvent) noexcept;
     void OnLocalGameplay(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept;
 
-    [[nodiscard]] bool Accept(std::uint32_t aPlayerId, SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
-                              std::uint32_t aSequence, std::uint64_t aSignature,
-                              std::uint8_t aChannel = 0) noexcept;
+    [[nodiscard]] AcceptanceToken PrepareAccept(std::uint32_t aPlayerId,
+                                                 SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+                                                 std::uint32_t aSequence, std::uint64_t aSignature,
+                                                 std::uint8_t aChannel = 0) const noexcept;
+    [[nodiscard]] bool CanCommitAccept(const AcceptanceToken& acToken) const noexcept;
+    [[nodiscard]] bool CommitAccept(const AcceptanceToken& acToken) noexcept;
+    [[nodiscard]] bool IsSameAcceptance(const AcceptanceToken& acLeft,
+                                        const AcceptanceToken& acRight) const noexcept;
+    [[nodiscard]] bool HasSemanticTombstone(const AcceptanceToken& acToken) const noexcept;
+    [[nodiscard]] bool RememberSemanticTombstone(const AcceptanceToken& acToken,
+                                                  bool aAcceptanceCommitted) noexcept;
+    void ForgetSemanticTombstones(std::uint32_t aPlayerId) noexcept;
+    void RequestSemanticTombstoneRebase() noexcept;
+    [[nodiscard]] bool QueueReliableForServer(const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
+                                              SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+                                              SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+                                              const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
+    [[nodiscard]] bool QueueReliableForPlayer(const AcceptanceToken& acAcceptance, std::uint32_t aPlayerId,
+                                              SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+                                              SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+                                              const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
+    [[nodiscard]] bool QueueReliableBatchForServer(
+        const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayAction> aActions,
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayActionPayload> aPayloads) noexcept;
+    [[nodiscard]] bool QueueReliableBatchForPlayer(
+        const AcceptanceToken& acAcceptance, std::uint32_t aPlayerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayAction> aActions,
+        std::vector<SkyrimTogetherVR::GameplayBridge::GameplayActionPayload> aPayloads) noexcept;
+    [[nodiscard]] bool QueueReliableProjectile(
+        const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
+        const SkyrimTogetherVR::GameplayBridge::ApplyProjectileLaunchPayload& acPayload) noexcept;
+    [[nodiscard]] bool QueueReliableTextForServer(
+        const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        std::uint64_t aTextId, std::string_view acText) noexcept;
+    [[nodiscard]] bool QueueReliableGameplayWork(PendingGameplayWork&& arWork) noexcept;
+    [[nodiscard]] bool TrySubmitReliableGameplayWork(std::size_t aIndex) noexcept;
+    void ForgetReliableGameplayWork(std::uint64_t aWorkId) noexcept;
+    void RetireReliableGameplayWork(std::uint64_t aWorkId) noexcept;
+    void ForgetReliableGameplayWorkForPlayer(std::uint32_t aPlayerId) noexcept;
+    void ForgetReliableGameplayWorkForServer(std::uint32_t aServerId) noexcept;
     [[nodiscard]] bool ApplyForPlayer(std::uint32_t aPlayerId, SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                       SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
-                                      const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
+                                      const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload,
+                                      std::uint64_t* apActionId = nullptr) noexcept;
     [[nodiscard]] bool ApplyForServer(std::uint32_t aServerId, SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                       SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
                                       const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
     [[nodiscard]] bool ApplyForTarget(std::uint32_t aServerId, SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                       SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
                                       const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
+    [[nodiscard]] bool BuildGameplayCommandForServerActor(
+        std::uint32_t aServerId, SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
     [[nodiscard]] bool ApplyTextForPlayer(std::uint32_t aPlayerId,
                                           SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                           SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
-                                          std::uint64_t aTextId, std::string_view acText) noexcept;
+                                          std::uint64_t aTextId, std::string_view acText,
+                                          SkyrimTogetherVR::GameplayBridge::BridgeIdentity* apIdentity = nullptr,
+                                          SkyrimTogetherVR::GameplayBridge::AdapterHandle* apTargetHandle = nullptr,
+                                          std::uint16_t* apResultCount = nullptr) noexcept;
     [[nodiscard]] bool ApplyTextForServer(std::uint32_t aServerId,
                                           SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                           SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
                                           std::uint64_t aTextId, std::string_view acText) noexcept;
     [[nodiscard]] std::uint32_t PlayerForServer(std::uint32_t aServerId) const noexcept;
     [[nodiscard]] bool SubmitSpawn(const CharacterSpawnRequest& acMessage) noexcept;
-    [[nodiscard]] bool ApplyVRAppearance(std::uint32_t aPlayerId, const VRAppearance& acAppearance) noexcept;
-    [[nodiscard]] MagicEffectSubmitResult SubmitMagicEffect(const NotifyAddTarget& acMessage) noexcept;
-    [[nodiscard]] bool TryApplyMount(std::uint32_t aRiderServerId, std::uint32_t aMountServerId) noexcept;
+    [[nodiscard]] bool ApplyVRAppearance(std::uint64_t aTargetKey, const VRAppearance& acAppearance) noexcept;
+    void QueueVRAppearance(std::uint64_t aTargetKey, const VRAppearance& acAppearance,
+                           const AcceptanceToken* apAcceptance = nullptr) noexcept;
+    void QueueNpcVRAppearance(std::uint32_t aServerId, const VRAppearance& acAppearance) noexcept;
+    void ForgetAppearanceApplication(std::uint64_t aTargetKey) noexcept;
+    [[nodiscard]] MagicEffectSubmitResult SubmitMagicEffect(const NotifyAddTarget& acMessage,
+                                                             const AcceptanceToken& acAcceptance) noexcept;
+    [[nodiscard]] SpellCastSubmitResult SubmitSpellCast(const NotifySpellCast& acMessage,
+                                                        const AcceptanceToken& acAcceptance) noexcept;
+    [[nodiscard]] bool TryResolveMagicActor(std::uint32_t aServerId, MagicActorReference& arReference) const noexcept;
+    [[nodiscard]] bool TryApplyMount(std::uint32_t aRiderServerId, std::uint32_t aMountServerId,
+                                     const AcceptanceToken& acAcceptance) noexcept;
     [[nodiscard]] bool HasExactActorActionCapability() const noexcept;
     [[nodiscard]] bool IsCurrentActorActionRecord(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) const noexcept;
-    [[nodiscard]] LocalActorActionTransaction& GetOrCreateLocalActorAction(std::uint64_t aActionId) noexcept;
+    [[nodiscard]] LocalActorActionTransaction* GetOrCreateLocalActorAction(std::uint64_t aActionId) noexcept;
+    [[nodiscard]] bool BuildLocalActorAction(const LocalActorActionTransaction& acTransaction,
+                                             ActionEvent& arAction) const noexcept;
     [[nodiscard]] bool TryCommitLocalActorAction(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool HasHumanoidActorActionVariables(const ActionEvent& acAction) const noexcept;
-    [[nodiscard]] bool SubmitRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction) noexcept;
+    [[nodiscard]] bool SubmitRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction,
+                                               std::uint8_t aAttempts = 0) noexcept;
+    [[nodiscard]] bool SubmitLegacyRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction) noexcept;
     [[nodiscard]] bool TrySubmitEquipmentApplication(std::uint32_t aServerId,
                                                      PendingEquipmentApplication& arPending) noexcept;
     void ForgetEquipmentApplication(std::uint32_t aServerId) noexcept;
+    void TerminalizeEquipmentApplication(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool HasInventoryTransactionCapability() const noexcept;
+    [[nodiscard]] bool QueueInventoryTransaction(std::uint32_t aServerId,
+                                                  const std::vector<Inventory::Entry>& acEntries,
+                                                  const std::vector<std::uint8_t>& acDrops,
+                                                  bool aReset, bool aSpawnInventory,
+                                                  const AcceptanceToken* apAcceptance = nullptr) noexcept;
+    [[nodiscard]] bool TrySubmitInventoryTransaction(std::size_t aIndex) noexcept;
+    void CompleteInventoryTransaction(std::size_t aIndex, bool aSucceeded) noexcept;
+    void TerminalizeInventoryTransaction(std::size_t aIndex) noexcept;
+    void ForgetInventoryTransactions(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool HasPendingSpawnInventoryTransaction(std::uint32_t aServerId) const noexcept;
     [[nodiscard]] std::uint64_t NextRemoteActorActionId() noexcept;
-    void QueueRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction) noexcept;
+    void QueueRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction,
+                                std::uint8_t aAttempts = 0) noexcept;
+    [[nodiscard]] bool IsKnownRemoteActorAction(std::uint32_t aServerId,
+                                                const ActionEvent& acAction) const noexcept;
+    void RememberCompletedRemoteActorAction(std::uint32_t aServerId,
+                                            const ActionEvent& acAction) noexcept;
+    void ForgetRemoteActorActions(std::uint32_t aServerId) noexcept;
     void ForgetSpawnActionIds(std::uint32_t aServerId) noexcept;
     [[nodiscard]] bool HasSpawnActionIds(std::uint32_t aServerId) const noexcept;
     void ForgetPlayer(std::uint32_t aPlayerId) noexcept;
@@ -235,23 +510,41 @@ private:
     std::unordered_map<std::uint32_t, std::uint32_t> m_serverPlayers{};
     std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_pendingSpawns{};
     std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_spawnSnapshots{};
-    std::unordered_map<std::uint32_t, VRAppearance> m_latestAppearances{};
-    std::unordered_map<std::uint32_t, std::uint32_t> m_pendingMounts{};
+    std::unordered_map<std::uint64_t, VRAppearance> m_latestAppearances{};
+    std::unordered_map<std::uint64_t, std::uint32_t> m_appliedAppearanceSequences{};
+    std::unordered_map<std::uint64_t, std::uint32_t> m_failedAppearanceSequences{};
+    std::unordered_map<std::uint64_t, PendingAppearanceApplication> m_pendingAppearanceApplications{};
+    std::unordered_map<std::uint64_t, AppearanceActionTracking> m_appearanceActionOwners{};
+    std::unordered_map<std::uint32_t, PendingMount> m_pendingMounts{};
     std::unordered_map<std::uint32_t, std::uint8_t> m_resyncAttempts{};
     std::unordered_map<std::uint32_t, DomainLedgers> m_ledgers{};
+    std::unordered_set<SemanticTombstone, SemanticTombstoneHash> m_semanticTombstones{};
+    std::vector<PendingGameplayWork> m_pendingGameplayWork{};
+    std::unordered_map<std::uint64_t, GameplayResultOwner> m_gameplayResultOwners{};
     std::unordered_map<std::uint32_t, std::uint64_t> m_lastEquipmentTransactionByServer{};
     std::unordered_map<std::uint32_t, PendingEquipmentApplication> m_pendingEquipmentApplications{};
     std::unordered_map<std::uint64_t, EquipmentActionTracking> m_equipmentActionOwners{};
+    std::vector<PendingInventoryTransaction> m_pendingInventoryTransactions{};
+    std::unordered_set<std::uint32_t> m_completedSpawnInventoryTransactions{};
+    std::unordered_set<std::uint32_t> m_failedSpawnInventoryTransactions{};
+    std::unordered_set<std::uint32_t> m_quarantinedSpawns{};
     std::vector<PendingMagicEffect> m_pendingMagicEffects{};
+    std::vector<PendingSpellCast> m_pendingSpellCasts{};
     std::unordered_map<std::uint64_t, LocalActorActionTransaction> m_localActorActions{};
     std::vector<PendingRemoteActorAction> m_pendingRemoteActorActions{};
+    std::unordered_map<std::uint64_t, RemoteActorActionTracking> m_remoteActorActionOwners{};
+    std::vector<CompletedRemoteActorAction> m_completedRemoteActorActions{};
     std::unordered_map<std::uint64_t, SpawnActionTracking> m_spawnActionOwners{};
     std::uint32_t m_recordingSpawnServerId{0};
     std::uint32_t m_localServerId{0};
     std::uint64_t m_observedLifecycleEpoch{0};
     std::uint64_t m_nextLocalActorActionOrder{1};
     std::uint64_t m_nextRemoteActorActionId{1};
+    std::uint64_t m_nextGameplayWorkId{1};
+    std::uint64_t m_semanticTombstoneRebaseEpoch{0};
+    double m_semanticTombstoneRebaseElapsed{0.0};
     bool m_replayAfterLifecycleBoundary{false};
+    bool m_semanticTombstoneRebaseRequested{false};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_characterSpawnConnection;
     entt::scoped_connection m_referencesMoveConnection;

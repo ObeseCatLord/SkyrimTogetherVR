@@ -26,7 +26,12 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::WorldState) |
     static_cast<CapabilityMask>(Capability::VrBodyPose) |
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |
-    static_cast<CapabilityMask>(Capability::NpcOwnership);
+    static_cast<CapabilityMask>(Capability::NpcOwnership) |
+    static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
+    static_cast<CapabilityMask>(Capability::InventoryStackTransactions);
+constexpr CapabilityMask kOptionalCapabilities =
+    static_cast<CapabilityMask>(Capability::ExactAnimationActions);
+constexpr CapabilityMask kAllowedCapabilities = kAvailableCapabilities | kOptionalCapabilities;
 
 [[nodiscard]] bool ParseMappingHandle(HANDLE& a_handle) noexcept
 {
@@ -168,6 +173,42 @@ bool BridgeEndpoint::TryPushEvents(const EventRecord* ap_records, const std::siz
     return true;
 }
 
+bool BridgeEndpoint::QueueCommandResultEvent(const EventRecord& a_record) noexcept
+{
+    if (_commandResultCount == 0 && TryPushEvent(a_record))
+        return true;
+    if (!CanQueueCommandResultEvents())
+        return false;
+
+    const auto tail = (_commandResultHead + _commandResultCount) % _commandResultEvents.size();
+    _commandResultEvents[tail] = a_record;
+    ++_commandResultCount;
+    return true;
+}
+
+bool BridgeEndpoint::FlushCommandResultEvents() noexcept
+{
+    while (_commandResultCount != 0) {
+        if (!TryPushEvent(_commandResultEvents[_commandResultHead]))
+            return false;
+        _commandResultHead = (_commandResultHead + 1) % _commandResultEvents.size();
+        --_commandResultCount;
+    }
+    _commandResultHead = 0;
+    return true;
+}
+
+bool BridgeEndpoint::CanQueueCommandResultEvents(const std::size_t a_count) const noexcept
+{
+    return a_count <= _commandResultEvents.size() - _commandResultCount;
+}
+
+void BridgeEndpoint::DiscardCommandResultEvents() noexcept
+{
+    _commandResultHead = 0;
+    _commandResultCount = 0;
+}
+
 BridgeIdentity BridgeEndpoint::SnapshotIdentity(const std::uint64_t a_sequenceId) const noexcept
 {
     BridgeIdentity identity{};
@@ -175,8 +216,11 @@ BridgeIdentity BridgeEndpoint::SnapshotIdentity(const std::uint64_t a_sequenceId
         return identity;
 
     const auto& header = _mapping->Header;
-    identity.ServerInstanceNonce = header.ServerInstanceNonce.load(std::memory_order_acquire);
-    identity.ConnectionGeneration = header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(header, session))
+        return identity;
+    identity.ServerInstanceNonce = session.ServerInstanceNonce;
+    identity.ConnectionGeneration = session.ConnectionGeneration;
     identity.LifecycleEpoch = header.LifecycleEpoch.load(std::memory_order_acquire);
     identity.SequenceId = a_sequenceId;
     return identity;
@@ -233,17 +277,19 @@ bool BridgeEndpoint::ValidateHeader(const MappingHeader& a_header) const noexcep
     if (a_header.Magic != kMappingMagic || a_header.AbiVersion != kMappingAbiVersion ||
         a_header.HeaderSize != sizeof(MappingHeader) || a_header.MappingSize != sizeof(GameplayBridgeMapping) ||
         a_header.PublisherProcessId != GetCurrentProcessId() || a_header.RuntimeVersion != kSkyrimVrRuntimeVersion ||
-        a_header.CapabilityRevision != kCapabilityRevision || a_header.Reserved0 != 0)
+        a_header.CapabilityRevision != kCapabilityRevision)
         return false;
 
     if (state == EndpointState::Ready) {
         const auto available = a_header.AvailableCapabilities.load(std::memory_order_acquire);
         const auto requested = a_header.RequestedCapabilities.load(std::memory_order_acquire);
-        const auto expectedAvailable = kAvailableCapabilities | _optionalCapabilities.load(std::memory_order_acquire);
+        const auto active = a_header.ActiveCapabilities.load(std::memory_order_acquire);
         return a_header.EventConsumerThreadId.load(std::memory_order_acquire) != 0 &&
                a_header.CommandExecutionThreadId.load(std::memory_order_acquire) != 0 &&
-               available == expectedAvailable &&
-               a_header.ActiveCapabilities.load(std::memory_order_acquire) == (requested & available);
+               (available & kAvailableCapabilities) == kAvailableCapabilities &&
+               (available & ~kAllowedCapabilities) == 0 &&
+               (active & ~kAllowedCapabilities) == 0 &&
+               (active & ~requested) == 0;
     }
 
     return true;

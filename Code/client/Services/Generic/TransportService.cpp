@@ -43,6 +43,38 @@
 #define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
 #endif
 
+#ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+#define TP_SKYRIM_VR_ENABLE_POSE_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
+#define TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE 0
+#endif
+
 static constexpr wchar_t kMO2DllName[] = L"usvfs_x64.dll";
 
 using TiltedPhoques::Packet;
@@ -52,6 +84,7 @@ namespace
 constexpr std::size_t kMaximumOutboundPacketBytes = 1u << 16;
 constexpr std::size_t kMaximumOutboundQueuePackets = 256;
 constexpr std::size_t kMaximumOutboundQueueBytes = 8u << 20;
+constexpr std::uint32_t kGameplayRetirementRetryIntervalFrames = 30;
 }
 
 TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
@@ -102,6 +135,40 @@ bool TransportService::Send(const ClientMessage& acMessage) noexcept
         return false;
 #endif
 
+    if (!IsConnected() || m_outboundQueue.size() >= kMaximumOutboundQueuePackets)
+        return false;
+
+    try
+    {
+        PendingOutboundPacket packet{};
+        if (SerializeOutboundPacket(acMessage, &packet.Data) != OutboundPacketPreflightResult::Fits)
+            return false;
+
+        const auto packetBytes = packet.Data.size();
+        if (m_outboundQueueBytes > kMaximumOutboundQueueBytes - packetBytes)
+            return false;
+
+        packet.ConnectionAttempt = m_connectionAttemptGeneration;
+        packet.ConnectionGeneration = m_connectionGeneration;
+        m_outboundQueue.emplace_back(std::move(packet));
+        m_outboundQueueBytes += packetBytes;
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+TransportService::OutboundPacketPreflightResult TransportService::PreflightOutboundPacket(
+    const ClientMessage& acMessage) const noexcept
+{
+    return SerializeOutboundPacket(acMessage, nullptr);
+}
+
+TransportService::OutboundPacketPreflightResult TransportService::SerializeOutboundPacket(
+    const ClientMessage& acMessage, std::vector<std::uint8_t>* apSerialized) const noexcept
+{
     try
     {
         static thread_local ScratchAllocator s_allocator(1 << 18);
@@ -111,32 +178,26 @@ bool TransportService::Send(const ClientMessage& acMessage) noexcept
             ~ScopedReset() { s_allocator.Reset(); }
         } allocatorGuard;
 
-        if (!IsConnected() || m_outboundQueue.size() >= kMaximumOutboundQueuePackets)
-            return false;
-
         ScopedAllocator _{s_allocator};
         Buffer buffer(kMaximumOutboundPacketBytes);
         Buffer::Writer writer(&buffer);
         writer.WriteBits(0, 8); // The networking layer owns the packet marker.
         acMessage.Serialize(writer);
         const auto packetBytes = static_cast<std::size_t>(writer.Size());
-        if (packetBytes == 0 || packetBytes > kMaximumOutboundPacketBytes ||
-            m_outboundQueueBytes > kMaximumOutboundQueueBytes - packetBytes)
-            return false;
-
-        PendingOutboundPacket packet{};
-        const auto* begin = reinterpret_cast<const std::uint8_t*>(buffer.GetWriteData());
-        packet.Data.assign(begin, begin + packetBytes);
-        packet.ConnectionAttempt = m_connectionAttemptGeneration;
-        packet.ConnectionGeneration = m_connectionGeneration;
-        const auto queuedBytes = packet.Data.size();
-        m_outboundQueue.emplace_back(std::move(packet));
-        m_outboundQueueBytes += queuedBytes;
-        return true;
+        if (packetBytes == 0)
+            return OutboundPacketPreflightResult::Unserializable;
+        if (packetBytes > kMaximumOutboundPacketBytes)
+            return OutboundPacketPreflightResult::Oversized;
+        if (apSerialized)
+        {
+            const auto* begin = reinterpret_cast<const std::uint8_t*>(buffer.GetWriteData());
+            apSerialized->assign(begin, begin + packetBytes);
+        }
+        return OutboundPacketPreflightResult::Fits;
     }
     catch (...)
     {
-        return false;
+        return OutboundPacketPreflightResult::Unserializable;
     }
 }
 
@@ -184,6 +245,196 @@ void TransportService::ClearOutboundQueue() noexcept
     m_drainingOutboundQueue = false;
 }
 
+void TransportService::ClearGameplayRetirementState() noexcept
+{
+    m_gameplayRetirement = {};
+}
+
+void TransportService::BeginGameplayRetirement(
+    const SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason,
+    const std::uint64_t aOriginLifecycleEpoch) noexcept
+{
+    ClearGameplayRetirementState();
+
+    const auto expectedLifecycleEpoch = aOriginLifecycleEpoch + 1;
+    if (m_serverInstanceNonce == 0 || m_connectionGeneration == 0)
+    {
+        m_gameplayCleanupRequired = false;
+        return;
+    }
+
+    auto& request = m_gameplayRetirement;
+    request.ServerInstanceNonce = m_serverInstanceNonce;
+    request.ConnectionGeneration = m_connectionGeneration;
+    if (aOriginLifecycleEpoch != 0 && expectedLifecycleEpoch != 0)
+    {
+        request.OriginLifecycleEpoch = aOriginLifecycleEpoch;
+        request.ExpectedLifecycleEpoch = expectedLifecycleEpoch;
+    }
+    request.Reason = static_cast<std::uint32_t>(aReason);
+    request.RetryFramesRemaining = kGameplayRetirementRetryIntervalFrames;
+    request.Pending = true;
+    m_gameplayCleanupRequired = true;
+}
+
+void TransportService::CompleteGameplayRetirement() noexcept
+{
+    m_gameplayRetirement.Pending = false;
+    m_gameplayRetirement.Completed = true;
+    m_gameplayRetirement.RetryFramesRemaining = 0;
+    m_gameplayCleanupRequired = false;
+
+#if TP_SKYRIM_VR
+    if (m_gameplayIdentityClearPending)
+    {
+        SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(0, 0);
+        m_serverInstanceNonce = 0;
+        m_connectionGeneration = 0;
+        m_negotiatedGameplayCapabilities = 0;
+        m_gameplayIdentityClearPending = false;
+        ClearGameplayRetirementState();
+    }
+#endif
+}
+
+bool TransportService::IsGameplayRetirementRequestCurrent() const noexcept
+{
+    const auto& request = m_gameplayRetirement;
+    return request.ServerInstanceNonce != 0 && request.ConnectionGeneration != 0 &&
+           request.ServerInstanceNonce == m_serverInstanceNonce &&
+           request.ConnectionGeneration == m_connectionGeneration;
+}
+
+bool TransportService::AttemptGameplayRetirement() noexcept
+{
+#if TP_SKYRIM_VR
+    auto& request = m_gameplayRetirement;
+    if (!request.Pending || !IsGameplayRetirementRequestCurrent())
+        return false;
+
+    if (request.OriginLifecycleEpoch == 0 || request.ExpectedLifecycleEpoch == 0)
+    {
+        request.RetryFramesRemaining = kGameplayRetirementRetryIntervalFrames;
+        m_gameplayCleanupRequired = true;
+        return false;
+    }
+
+    TP_UNUSED(SkyrimTogetherVR::GameplayBridgeClient::RetireSession(
+        static_cast<SkyrimTogetherVR::GameplayBridge::EpochRetireReason>(request.Reason)));
+
+    if (IsGameplayRetirementRequestCurrent() &&
+        SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == request.ExpectedLifecycleEpoch)
+    {
+        CompleteGameplayRetirement();
+        return true;
+    }
+
+    request.RetryFramesRemaining = kGameplayRetirementRetryIntervalFrames;
+    m_gameplayCleanupRequired = true;
+    return false;
+#else
+    return true;
+#endif
+}
+
+void TransportService::RetryGameplayRetirement() noexcept
+{
+#if TP_SKYRIM_VR
+    if (std::this_thread::get_id() != m_ownerThreadId)
+        return;
+
+    auto& request = m_gameplayRetirement;
+    if (request.Completed)
+    {
+        // The cache only spans the fault wave that completed this transition.
+        ClearGameplayRetirementState();
+        return;
+    }
+
+    if (!request.Pending)
+    {
+        if (m_gameplayIdentityClearPending &&
+            m_serverInstanceNonce != 0 && m_connectionGeneration != 0)
+        {
+            BeginGameplayRetirement(
+                SkyrimTogetherVR::GameplayBridge::EpochRetireReason::Disconnect,
+                SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch());
+            TP_UNUSED(AttemptGameplayRetirement());
+        }
+        return;
+    }
+
+    if (!IsGameplayRetirementRequestCurrent())
+    {
+        ClearGameplayRetirementState();
+        m_gameplayCleanupRequired = false;
+        return;
+    }
+
+    const auto observedLifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (request.OriginLifecycleEpoch == 0 || request.ExpectedLifecycleEpoch == 0)
+    {
+        if (observedLifecycleEpoch == 0)
+        {
+            if (request.RetryFramesRemaining != 0)
+                --request.RetryFramesRemaining;
+            return;
+        }
+
+        const auto reason = static_cast<SkyrimTogetherVR::GameplayBridge::EpochRetireReason>(request.Reason);
+        BeginGameplayRetirement(reason, observedLifecycleEpoch);
+        request.RetryFramesRemaining = 0;
+    }
+
+    if (observedLifecycleEpoch == request.ExpectedLifecycleEpoch)
+    {
+        CompleteGameplayRetirement();
+        return;
+    }
+
+    if (observedLifecycleEpoch != request.OriginLifecycleEpoch)
+    {
+        // A different epoch is not evidence that this request completed. Rebase
+        // the pending ownership to the current epoch and retain cleanup status.
+        const auto reason = static_cast<SkyrimTogetherVR::GameplayBridge::EpochRetireReason>(request.Reason);
+        BeginGameplayRetirement(reason, observedLifecycleEpoch);
+        return;
+    }
+
+    if (request.RetryFramesRemaining != 0)
+    {
+        --request.RetryFramesRemaining;
+        return;
+    }
+
+    // A failed synchronous call may already have submitted its command. Pump
+    // before submitting another retirement command so that transition wins.
+    if (SkyrimTogetherVR::GameplayBridgeClient::PumpCommands(
+            SkyrimTogetherVR::GameplayBridge::kDefaultCommandRingCapacity) !=
+        SkyrimTogetherVR::GameplayBridge::CommandPumpResult::Success)
+    {
+        request.RetryFramesRemaining = kGameplayRetirementRetryIntervalFrames;
+        return;
+    }
+
+    const auto pumpedLifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (pumpedLifecycleEpoch == request.ExpectedLifecycleEpoch)
+    {
+        CompleteGameplayRetirement();
+        return;
+    }
+
+    if (pumpedLifecycleEpoch != request.OriginLifecycleEpoch)
+    {
+        const auto reason = static_cast<SkyrimTogetherVR::GameplayBridge::EpochRetireReason>(request.Reason);
+        BeginGameplayRetirement(reason, pumpedLifecycleEpoch);
+        return;
+    }
+
+    TP_UNUSED(AttemptGameplayRetirement());
+#endif
+}
+
 void TransportService::OnConsume(const void* apData, uint32_t aSize)
 {
     ServerMessageFactory factory;
@@ -211,22 +462,66 @@ void TransportService::OnConsume(const void* apData, uint32_t aSize)
 void TransportService::OnConnected()
 {
     ClearOutboundQueue();
+#if TP_SKYRIM_VR
+    if (!m_connected && m_serverInstanceNonce != 0 && m_connectionGeneration != 0)
+        m_gameplayIdentityClearPending = true;
+
+    RetryGameplayRetirement();
+    if (m_gameplayCleanupRequired || m_gameplayRetirement.Pending ||
+        m_gameplayIdentityClearPending)
+    {
+        spdlog::warn("Deferring authentication until the prior CommonLib gameplay session is retired");
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"gameplay_cleanup_required\"}";
+        Client::Close();
+        m_dispatcher.trigger(errorEvent);
+        return;
+    }
+#endif
+
     AuthenticationRequest request{};
     request.Version = BUILD_COMMIT;
     request.GameplayProtocolRevision = SkyrimTogether::Protocol::kGameplayProtocolRevision;
     m_requestedGameplayCapabilities = SkyrimTogether::Protocol::kCoreCapabilities;
 #if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
-    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kRemoteAvatarCapabilities;
+    using SkyrimTogether::Protocol::GameplayCapability;
+    using SkyrimTogether::Protocol::ToMask;
+    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kRemoteAvatarCoreCapabilities |
+                                       ToMask(GameplayCapability::VREquipmentRelay) |
+                                       ToMask(GameplayCapability::VRGrabRelay) |
+                                       ToMask(GameplayCapability::VRAppearanceRelay);
+#if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRPoseRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRMovementRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRActivationRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRMagicRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRCombatPlanckRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRProjectileRelay);
+#endif
+#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
+    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRHiggsRelay);
+#endif
+    const auto nativeGameplayCapabilities = SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities();
     if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
-            SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities(),
-            SkyrimTogetherVR::GameplayBridge::Capability::NpcOwnership))
+            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::NpcOwnership) &&
+        SkyrimTogetherVR::GameplayBridge::HasCapability(
+            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions))
         m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRNpcOwnershipCapabilities;
-    if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
-        SkyrimTogetherVR::GameplayBridge::HasCapability(
-            SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities(),
-            SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions))
-        m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRExactAnimationActionCapabilities;
+    // Protocol support is stable for the connection. Native action replay is
+    // gated separately by the CommonLib bridge's live semantic capability, so
+    // actions can be bounded and queued if that gate opens after authentication.
+    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRExactAnimationActionCapabilities;
 #endif
     request.GameplayCapabilities = m_requestedGameplayCapabilities;
     request.ClientSessionNonce = m_sessionId;
@@ -340,17 +635,24 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_connected = false;
     m_localPlayerId = 0;
 #if TP_SKYRIM_VR
+    if (m_gameplayRetirement.Completed)
+        ClearGameplayRetirementState();
+
     if (m_serverInstanceNonce != 0 && m_connectionGeneration != 0 &&
-        !RetireGameplaySession(
-            SkyrimTogetherVR::GameplayBridge::EpochRetireReason::Disconnect))
+        !m_gameplayIdentityClearPending)
+        m_gameplayIdentityClearPending = true;
+
+    if (m_gameplayIdentityClearPending &&
+        !RetireGameplaySession(SkyrimTogetherVR::GameplayBridge::EpochRetireReason::Disconnect))
+    {
+        m_gameplayCleanupRequired = true;
         spdlog::warn("SkyrimTogetherVR CommonLib gameplay session could not be retired during disconnect");
-#endif
+    }
+#else
     m_serverInstanceNonce = 0;
     m_connectionGeneration = 0;
-    m_negotiatedGameplayCapabilities = 0;
-#if TP_SKYRIM_VR
-    SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(0, 0);
 #endif
+    m_negotiatedGameplayCapabilities = 0;
 
     spdlog::warn("Disconnected from server {}", static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
 
@@ -364,6 +666,9 @@ void TransportService::OnUpdate()
 
 void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 {
+#if TP_SKYRIM_VR
+    RetryGameplayRetirement();
+#endif
     Update();
 }
 
@@ -414,11 +719,20 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             return;
         }
 
+        const bool authenticationGenerationChanged =
+            m_serverInstanceNonce != acMessage.ServerInstanceNonce ||
+            m_connectionGeneration != acMessage.ConnectionGeneration;
+
 #if TP_SKYRIM_VR
-        if (m_gameplayCleanupRequired &&
-            !RetireGameplaySession(SkyrimTogetherVR::GameplayBridge::EpochRetireReason::LifecycleReset))
+        if (authenticationGenerationChanged &&
+            m_serverInstanceNonce != 0 && m_connectionGeneration != 0)
+            m_gameplayIdentityClearPending = true;
+
+        RetryGameplayRetirement();
+        if (m_gameplayCleanupRequired || m_gameplayRetirement.Pending ||
+            m_gameplayIdentityClearPending)
         {
-            spdlog::error("Rejected authentication acceptance because the prior CommonLib gameplay session could not be retired");
+            spdlog::error("Rejected authentication acceptance while the prior CommonLib gameplay session is retiring");
             ConnectionErrorEvent errorEvent;
             errorEvent.ErrorDetail = "{\"error\":\"gameplay_cleanup_required\"}";
             Client::Close();
@@ -426,6 +740,13 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             return;
         }
 #endif
+
+        if (authenticationGenerationChanged)
+        {
+            ClearGameplayRetirementState();
+            m_gameplayCleanupRequired = false;
+            m_gameplayIdentityClearPending = false;
+        }
 
         m_connected = true;
         m_localPlayerId = acMessage.PlayerId;
@@ -529,9 +850,46 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
 bool TransportService::RetireGameplaySession(const SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason) noexcept
 {
 #if TP_SKYRIM_VR
-    const auto retired = SkyrimTogetherVR::GameplayBridgeClient::RetireSession(aReason);
-    m_gameplayCleanupRequired = !retired;
-    return retired;
+    if (std::this_thread::get_id() != m_ownerThreadId)
+        return false;
+
+    const auto retiringLifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    auto& request = m_gameplayRetirement;
+    if (request.Completed)
+    {
+        if (IsGameplayRetirementRequestCurrent() &&
+            retiringLifecycleEpoch == request.ExpectedLifecycleEpoch)
+            return true;
+
+        ClearGameplayRetirementState();
+    }
+
+    if (request.Pending)
+    {
+        if (!IsGameplayRetirementRequestCurrent())
+        {
+            ClearGameplayRetirementState();
+            m_gameplayCleanupRequired = false;
+        }
+        else if (request.OriginLifecycleEpoch == 0 || request.ExpectedLifecycleEpoch == 0)
+        {
+            m_gameplayCleanupRequired = true;
+            return false;
+        }
+        else if (retiringLifecycleEpoch == request.ExpectedLifecycleEpoch)
+        {
+            CompleteGameplayRetirement();
+            return true;
+        }
+        else if (retiringLifecycleEpoch == request.OriginLifecycleEpoch)
+        {
+            m_gameplayCleanupRequired = true;
+            return false;
+        }
+    }
+
+    BeginGameplayRetirement(aReason, retiringLifecycleEpoch);
+    return AttemptGameplayRetirement();
 #else
     TP_UNUSED(aReason);
     m_gameplayCleanupRequired = false;

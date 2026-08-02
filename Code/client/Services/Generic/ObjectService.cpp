@@ -22,7 +22,29 @@
 #include <Forms/TESWorldSpace.h>
 #include <Forms/BGSEncounterZone.h>
 
+#include <algorithm>
+#include <array>
 #include <inttypes.h>
+
+namespace
+{
+void LogObjectServiceFailure(const char* apMessage) noexcept
+{
+    try
+    {
+        spdlog::error("{}", apMessage);
+    }
+    catch (...)
+    {
+    }
+}
+
+struct ObjectResponseIdentity
+{
+    uint32_t ServerId{};
+    GameId FormId{};
+};
+} // namespace
 
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport)
     : m_world(aWorld)
@@ -83,7 +105,7 @@ void ObjectService::OnDisconnected(const DisconnectedEvent&) noexcept
     // TODO(cosideci): clear object components
 }
 
-void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
+void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept try
 {
     if (!m_transport.IsConnected())
         return;
@@ -156,20 +178,57 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 
     m_transport.Send(request);
 }
-
-void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessage) noexcept
+catch (...)
 {
+    LogObjectServiceFailure("Object cell synchronization failed");
+}
+
+void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessage) noexcept try
+{
+    if (!acMessage.IsDecodedValid || acMessage.Objects.size() > AssignObjectsResponse::kMaximumWireObjects)
+        return;
+
+    std::array<ObjectResponseIdentity, AssignObjectsResponse::kMaximumWireObjects> identities{};
+    std::size_t identityCount{};
+    for (const ObjectData& objectData : acMessage.Objects)
+    {
+        if (!objectData.IsDecodedValid || objectData.ServerId == 0 || !objectData.Id)
+        {
+            LogObjectServiceFailure("Rejected object assignment response with a zero or invalid object identity");
+            return;
+        }
+
+        for (std::size_t index = 0; index < identityCount; ++index)
+        {
+            const auto& identity = identities[index];
+            if (identity.ServerId == objectData.ServerId || identity.FormId == objectData.Id)
+            {
+                LogObjectServiceFailure("Rejected object assignment response with duplicate or contradictory object identities");
+                return;
+            }
+        }
+
+        identities[identityCount++] = ObjectResponseIdentity{objectData.ServerId, objectData.Id};
+    }
+
     for (const ObjectData& objectData : acMessage.Objects)
     {
         const uint32_t cObjectId = World::Get().GetModSystem().GetGameId(objectData.Id);
+        if (cObjectId == 0)
+        {
+            spdlog::error("Object form id could not be resolved: {:X}", objectData.Id.LogFormat());
+            continue;
+        }
+
         TESObjectREFR* pObject = Cast<TESObjectREFR>(TESForm::GetById(cObjectId));
-        if (!pObject)
+        if (!pObject || pObject->GetFormIdData() == 0)
         {
             spdlog::error("Object not found for form id {:X}", objectData.Id.LogFormat());
             continue;
         }
 
-        CreateObjectEntity(pObject->GetFormIdData(), objectData.ServerId);
+        if (CreateObjectEntity(pObject->GetFormIdData(), objectData.ServerId) == entt::null)
+            continue;
 
         if (objectData.IsSenderFirst)
             continue;
@@ -202,33 +261,118 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
         }
     }
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object assignment response application failed");
+}
 
 entt::entity ObjectService::CreateObjectEntity(const uint32_t acFormId, const uint32_t acServerId) noexcept
 {
-    const auto view = m_world.view<FormIdComponent, ObjectComponent>();
+    if (acFormId == 0 || acServerId == 0)
+        return entt::null;
 
-    auto it = std::find_if(view.begin(), view.end(), [acServerId, view](entt::entity entity) { return view.get<ObjectComponent>(entity).Id == acServerId; });
+    entt::entity createdEntity{entt::null};
+    try
+    {
+        entt::entity serverEntity{entt::null};
+        const auto objectView = m_world.view<ObjectComponent>();
+        for (const entt::entity entity : objectView)
+        {
+            if (objectView.get<ObjectComponent>(entity).Id != acServerId)
+                continue;
 
-    if (it != view.end())
-        return *it;
+            if (serverEntity != entt::null)
+            {
+                LogObjectServiceFailure("Object entity creation rejected duplicate local server identities");
+                return entt::null;
+            }
+            serverEntity = entity;
+        }
 
-    entt::entity entity = m_world.create();
-    spdlog::info("Created object entity, server id: {:X}, form id {:X}", acServerId, acFormId);
+        entt::entity formEntity{entt::null};
+        const auto formView = m_world.view<FormIdComponent>();
+        for (const entt::entity entity : formView)
+        {
+            if (formView.get<FormIdComponent>(entity).Id != acFormId)
+                continue;
 
-    m_world.emplace<FormIdComponent>(entity, acFormId);
-    m_world.emplace<ObjectComponent>(entity, acServerId);
+            if (formEntity != entt::null)
+            {
+                LogObjectServiceFailure("Object entity creation rejected duplicate local form identities");
+                return entt::null;
+            }
+            formEntity = entity;
+        }
 
-    return entity;
+        if (serverEntity != entt::null)
+        {
+            const auto* pFormIdComponent = m_world.try_get<FormIdComponent>(serverEntity);
+            if (!pFormIdComponent || pFormIdComponent->Id != acFormId || serverEntity != formEntity)
+            {
+                LogObjectServiceFailure("Object entity creation rejected a conflicting or partial local mapping");
+                return entt::null;
+            }
+        }
+
+        if (formEntity != entt::null)
+        {
+            const auto* pObjectComponent = m_world.try_get<ObjectComponent>(formEntity);
+            if (!pObjectComponent || pObjectComponent->Id != acServerId || formEntity != serverEntity)
+            {
+                LogObjectServiceFailure("Object entity creation rejected a conflicting or partial local mapping");
+                return entt::null;
+            }
+        }
+
+        if (serverEntity != entt::null)
+            return serverEntity;
+
+        createdEntity = m_world.create();
+        m_world.emplace<FormIdComponent>(createdEntity, acFormId);
+        m_world.emplace<ObjectComponent>(createdEntity, acServerId);
+
+        try
+        {
+            spdlog::info("Created object entity, server id: {:X}, form id {:X}", acServerId, acFormId);
+        }
+        catch (...)
+        {
+        }
+
+        return createdEntity;
+    }
+    catch (...)
+    {
+        if (createdEntity != entt::null)
+        {
+            try
+            {
+                m_world.destroy(createdEntity);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        LogObjectServiceFailure("Object entity creation failed; discarded the partial entity");
+        return entt::null;
+    }
 }
 
-void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
+void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept try
 {
+    if (!acEvent.pObject)
+        return;
+
     if (acEvent.ActivateFlag)
     {
         acEvent.pObject->Activate(acEvent.pActivator, acEvent.Unk1, acEvent.pObjectToGet, acEvent.Count, acEvent.DefaultProcessing);
     }
 
     if (!m_transport.IsConnected())
+        return;
+
+    if (!acEvent.pActivator)
         return;
 
     if (Lock* pLock = acEvent.pObject->GetLock())
@@ -277,8 +421,12 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
     m_transport.Send(request);
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object activation handling failed");
+}
 
-void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
+void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept try
 {
     Actor* pActor = Utils::GetByServerId<Actor>(acMessage.ActivatorId);
     if (!pActor)
@@ -313,8 +461,12 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
     // might be an idea to have the client send the flags through NotifyActivate
     pObject->Activate(pActor, 0, nullptr, 1, 0);
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object activation notification handling failed");
+}
 
-void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
+void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept try
 {
     if (!m_transport.IsConnected())
         return;
@@ -328,6 +480,11 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
     }
 
     const auto* const pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormId));
+    if (!pObject)
+    {
+        spdlog::error("Lock-change object not found for form id {:X}", acEvent.FormId);
+        return;
+    }
 
     TESObjectCELL* pCell = pObject->GetParentCellEx();
     if (!pCell)
@@ -347,8 +504,12 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
 
     m_transport.Send(request);
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object lock-change handling failed");
+}
 
-void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexcept
+void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexcept try
 {
     const auto cObjectId = World::Get().GetModSystem().GetGameId(acMessage.Id);
     if (cObjectId == 0)
@@ -386,8 +547,12 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
     pLock->SetLock(acMessage.IsLocked);
     pObject->LockChange();
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object lock-change notification handling failed");
+}
 
-void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) noexcept
+void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) noexcept try
 {
     ScriptAnimationRequest request{};
     request.FormID = acEvent.FormID;
@@ -396,8 +561,12 @@ void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) 
 
     m_transport.Send(request);
 }
+catch (...)
+{
+    LogObjectServiceFailure("Object script-animation relay failed");
+}
 
-void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept
+void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept try
 {
     if (acMessage.FormID == 0)
         return;
@@ -421,6 +590,10 @@ void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessa
         BSFixedString animation(acMessage.Animation.c_str());
         pObject->PlayAnimationAndWait(&animation, &eventName);
     }
+}
+catch (...)
+{
+    LogObjectServiceFailure("Object script-animation notification handling failed");
 }
 
 BSTEventResult ObjectService::OnEvent(const TESActivateEvent* acEvent, const EventDispatcher<TESActivateEvent>* aDispatcher)

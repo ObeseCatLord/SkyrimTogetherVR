@@ -4,6 +4,50 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
 
+usage() {
+    printf 'Usage: %s [--skip-handoff] [<commit>]\n' "${0##*/}" >&2
+}
+
+skip_handoff=0
+revision=HEAD
+revision_set=0
+while (($# > 0)); do
+    case $1 in
+        --skip-handoff)
+            skip_handoff=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            if (($# > 1)); then
+                usage
+                exit 2
+            fi
+            if (($# == 1)); then
+                revision=$1
+            fi
+            break
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage
+            exit 2
+            ;;
+        *)
+            if ((revision_set)); then
+                usage
+                exit 2
+            fi
+            revision=$1
+            revision_set=1
+            ;;
+    esac
+    shift
+done
+
 build_lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-active.lock"
 exec 8>"$build_lock_file"
 if ! flock -n 8; then
@@ -42,7 +86,6 @@ if [[ -n $(git status --porcelain=v1 --untracked-files=all) ]]; then
     exit 2
 fi
 
-revision=${1:-HEAD}
 commit=$(git rev-parse --verify "${revision}^{commit}")
 short_commit=${commit:0:8}
 git fetch --force --tags github main
@@ -172,8 +215,7 @@ fi
 
 package_dir="$repo_root/artifacts/SkyrimTogetherVR/packages"
 evidence_dir="$repo_root/artifacts/SkyrimTogetherVR/build-evidence"
-handoff_dir="$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
-mkdir -p "$package_dir" "$evidence_dir" "$handoff_dir"
+mkdir -p "$package_dir" "$evidence_dir"
 package_zip="$package_dir/SkyrimTogetherVR-gameplay-${short_commit}-${timestamp}.zip"
 evidence_copy="$evidence_dir/$(basename "$evidence_path")"
 python3 "$repo_root/Tools/SkyrimVR/archive_gameplay_package.py" \
@@ -190,15 +232,22 @@ from local_handoff_artifacts import validate_artifact_pair
 validate_artifact_pair(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4])
 PY
 
-handoff_zip="$handoff_dir/SkyrimTogetherVR-local-agent-complete-handoff-${short_commit}-${timestamp}.zip"
-python3 "$repo_root/Tools/SkyrimVR/create_local_agent_handoff.py" \
-    --repo "$repo_root" \
-    --gameplay-package "$package_zip" \
-    --build-evidence "$evidence_copy" \
-    --output "$handoff_zip"
-python3 "$repo_root/Tools/SkyrimVR/audit_local_agent_handoff.py" "$handoff_zip"
-unzip -tq "$handoff_zip"
-
-printf 'STVR_LINUX_GAMEPLAY_PACKAGE=%s\n' "$package_zip"
-printf 'STVR_LINUX_BUILD_EVIDENCE=%s\n' "$evidence_copy"
-printf 'STVR_LOCAL_HANDOFF=%s\n' "$handoff_zip"
+if ((skip_handoff)); then
+    printf 'STVR_LINUX_GAMEPLAY_PACKAGE=%s\n' "$package_zip"
+    printf 'STVR_LINUX_BUILD_EVIDENCE=%s\n' "$evidence_copy"
+    printf 'STVR_LOCAL_HANDOFF=SKIPPED (--skip-handoff: no handoff archive was created, overwritten, regenerated, audited, or unzipped)\n'
+else
+    handoff_dir="$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
+    mkdir -p "$handoff_dir"
+    handoff_zip="$handoff_dir/SkyrimTogetherVR-local-agent-complete-handoff-${short_commit}-${timestamp}.zip"
+    python3 "$repo_root/Tools/SkyrimVR/create_local_agent_handoff.py" \
+        --repo "$repo_root" \
+        --gameplay-package "$package_zip" \
+        --build-evidence "$evidence_copy" \
+        --output "$handoff_zip"
+    python3 "$repo_root/Tools/SkyrimVR/audit_local_agent_handoff.py" "$handoff_zip"
+    unzip -tq "$handoff_zip"
+    printf 'STVR_LINUX_GAMEPLAY_PACKAGE=%s\n' "$package_zip"
+    printf 'STVR_LINUX_BUILD_EVIDENCE=%s\n' "$evidence_copy"
+    printf 'STVR_LOCAL_HANDOFF=%s\n' "$handoff_zip"
+fi

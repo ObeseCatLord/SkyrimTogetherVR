@@ -4,9 +4,10 @@
 
 using TiltedPhoques::Serialization;
 
-CachedString& CachedString::operator=(const TiltedPhoques::String& acRhs) noexcept
+CachedString& CachedString::operator=(const TiltedPhoques::String& acRhs)
 {
     String::operator=(acRhs);
+    IsDecodedValid = true;
     return *this;
 }
 
@@ -29,25 +30,37 @@ void CachedString::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexc
 
 void CachedString::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    const auto cHasId = Serialization::ReadBool(aReader);
-    if (cHasId)
+    clear();
+    IsDecodedValid = true;
+    try
     {
-        const auto cId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
-        const auto cValue = StringCache::Get()[cId];
-        if (cValue)
+        const auto cHasId = Serialization::ReadBool(aReader);
+        if (cHasId)
         {
+            const auto cId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+            const auto cValue = StringCache::Get()[cId];
+            if (!cValue || cValue->size() > kMaximumWireBytes)
+            {
+                IsDecodedValid = false;
+                return;
+            }
             *this = *cValue;
         }
         else
         {
-            // If we receive an id but is not in our local cache, then something fucked up
-            assert(false);
+            auto value = Serialization::ReadString(aReader);
+            if (value.size() > kMaximumWireBytes)
+            {
+                IsDecodedValid = false;
+                return;
+            }
+            *this = value;
+            StringCache::Get().AddWanted(*this);
         }
     }
-    else
+    catch (...)
     {
-        *this = Serialization::ReadString(aReader);
-
-        StringCache::Get().AddWanted(*this);
+        clear();
+        IsDecodedValid = false;
     }
 }

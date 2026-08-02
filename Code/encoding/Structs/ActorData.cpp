@@ -13,8 +13,13 @@ void ActorData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 
 void ActorData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
     InitialActorValues.Deserialize(aReader);
+    if (!InitialActorValues.IsDecodedValid)
+        return;
     InitialInventory.Deserialize(aReader);
+    if (!InitialInventory.IsDecodedValid)
+        return;
     IsDead = Serialization::ReadBool(aReader);
     IsWeaponDrawn = Serialization::ReadBool(aReader);
 }

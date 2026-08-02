@@ -236,8 +236,6 @@ void World::Shutdown() noexcept
 
 #if TP_SKYRIM_VR
     SkyrimTogetherVR::LogShutdownPhase("world.shutdown.begin");
-    if (auto* pLifecycle = ctx().find<VRLifecycleService>())
-        pLifecycle->BeginTeardown();
 #endif
 
     // Deliver the final disconnect while subscribers and the dispatcher still
@@ -248,6 +246,10 @@ void World::Shutdown() noexcept
     m_transport.Close();
 #if TP_SKYRIM_VR
     SkyrimTogetherVR::LogShutdownPhase("transport.close.done");
+    if (auto* pLifecycle = ctx().find<VRLifecycleService>())
+        pLifecycle->BeginTeardown();
+    if (auto* pConnection = ctx().find<VRConnectionService>())
+        pConnection->BeginTeardown();
 #endif
 
 #if TP_SKYRIM_VR

@@ -92,6 +92,9 @@ VRProjectileService::VRProjectileService(World& aWorld, entt::dispatcher& aDispa
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRProjectileService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRProjectileService::OnDisconnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRProjectileService native sinks are owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
     {
@@ -102,6 +105,7 @@ VRProjectileService::VRProjectileService(World& aWorld, entt::dispatcher& aDispa
     {
         spdlog::warn("VRProjectileService could not register projectile event sinks; dispatcher manager is unavailable");
     }
+#endif
 }
 
 BSTEventResult VRProjectileService::OnEvent(const TESPlayerBowShotEvent* apEvent, const EventDispatcher<TESPlayerBowShotEvent>* apSender)

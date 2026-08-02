@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include "Message.h"
 #include <Structs/ReferenceUpdate.h>
 
@@ -7,6 +8,8 @@ using TiltedPhoques::String;
 
 struct ServerReferencesMoveRequest final : ServerMessage
 {
+    static constexpr std::size_t kMaximumUpdates = 512;
+
     static constexpr ServerOpcode Opcode = kServerReferencesMoveRequest;
 
     ServerReferencesMoveRequest()
@@ -21,4 +24,5 @@ struct ServerReferencesMoveRequest final : ServerMessage
 
     uint64_t Tick{};
     TiltedPhoques::Map<uint32_t, ReferenceUpdate> Updates{};
+    bool IsDecodedValid{true};
 };

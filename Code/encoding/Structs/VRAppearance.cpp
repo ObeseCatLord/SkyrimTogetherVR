@@ -1,5 +1,6 @@
 #include <Structs/VRAppearance.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -7,6 +8,8 @@
 
 namespace
 {
+constexpr std::uint8_t kTintMaskTypeCount = 15;
+
 void WriteFloat(TiltedPhoques::Buffer::Writer& aWriter, const float aValue) noexcept
 {
     std::uint32_t bits{};
@@ -24,9 +27,12 @@ float ReadFloat(TiltedPhoques::Buffer::Reader& aReader) noexcept
     return result;
 }
 
-bool IsValidUtf8(const std::array<char, VRAppearance::kMaximumNameBytes>& acBytes, const std::uint8_t aLength) noexcept
+template <std::size_t Size>
+bool IsValidUtf8(const std::array<char, Size>& acBytes, const std::size_t aLength) noexcept
 {
-    for (std::uint8_t index = 0; index < aLength;)
+    if (aLength > acBytes.size())
+        return false;
+    for (std::size_t index = 0; index < aLength;)
     {
         const auto byte = static_cast<std::uint8_t>(acBytes[index]);
         if (byte == 0)
@@ -37,7 +43,7 @@ bool IsValidUtf8(const std::array<char, VRAppearance::kMaximumNameBytes>& acByte
             continue;
         }
 
-        std::uint8_t continuationCount{};
+        std::size_t continuationCount{};
         std::uint32_t codePoint{};
         if (byte >= 0xC2 && byte <= 0xDF) { continuationCount = 1; codePoint = byte & 0x1Fu; }
         else if (byte >= 0xE0 && byte <= 0xEF) { continuationCount = 2; codePoint = byte & 0x0Fu; }
@@ -45,7 +51,7 @@ bool IsValidUtf8(const std::array<char, VRAppearance::kMaximumNameBytes>& acByte
         else return false;
         if (index + continuationCount >= aLength)
             return false;
-        for (std::uint8_t continuation = 1; continuation <= continuationCount; ++continuation)
+        for (std::size_t continuation = 1; continuation <= continuationCount; ++continuation)
         {
             const auto continuationByte = static_cast<std::uint8_t>(acBytes[index + continuation]);
             if ((continuationByte & 0xC0) != 0x80)
@@ -56,7 +62,37 @@ bool IsValidUtf8(const std::array<char, VRAppearance::kMaximumNameBytes>& acByte
             (continuationCount == 3 && codePoint < 0x10000) || codePoint > 0x10FFFF ||
             (codePoint >= 0xD800 && codePoint <= 0xDFFF))
             return false;
-        index = static_cast<std::uint8_t>(index + continuationCount + 1);
+        index += continuationCount + 1;
+    }
+    return true;
+}
+
+bool IsValidRelativeResourcePath(
+    const std::array<char, VRAppearanceTint::kMaximumTexturePathBytes>& acBytes,
+    const std::uint8_t aLength) noexcept
+{
+    if (!IsValidUtf8(acBytes, aLength))
+        return false;
+    if (aLength == 0)
+        return true;
+    if (acBytes[0] == '/' || acBytes[0] == '\\')
+        return false;
+
+    std::size_t segmentBegin{};
+    for (std::size_t index = 0; index <= aLength; ++index)
+    {
+        if (index != aLength && acBytes[index] != '/' && acBytes[index] != '\\')
+        {
+            if (acBytes[index] == ':')
+                return false;
+            continue;
+        }
+
+        const auto segmentLength = index - segmentBegin;
+        if (segmentLength == 0 || (segmentLength == 1 && acBytes[segmentBegin] == '.') ||
+            (segmentLength == 2 && acBytes[segmentBegin] == '.' && acBytes[segmentBegin + 1] == '.'))
+            return false;
+        segmentBegin = index + 1;
     }
     return true;
 }
@@ -74,7 +110,8 @@ bool VRAppearanceHeadPart::operator!=(const VRAppearanceHeadPart& acRhs) const n
 
 bool VRAppearanceTint::operator==(const VRAppearanceTint& acRhs) const noexcept
 {
-    return Type == acRhs.Type && Color == acRhs.Color && Alpha == acRhs.Alpha;
+    return Type == acRhs.Type && Color == acRhs.Color && Alpha == acRhs.Alpha &&
+           TexturePathLength == acRhs.TexturePathLength && TexturePath == acRhs.TexturePath;
 }
 
 bool VRAppearanceTint::operator!=(const VRAppearanceTint& acRhs) const noexcept
@@ -84,8 +121,11 @@ bool VRAppearanceTint::operator!=(const VRAppearanceTint& acRhs) const noexcept
 
 bool VRAppearance::operator==(const VRAppearance& acRhs) const noexcept
 {
-    return Sequence == acRhs.Sequence && RaceId == acRhs.RaceId && Sex == acRhs.Sex && Weight == acRhs.Weight &&
-           Level == acRhs.Level && Essential == acRhs.Essential &&
+    return SchemaVersion == acRhs.SchemaVersion && Sequence == acRhs.Sequence && RaceId == acRhs.RaceId &&
+           Sex == acRhs.Sex && Weight == acRhs.Weight &&
+           Level == acRhs.Level && Essential == acRhs.Essential && HairColorId == acRhs.HairColorId &&
+           FaceTextureId == acRhs.FaceTextureId && HasFaceData == acRhs.HasFaceData &&
+           FaceMorphs == acRhs.FaceMorphs && FaceParts == acRhs.FaceParts &&
            NameLength == acRhs.NameLength && Name == acRhs.Name && HeadPartCount == acRhs.HeadPartCount &&
            HeadParts == acRhs.HeadParts && TintCount == acRhs.TintCount && Tints == acRhs.Tints;
 }
@@ -97,10 +137,21 @@ bool VRAppearance::operator!=(const VRAppearance& acRhs) const noexcept
 
 bool VRAppearance::IsValid() const noexcept
 {
-    if (Sequence == 0 || !RaceId || Sex > 1 || !std::isfinite(Weight) || Weight < 0.0F || Weight > 100.0F || Level == 0 ||
-        NameLength > kMaximumNameBytes || HeadPartCount > kMaximumHeadParts || TintCount > kMaximumTints ||
+    if (SchemaVersion != kSchemaVersion || Sequence == 0 || !RaceId || Sex > 1 || !std::isfinite(Weight) ||
+        Weight < 0.0F || Weight > 100.0F || Level == 0 ||
+        NameLength == 0 || NameLength > kMaximumNameBytes || HeadPartCount > kMaximumHeadParts || TintCount > kMaximumTints ||
         !IsValidUtf8(Name, NameLength))
         return false;
+
+    for (const auto morph : FaceMorphs) {
+        if (!std::isfinite(morph) || std::abs(morph) > kMaximumFaceMorphMagnitude || (!HasFaceData && morph != 0.0F))
+            return false;
+    }
+    for (const auto part : FaceParts) {
+        if ((!HasFaceData && part != 0) ||
+            (HasFaceData && part != kFacePartDefault && (part < 0 || part > kMaximumFacePartPreset)))
+            return false;
+    }
 
     for (std::uint8_t index = NameLength; index < kMaximumNameBytes; ++index)
         if (Name[index] != '\0')
@@ -118,27 +169,39 @@ bool VRAppearance::IsValid() const noexcept
             return false;
     for (std::uint8_t index = 0; index < TintCount; ++index)
     {
-        if (Tints[index].Type >= kMaximumTints || !std::isfinite(Tints[index].Alpha) ||
-            Tints[index].Alpha < 0.0F || Tints[index].Alpha > 1.0F)
+        const auto& tint = Tints[index];
+        if (tint.Type >= kTintMaskTypeCount || !std::isfinite(tint.Alpha) || tint.Alpha < 0.0F ||
+            tint.Alpha > 1.0F || !IsValidRelativeResourcePath(tint.TexturePath, tint.TexturePathLength))
             return false;
-        for (std::uint8_t prior = 0; prior < index; ++prior)
-            if (Tints[prior].Type == Tints[index].Type)
+        for (std::size_t pathIndex = tint.TexturePathLength; pathIndex < tint.TexturePath.size(); ++pathIndex)
+            if (tint.TexturePath[pathIndex] != '\0')
                 return false;
     }
     for (std::uint8_t index = TintCount; index < kMaximumTints; ++index)
-        if (Tints[index].Type != 0 || Tints[index].Color != 0 || Tints[index].Alpha != 0.0F)
+        if (Tints[index].Type != 0 || Tints[index].Color != 0 || Tints[index].Alpha != 0.0F ||
+            Tints[index].TexturePathLength != 0 ||
+            std::any_of(Tints[index].TexturePath.begin(), Tints[index].TexturePath.end(),
+                        [](const char value) { return value != '\0'; }))
             return false;
     return true;
 }
 
 void VRAppearance::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
+    aWriter.WriteBits(SchemaVersion, 8);
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Sequence);
     RaceId.Serialize(aWriter);
     aWriter.WriteBits(Sex, 8);
     WriteFloat(aWriter, Weight);
     aWriter.WriteBits(Level, 16);
     aWriter.WriteBits(Essential ? 1u : 0u, 1);
+    HairColorId.Serialize(aWriter);
+    FaceTextureId.Serialize(aWriter);
+    aWriter.WriteBits(HasFaceData ? 1u : 0u, 1);
+    for (const auto morph : FaceMorphs)
+        WriteFloat(aWriter, morph);
+    for (const auto part : FaceParts)
+        aWriter.WriteBits(static_cast<std::uint32_t>(part), 32);
     aWriter.WriteBits(NameLength, 8);
     for (std::uint8_t index = 0; index < NameLength; ++index)
         aWriter.WriteBits(static_cast<std::uint8_t>(Name[index]), 8);
@@ -154,15 +217,20 @@ void VRAppearance::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexc
         aWriter.WriteBits(Tints[index].Type, 8);
         aWriter.WriteBits(Tints[index].Color, 32);
         WriteFloat(aWriter, Tints[index].Alpha);
+        aWriter.WriteBits(Tints[index].TexturePathLength, 8);
+        for (std::uint16_t pathIndex = 0; pathIndex < Tints[index].TexturePathLength; ++pathIndex)
+            aWriter.WriteBits(static_cast<std::uint8_t>(Tints[index].TexturePath[pathIndex]), 8);
     }
 }
 
 void VRAppearance::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
     *this = {};
+    std::uint64_t value{};
+    aReader.ReadBits(value, 8);
+    SchemaVersion = static_cast<std::uint8_t>(value);
     Sequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     RaceId.Deserialize(aReader);
-    std::uint64_t value{};
     aReader.ReadBits(value, 8);
     Sex = static_cast<std::uint8_t>(value);
     Weight = ReadFloat(aReader);
@@ -170,6 +238,17 @@ void VRAppearance::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     Level = static_cast<std::uint16_t>(value);
     aReader.ReadBits(value, 1);
     Essential = value != 0;
+    HairColorId.Deserialize(aReader);
+    FaceTextureId.Deserialize(aReader);
+    aReader.ReadBits(value, 1);
+    HasFaceData = value != 0;
+    for (auto& morph : FaceMorphs)
+        morph = ReadFloat(aReader);
+    for (auto& part : FaceParts)
+    {
+        aReader.ReadBits(value, 32);
+        part = static_cast<std::int32_t>(static_cast<std::uint32_t>(value));
+    }
     aReader.ReadBits(value, 8);
     const auto encodedNameLength = static_cast<std::uint8_t>(value);
     const bool invalidNameLength = encodedNameLength > kMaximumNameBytes;
@@ -203,9 +282,18 @@ void VRAppearance::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
         aReader.ReadBits(value, 32);
         const auto color = static_cast<std::uint32_t>(value);
         const auto alpha = ReadFloat(aReader);
+        aReader.ReadBits(value, 8);
+        const auto texturePathLength = static_cast<std::uint8_t>(value);
+        VRAppearanceTint tint{type, color, alpha};
+        tint.TexturePathLength = texturePathLength;
+        for (std::uint16_t pathIndex = 0; pathIndex < texturePathLength; ++pathIndex)
+        {
+            aReader.ReadBits(value, 8);
+            tint.TexturePath[pathIndex] = static_cast<char>(value);
+        }
         if (index < kMaximumTints)
-            Tints[index] = {type, color, alpha};
+            Tints[index] = tint;
     }
     if (invalidNameLength || invalidHeadPartCount || invalidTintCount)
-        Sex = 2;
+        SchemaVersion = 0;
 }

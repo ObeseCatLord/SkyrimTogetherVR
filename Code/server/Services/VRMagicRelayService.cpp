@@ -32,7 +32,7 @@ VRMagicRelayService::VRMagicRelayService(World& aWorld, entt::dispatcher& aDispa
 {
 }
 
-void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicEffectEvent>& acMessage) noexcept
+void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicEffectEvent>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -66,6 +66,10 @@ void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicE
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR magic relay rejected an update after an allocation or fanout failure");
+}
 
 void VRMagicRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -74,7 +78,7 @@ void VRMagicRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcep
 }
 
 bool VRMagicRelayService::ShouldRelayMagicEffect(
-    uint32_t aPlayerId, const RequestVRMagicEffectEvent& acRequest) noexcept
+    uint32_t aPlayerId, const RequestVRMagicEffectEvent& acRequest)
 {
     const auto& magicEffect = acRequest.MagicEffect;
     if (magicEffect.Sequence == 0 || !HasMagicEffectContext(magicEffect))

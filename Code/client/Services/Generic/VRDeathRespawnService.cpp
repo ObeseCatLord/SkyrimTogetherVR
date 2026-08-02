@@ -16,6 +16,7 @@
 #include <World.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -27,6 +28,7 @@ namespace
 {
 constexpr double kRespawnDelay = 5.0;
 constexpr double kCommandRetryDelay = 0.25;
+constexpr double kCommandResultTimeout = 10.0;
 constexpr std::uint8_t kMaximumCommandAttempts = 3;
 constexpr std::int32_t kMaximumGoldLoss = 10'000;
 constexpr std::uint32_t kGoldFormId = 0xF;
@@ -87,6 +89,10 @@ void VRDeathRespawnService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::L
     const bool isDead = record.Payload.LocalGameplayAction.ValueA != 0;
     if (!isDead)
     {
+        m_fadeOutPending = false;
+        m_fadeActionId = 0;
+        m_fadeResultElapsed = 0.0;
+        m_fadeRetryRemaining = 0.0;
         if (!m_serverRespawnPending)
             m_deathObserved = false;
         if (m_respawnActionId == 0 && !m_serverRespawnPending)
@@ -102,6 +108,9 @@ void VRDeathRespawnService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::L
     m_deathObserved = true;
     m_pendingServerId = localServerId;
     m_respawnRemaining = kRespawnDelay;
+    m_fadeOutPending = true;
+    m_fadeAttempts = 0;
+    SubmitFadeOut();
 }
 
 void VRDeathRespawnService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) noexcept
@@ -121,7 +130,7 @@ void VRDeathRespawnService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acM
 }
 
 void VRDeathRespawnService::OnGameplayResult(
-    const SkyrimTogetherVR::RemoteGameplayBridgeResultEvent& acEvent) noexcept
+    const SkyrimTogetherVR::RemoteGameplayBridgeResultEvent& acEvent) noexcept try
 {
     const auto& record = acEvent.Record;
     if (record.Header.Kind != static_cast<std::uint16_t>(GameplayBridge::EventKind::RemoteGameplayActionState) ||
@@ -134,11 +143,38 @@ void VRDeathRespawnService::OnGameplayResult(
     const auto domain = static_cast<GameplayBridge::GameplayDomain>(result.Domain);
     const auto action = static_cast<GameplayBridge::GameplayAction>(result.Action);
     const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
+    if (record.Header.Identity.ActionId == m_fadeActionId &&
+        domain == GameplayBridge::GameplayDomain::ActorState && action == GameplayBridge::GameplayAction::FadeScreen &&
+        result.TargetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value)
+    {
+        m_fadeActionId = 0;
+        m_fadeResultElapsed = 0.0;
+        if (status == GameplayBridge::CommandStatus::Success)
+        {
+            m_fadeAttempts = 0;
+            m_fadeRetryRemaining = 0.0;
+        }
+        else if (IsRetryable(status) && m_fadeAttempts < kMaximumCommandAttempts)
+        {
+            m_fadeOutPending = true;
+            m_fadeRetryRemaining = kCommandRetryDelay;
+        }
+        else
+        {
+            spdlog::warn("VR respawn fade failed with bridge status {} after {} attempt(s)",
+                         result.Status, m_fadeAttempts);
+            m_fadeOutPending = false;
+            m_fadeRetryRemaining = 0.0;
+        }
+        return;
+    }
+
     if (record.Header.Identity.ActionId == m_respawnActionId &&
         domain == GameplayBridge::GameplayDomain::ActorState && action == GameplayBridge::GameplayAction::Respawn &&
         result.TargetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value)
     {
         m_respawnActionId = 0;
+        m_respawnResultElapsed = 0.0;
         if (status == GameplayBridge::CommandStatus::Success)
         {
             m_serverRespawnPending = true;
@@ -164,6 +200,7 @@ void VRDeathRespawnService::OnGameplayResult(
         return;
 
     m_goldActionId = 0;
+    m_goldResultElapsed = 0.0;
     if (status == GameplayBridge::CommandStatus::Success)
     {
         m_pendingGoldLoss -= m_pendingGoldChunk;
@@ -192,6 +229,9 @@ void VRDeathRespawnService::OnGameplayResult(
         }
     }
 }
+catch (...)
+{
+}
 
 void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
@@ -199,6 +239,42 @@ void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
     {
         CancelRespawnTimer();
         return;
+    }
+
+    if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0) {
+        if (m_fadeActionId != 0) {
+            m_fadeResultElapsed += acEvent.Delta;
+            if (m_fadeResultElapsed >= kCommandResultTimeout) {
+                spdlog::warn("VR respawn fade result timed out; suppressing ambiguous replay");
+                m_fadeActionId = 0;
+                m_fadeResultElapsed = 0.0;
+                m_fadeOutPending = false;
+                m_fadeRetryRemaining = 0.0;
+            }
+        }
+        if (m_respawnActionId != 0) {
+            m_respawnResultElapsed += acEvent.Delta;
+            if (m_respawnResultElapsed >= kCommandResultTimeout) {
+                spdlog::error("VR local respawn result timed out; suppressing ambiguous replay");
+                m_respawnActionId = 0;
+                m_respawnResultElapsed = 0.0;
+                CancelRespawnTimer();
+                m_deathObserved = false;
+            }
+        }
+        if (m_goldActionId != 0) {
+            m_goldResultElapsed += acEvent.Delta;
+            if (m_goldResultElapsed >= kCommandResultTimeout) {
+                spdlog::error("VR respawn gold result timed out; suppressing ambiguous replay");
+                m_goldActionId = 0;
+                m_goldResultElapsed = 0.0;
+                m_localGameplay.CancelGoldInventoryDeltaSuppression();
+                m_pendingGoldChunk = 0;
+                m_pendingGoldLoss = 0;
+                m_totalGoldLoss = 0;
+                m_goldRetryRemaining = 0.0;
+            }
+        }
     }
     if ((m_sessionServerId != 0 && m_sessionServerId != m_avatars.GetLocalServerId()) ||
         (m_sessionLifecycleEpoch != 0 &&
@@ -222,6 +298,14 @@ void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
         m_hudRetryRemaining -= acEvent.Delta;
         if (m_hudRetryRemaining <= 0.0)
             SubmitPendingHudMessage();
+    }
+
+    if (m_fadeOutPending)
+    {
+        if (m_fadeRetryRemaining > 0.0)
+            m_fadeRetryRemaining -= acEvent.Delta;
+        if (m_fadeRetryRemaining <= 0.0)
+            SubmitFadeOut();
     }
 
     if (m_serverRespawnPending)
@@ -287,19 +371,62 @@ void VRDeathRespawnService::ResetSessionState() noexcept
     m_sessionServerId = 0;
     m_sessionLifecycleEpoch = 0;
     m_respawnActionId = 0;
+    m_fadeActionId = 0;
+    m_fadeRetryRemaining = 0.0;
+    m_fadeResultElapsed = 0.0;
     m_goldActionId = 0;
     m_goldRetryRemaining = 0.0;
+    m_goldResultElapsed = 0.0;
+    m_respawnResultElapsed = 0.0;
     m_hudRetryRemaining = 0.0;
     m_pendingGoldLoss = 0;
     m_totalGoldLoss = 0;
     m_pendingGoldChunk = 0;
     m_respawnAttempts = 0;
+    m_fadeAttempts = 0;
     m_goldAttempts = 0;
     m_hudAttempts = 0;
     m_serverRespawnPending = false;
+    m_fadeOutPending = false;
     m_nextHudTextId = 1;
     m_pendingHudMessage.clear();
     m_localGameplay.CancelGoldInventoryDeltaSuppression();
+}
+
+void VRDeathRespawnService::SubmitFadeOut() noexcept
+{
+    if (!m_fadeOutPending || m_fadeActionId != 0)
+        return;
+
+    GameplayBridge::CommandRecord command{};
+    if (m_avatars.BuildLocalGameplayCommand(
+            GameplayBridge::GameplayDomain::ActorState, GameplayBridge::GameplayAction::FadeScreen, command))
+    {
+        auto& payload = command.Payload.ApplyGameplayAction;
+        payload.ValueA = 1;
+        payload.ValueB = 1;
+        payload.ScalarA = 3.0F;
+        payload.ScalarB = 2.0F;
+        payload.ActionFlags = GameplayBridge::kFadeScreenRemainVisible;
+        if (SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
+        {
+            m_fadeActionId = command.Header.Identity.ActionId;
+            m_fadeResultElapsed = 0.0;
+            m_fadeOutPending = false;
+            ++m_fadeAttempts;
+            m_fadeRetryRemaining = 0.0;
+            return;
+        }
+    }
+
+    if (++m_fadeAttempts < kMaximumCommandAttempts)
+        m_fadeRetryRemaining = kCommandRetryDelay;
+    else
+    {
+        spdlog::warn("Unable to enqueue the native VR respawn fade after {} attempt(s)", m_fadeAttempts);
+        m_fadeOutPending = false;
+        m_fadeRetryRemaining = 0.0;
+    }
 }
 
 void VRDeathRespawnService::SubmitServerRespawnRequest() noexcept
@@ -333,6 +460,7 @@ void VRDeathRespawnService::SubmitRespawn() noexcept
         SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
     {
         m_respawnActionId = command.Header.Identity.ActionId;
+        m_respawnResultElapsed = 0.0;
         ++m_respawnAttempts;
         m_respawnRemaining = 0.0;
         return;
@@ -388,10 +516,11 @@ void VRDeathRespawnService::SubmitGoldLoss() noexcept
         return;
     }
     m_goldActionId = command.Header.Identity.ActionId;
+    m_goldResultElapsed = 0.0;
     ++m_goldAttempts;
 }
 
-void VRDeathRespawnService::SubmitHudMessage(const std::string_view acMessage) noexcept
+void VRDeathRespawnService::SubmitHudMessage(const std::string_view acMessage) noexcept try
 {
     if (acMessage.empty() || !m_transport.IsOnline())
         return;
@@ -399,8 +528,11 @@ void VRDeathRespawnService::SubmitHudMessage(const std::string_view acMessage) n
     m_hudAttempts = 0;
     SubmitPendingHudMessage();
 }
+catch (...)
+{
+}
 
-void VRDeathRespawnService::SubmitPendingHudMessage() noexcept
+void VRDeathRespawnService::SubmitPendingHudMessage() noexcept try
 {
     if (m_pendingHudMessage.empty() || !m_transport.IsOnline())
         return;
@@ -447,6 +579,16 @@ void VRDeathRespawnService::SubmitPendingHudMessage() noexcept
     else
     {
         spdlog::warn("Unable to enqueue VR respawn gold HUD message after {} attempt(s)", m_hudAttempts);
+        m_pendingHudMessage.clear();
+    }
+}
+catch (...)
+{
+    if (++m_hudAttempts < kMaximumCommandAttempts)
+        m_hudRetryRemaining = kCommandRetryDelay;
+    else
+    {
+        m_hudRetryRemaining = 0.0;
         m_pendingHudMessage.clear();
     }
 }

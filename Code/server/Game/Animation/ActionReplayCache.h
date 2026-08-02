@@ -21,6 +21,7 @@ public:
     ActionReplayChain FormRefinedReplayChain() noexcept;
 
     /// Appends actions to the replay cache
+    void Append(const ActionEvent& acAction) noexcept;
     void AppendAll(const Vector<ActionEvent>& acActions) noexcept;
 
     const Vector<ActionEvent>& GetActions() const noexcept { return m_actions; };

@@ -19,6 +19,7 @@ constexpr std::uint64_t kSnapshotHasCell = 1ull << 1;
 constexpr std::uint64_t kSnapshotHasWorldspace = 1ull << 2;
 constexpr std::uint32_t kPendingNewGame = 1u << 0;
 constexpr std::uint32_t kPendingPreLoadGame = 1u << 1;
+constexpr std::uint32_t kPendingPostLoadGame = 1u << 2;
 
 std::atomic<std::uint32_t> g_pendingLifecycleTransitions{};
 std::uint32_t g_lastLocalCellFormId{};
@@ -233,7 +234,7 @@ void HandleSkseMessage(SKSE::MessagingInterface::Message* a_message) noexcept
             g_pendingLifecycleTransitions.fetch_or(kPendingPreLoadGame, std::memory_order_release);
             break;
         case SKSE::MessagingInterface::kPostLoadGame:
-            PublishLifecycle(LifecycleState::PostLoadGame, 0);
+            g_pendingLifecycleTransitions.fetch_or(kPendingPostLoadGame, std::memory_order_release);
             break;
         default:
             break;
@@ -252,9 +253,12 @@ bool ProcessPendingLifecycleTransitions() noexcept
 
     LifecycleState state{};
     std::uint32_t reason{};
-    bool transitionPending = pending != 0;
+    bool transitionPending = (pending & (kPendingNewGame | kPendingPreLoadGame)) != 0;
     if (transitionPending) {
         state = (pending & kPendingPreLoadGame) != 0 ? LifecycleState::PreLoadGame : LifecycleState::NewGame;
+    } else if ((pending & kPendingPostLoadGame) != 0) {
+        PublishLifecycle(LifecycleState::PostLoadGame, 0);
+        return false;
     } else {
         const auto* player = RE::PlayerCharacter::GetSingleton();
         const auto* cell = player ? player->GetParentCell() : nullptr;
@@ -276,11 +280,14 @@ bool ProcessPendingLifecycleTransitions() noexcept
         return false;
 
     AvatarManager::Get().RetireAllOnCommandPumpOwner();
+    endpoint.DiscardCommandResultEvents();
     g_lastLocalCellFormId = 0;
     g_lastLocalWorldspaceFormId = 0;
     g_lastAnimationSnapshotTime = {};
     endpoint.Mapping()->Header.LifecycleEpoch.fetch_add(1, std::memory_order_acq_rel);
     PublishLifecycle(state, reason);
+    if ((pending & kPendingPostLoadGame) != 0)
+        PublishLifecycle(LifecycleState::PostLoadGame, 0);
     return true;
 }
 
@@ -321,7 +328,8 @@ void PublishRemoteAvatarState(
     payload.LocalWorldspaceFormId = a_localWorldspaceFormId;
     payload.LocalActorReferenceFormId = a_localActorReferenceFormId;
     payload.Root = EventSafeRoot(a_root);
-    endpoint.TryPushEvent(record);
+    if (!endpoint.QueueCommandResultEvent(record))
+        endpoint.Fault("command-result backlog overflow while publishing remote avatar state");
 }
 
 void PublishRemoteAnimationGraphState(
@@ -344,7 +352,8 @@ void PublishRemoteAnimationGraphState(
     payload.SnapshotId = a_snapshotId;
     payload.State = static_cast<std::uint32_t>(a_state);
     payload.Status = static_cast<std::uint32_t>(a_status);
-    endpoint.TryPushEvent(record);
+    if (!endpoint.QueueCommandResultEvent(record))
+        endpoint.Fault("command-result backlog overflow while publishing remote animation state");
 }
 
 void PublishRemoteSpatialTransferState(
@@ -370,7 +379,8 @@ void PublishRemoteSpatialTransferState(
     payload.TargetCellFormId = a_targetCellFormId;
     payload.TargetWorldspaceFormId = a_targetWorldspaceFormId;
     payload.Status = static_cast<std::uint32_t>(a_status);
-    endpoint.TryPushEvent(record);
+    if (!endpoint.QueueCommandResultEvent(record))
+        endpoint.Fault("command-result backlog overflow while publishing remote spatial-transfer state");
 }
 
 void PublishRemoteGameplayActionState(
@@ -394,6 +404,7 @@ void PublishRemoteGameplayActionState(
     payload.Action = static_cast<std::uint16_t>(a_action);
     payload.Status = static_cast<std::uint32_t>(a_status);
     payload.TargetLocalFormId = a_targetLocalFormId;
-    endpoint.TryPushEvent(record);
+    if (!endpoint.QueueCommandResultEvent(record))
+        endpoint.Fault("command-result backlog overflow while publishing gameplay action state");
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

@@ -39,8 +39,8 @@ EventRecord MakeEvent(const std::uint64_t a_sequence) noexcept
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 12);
-    REQUIRE(kCapabilityRevision == 20);
+    REQUIRE(kMappingAbiVersion == 19);
+    REQUIRE(kCapabilityRevision == 29);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
@@ -48,7 +48,7 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(kMinimumSkseVrReleaseIndex == 60);
     REQUIRE(kFixedPayloadBytes == 80);
     REQUIRE(kDefaultEventRingCapacity == 2048);
-    REQUIRE(kDefaultCommandRingCapacity == 1024);
+    REQUIRE(kDefaultCommandRingCapacity == 2048);
     REQUIRE(kLocalPlayerHandle.Value == 1);
     REQUIRE(kFirstRemoteAvatarHandle == 2);
     REQUIRE(sizeof(MessageHeader) == 0x40);
@@ -67,8 +67,8 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(kProjectileLaunchKnownFlags == 0x3F);
     REQUIRE(sizeof(MappingHeader) == 0x90);
     REQUIRE(sizeof(EventRing) == 0x4C020);
-    REQUIRE(sizeof(CommandRing) == 0x26020);
-    REQUIRE(sizeof(GameplayBridgeMapping) == 0x720D0);
+    REQUIRE(sizeof(CommandRing) == 0x4C020);
+    REQUIRE(sizeof(GameplayBridgeMapping) == 0x980D0);
     REQUIRE(offsetof(GameplayBridgeMapping, Events) == 0x90);
     REQUIRE(offsetof(GameplayBridgeMapping, Commands) == 0x4C0B0);
     REQUIRE(HasCapability(kInitialCapabilities, Capability::Lifecycle));
@@ -80,8 +80,30 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::InventoryStackTransactions));
     REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ArmLocalCapture));
     REQUIRE_FALSE(IsActionInDomain(GameplayDomain::Animation, GameplayAction::ArmLocalCapture));
+    REQUIRE(IsActionInDomain(GameplayDomain::VrBodyPose, GameplayAction::VrPoseCommit));
+    REQUIRE(static_cast<std::uint16_t>(GameplayAction::ConfigureDeathSystem) == 88);
+    REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ConfigureDeathSystem));
+    REQUIRE_FALSE(IsActionInDomain(GameplayDomain::WorldState, GameplayAction::ConfigureDeathSystem));
+    REQUIRE(kPoseCommitNodeMask == 0x3FFu);
+    REQUIRE(kNpcSnapshotActionIdMarker == (1ull << 63));
+    REQUIRE(kNpcSnapshotGraphChunkCount == 5);
+    REQUIRE(kMaximumInventoryTransactionRecords == 1538);
+    REQUIRE(kMaximumInventoryTransactionRecords <= kDefaultCommandRingCapacity);
+    REQUIRE(kMaximumNpcSnapshotRecords == 912);
+    REQUIRE(kMaximumAppearanceHeadParts == 7);
+    REQUIRE(kNpcSnapshotNameChunkBytes == 24);
+    REQUIRE(IsActionInDomain(GameplayDomain::NpcOwnership, GameplayAction::NpcSnapshotAppearance));
+    REQUIRE(IsActionInDomain(GameplayDomain::NpcOwnership, GameplayAction::NpcSnapshotNameChunk));
+    REQUIRE(static_cast<std::uint16_t>(GameplayAction::NpcSnapshotItemExtra) == 94);
+    REQUIRE(static_cast<std::uint16_t>(GameplayAction::NpcSnapshotItemEffect) == 95);
+    REQUIRE(static_cast<std::uint16_t>(GameplayAction::InventoryTransactionEnd) == 100);
+    REQUIRE(IsInventoryTransactionAction(GameplayAction::InventoryTransactionBegin));
+    REQUIRE(IsActionInDomain(GameplayDomain::Inventory, GameplayAction::InventoryTransactionItemEffect));
+    REQUIRE(kInventoryTransactionDynamicEnchantmentFormId == std::numeric_limits<std::uint32_t>::max());
+    REQUIRE(kInventoryTransactionBeginKnownFlags == kInventoryTransactionReset);
 }
 
 TEST_CASE("VR gameplay bridge records preserve identity and payloads", "[skyrim-vr][gameplay-bridge]")

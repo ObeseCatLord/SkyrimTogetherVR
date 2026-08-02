@@ -21,6 +21,10 @@ public:
         std::uint64_t a_lifecycleEpoch) noexcept;
     [[nodiscard]] bool TryPushEvent(const EventRecord& a_record) noexcept;
     [[nodiscard]] bool TryPushEvents(const EventRecord* ap_records, std::size_t a_count) noexcept;
+    [[nodiscard]] bool QueueCommandResultEvent(const EventRecord& a_record) noexcept;
+    [[nodiscard]] bool FlushCommandResultEvents() noexcept;
+    [[nodiscard]] bool CanQueueCommandResultEvents(std::size_t a_count = 1) const noexcept;
+    void DiscardCommandResultEvents() noexcept;
     [[nodiscard]] BridgeIdentity SnapshotIdentity(std::uint64_t a_sequenceId) const noexcept;
     [[nodiscard]] std::uint64_t NextEventSequence() noexcept;
 
@@ -37,5 +41,8 @@ private:
     std::atomic<std::uint64_t> _eventSequence{};
     std::atomic<CapabilityMask> _optionalCapabilities{};
     std::atomic_bool _attachAttempted{};
+    std::array<EventRecord, kDefaultCommandRingCapacity> _commandResultEvents{};
+    std::size_t _commandResultHead{};
+    std::size_t _commandResultCount{};
 };
 } // namespace SkyrimTogetherVR::GameplayAdapter

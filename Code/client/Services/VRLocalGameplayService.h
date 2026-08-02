@@ -11,6 +11,7 @@
 #include <entt/entt.hpp>
 
 #include <vr_common/VRGameplayBridge.h>
+#include <Structs/Inventory.h>
 #include <Structs/MagicEquipment.h>
 #include <Structs/ObjectData.h>
 #include <Structs/VRAppearance.h>
@@ -39,6 +40,7 @@ struct VRLocalGameplayService
     TP_NOCOPYMOVE(VRLocalGameplayService);
 
     void SetLocalServerId(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool SeedLocalAppearance(const VRAppearance& acAppearance) noexcept;
     void ArmGoldInventoryDeltaSuppression(std::int32_t aCount) noexcept;
     void CancelGoldInventoryDeltaSuppression() noexcept;
     [[nodiscard]] bool HasGoldInventoryDeltaSuppression() const noexcept;
@@ -50,15 +52,19 @@ private:
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
 
     [[nodiscard]] bool AcceptAction(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    [[nodiscard]] bool IsCurrentBridgeRecord(
+        const SkyrimTogetherVR::GameplayBridge::MessageHeader& acHeader) const noexcept;
     [[nodiscard]] bool AcceptAppearanceText(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) const noexcept;
     [[nodiscard]] bool HasMappedLocalPlayerForm(
         const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) const noexcept;
     [[nodiscard]] bool ApplyAppearanceAction(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool ApplyAppearanceText(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool ApplyObjectSnapshot(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    [[nodiscard]] bool ApplyInventoryTransaction(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool ApplyEquipmentSnapshot(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool ApplyProjectileLaunch(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] std::uint32_t GetServerIdForLocalActor(std::uint32_t aLocalFormId) const noexcept;
+    [[nodiscard]] std::uint32_t GetServerIdForLocalInventoryOwner(std::uint32_t aLocalFormId) const noexcept;
     [[nodiscard]] bool ConsumeInventoryDeltaSuppression(
         const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
     template <class T>
@@ -68,6 +74,8 @@ private:
                                   std::uint64_t aCoalesceKey) noexcept;
     void QueuePendingInventoryDelta(GameId aBaseId, std::int32_t aCount, bool aIsQuestItem, bool aDrop,
                                     std::size_t aDomainIndex, std::uint64_t aActionId) noexcept;
+    void QueuePendingInventoryChange(std::uint32_t aServerId, Inventory::Entry aItem, bool aDrop,
+                                     std::size_t aDomainIndex, std::uint64_t aActionId) noexcept;
     void TrySendPendingOutbound() noexcept;
     void MarkActionAccepted(std::size_t aDomainIndex, std::uint64_t aActionId) noexcept;
     void TryArmLocalCapture() noexcept;
@@ -86,16 +94,29 @@ private:
         std::uint64_t TextId{0};
         std::uint16_t ChunkCount{0};
         std::uint16_t ReceivedMask{0};
+        std::uint16_t Action{0};
+        std::uint32_t AuxiliaryLocalFormId{0};
         std::array<std::uint16_t, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks> Lengths{};
         std::array<char, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks *
                              SkyrimTogetherVR::GameplayBridge::kGameplayTextBytesPerChunk> Bytes{};
     };
     VRAppearance m_appearance{};
     NameAssembly m_nameAssembly{};
+    bool m_appearanceDirty{false};
     struct PendingObjectSnapshot
     {
         ObjectData Data{};
+        std::uint64_t ActionId{};
+        std::uint32_t ExpectedItems{};
+        std::uint32_t NextItemOrdinal{};
+        std::size_t OpenInventoryIndex{};
+        std::uint32_t InventoryEffectsRemaining{};
+        std::uint32_t TotalEffects{};
+        double Elapsed{};
         bool Ignore{false};
+        bool IsContainer{false};
+        bool HasOpenInventory{false};
+        bool HasInventoryExtra{false};
     };
     struct PendingInventoryDeltaSuppression
     {
@@ -112,13 +133,30 @@ private:
     };
     struct PendingInventoryDelta
     {
-        GameId BaseId{};
-        std::int32_t Count{};
+        std::uint32_t ServerId{};
+        Inventory::Entry Item{};
         std::size_t DomainIndex{};
         std::uint64_t ActionId{};
         bool IsQuestItem{};
         bool Drop{};
         std::uint64_t Order{};
+    };
+    struct PendingInventoryTransaction
+    {
+        std::uint64_t ActionId{};
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+        std::uint64_t LifecycleEpoch{};
+        std::uint32_t ServerId{};
+        std::uint16_t ExpectedItems{};
+        std::size_t OpenItemIndex{};
+        std::uint32_t EffectsRemaining{};
+        std::uint32_t TotalEffects{};
+        std::vector<Inventory::Entry> Items{};
+        std::vector<bool> Drops{};
+        std::vector<bool> Suppressed{};
+        double Elapsed{};
+        bool HasOpenItemExtra{};
     };
     struct EquipmentSnapshotItem
     {
@@ -141,6 +179,7 @@ private:
         std::vector<EquipmentSnapshotItem> Items{};
     };
     std::unordered_map<std::uint32_t, PendingObjectSnapshot> m_pendingObjectSnapshots{};
+    std::unordered_map<std::uint32_t, PendingInventoryTransaction> m_pendingInventoryTransactions{};
     PendingEquipmentSnapshot m_pendingEquipmentSnapshot{};
     std::vector<EquipmentSnapshotItem> m_equipmentBaseline{};
     bool m_hasEquipmentBaseline{false};
@@ -150,6 +189,7 @@ private:
     std::uint64_t m_equipmentSessionConnectionGeneration{};
     std::uint64_t m_equipmentSessionLifecycleEpoch{};
     std::uint64_t m_lastLocalProjectileSequence{};
+    std::uint32_t m_vrGrabSequence{};
     std::deque<PendingStatefulSend> m_pendingStatefulSends{};
     std::deque<PendingInventoryDelta> m_pendingInventoryDeltas{};
     std::uint64_t m_nextPendingSendOrder{};

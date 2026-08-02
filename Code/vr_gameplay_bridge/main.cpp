@@ -1,4 +1,5 @@
 #include "CommandExecutor.h"
+#include "ActorActionHooks.h"
 #include "DialogueHooks.h"
 #include "EventCapture.h"
 #include "MagicHooks.h"
@@ -94,16 +95,21 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             endpoint.Fault("exact magic hook installation failed");
             return false;
         }
-        endpoint.SetOptionalCapability(
-            SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions,
-            false);
+        if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
+            SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall();
+            SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
+            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
+            endpoint.Fault("exact ActorMediator::PerformAction hook installation failed");
+            return false;
+        }
         SKSE::log::info(
-            "SkyrimTogetherVRGameplayBridge: exact ActorMediator action lane is disabled pending GameId translation and verified TESActionData lifetime");
+            "SkyrimTogetherVRGameplayBridge: exact ActorMediator action lane installed; capability remains gated until live semantic validation");
 
         SkyrimTogetherVR::GameplayAdapter::PublishPluginLoaded();
         SKSE::log::info("SkyrimTogetherVRGameplayBridge loaded");
         return true;
     } catch (...) {
+        SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Uninstall();
         SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall();
         SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
         SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();

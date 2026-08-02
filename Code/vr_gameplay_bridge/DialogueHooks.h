@@ -13,4 +13,5 @@ namespace SkyrimTogetherVR::GameplayAdapter::DialogueHooks
 void Uninstall() noexcept;
 
 [[nodiscard]] bool PlayRemoteVoice(RE::Actor& a_actor, const char* a_resourcePath) noexcept;
+[[nodiscard]] bool ShowRemoteSubtitle(RE::Actor& a_speaker, const char* a_text) noexcept;
 }

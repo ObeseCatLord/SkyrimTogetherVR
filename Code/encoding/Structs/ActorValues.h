@@ -1,7 +1,11 @@
 #pragma once
 
+#include <cstddef>
+
 struct ActorValues
 {
+    static constexpr std::size_t kMaximumWireValues = 164;
+
     ActorValues() = default;
     ~ActorValues() = default;
 
@@ -13,4 +17,5 @@ struct ActorValues
 
     TiltedPhoques::Map<uint32_t, float> ActorValuesList{};
     TiltedPhoques::Map<uint32_t, float> ActorMaxValuesList{};
+    bool IsDecodedValid{true};
 };

@@ -92,8 +92,9 @@ REQUIRED_TOKENS = {
         "NPC L Thigh [LThg]",
         "NPC R Foot [Rft ]",
     ),
-    "Code/client/TiltedOnlineApp.cpp": (
-        "World::Get().ctx().at<VRLifecycleService>().BeginTeardown();",
+    "Code/client/World.cpp": (
+        "pLifecycle->BeginTeardown();",
+        "pConnection->BeginTeardown();",
     ),
     "Code/client/main.cpp": (
         "static int __stdcall HookVrWinMain",
@@ -207,8 +208,8 @@ def main() -> int:
         failures.append("Code/client/main.cpp: mapped VR WinMain must reach idempotent client teardown")
     retire_index = end_body.find("SkyrimTogetherVR::TickBridge::Retire();")
     end_main_index = end_body.find("g_appInstance->EndMain();")
-    if retire_index < 0 or end_main_index < 0 or retire_index >= end_main_index:
-        failures.append("Code/client/main.cpp: tick bridge must retire before client lifecycle teardown")
+    if retire_index < 0 or end_main_index < 0 or retire_index <= end_main_index:
+        failures.append("Code/client/main.cpp: tick bridge must retire after client lifecycle teardown")
 
     print(f"Audited SKSEVR tick bridge files: {len(REQUIRED_TOKENS)}")
     print(f"SKSEVR tick bridge audit failures: {len(failures)}")

@@ -38,4 +38,5 @@ struct AssignCharacterResponse final : ServerMessage
     bool Owner{false};
     bool IsDead{};
     bool IsWeaponDrawn{};
+    bool IsDecodedValid{true};
 };

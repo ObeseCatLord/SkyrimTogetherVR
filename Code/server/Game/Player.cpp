@@ -86,6 +86,15 @@ void Player::SetCharacter(entt::entity aCharacter) noexcept
     m_character = aCharacter;
 }
 
+bool Player::ClearCharacter(const entt::entity aExpectedCharacter) noexcept
+{
+    if (!m_character || *m_character != aExpectedCharacter)
+        return false;
+
+    m_character.reset();
+    return true;
+}
+
 void Player::SetStringCacheId(uint32_t aStringCacheId) noexcept
 {
     m_stringCacheId = aStringCacheId;

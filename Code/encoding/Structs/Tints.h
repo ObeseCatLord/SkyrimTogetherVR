@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include "CachedString.h"
 
 using TiltedPhoques::Buffer;
@@ -7,6 +8,8 @@ using TiltedPhoques::Vector;
 
 struct Tints
 {
+    static constexpr std::size_t kMaximumWireEntries = 0xFF;
+
     struct Entry
     {
         CachedString Name;
@@ -28,4 +31,5 @@ struct Tints
     void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
 
     Vector<Entry> Entries;
+    bool IsDecodedValid{true};
 };

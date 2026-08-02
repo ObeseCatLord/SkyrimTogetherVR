@@ -67,17 +67,17 @@ void ActionEvent::GenerateDifferential(const ActionEvent& aPrevious, TiltedPhoqu
 
     if (flags & kActionId)
     {
-        Serialization::WriteVarInt(aWriter, ActionId);
+        ActionId.Serialize(aWriter);
     }
 
     if (flags & kTargetId)
     {
-        Serialization::WriteVarInt(aWriter, TargetId);
+        TargetId.Serialize(aWriter);
     }
 
     if (flags & kIdleId)
     {
-        Serialization::WriteVarInt(aWriter, IdleId);
+        IdleId.Serialize(aWriter);
     }
 
     if (flags & kState)
@@ -109,56 +109,105 @@ void ActionEvent::GenerateDifferential(const ActionEvent& aPrevious, TiltedPhoqu
 
 void ActionEvent::ApplyDifferential(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    uint64_t flags = 0;
+    ActionEvent candidate{};
+    try
+    {
+        candidate = *this;
+    }
+    catch (...)
+    {
+        IsDecodedValid = false;
+        return;
+    }
+    candidate.IsDecodedValid = true;
+    candidate.EventName.IsDecodedValid = true;
+    candidate.TargetEventName.IsDecodedValid = true;
+    candidate.Variables.IsDecodedValid = true;
 
-    aReader.ReadBits(flags, 8);
+    uint64_t flags = 0;
+    if (!aReader.ReadBits(flags, 8))
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     {
         const auto tickDiff = Serialization::ReadVarInt(aReader);
-        Tick += tickDiff;
+        candidate.Tick += tickDiff;
     }
 
     if (flags & kActionId)
     {
-        ActionId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        candidate.ActionId.Deserialize(aReader);
     }
 
     if (flags & kTargetId)
     {
-        TargetId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        candidate.TargetId.Deserialize(aReader);
     }
 
     if (flags & kIdleId)
     {
-        IdleId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        candidate.IdleId.Deserialize(aReader);
     }
 
     if (flags & kState)
     {
         uint64_t tmp = 0;
-        aReader.ReadBits(tmp, 32);
-        State1 = tmp & 0xFFFFFFFF;
-        aReader.ReadBits(tmp, 32);
-        State2 = tmp & 0xFFFFFFFF;
+        if (!aReader.ReadBits(tmp, 32))
+        {
+            IsDecodedValid = false;
+            return;
+        }
+        candidate.State1 = tmp & 0xFFFFFFFF;
+        if (!aReader.ReadBits(tmp, 32))
+        {
+            IsDecodedValid = false;
+            return;
+        }
+        candidate.State2 = tmp & 0xFFFFFFFF;
     }
 
     if (flags & kType)
     {
-        Type = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        candidate.Type = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     }
 
     if (flags & kEventName)
     {
-        EventName.Deserialize(aReader);
+        candidate.EventName.Deserialize(aReader);
+        if (!candidate.EventName.IsDecodedValid)
+        {
+            IsDecodedValid = false;
+            return;
+        }
     }
 
     if (flags & kTargetEventName)
     {
-        TargetEventName.Deserialize(aReader);
+        candidate.TargetEventName.Deserialize(aReader);
+        if (!candidate.TargetEventName.IsDecodedValid)
+        {
+            IsDecodedValid = false;
+            return;
+        }
     }
 
     if (flags & kVariables)
     {
-        Variables.ApplyDiff(aReader);
+        if (!candidate.Variables.ApplyDiff(aReader))
+        {
+            IsDecodedValid = false;
+            return;
+        }
+    }
+
+    try
+    {
+        *this = std::move(candidate);
+    }
+    catch (...)
+    {
+        IsDecodedValid = false;
     }
 }

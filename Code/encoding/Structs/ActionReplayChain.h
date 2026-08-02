@@ -1,11 +1,15 @@
 #pragma once
 
+#include <cstddef>
+
 #include <Structs/ActionEvent.h>
 
 using TiltedPhoques::Vector;
 
 struct ActionReplayChain
 {
+    static constexpr std::size_t kMaximumActions = 0xFF;
+
     ActionReplayChain() = default;
     ~ActionReplayChain() = default;
 
@@ -17,4 +21,5 @@ struct ActionReplayChain
 
     bool ResetAnimationGraph{false};
     Vector<ActionEvent> Actions;
+    bool IsDecodedValid{true};
 };

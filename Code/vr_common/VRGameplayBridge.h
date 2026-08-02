@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include "VRAnimationGraphProtocol.h"
+#include "VRAssignmentLimits.h"
 
 namespace SkyrimTogetherVR::GameplayBridge
 {
@@ -16,8 +17,8 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 12;
-inline constexpr std::uint32_t kCapabilityRevision = 20;
+inline constexpr std::uint16_t kMappingAbiVersion = 19;
+inline constexpr std::uint32_t kCapabilityRevision = 29;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -29,6 +30,14 @@ inline constexpr std::uint32_t kMinimumSkseVrReleaseIndex = 60;
 inline constexpr std::uint16_t kFixedPayloadBytes = 80;
 inline constexpr std::uint16_t kGameplayTextBytesPerChunk = 44;
 inline constexpr std::uint16_t kMaximumGameplayTextChunks = 16;
+inline constexpr std::uint16_t kMaximumAppearanceTints = 32;
+inline constexpr std::uint16_t kMaximumAppearanceTexturePathBytes = 255;
+inline constexpr std::uint16_t kMaximumAppearanceNameBytes = 127;
+inline constexpr std::uint16_t kMaximumAppearanceHeadParts = 7;
+inline constexpr std::uint16_t kNpcSnapshotNameChunkBytes = sizeof(std::uint32_t) * 6;
+inline constexpr std::size_t kMaximumNpcSnapshotAppearanceRecords =
+    1 + kMaximumAppearanceHeadParts + 19 + 4 +
+    (kMaximumAppearanceNameBytes + kNpcSnapshotNameChunkBytes - 1) / kNpcSnapshotNameChunkBytes;
 inline constexpr float kMaximumProjectileCoordinate = 1000000.0F;
 inline constexpr float kMaximumProjectileAngle = 6.2831855F;
 inline constexpr std::int32_t kMaximumProjectileArea = 100000;
@@ -38,7 +47,37 @@ inline constexpr float kMaximumProjectileScale = 1000.0F;
 // enough event capacity for that transaction plus normal local observations;
 // command traffic must also hold one complete authoritative container reply.
 inline constexpr std::uint32_t kDefaultEventRingCapacity = 2048;
-inline constexpr std::uint32_t kDefaultCommandRingCapacity = 1024;
+inline constexpr std::uint32_t kDefaultCommandRingCapacity = 2048;
+inline constexpr std::size_t kSkyrimActorValueCount = 164;
+inline constexpr std::size_t kMaximumNpcSnapshotItems = 64;
+inline constexpr std::size_t kMaximumNpcSnapshotFactions = 64;
+// An inventory transaction uses Begin, Item, ItemExtra, zero or more
+// ItemEffect records, and End. Keep the complete event batch below the ring
+// capacity so a producer can publish it atomically.
+inline constexpr std::size_t kMaximumInventoryTransactionItems = 512;
+inline constexpr std::size_t kMaximumInventoryTransactionEffects = 512;
+inline constexpr std::size_t kMaximumInventoryTransactionRecords =
+    2 + kMaximumInventoryTransactionItems * 2 + kMaximumInventoryTransactionEffects;
+inline constexpr std::size_t kNpcSnapshotGraphChunkCount =
+    1 + (AnimationGraphProtocol::kFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk +
+    (AnimationGraphProtocol::kIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk;
+inline constexpr std::size_t kMaximumNpcSnapshotRecords =
+    2 + kSkyrimActorValueCount + kNpcSnapshotGraphChunkCount + kMaximumNpcSnapshotItems * 2 +
+    kMaximumInventoryTransactionEffects + kMaximumNpcSnapshotFactions +
+    kMaximumNpcSnapshotAppearanceRecords;
+// NPC snapshots use the high bit to keep their graph chunks out of the
+// independently generated exact-action transaction namespace.
+inline constexpr std::uint64_t kNpcSnapshotActionIdMarker = 1ull << 63;
+static_assert(kMaximumNpcSnapshotRecords <= kDefaultEventRingCapacity);
+static_assert(kMaximumInventoryTransactionRecords <= kDefaultEventRingCapacity);
+static_assert(kMaximumInventoryTransactionRecords <= kDefaultCommandRingCapacity);
+inline constexpr std::size_t kMaximumAppearanceTextRecords =
+    (kMaximumAppearanceNameBytes + kGameplayTextBytesPerChunk - 1) / kGameplayTextBytesPerChunk +
+    kMaximumAppearanceTints *
+        ((kMaximumAppearanceTexturePathBytes + kGameplayTextBytesPerChunk - 1) / kGameplayTextBytesPerChunk);
+static_assert(kMaximumAppearanceTextRecords + 96 <= kDefaultCommandRingCapacity);
 
 enum class EndpointState : std::uint32_t
 {
@@ -73,6 +112,8 @@ enum class Capability : std::uint64_t
     PlanckInteraction = 1ull << 18,
     NpcOwnership = 1ull << 19,
     ExactAnimationActions = 1ull << 20,
+    AssignmentBootstrap = 1ull << 21,
+    InventoryStackTransactions = 1ull << 22,
 };
 
 using CapabilityMask = std::uint64_t;
@@ -98,7 +139,9 @@ inline constexpr CapabilityMask kInitialCapabilities =
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |
     static_cast<CapabilityMask>(Capability::PlanckInteraction) |
     static_cast<CapabilityMask>(Capability::NpcOwnership) |
-    static_cast<CapabilityMask>(Capability::ExactAnimationActions);
+    static_cast<CapabilityMask>(Capability::ExactAnimationActions) |
+    static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
+    static_cast<CapabilityMask>(Capability::InventoryStackTransactions);
 
 [[nodiscard]] constexpr bool HasCapability(const CapabilityMask a_mask, const Capability a_capability) noexcept
 {
@@ -166,6 +209,7 @@ enum class EventKind : std::uint16_t
     LocalActorActionMetadata = 11,
     LocalActorActionGraphChunk = 12,
     LocalActorActionTextChunk = 13,
+    AssignmentBootstrapRecord = 14,
 };
 
 enum class GameplayDomain : std::uint16_t
@@ -273,7 +317,52 @@ enum class GameplayAction : std::uint16_t
     SyncExperience = 71,
     ActorAction = 72,
     ArmLocalCapture = 73,
+    SetHairColor = 74,
+    SetFaceTexture = 75,
+    SetFaceMorph = 76,
+    SetFacePart = 77,
+    CommitAppearance = 78,
+    FadeScreen = 79,
+    ResetFaceData = 80,
+    ClearHeadPart = 81,
+    ResetHeadParts = 82,
+    BeginAppearance = 83,
+    ResetTints = 84,
+    ObjectSnapshotItemExtra = 85,
+    ObjectSnapshotItemEffect = 86,
+    VrPoseCommit = 87,
+    ConfigureDeathSystem = 88,
+    NpcSnapshotAppearance = 89,
+    NpcSnapshotHeadPart = 90,
+    NpcSnapshotFaceMorph = 91,
+    NpcSnapshotFacePart = 92,
+    NpcSnapshotNameChunk = 93,
+    NpcSnapshotItemExtra = 94,
+    NpcSnapshotItemEffect = 95,
+    InventoryTransactionBegin = 96,
+    InventoryTransactionItem = 97,
+    InventoryTransactionItemExtra = 98,
+    InventoryTransactionItemEffect = 99,
+    InventoryTransactionEnd = 100,
 };
+
+[[nodiscard]] constexpr bool IsObjectSnapshotAction(const GameplayAction a_action) noexcept
+{
+    return a_action == GameplayAction::ObjectSnapshotBegin ||
+           a_action == GameplayAction::ObjectSnapshotItem ||
+           a_action == GameplayAction::ObjectSnapshotItemExtra ||
+           a_action == GameplayAction::ObjectSnapshotItemEffect ||
+           a_action == GameplayAction::ObjectSnapshotEnd;
+}
+
+[[nodiscard]] constexpr bool IsInventoryTransactionAction(const GameplayAction a_action) noexcept
+{
+    return a_action == GameplayAction::InventoryTransactionBegin ||
+           a_action == GameplayAction::InventoryTransactionItem ||
+           a_action == GameplayAction::InventoryTransactionItemExtra ||
+           a_action == GameplayAction::InventoryTransactionItemEffect ||
+           a_action == GameplayAction::InventoryTransactionEnd;
+}
 
 [[nodiscard]] constexpr bool IsSupportedLegacyAnimationEvent(const std::string_view aEvent) noexcept
 {
@@ -307,17 +396,70 @@ inline constexpr float kMaximumSyncedExperience = 100000.0F;
 inline constexpr std::uint32_t kInventoryQuestItem = 1u << 0;
 inline constexpr std::uint32_t kInventoryDrop = 1u << 1;
 inline constexpr std::uint32_t kInventorySnapshotEntry = 1u << 2;
+// InventoryTransaction records use the same verified stack metadata layout
+// as object snapshots. Item flags describe the base stack and ItemExtra flags
+// describe extra enchantment metadata.
+inline constexpr std::uint32_t kInventoryTransactionQuestItem = 1u << 0;
+inline constexpr std::uint32_t kInventoryTransactionWorn = 1u << 1;
+inline constexpr std::uint32_t kInventoryTransactionWornLeft = 1u << 2;
+inline constexpr std::uint32_t kInventoryTransactionWeapon = 1u << 3;
+inline constexpr std::uint32_t kInventoryTransactionAmmo = 1u << 4;
+inline constexpr std::uint32_t kInventoryTransactionItemKnownFlags =
+    kInventoryTransactionQuestItem | kInventoryTransactionWorn |
+    kInventoryTransactionWornLeft | kInventoryTransactionWeapon |
+    kInventoryTransactionAmmo;
+inline constexpr std::uint32_t kInventoryTransactionItemWireKnownFlags =
+    kInventoryTransactionItemKnownFlags | kInventoryDrop;
+inline constexpr std::uint32_t kInventoryTransactionEnchantRemoveUnequip = 1u << 0;
+inline constexpr std::uint32_t kInventoryTransactionEnchantIsWeapon = 1u << 1;
+inline constexpr std::uint32_t kInventoryTransactionExtraKnownFlags =
+    kInventoryTransactionEnchantRemoveUnequip | kInventoryTransactionEnchantIsWeapon;
+// A dynamic enchantment is identified on the network by GameId.ModId ==
+// UINT32_MAX. The inbound client maps that marker to this local-only form ID so
+// the native adapter reconstructs the enchantment from ItemEffect records.
+inline constexpr std::uint32_t kInventoryTransactionDynamicEnchantmentFormId =
+    (std::numeric_limits<std::uint32_t>::max)();
+inline constexpr std::uint32_t kInventoryTransactionReset = 1u << 0;
+inline constexpr std::uint32_t kInventoryTransactionBeginKnownFlags =
+    kInventoryTransactionReset;
 inline constexpr std::uint32_t kObjectSnapshotContainer = 1u << 0;
 inline constexpr std::uint32_t kObjectSnapshotPlayerHome = 1u << 1;
 inline constexpr std::uint32_t kNpcSnapshotDead = 1u << 0;
 inline constexpr std::uint32_t kNpcSnapshotWeaponDrawn = 1u << 1;
+inline constexpr std::uint32_t kNpcSnapshotIsDragon = 1u << 2;
+inline constexpr std::uint32_t kNpcSnapshotIsMount = 1u << 3;
+inline constexpr std::uint32_t kNpcSnapshotIsPlayerSummon = 1u << 4;
+inline constexpr std::uint32_t kNpcSnapshotKnownFlags =
+    kNpcSnapshotDead | kNpcSnapshotWeaponDrawn | kNpcSnapshotIsDragon |
+    kNpcSnapshotIsMount | kNpcSnapshotIsPlayerSummon;
+inline constexpr std::uint32_t kNpcSnapshotAppearanceHasFaceData = 1u << 0;
+inline constexpr std::uint32_t kNpcSnapshotAppearanceEssential = 1u << 1;
+inline constexpr std::uint32_t kNpcSnapshotAppearanceHeadPartCountShift = 8;
+inline constexpr std::uint32_t kNpcSnapshotAppearanceHeadPartCountMask =
+    0x7u << kNpcSnapshotAppearanceHeadPartCountShift;
+inline constexpr std::uint32_t kNpcSnapshotNameChunkByteCountMask = 0xFFu;
+inline constexpr std::uint32_t kNpcSnapshotNameChunkIndexShift = 8;
+inline constexpr std::uint32_t kNpcSnapshotNameChunkIndexMask =
+    0xFFu << kNpcSnapshotNameChunkIndexShift;
+
+[[nodiscard]] constexpr bool IsNpcSnapshotActionId(const std::uint64_t a_actionId) noexcept
+{
+    return (a_actionId & kNpcSnapshotActionIdMarker) != 0;
+}
 inline constexpr std::uint32_t kEquipmentSnapshotWorn = 1u << 0;
 inline constexpr std::uint32_t kEquipmentSnapshotWornLeft = 1u << 1;
 inline constexpr std::uint32_t kEquipmentSnapshotWeapon = 1u << 2;
 inline constexpr std::uint32_t kEquipmentSnapshotAmmo = 1u << 3;
-// Skyrim VR can safely refresh the skin-tone mask through the public
-// CommonLib surface. Other FaceGen tint types remain fail-closed.
 inline constexpr std::uint32_t kSupportedSkinTintType = 6;
+inline constexpr std::uint32_t kFaceMorphCount = 19;
+inline constexpr std::uint32_t kFacePartCount = 4;
+inline constexpr std::int32_t kFacePartDefault = 0x7F7FFFFF;
+inline constexpr float kMaximumFaceMorphMagnitude = 10.0F;
+inline constexpr std::int32_t kMaximumFacePartPreset = 255;
+inline constexpr std::uint32_t kAppearanceDeferredRefresh = 1u << 0;
+inline constexpr std::uint32_t kAppearanceTintHasTexturePath = 1u << 1;
+inline constexpr std::uint16_t kGameplayTextAppearanceDeferred = 1u << 0;
+inline constexpr std::uint32_t kFadeScreenRemainVisible = 1u << 0;
 // SetCalendar retains the local date while still applying server time and
 // timescale when SyncPlayerCalendar is disabled.
 inline constexpr std::uint32_t kPreserveCalendarDate = 1u << 0;
@@ -348,6 +490,8 @@ inline constexpr std::uint32_t kPoseChunkAxisShift = 2;
 inline constexpr std::uint32_t kPoseChunkAxisMask = 0x3u << kPoseChunkAxisShift;
 inline constexpr std::uint32_t kPoseChunkNodeShift = 8;
 inline constexpr std::uint32_t kPoseChunkNodeMask = 0xFFu << kPoseChunkNodeShift;
+inline constexpr std::uint32_t kPoseCommitNodeMask =
+    (1u << static_cast<std::uint32_t>(GameplayPoseNode::Count)) - 1u;
 
 [[nodiscard]] constexpr Capability CapabilityForDomain(const GameplayDomain a_domain) noexcept
 {
@@ -397,15 +541,17 @@ inline constexpr std::uint32_t kPoseChunkNodeMask = 0xFFu << kPoseChunkNodeShift
     case GameplayDomain::Animation:
         return (action >= 1 && action <= 2) || action == 72;
     case GameplayDomain::Appearance:
-        return action >= 3 && action <= 8;
+        return (action >= 3 && action <= 8) || (action >= 74 && action <= 78) ||
+               (action >= 80 && action <= 84);
     case GameplayDomain::Equipment:
         return (action >= 9 && action <= 10) || (action >= 68 && action <= 70);
     case GameplayDomain::Inventory:
-        return action == 11 || action == 50;
+        return action == 11 || action == 50 || IsInventoryTransactionAction(a_action);
     case GameplayDomain::ActorState:
-        return (action >= 12 && action <= 16) || (action >= 51 && action <= 55) || action == 71 || action == 73;
+        return (action >= 12 && action <= 16) || (action >= 51 && action <= 55) || action == 71 ||
+               action == 73 || action == 79 || action == 88;
     case GameplayDomain::Object:
-        return (action >= 17 && action <= 21) || (action >= 56 && action <= 58);
+        return (action >= 17 && action <= 21) || IsObjectSnapshotAction(a_action);
     case GameplayDomain::Combat:
         return action >= 22 && action <= 23;
     case GameplayDomain::Projectile:
@@ -421,13 +567,13 @@ inline constexpr std::uint32_t kPoseChunkNodeMask = 0xFFu << kPoseChunkNodeShift
     case GameplayDomain::WorldState:
         return (action >= 37 && action <= 39) || action == 66 || action == 67;
     case GameplayDomain::VrBodyPose:
-        return action >= 40 && action <= 41;
+        return (action >= 40 && action <= 41) || action == 87;
     case GameplayDomain::Higgs:
         return action >= 42 && action <= 46;
     case GameplayDomain::Planck:
         return action >= 47 && action <= 49;
     case GameplayDomain::NpcOwnership:
-        return action >= 59 && action <= 65;
+        return (action >= 59 && action <= 65) || (action >= 89 && action <= 95);
     default:
         return false;
     }
@@ -690,6 +836,60 @@ struct ActorActionGraphChunkPayload
     std::uint8_t ReservedTail[4];
 };
 
+enum class AssignmentBootstrapRecordKind : std::uint16_t
+{
+    Begin = 1,
+    ActorState = 2,
+    ActorValue = 3,
+    InventoryEntry = 4,
+    InventoryExtra = 5,
+    InventoryEffect = 6,
+    MagicEquipment = 7,
+    Quest = 8,
+    NpcFaction = 9,
+    ExtraFaction = 10,
+    Tint = 11,
+    End = 12,
+    Failure = 13,
+    AppearanceCore = 14,
+    FaceMorph = 15,
+    FacePart = 16,
+    HeadPart = 17,
+};
+
+inline constexpr std::uint16_t kAssignmentBootstrapDead = 1u << 0;
+inline constexpr std::uint16_t kAssignmentBootstrapWeaponDrawn = 1u << 1;
+inline constexpr std::uint16_t kAssignmentBootstrapInventoryQuestItem = 1u << 2;
+inline constexpr std::uint16_t kAssignmentBootstrapInventoryWorn = 1u << 3;
+inline constexpr std::uint16_t kAssignmentBootstrapInventoryWornLeft = 1u << 4;
+inline constexpr std::uint16_t kAssignmentBootstrapInventoryWeapon = 1u << 5;
+inline constexpr std::uint16_t kAssignmentBootstrapInventoryAmmo = 1u << 6;
+inline constexpr std::uint16_t kAssignmentBootstrapEnchantRemoveUnequip = 1u << 7;
+inline constexpr std::uint16_t kAssignmentBootstrapEnchantIsWeapon = 1u << 8;
+inline constexpr std::uint16_t kAssignmentBootstrapTintHasTexturePath = 1u << 9;
+inline constexpr std::uint16_t kAssignmentBootstrapHasFaceData = 1u << 10;
+inline constexpr std::uint16_t kAssignmentBootstrapEssential = 1u << 11;
+
+struct AssignmentBootstrapRecordPayload
+{
+    AdapterHandle TargetHandle;
+    std::uint64_t RequestId;
+    std::uint16_t RecordKind;
+    std::uint16_t RecordFlags;
+    std::uint32_t Ordinal;
+    std::uint32_t LocalFormIdA;
+    std::uint32_t LocalFormIdB;
+    std::uint32_t LocalFormIdC;
+    std::uint32_t LocalFormIdD;
+    std::int32_t ValueA;
+    std::int32_t ValueB;
+    float ScalarA;
+    float ScalarB;
+    std::uint32_t TotalRecords;
+    std::uint32_t Digest;
+    std::uint8_t Reserved[16];
+};
+
 union EventPayload
 {
     LifecycleEventPayload Lifecycle;
@@ -705,6 +905,7 @@ union EventPayload
     ActorActionPayload LocalActorActionMetadata;
     ActorActionGraphChunkPayload LocalActorActionGraphChunk;
     GameplayTextChunkPayload LocalActorActionTextChunk;
+    AssignmentBootstrapRecordPayload AssignmentBootstrapRecord;
     std::uint8_t Bytes[kFixedPayloadBytes];
 };
 
@@ -727,6 +928,7 @@ enum class CommandKind : std::uint16_t
     StageActorActionGraphChunk = 9,
     StageActorActionTextChunk = 10,
     ApplyActorAction = 11,
+    CaptureAssignmentBootstrap = 12,
 };
 
 struct CreateRemoteAvatarPayload
@@ -779,6 +981,15 @@ struct RetireEpochPayload
     std::uint8_t Reserved[64];
 };
 
+struct CaptureAssignmentBootstrapPayload
+{
+    AdapterHandle TargetHandle;
+    std::uint64_t RequestId;
+    std::uint32_t CaptureFlags;
+    std::uint32_t Reserved0;
+    std::uint8_t Reserved[56];
+};
+
 union CommandPayload
 {
     CreateRemoteAvatarPayload CreateRemoteAvatar;
@@ -792,6 +1003,7 @@ union CommandPayload
     ActorActionGraphChunkPayload StageActorActionGraphChunk;
     GameplayTextChunkPayload StageActorActionTextChunk;
     ActorActionPayload ApplyActorAction;
+    CaptureAssignmentBootstrapPayload CaptureAssignmentBootstrap;
     std::uint8_t Bytes[kFixedPayloadBytes];
 };
 
@@ -819,7 +1031,7 @@ struct alignas(8) MappingHeader
     std::uint32_t RuntimeVersion;
     std::uint32_t CapabilityRevision;
     AtomicU32 State;
-    std::uint32_t Reserved0;
+    AtomicU32 SessionIdentityVersion;
     AtomicU64 RequestedCapabilities;
     AtomicU64 AvailableCapabilities;
     AtomicU64 ActiveCapabilities;
@@ -835,6 +1047,48 @@ struct alignas(8) MappingHeader
     AtomicU64 RejectedCommandCount;
     AtomicU64 StaleCommandCount;
 };
+
+struct SessionIdentitySnapshot
+{
+    std::uint64_t ServerInstanceNonce{};
+    std::uint64_t ConnectionGeneration{};
+};
+
+[[nodiscard]] inline bool TrySnapshotSessionIdentity(
+    const MappingHeader& acHeader, SessionIdentitySnapshot& arSnapshot) noexcept
+{
+    for (std::uint32_t attempt = 0; attempt < 8; ++attempt) {
+        const auto before = acHeader.SessionIdentityVersion.load(std::memory_order_acquire);
+        if ((before & 1u) != 0)
+            continue;
+
+        SessionIdentitySnapshot snapshot{
+            acHeader.ServerInstanceNonce.load(std::memory_order_relaxed),
+            acHeader.ConnectionGeneration.load(std::memory_order_relaxed),
+        };
+        const auto after = acHeader.SessionIdentityVersion.load(std::memory_order_acquire);
+        if (before == after && (after & 1u) == 0) {
+            arSnapshot = snapshot;
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool PublishSessionIdentity(
+    MappingHeader& arHeader, const SessionIdentitySnapshot& acSnapshot) noexcept
+{
+    auto version = arHeader.SessionIdentityVersion.load(std::memory_order_acquire);
+    if ((version & 1u) != 0 ||
+        !arHeader.SessionIdentityVersion.compare_exchange_strong(
+            version, version + 1u, std::memory_order_acq_rel, std::memory_order_acquire))
+        return false;
+
+    arHeader.ServerInstanceNonce.store(acSnapshot.ServerInstanceNonce, std::memory_order_relaxed);
+    arHeader.ConnectionGeneration.store(acSnapshot.ConnectionGeneration, std::memory_order_relaxed);
+    arHeader.SessionIdentityVersion.store(version + 2u, std::memory_order_release);
+    return true;
+}
 
 template <class T>
 struct alignas(8) RingSlot
@@ -1061,6 +1315,10 @@ static_assert(std::is_standard_layout_v<GameplayTextChunkPayload>);
 static_assert(std::is_trivially_copyable_v<GameplayTextChunkPayload>);
 static_assert(std::is_standard_layout_v<ApplyProjectileLaunchPayload>);
 static_assert(std::is_trivially_copyable_v<ApplyProjectileLaunchPayload>);
+static_assert(std::is_standard_layout_v<AssignmentBootstrapRecordPayload>);
+static_assert(std::is_trivially_copyable_v<AssignmentBootstrapRecordPayload>);
+static_assert(std::is_standard_layout_v<CaptureAssignmentBootstrapPayload>);
+static_assert(std::is_trivially_copyable_v<CaptureAssignmentBootstrapPayload>);
 static_assert(std::is_standard_layout_v<CreateRemoteAvatarPayload>);
 static_assert(std::is_trivially_copyable_v<CreateRemoteAvatarPayload>);
 static_assert(std::is_standard_layout_v<DestroyRemoteAvatarPayload>);
@@ -1083,6 +1341,11 @@ static_assert(sizeof(GameplayTextChunkPayload) == kFixedPayloadBytes);
 static_assert(sizeof(ApplyProjectileLaunchPayload) == kFixedPayloadBytes);
 static_assert(sizeof(ActorActionPayload) == kFixedPayloadBytes);
 static_assert(sizeof(ActorActionGraphChunkPayload) == kFixedPayloadBytes);
+static_assert(sizeof(AssignmentBootstrapRecordPayload) == kFixedPayloadBytes);
+static_assert(sizeof(CaptureAssignmentBootstrapPayload) == kFixedPayloadBytes);
+static_assert(offsetof(AssignmentBootstrapRecordPayload, RequestId) == 0x08);
+static_assert(offsetof(AssignmentBootstrapRecordPayload, LocalFormIdA) == 0x18);
+static_assert(offsetof(AssignmentBootstrapRecordPayload, TotalRecords) == 0x38);
 static_assert(offsetof(ActorActionPayload, TargetHandle) == 0x00);
 static_assert(offsetof(ActorActionPayload, ActorLocalFormId) == 0x08);
 static_assert(offsetof(ActorActionPayload, State1) == 0x18);
@@ -1117,6 +1380,7 @@ static_assert(std::is_trivially_copyable_v<CommandRecord>);
 static_assert(sizeof(MappingHeader) == 0x90);
 static_assert(alignof(MappingHeader) == 8);
 static_assert(offsetof(MappingHeader, State) == 0x18);
+static_assert(offsetof(MappingHeader, SessionIdentityVersion) == 0x1C);
 static_assert(offsetof(MappingHeader, RequestedCapabilities) == 0x20);
 static_assert(offsetof(MappingHeader, AvailableCapabilities) == 0x28);
 static_assert(offsetof(MappingHeader, ActiveCapabilities) == 0x30);
@@ -1128,13 +1392,13 @@ static_assert(sizeof(RingSlot<CommandRecord>) == 0x98);
 static_assert(offsetof(EventRing, Slots) == 0x20);
 static_assert(offsetof(CommandRing, Slots) == 0x20);
 static_assert(sizeof(EventRing) == 0x4C020);
-static_assert(sizeof(CommandRing) == 0x26020);
+static_assert(sizeof(CommandRing) == 0x4C020);
 static_assert(alignof(EventRing) == 8);
 static_assert(alignof(CommandRing) == 8);
 static_assert(std::is_standard_layout_v<MappingHeader>);
 static_assert(std::is_standard_layout_v<EventRing>);
 static_assert(std::is_standard_layout_v<CommandRing>);
-static_assert(sizeof(GameplayBridgeMapping) == 0x720D0);
+static_assert(sizeof(GameplayBridgeMapping) == 0x980D0);
 static_assert(alignof(GameplayBridgeMapping) == 8);
 static_assert(offsetof(GameplayBridgeMapping, Events) == 0x90);
 static_assert(offsetof(GameplayBridgeMapping, Commands) == 0x4C0B0);

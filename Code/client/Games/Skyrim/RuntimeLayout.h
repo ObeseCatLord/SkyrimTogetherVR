@@ -839,6 +839,8 @@ struct PlayerCharacterVRCommonLibNgOffsets
     static constexpr std::uintptr_t InfoRuntimeData = 0xFD0;
     static constexpr std::uintptr_t SkillsPointer = 0x10B0;
     static constexpr std::uintptr_t GameStateData = 0x11F4;
+    static constexpr std::uintptr_t BaseTints = 0x1208;
+    static constexpr std::uintptr_t OverlayTints = 0x1220;
 };
 
 struct PlayerCharacterLocalShimOffsets

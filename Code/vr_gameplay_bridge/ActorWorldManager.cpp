@@ -19,6 +19,7 @@ constexpr std::array<RE::FormID, 9> kCrimeFactionFormIds{
 };
 constexpr RE::FormID kRightHandEquipSlotFormId = 0x13F42;
 constexpr RE::FormID kLeftHandEquipSlotFormId = 0x13F43;
+constexpr RE::FormID kKillMoveGlobalFormId = 0x100F19;
 constexpr auto kPostRespawnKnockdownDelay = std::chrono::milliseconds(1500);
 constexpr auto kPostRespawnProtectionDuration = std::chrono::seconds(10);
 
@@ -32,6 +33,37 @@ enum class PostRespawnPhase : std::uint8_t
 PostRespawnPhase g_postRespawnPhase{PostRespawnPhase::None};
 std::chrono::steady_clock::time_point g_postRespawnDeadline{};
 bool g_postRespawnEnabledGodMode{};
+
+struct DeathSystemPolicyState
+{
+    float PreviousKillMoveValue{};
+    bool PreviousActorEssential{};
+    bool PreviousNoBleedoutRecovery{};
+    bool PreviousBaseEssential{};
+    bool Active{};
+};
+
+DeathSystemPolicyState g_deathSystemPolicy{};
+
+[[nodiscard]] CommandStatus FadeScreen(
+    const bool a_fadingOut,
+    const bool a_blackFade,
+    const float a_fadeDuration,
+    const bool a_remainVisible,
+    const float a_secondsToFade) noexcept
+{
+    auto* skyrimVm = RE::SkyrimVM::GetSingleton();
+    auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
+    if (!vm)
+        return CommandStatus::Inactive;
+
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+    return vm->DispatchStaticCall(
+               RE::BSFixedString{"Game"}, RE::BSFixedString{"FadeOutGame"},
+               RE::MakeFunctionArguments(
+                   a_fadingOut, a_blackFade, a_fadeDuration, a_remainVisible, a_secondsToFade), callback) ?
+               CommandStatus::Success : CommandStatus::EngineRejected;
+}
 
 [[nodiscard]] bool IsZero(const GameplayActionPayload& a_payload) noexcept
 {
@@ -130,7 +162,116 @@ bool g_postRespawnEnabledGodMode{};
     return CommandStatus::Success;
 }
 
-[[nodiscard]] CommandStatus ExecuteActorState(const CommandRecord& a_command) noexcept
+void SetActorBoolFlag(RE::Actor& ar_actor, const RE::Actor::BOOL_FLAGS a_flag, const bool a_enabled) noexcept
+{
+    auto& flags = ar_actor.GetActorRuntimeData().boolFlags;
+    if (a_enabled)
+        flags.set(a_flag);
+    else
+        flags.reset(a_flag);
+}
+
+[[nodiscard]] CommandStatus RestoreDeathSystemPolicy() noexcept
+{
+    if (!g_deathSystemPolicy.Active)
+        return CommandStatus::Success;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    auto* base = player ? player->GetActorBase() : nullptr;
+    auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
+    if (!player || !base || !killMove || !std::isfinite(killMove->value))
+        return CommandStatus::Inactive;
+
+    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential, g_deathSystemPolicy.PreviousActorEssential);
+    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery,
+                     g_deathSystemPolicy.PreviousNoBleedoutRecovery);
+    base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, g_deathSystemPolicy.PreviousBaseEssential, true);
+    killMove->value = g_deathSystemPolicy.PreviousKillMoveValue;
+    g_deathSystemPolicy = {};
+    return CommandStatus::Success;
+}
+
+void RestoreDeathSystemPolicyForRetirement() noexcept
+{
+    if (!g_deathSystemPolicy.Active)
+        return;
+
+    try {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* base = player ? player->GetActorBase() : nullptr;
+        auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
+        if (player)
+        {
+            SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential,
+                             g_deathSystemPolicy.PreviousActorEssential);
+            SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery,
+                             g_deathSystemPolicy.PreviousNoBleedoutRecovery);
+        }
+        if (base)
+            base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential,
+                                   g_deathSystemPolicy.PreviousBaseEssential, true);
+        if (killMove)
+            killMove->value = g_deathSystemPolicy.PreviousKillMoveValue;
+    } catch (...) {
+    }
+    g_deathSystemPolicy = {};
+}
+
+[[nodiscard]] CommandStatus ConfigureDeathSystemPolicy(RE::Actor& a_actor, const bool a_enabled) noexcept
+{
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player || &a_actor != player)
+        return CommandStatus::Malformed;
+    if (!a_enabled)
+        return RestoreDeathSystemPolicy();
+
+    auto* base = player->GetActorBase();
+    auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
+    if (!base || !killMove || !std::isfinite(killMove->value))
+        return CommandStatus::Inactive;
+
+    if (!g_deathSystemPolicy.Active)
+    {
+        const auto& flags = player->GetActorRuntimeData().boolFlags;
+        g_deathSystemPolicy = {
+            .PreviousKillMoveValue = killMove->value,
+            .PreviousActorEssential = flags.all(RE::Actor::BOOL_FLAGS::kEssential),
+            .PreviousNoBleedoutRecovery = flags.all(RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery),
+            .PreviousBaseEssential = base->IsEssential(),
+            .Active = true,
+        };
+    }
+
+    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential, true);
+    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery, true);
+    base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, true, true);
+    killMove->value = 0.0F;
+    return CommandStatus::Success;
+}
+
+void ResetPostRespawnState() noexcept
+{
+    if (g_postRespawnPhase != PostRespawnPhase::None)
+    {
+        try {
+            static_cast<void>(FadeScreen(false, true, 0.0F, true, 0.5F));
+        } catch (...) {
+        }
+    }
+    if (g_postRespawnEnabledGodMode)
+    {
+        try {
+            if (auto* player = RE::PlayerCharacter::GetSingleton())
+                player->SetGodMode(false);
+        } catch (...) {
+        }
+    }
+    g_postRespawnEnabledGodMode = false;
+    g_postRespawnPhase = PostRespawnPhase::None;
+    g_postRespawnDeadline = {};
+}
+
+[[nodiscard]] CommandStatus ExecuteActorState(const CommandRecord& a_command)
 {
     const auto& payload = a_command.Payload.ApplyGameplayAction;
     const auto action = static_cast<GameplayAction>(payload.Action);
@@ -201,6 +342,23 @@ bool g_postRespawnEnabledGodMode{};
     case GameplayAction::ResetFactions:
         if (payload.TargetHandle.Value == 0 || payload.SecondaryHandle.Value != 0 ||
             payload.TargetLocalFormId != 0 || !IsZero(payload))
+            return CommandStatus::Malformed;
+        break;
+    case GameplayAction::FadeScreen:
+        if (payload.TargetHandle.Value != kLocalPlayerHandle.Value || payload.SecondaryHandle.Value != 0 ||
+            payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || !IsBoolean(payload.ValueA) ||
+            !IsBoolean(payload.ValueB) || payload.ScalarA < 0.0F || payload.ScalarA > 30.0F ||
+            payload.ScalarB < 0.0F || payload.ScalarB > 30.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F || (payload.ActionFlags & ~kFadeScreenRemainVisible) != 0)
+            return CommandStatus::Malformed;
+        break;
+    case GameplayAction::ConfigureDeathSystem:
+        if (payload.TargetHandle.Value != kLocalPlayerHandle.Value || payload.SecondaryHandle.Value != 0 ||
+            payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || !IsBoolean(payload.ValueA) ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
             return CommandStatus::Malformed;
         break;
     default:
@@ -300,6 +458,13 @@ bool g_postRespawnEnabledGodMode{};
             actor->RemoveFromFaction(faction);
         return CommandStatus::Success;
     }
+    case GameplayAction::FadeScreen:
+        if (actor.get() != RE::PlayerCharacter::GetSingleton())
+            return CommandStatus::Malformed;
+        return FadeScreen(payload.ValueA != 0, payload.ValueB != 0, payload.ScalarA,
+                          (payload.ActionFlags & kFadeScreenRemainVisible) != 0, payload.ScalarB);
+    case GameplayAction::ConfigureDeathSystem:
+        return ConfigureDeathSystemPolicy(*actor, payload.ValueA != 0);
     default:
         return CommandStatus::Malformed;
     }
@@ -427,7 +592,7 @@ bool g_postRespawnEnabledGodMode{};
 {
     const auto& payload = a_command.Payload.ApplyGameplayAction;
     const auto action = static_cast<GameplayAction>(payload.Action);
-    if (payload.TargetHandle.Value != kLocalPlayerHandle.Value || payload.SecondaryHandle.Value != 0 ||
+    if (payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 ||
         payload.TargetLocalFormId == 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
         payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
         payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
@@ -436,10 +601,13 @@ bool g_postRespawnEnabledGodMode{};
 
     switch (action) {
     case GameplayAction::StartNpcObservation:
-        return LocalGameplayCapture::StartNpcObservation(payload.TargetLocalFormId) ?
-                   CommandStatus::Success : CommandStatus::MissingForm;
+        if (LocalGameplayCapture::StartNpcObservation(payload.TargetLocalFormId))
+            return CommandStatus::Success;
+        AvatarManager::Get().ReleaseLocalNativeGameplayActor(a_command);
+        return CommandStatus::MissingForm;
     case GameplayAction::StopNpcObservation:
         LocalGameplayCapture::StopNpcObservation(payload.TargetLocalFormId);
+        AvatarManager::Get().ReleaseLocalNativeGameplayActor(a_command);
         return CommandStatus::Success;
     default:
         return CommandStatus::Malformed;
@@ -492,7 +660,7 @@ void ActorWorldManager::ProcessPeriodic() noexcept
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player)
         {
-            Reset();
+            ResetPostRespawnState();
             return;
         }
 
@@ -505,6 +673,7 @@ void ActorWorldManager::ProcessPeriodic() noexcept
             }
             if (auto* process = player->GetActorRuntimeData().currentProcess)
                 process->KnockExplosion(player, player->GetPosition(), 0.0F);
+            static_cast<void>(FadeScreen(false, true, 0.5F, true, 2.0F));
             g_postRespawnPhase = PostRespawnPhase::Protected;
             g_postRespawnDeadline = std::chrono::steady_clock::now() + kPostRespawnProtectionDuration;
             return;
@@ -516,22 +685,13 @@ void ActorWorldManager::ProcessPeriodic() noexcept
         g_postRespawnPhase = PostRespawnPhase::None;
         g_postRespawnDeadline = {};
     } catch (...) {
-        Reset();
+        ResetPostRespawnState();
     }
 }
 
 void ActorWorldManager::Reset() noexcept
 {
-    if (g_postRespawnEnabledGodMode)
-    {
-        try {
-            if (auto* player = RE::PlayerCharacter::GetSingleton())
-                player->SetGodMode(false);
-        } catch (...) {
-        }
-    }
-    g_postRespawnEnabledGodMode = false;
-    g_postRespawnPhase = PostRespawnPhase::None;
-    g_postRespawnDeadline = {};
+    RestoreDeathSystemPolicyForRetirement();
+    ResetPostRespawnState();
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

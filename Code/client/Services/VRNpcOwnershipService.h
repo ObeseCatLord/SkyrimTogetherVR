@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include <entt/entt.hpp>
 #include <glm/vec3.hpp>
@@ -10,6 +12,7 @@
 #include <Structs/ActorData.h>
 #include <Structs/Factions.h>
 #include <Structs/GameId.h>
+#include <Structs/VRAppearance.h>
 #include <vr_common/VRGameplayBridge.h>
 
 struct AssignCharacterResponse;
@@ -26,6 +29,7 @@ struct World;
 namespace SkyrimTogetherVR
 {
 struct LocalGameplayBridgeEvent;
+struct RemoteGameplayBridgeResultEvent;
 }
 
 // Owns only mapped, fixed-size NPC snapshots. Native actors remain entirely in
@@ -39,14 +43,17 @@ struct VRNpcOwnershipService
     TP_NOCOPYMOVE(VRNpcOwnershipService);
 
     [[nodiscard]] std::uint32_t GetServerIdForLocalReference(std::uint32_t aReferenceFormId) const noexcept;
+    [[nodiscard]] std::uint32_t GetLocalReferenceForOwnedServerId(std::uint32_t aServerId) const noexcept;
     [[nodiscard]] bool RequestOwnershipForLocalReference(std::uint32_t aReferenceFormId) noexcept;
+    void CommitRemoteInventoryTransaction(std::uint32_t aServerId,
+                                          const std::vector<Inventory::Entry>& acEntries,
+                                          bool aReset) noexcept;
 
 private:
     struct InventoryEntry
     {
-        GameId Id{};
-        std::int32_t Count{};
-        bool QuestItem{};
+        std::uint32_t LocalFormId{};
+        Inventory::Entry Item{};
     };
 
     struct Snapshot
@@ -59,23 +66,46 @@ private:
         GameId PackageId{};
         glm::vec3 Position{};
         float ZRotation{};
-        std::array<float, 3> Values{};
-        std::array<float, 3> Maximums{};
-        std::unordered_map<std::uint32_t, InventoryEntry> Inventory{};
+        std::array<float, SkyrimTogetherVR::GameplayBridge::kSkyrimActorValueCount> Values{};
+        std::array<float, SkyrimTogetherVR::GameplayBridge::kSkyrimActorValueCount> Maximums{};
+        SkyrimTogetherVR::AnimationGraphProtocol::SnapshotBuffer Animation{};
+        std::vector<InventoryEntry> Inventory{};
         Factions FactionData{};
+        VRAppearance Appearance{};
         std::uint64_t Order{};
         double Age{};
         bool Dead{};
         bool WeaponDrawn{};
+        bool IsDragon{};
+        bool IsMount{};
+        bool IsPlayerSummon{};
+        bool HasAnimationGraph{};
     };
 
     struct PartialSnapshot
     {
         Snapshot Data{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
         std::uint64_t ActionId{};
+        std::uint16_t ExpectedInventoryCount{};
+        std::uint16_t ExpectedFactionCount{};
+        std::uint16_t NextActorValueIndex{};
+        std::uint8_t ExpectedAppearanceHeadPartCount{};
+        std::uint8_t ExpectedNameChunkCount{};
+        std::uint8_t NextFaceMorphIndex{};
+        std::uint8_t NextFacePartIndex{};
+        std::uint8_t NextNameChunkIndex{};
+        std::uint8_t NextGraphChunk{};
+        std::uint32_t LastFactionFormId{};
+        std::size_t OpenInventoryIndex{};
+        std::uint32_t InventoryEffectsRemaining{};
+        std::uint32_t TotalInventoryEffects{};
         double Age{};
         bool Begun{};
-        std::array<bool, 3> HasValue{};
+        bool HasAppearance{};
+        bool HasInventoryExtra{};
+        bool ExpectsAnimationGraph{};
+        std::array<bool, SkyrimTogetherVR::GameplayBridge::kSkyrimActorValueCount> HasValue{};
     };
 
     struct PendingAssignment
@@ -95,6 +125,16 @@ private:
         bool ClaimSent{};
     };
 
+    struct PendingObservation
+    {
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity Identity{};
+        std::uint32_t ReferenceFormId{};
+        std::uint32_t ServerId{};
+        SkyrimTogetherVR::GameplayBridge::GameplayAction Action{};
+        double Age{};
+        bool Active{};
+    };
+
     struct OwnedNpc
     {
         std::uint32_t ServerId{};
@@ -109,6 +149,7 @@ private:
     void OnConnected(const ConnectedEvent& acEvent) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
     void OnLocalGameplay(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept;
+    void OnGameplayResult(const SkyrimTogetherVR::RemoteGameplayBridgeResultEvent& acEvent) noexcept;
     void OnAssignCharacter(const AssignCharacterResponse& acMessage) noexcept;
     void OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept;
     void OnOwnershipTransfer(const NotifyOwnershipTransfer& acMessage) noexcept;
@@ -125,7 +166,16 @@ private:
     [[nodiscard]] bool StartObservation(std::uint32_t aReferenceFormId) noexcept;
     [[nodiscard]] bool StoreLatestSnapshot(Snapshot&& aSnapshot) noexcept;
     [[nodiscard]] bool TrackServerReference(std::uint32_t aServerId, std::uint32_t aReferenceFormId) noexcept;
-    void StopObservation(std::uint32_t aReferenceFormId) noexcept;
+    [[nodiscard]] bool StopObservation(std::uint32_t aReferenceFormId) noexcept;
+    [[nodiscard]] PendingObservation* FindPendingObservation(std::uint64_t aActionId) noexcept;
+    [[nodiscard]] bool HasPendingObservation(
+        std::uint32_t aReferenceFormId, SkyrimTogetherVR::GameplayBridge::GameplayAction aAction) const noexcept;
+    [[nodiscard]] bool HasPendingObservationSlot() const noexcept;
+    [[nodiscard]] bool HasObservationCapacity(std::uint32_t aReferenceFormId) const noexcept;
+    [[nodiscard]] bool TrackPendingObservation(const SkyrimTogetherVR::GameplayBridge::CommandRecord& acCommand) noexcept;
+    void ClearPendingObservationsForReference(std::uint32_t aReferenceFormId) noexcept;
+    void ClearPendingObservations() noexcept;
+    void RequestObservationLifecycleRetirement() noexcept;
     void HandleCompleteSnapshot(Snapshot&& aSnapshot) noexcept;
     void RequestAssignment(const Snapshot& acSnapshot) noexcept;
     [[nodiscard]] bool RequestOwnershipClaim(std::uint32_t aServerId, std::uint64_t aGrantToken, const Snapshot& acSnapshot) noexcept;
@@ -147,6 +197,8 @@ private:
     std::unordered_map<std::uint32_t, std::uint32_t> m_serverToReference{};
     std::unordered_map<std::uint32_t, std::uint32_t> m_referenceToServer{};
     std::unordered_map<std::uint32_t, OwnedNpc> m_ownedByReference{};
+    std::unordered_set<std::uint32_t> m_observedReferences{};
+    std::array<PendingObservation, 128> m_pendingObservations{};
     std::uint32_t m_nextAssignmentCookie{1};
     std::uint64_t m_nextStateOrder{1};
     std::uint64_t m_lastCompletedSnapshotActionId{};
@@ -156,10 +208,12 @@ private:
     std::uint64_t m_bridgeLifecycleEpoch{};
     bool m_connected{false};
     bool m_bridgeWasReady{false};
+    bool m_observationLifecycleRetirementRequested{false};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
     entt::scoped_connection m_disconnectedConnection;
     entt::scoped_connection m_localGameplayConnection;
+    entt::scoped_connection m_gameplayResultConnection;
     entt::scoped_connection m_assignCharacterConnection;
     entt::scoped_connection m_characterSpawnConnection;
     entt::scoped_connection m_ownershipTransferConnection;

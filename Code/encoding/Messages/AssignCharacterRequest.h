@@ -10,6 +10,7 @@
 #include <Structs/Factions.h>
 #include <Structs/QuestLog.h>
 #include <Structs/ActorData.h>
+#include <Structs/VRAppearance.h>
 
 using TiltedPhoques::String;
 
@@ -31,7 +32,14 @@ struct AssignCharacterRequest final : ClientMessage
     {
         return GetOpcode() == acRhs.GetOpcode() && Cookie == acRhs.Cookie && ReferenceId == acRhs.ReferenceId && FormId == acRhs.FormId && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && Position == acRhs.Position && Rotation == acRhs.Rotation && ChangeFlags == acRhs.ChangeFlags &&
                AppearanceBuffer == acRhs.AppearanceBuffer && FactionsContent == acRhs.FactionsContent && LatestAction == acRhs.LatestAction && FaceTints == acRhs.FaceTints && QuestContent == acRhs.QuestContent && HasQuestContent == acRhs.HasQuestContent && HasFaceTints == acRhs.HasFaceTints &&
-               IsDragon == acRhs.IsDragon && IsMount == acRhs.IsMount && IsPlayerSummon == acRhs.IsPlayerSummon;
+               IsDragon == acRhs.IsDragon && IsMount == acRhs.IsMount && IsPlayerSummon == acRhs.IsPlayerSummon &&
+               HasVRAppearance == acRhs.HasVRAppearance && InitialVRAppearance == acRhs.InitialVRAppearance;
+    }
+
+    [[nodiscard]] bool IsDecodedValid() const noexcept
+    {
+        return m_isDecodedValid && FactionsContent.IsDecodedValid && QuestContent.IsDecodedValid &&
+               FaceTints.IsDecodedValid && CurrentActorData.IsDecodedValid();
     }
 
     uint32_t Cookie{};
@@ -52,5 +60,10 @@ struct AssignCharacterRequest final : ClientMessage
     bool IsDragon{};
     bool IsMount{};
     bool IsPlayerSummon{};
+    bool HasVRAppearance{};
+    VRAppearance InitialVRAppearance{};
     ActorData CurrentActorData{};
+
+private:
+    bool m_isDecodedValid{true};
 };

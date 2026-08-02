@@ -2,7 +2,7 @@
 #include <Game/Animation/AnimationEventLists.h>
 #include <optional>
 
-ActionReplayChain ActionReplayCache::FormRefinedReplayChain() noexcept
+ActionReplayChain ActionReplayCache::FormRefinedReplayChain() noexcept try
 {
     const bool shouldResetAnimGraph = RefineReplayCache();
 
@@ -14,21 +14,36 @@ ActionReplayChain ActionReplayCache::FormRefinedReplayChain() noexcept
 
     return chain;
 }
+catch (...)
+{
+    return {};
+}
 
-void ActionReplayCache::AppendAll(const Vector<ActionEvent>& acActions) noexcept
+void ActionReplayCache::Append(const ActionEvent& acAction) noexcept try
+{
+    if (ShouldIgnoreAction(acAction))
+        return;
+    m_actions.push_back(acAction);
+    if (m_actions.size() > kReplayCacheMaxSize)
+        m_actions.erase(m_actions.begin(), m_actions.end() - kReplayCacheMaxSize);
+}
+catch (...)
+{
+}
+
+void ActionReplayCache::AppendAll(const Vector<ActionEvent>& acActions) noexcept try
 {
     for (const auto& action : acActions)
-    {
-        if (ShouldIgnoreAction(action))
-            continue;
-        m_actions.push_back(action);
-    }
+        Append(action);
 
     if (m_actions.size() > kReplayCacheMaxSize)
         m_actions.erase(m_actions.begin(), m_actions.end() - kReplayCacheMaxSize);
 }
+catch (...)
+{
+}
 
-bool ActionReplayCache::RefineReplayCache() noexcept
+bool ActionReplayCache::RefineReplayCache() noexcept try
 {
     int32_t dropAllUpToIndex = -1;
 
@@ -41,8 +56,8 @@ bool ActionReplayCache::RefineReplayCache() noexcept
         {
             action.EventName = String{*instantAnimName};
             action.TargetEventName = String{*instantAnimName};
-            action.ActionId = 0;
-            action.IdleId = 0;
+            action.ActionId = {};
+            action.IdleId = {};
         }
 
         if (IsExitAction(action))
@@ -60,8 +75,12 @@ bool ActionReplayCache::RefineReplayCache() noexcept
     m_actions.erase(m_actions.begin(), m_actions.begin() + dropAllUpToIndex);
     return true;
 }
+catch (...)
+{
+    return false;
+}
 
-bool ActionReplayCache::IsExitAction(const ActionEvent& acAction) noexcept
+bool ActionReplayCache::IsExitAction(const ActionEvent& acAction) noexcept try
 {
     if (AnimationEventLists::kExitSpecial.contains(acAction.EventName))
         return true;
@@ -74,6 +93,10 @@ bool ActionReplayCache::IsExitAction(const ActionEvent& acAction) noexcept
 
     return lowercaseName.starts_with("idle") &&
            (lowercaseName.ends_with("exit") || lowercaseName.ends_with("exitstart"));
+}
+catch (...)
+{
+    return false;
 }
 
 bool ActionReplayCache::ShouldIgnoreAction(const ActionEvent& acAction) noexcept

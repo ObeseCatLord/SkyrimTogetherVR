@@ -1,6 +1,6 @@
 #include <Structs/Factions.h>
 #include <TiltedCore/Serialization.hpp>
-#include <stdexcept>
+#include <algorithm>
 
 using TiltedPhoques::Serialization;
 
@@ -16,41 +16,49 @@ bool Factions::operator!=(const Factions& acRhs) const noexcept
 
 void Factions::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
-    // Limit the number of factions to send
-    Serialization::WriteVarInt(aWriter, NpcFactions.size() & 0x1FF);
+    const auto npcCount = std::min(NpcFactions.size(), kMaximumWireEntries);
+    Serialization::WriteVarInt(aWriter, npcCount);
 
-    for (auto& entry : NpcFactions)
-    {
-        entry.Serialize(aWriter);
-    }
+    for (std::size_t index = 0; index < npcCount; ++index)
+        NpcFactions[index].Serialize(aWriter);
 
-    Serialization::WriteVarInt(aWriter, ExtraFactions.size() & 0x1FF);
+    const auto extraCount = std::min(ExtraFactions.size(), kMaximumWireEntries);
+    Serialization::WriteVarInt(aWriter, extraCount);
 
-    for (auto& entry : ExtraFactions)
-    {
-        entry.Serialize(aWriter);
-    }
+    for (std::size_t index = 0; index < extraCount; ++index)
+        ExtraFactions[index].Serialize(aWriter);
 }
 
-void Factions::Deserialize(TiltedPhoques::Buffer::Reader& aReader)
+void Factions::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    auto npcCount = Serialization::ReadVarInt(aReader);
-    if (npcCount > 0x1FF)
-        throw std::runtime_error("Too many NPC factions received !");
-
-    NpcFactions.resize(npcCount);
-    for (auto& entry : NpcFactions)
+    *this = {};
+    const auto npcCount = Serialization::ReadVarInt(aReader);
+    if (npcCount > kMaximumWireEntries)
     {
-        entry.Deserialize(aReader);
+        IsDecodedValid = false;
+        return;
     }
-
-    auto extraCount = Serialization::ReadVarInt(aReader) & 0x1FF;
-    if (extraCount > 0x1FF)
-        throw std::runtime_error("Too many extra factions received !");
-
-    ExtraFactions.resize(extraCount);
-    for (auto& entry : ExtraFactions)
+    try
     {
-        entry.Deserialize(aReader);
+        NpcFactions.resize(static_cast<std::size_t>(npcCount));
+        for (auto& entry : NpcFactions)
+            entry.Deserialize(aReader);
+
+        const auto extraCount = Serialization::ReadVarInt(aReader);
+        if (extraCount > kMaximumWireEntries)
+        {
+            NpcFactions.clear();
+            IsDecodedValid = false;
+            return;
+        }
+        ExtraFactions.resize(static_cast<std::size_t>(extraCount));
+        for (auto& entry : ExtraFactions)
+            entry.Deserialize(aReader);
+    }
+    catch (...)
+    {
+        NpcFactions.clear();
+        ExtraFactions.clear();
+        IsDecodedValid = false;
     }
 }

@@ -27,6 +27,7 @@ void ObjectData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcep
 
 void ObjectData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
     ServerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     Id.Deserialize(aReader);
     CellId.Deserialize(aReader);
@@ -34,5 +35,10 @@ void ObjectData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     CurrentCoords.Deserialize(aReader);
     CurrentLockData.Deserialize(aReader);
     CurrentInventory.Deserialize(aReader);
+    if (!CurrentInventory.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     IsSenderFirst = Serialization::ReadBool(aReader);
 }

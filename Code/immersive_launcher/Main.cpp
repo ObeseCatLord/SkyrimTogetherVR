@@ -7,6 +7,7 @@
 
 #include "utils/ComUtils.h"
 #include "script_extender/SEMemoryBlock.h"
+#include <client/ShutdownDiagnostics.h>
 
 #include <TiltedCore/Platform.hpp>
 
@@ -60,6 +61,9 @@ int main(int argc, char** argv)
     TP_UNUSED(cs);
 
     auto ret = launcher::StartUp(argc, argv);
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::LogShutdownPhase("launcher.main.returning");
+#endif
 
     return ret;
 }

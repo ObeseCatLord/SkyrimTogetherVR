@@ -20,11 +20,15 @@ void AssignCharacterRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     Serialization::WriteBool(aWriter, IsDragon);
     Serialization::WriteBool(aWriter, IsMount);
     Serialization::WriteBool(aWriter, IsPlayerSummon);
+    Serialization::WriteBool(aWriter, HasVRAppearance);
+    if (HasVRAppearance)
+        InitialVRAppearance.Serialize(aWriter);
     CurrentActorData.Serialize(aWriter);
 }
 
 void AssignCharacterRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    m_isDecodedValid = true;
     ClientMessage::DeserializeRaw(aReader);
 
     Cookie = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
@@ -36,25 +40,63 @@ void AssignCharacterRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     Rotation.Deserialize(aReader);
 
     uint64_t dest = 0;
-    aReader.ReadBits(dest, 32);
+    if (!aReader.ReadBits(dest, 32))
+    {
+        m_isDecodedValid = false;
+        return;
+    }
     ChangeFlags = dest & 0xFFFFFFFF;
 
-    AppearanceBuffer = Serialization::ReadString(aReader);
+    try
+    {
+        AppearanceBuffer = Serialization::ReadString(aReader);
+    }
+    catch (...)
+    {
+        m_isDecodedValid = false;
+        return;
+    }
 
     FactionsContent = {};
     FactionsContent.Deserialize(aReader);
+    if (!FactionsContent.IsDecodedValid)
+    {
+        m_isDecodedValid = false;
+        return;
+    }
 
     LatestAction = ActionEvent{};
     LatestAction.ApplyDifferential(aReader);
+    if (!LatestAction.IsDecodedValid)
+    {
+        m_isDecodedValid = false;
+        return;
+    }
 
     QuestContent.Deserialize(aReader);
+    if (!QuestContent.IsDecodedValid)
+    {
+        m_isDecodedValid = false;
+        return;
+    }
     FaceTints.Deserialize(aReader);
+    if (!FaceTints.IsDecodedValid)
+    {
+        m_isDecodedValid = false;
+        return;
+    }
 
     HasQuestContent = Serialization::ReadBool(aReader);
     HasFaceTints = Serialization::ReadBool(aReader);
     IsDragon = Serialization::ReadBool(aReader);
     IsMount = Serialization::ReadBool(aReader);
     IsPlayerSummon = Serialization::ReadBool(aReader);
+    HasVRAppearance = Serialization::ReadBool(aReader);
+    InitialVRAppearance = {};
+    if (HasVRAppearance)
+        InitialVRAppearance.Deserialize(aReader);
 
     CurrentActorData.Deserialize(aReader);
+    if (!CurrentActorData.IsDecodedValid())
+        m_isDecodedValid = false;
 }

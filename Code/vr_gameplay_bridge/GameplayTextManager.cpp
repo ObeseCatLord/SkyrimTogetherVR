@@ -1,10 +1,10 @@
 #include "GameplayTextManager.h"
 
 #include "AvatarManager.h"
+#include "AnimationAppearanceManager.h"
 #include "DialogueHooks.h"
 
 #include <algorithm>
-#include <array>
 #include <bitset>
 #include <cctype>
 #include <cstring>
@@ -17,11 +17,6 @@ namespace SkyrimTogetherVR::GameplayAdapter
 namespace
 {
 constexpr std::size_t kMaximumPendingTexts = 64;
-constexpr std::uint64_t kShowSubtitleVrRva = 0x08F9C60;
-constexpr std::array<std::uint8_t, 16> kShowSubtitleVrPrologue{
-    0x4C, 0x8B, 0xDC, 0x55, 0x56, 0x57, 0x41, 0x54,
-    0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83,
-};
 
 struct TextKey
 {
@@ -124,6 +119,7 @@ std::unordered_map<TextTargetKey, std::uint64_t, TextTargetKeyHash> g_lastAccept
            first.TargetLocalFormId == next.TargetLocalFormId && first.Domain == next.Domain &&
            first.Action == next.Action && first.TextId == next.TextId &&
            first.AuxiliaryLocalFormId == next.AuxiliaryLocalFormId &&
+           first.Reserved0 == next.Reserved0 &&
            first.ChunkCount == next.ChunkCount;
 }
 
@@ -146,7 +142,7 @@ std::unordered_map<TextTargetKey, std::uint64_t, TextTargetKeyHash> g_lastAccept
 [[nodiscard]] CommandStatus PlayAnimationAndWait(
     RE::TESObjectREFR& a_reference,
     const std::string_view a_animation,
-    const std::string_view a_event) noexcept
+    const std::string_view a_event)
 {
     auto* skyrimVm = RE::SkyrimVM::GetSingleton();
     auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
@@ -182,23 +178,8 @@ std::unordered_map<TextTargetKey, std::uint64_t, TextTargetKeyHash> g_lastAccept
     if (a_topicFormId != 0 && !RE::TESForm::LookupByID<RE::TESTopic>(a_topicFormId))
         return CommandStatus::MissingForm;
 
-    auto* manager = RE::SubtitleManager::GetSingleton();
-    if (!manager)
-        return CommandStatus::Inactive;
-
-    // VR Address Library ID 51753 resolves to RVA 0x08F9C60 in SkyrimVR
-    // 1.4.15. Its decrypted body validates the exact four-argument ABI and
-    // appends a 0x20-byte SubtitleInfo under SubtitleManager's lock. The
-    // similarly named generated ID 52626 row is a hash-table helper and must
-    // never be used for this call.
-    using ShowSubtitle = void(RE::SubtitleManager*, RE::TESObjectREFR*, const char*, bool);
-    static REL::Relocation<ShowSubtitle> showSubtitle{REL::ID(51753)};
-    if (showSubtitle.offset() != kShowSubtitleVrRva ||
-        std::memcmp(reinterpret_cast<const void*>(showSubtitle.address()),
-                    kShowSubtitleVrPrologue.data(), kShowSubtitleVrPrologue.size()) != 0)
-        return CommandStatus::Unsupported;
-    showSubtitle(manager, &a_speaker, a_text.c_str(), false);
-    return CommandStatus::Success;
+    return DialogueHooks::ShowRemoteSubtitle(a_speaker, a_text.c_str()) ?
+               CommandStatus::Success : CommandStatus::Inactive;
 }
 
 [[nodiscard]] bool IsSafeVoiceResourcePath(const std::string_view a_path) noexcept
@@ -239,10 +220,14 @@ std::unordered_map<TextTargetKey, std::uint64_t, TextTargetKeyHash> g_lastAccept
                CommandStatus::Success : CommandStatus::EngineRejected;
 }
 
-[[nodiscard]] CommandStatus ApplyCompletedText(const CommandRecord& a_command, const std::string& a_text) noexcept
+[[nodiscard]] CommandStatus ApplyCompletedText(const CommandRecord& a_command, const std::string& a_text)
 {
     const auto& payload = a_command.Payload.ApplyGameplayTextChunk;
     const auto action = static_cast<GameplayAction>(payload.Action);
+    if (payload.Reserved0 == kGameplayTextAppearanceDeferred &&
+        static_cast<GameplayDomain>(payload.Domain) == GameplayDomain::Appearance &&
+        (action == GameplayAction::SetName || action == GameplayAction::SetTint))
+        return AnimationAppearanceManager::StageText(a_command, a_text);
     if (action == GameplayAction::Dialogue && payload.TargetHandle.Value == 0) {
         RE::SendHUDMessage::ShowHUDMessage(a_text.c_str(), nullptr, false);
         return CommandStatus::Success;
@@ -313,9 +298,16 @@ CommandStatus GameplayTextManager::Execute(const CommandRecord& a_command) noexc
 
         const auto& payload = a_command.Payload.ApplyGameplayTextChunk;
         const auto action = static_cast<GameplayAction>(payload.Action);
+        const bool deferredAppearanceText =
+            static_cast<GameplayDomain>(payload.Domain) == GameplayDomain::Appearance &&
+            payload.Reserved0 == kGameplayTextAppearanceDeferred &&
+            ((action == GameplayAction::SetName && payload.AuxiliaryLocalFormId == 0) ||
+             (action == GameplayAction::SetTint && payload.AuxiliaryLocalFormId >= 1 &&
+              payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints));
         if (payload.TextId == 0 || payload.ChunkCount == 0 || payload.ChunkCount > kMaximumGameplayTextChunks ||
             payload.ChunkIndex >= payload.ChunkCount || payload.ByteCount > kGameplayTextBytesPerChunk ||
-            payload.Reserved0 != 0 || (action != GameplayAction::Subtitle && payload.AuxiliaryLocalFormId != 0) ||
+            (!deferredAppearanceText && payload.Reserved0 != 0) ||
+            (!deferredAppearanceText && action != GameplayAction::Subtitle && payload.AuxiliaryLocalFormId != 0) ||
             !IsActionInDomain(static_cast<GameplayDomain>(payload.Domain), action) ||
             !std::all_of(payload.Utf8Bytes + payload.ByteCount,
                          payload.Utf8Bytes + kGameplayTextBytesPerChunk,

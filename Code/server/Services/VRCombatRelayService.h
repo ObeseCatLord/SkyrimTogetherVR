@@ -35,7 +35,7 @@ private:
 
     void OnVRCombatHitEvent(const PacketEvent<RequestVRCombatHitEvent>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
-    [[nodiscard]] bool ShouldRelayCombatHit(uint32_t aPlayerId, const RequestVRCombatHitEvent& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayCombatHit(uint32_t aPlayerId, const RequestVRCombatHitEvent& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerCombatRelayState> m_playerCombatRelayState{};

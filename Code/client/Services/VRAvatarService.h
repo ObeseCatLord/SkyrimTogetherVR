@@ -10,6 +10,7 @@
 #include <entt/entt.hpp>
 
 #include <vr_common/VRGameplayBridge.h>
+#include <Messages/AssignCharacterRequest.h>
 #include <Messages/CharacterSpawnRequest.h>
 #include <Structs/ActionEvent.h>
 
@@ -47,6 +48,11 @@ struct VRAvatarService
         SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
     [[nodiscard]] bool BuildRemoteGameplayCommandForServerId(
         std::uint32_t aServerId,
+        SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
+        SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
+        SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
+    [[nodiscard]] bool BuildLocalNativeGameplayCommandForServerId(
+        std::uint32_t aServerId, std::uint32_t aLocalReferenceFormId,
         SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
         SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
         SkyrimTogetherVR::GameplayBridge::CommandRecord& arCommand) const noexcept;
@@ -120,9 +126,13 @@ private:
     void HandleBridgeRemoteAnimationGraphState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeRemoteSpatialTransferState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
     void HandleBridgeRemoteGameplayActionState(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeAssignmentBootstrapRecord(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
+    void HandleBridgeAssignmentBootstrapText(const SkyrimTogetherVR::GameplayBridge::EventRecord& acEvent) noexcept;
 
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
+    void ResetAssignmentBootstrap() noexcept;
+    void TryRequestAssignmentBootstrap() noexcept;
     void TryRequestLocalAssignment() noexcept;
     void SendLocalMovement() noexcept;
     void UpdateRemoteAvatars(double aDelta) noexcept;
@@ -159,7 +169,30 @@ private:
     std::optional<std::uint32_t> m_localServerId{};
     std::uint32_t m_assignmentCookie{0};
     std::uint32_t m_nextAssignmentCookie{1};
+    AssignCharacterRequest m_assignmentBaseline{};
+    struct AssignmentTintTextAssembly
+    {
+        std::uint64_t TextId{};
+        std::uint16_t ChunkCount{};
+        std::uint16_t ReceivedMask{};
+        std::array<std::uint16_t, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks> Lengths{};
+        std::array<char, SkyrimTogetherVR::GameplayBridge::kMaximumGameplayTextChunks *
+                             SkyrimTogetherVR::GameplayBridge::kGameplayTextBytesPerChunk> Bytes{};
+        bool Complete{};
+    };
+    std::uint64_t m_assignmentBootstrapRequestId{0};
+    std::uint64_t m_assignmentBootstrapActionId{0};
+    std::uint64_t m_nextAssignmentBootstrapRequestId{1};
+    std::uint32_t m_assignmentBootstrapExpectedRecords{0};
+    std::uint32_t m_assignmentBootstrapNextOrdinal{0};
+    std::uint32_t m_assignmentBootstrapInventoryRecords{0};
+    std::uint32_t m_assignmentBootstrapQuestRecords{0};
+    std::uint32_t m_assignmentBootstrapNpcFactionRecords{0};
+    std::uint32_t m_assignmentBootstrapExtraFactionRecords{0};
+    std::size_t m_assignmentBootstrapOpenInventoryIndex{0};
+    std::uint32_t m_assignmentBootstrapInventoryEffectsRemaining{0};
     double m_assignmentElapsed{0.0};
+    double m_assignmentBootstrapElapsed{0.0};
     double m_localMovementElapsed{0.0};
     double m_statusElapsed{0.0};
     std::uint64_t m_createSubmittedCount{0};
@@ -183,6 +216,30 @@ private:
     bool m_connected{false};
     bool m_hasLocalSnapshot{false};
     bool m_assignmentPending{false};
+    bool m_assignmentBootstrapPending{false};
+    bool m_assignmentBootstrapActive{false};
+    bool m_assignmentBootstrapReady{false};
+    bool m_assignmentBootstrapPermanentFailure{false};
+    bool m_assignmentBootstrapHasActorState{false};
+    bool m_assignmentBootstrapHasMagicEquipment{false};
+    bool m_assignmentBootstrapHasOpenInventory{false};
+    bool m_assignmentBootstrapHasInventoryExtra{false};
+    std::array<bool, SkyrimTogetherVR::GameplayBridge::kSkyrimActorValueCount>
+        m_assignmentBootstrapActorValues{};
+    std::array<bool, SkyrimTogetherVR::GameplayBridge::kMaximumAppearanceTints>
+        m_assignmentBootstrapTints{};
+    std::array<bool, SkyrimTogetherVR::GameplayBridge::kMaximumAppearanceTints>
+        m_assignmentBootstrapTintPathsRequired{};
+    std::array<AssignmentTintTextAssembly, SkyrimTogetherVR::GameplayBridge::kMaximumAppearanceTints>
+        m_assignmentBootstrapTintText{};
+    AssignmentTintTextAssembly m_assignmentBootstrapNameText{};
+    std::array<bool, SkyrimTogetherVR::GameplayBridge::kFaceMorphCount>
+        m_assignmentBootstrapFaceMorphs{};
+    std::array<bool, SkyrimTogetherVR::GameplayBridge::kFacePartCount>
+        m_assignmentBootstrapFaceParts{};
+    std::array<bool, VRAppearance::kMaximumHeadParts>
+        m_assignmentBootstrapHeadParts{};
+    bool m_assignmentBootstrapHasAppearanceCore{false};
     bool m_capabilityWarningLogged{false};
     bool m_statusDirty{true};
     std::filesystem::path m_statusPath{};

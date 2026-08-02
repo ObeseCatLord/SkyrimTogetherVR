@@ -163,10 +163,6 @@ bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
     SkyrimTogetherVR::LogShutdownPhase("endmain.begin");
-    SkyrimTogetherVR::LogShutdownPhase("lifecycle.begin_teardown.begin");
-    if (World::Exists())
-        World::Get().ctx().at<VRLifecycleService>().BeginTeardown();
-    SkyrimTogetherVR::LogShutdownPhase("lifecycle.begin_teardown.done");
 #endif
 
 #if TP_SKYRIM_VR

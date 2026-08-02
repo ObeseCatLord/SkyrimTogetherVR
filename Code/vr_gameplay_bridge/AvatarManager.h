@@ -35,6 +35,8 @@ public:
     [[nodiscard]] CommandStatus ResolveGameplayActor(
         const CommandRecord& a_command,
         RE::NiPointer<RE::Actor>& ar_actor) noexcept;
+    [[nodiscard]] CommandStatus ValidateLocalNativeGameplayActor(const CommandRecord& a_command) noexcept;
+    void ReleaseLocalNativeGameplayActor(const CommandRecord& a_command) noexcept;
     [[nodiscard]] CommandStatus ResolveActorByHandle(
         const BridgeIdentity& a_identity,
         AdapterHandle a_handle,
@@ -116,6 +118,12 @@ private:
         bool Destroyed{};
     };
 
+    struct LocalNativeActorBinding
+    {
+        RE::ActorHandle Actor;
+        std::uint32_t LocalReferenceFormId{};
+    };
+
     [[nodiscard]] static AvatarKey MakeAvatarKey(const BridgeIdentity& a_identity) noexcept;
     [[nodiscard]] static EntityKey MakeEntityKey(const BridgeIdentity& a_identity) noexcept;
     [[nodiscard]] bool IsCommandPumpOwner() const noexcept;
@@ -127,10 +135,13 @@ private:
     [[nodiscard]] static bool ValidateAnimationGraph(RE::Actor& a_actor) noexcept;
     [[nodiscard]] static bool ApplyAnimationSnapshot(RE::Actor& a_actor, const AvatarRecord::PendingAnimationSnapshot& a_snapshot) noexcept;
     [[nodiscard]] static PendingAnimationResult TryApplyPendingAnimation(AvatarRecord& a_record) noexcept;
+    void RetireLocalNativeGameplayActor(
+        std::unordered_map<AvatarKey, LocalNativeActorBinding, AvatarKeyHash>::iterator a_binding) noexcept;
     void DestroyRecord(AvatarRecord& a_record) noexcept;
 
     std::unordered_map<AvatarKey, AvatarRecord, AvatarKeyHash> _avatars;
     std::unordered_map<EntityKey, EntityLedger, EntityKeyHash> _entityLedger;
+    std::unordered_map<AvatarKey, LocalNativeActorBinding, AvatarKeyHash> _localNativeActors;
     std::uint64_t _nextToken{GameplayBridge::kFirstRemoteAvatarHandle};
     std::uint32_t _commandPumpOwnerThreadId{};
     bool _tokenExhausted{};

@@ -206,8 +206,8 @@ def main() -> int:
     client_main = (root / "Code" / "client" / "main.cpp").read_text(encoding="utf-8")
     retire_index = client_main.find("SkyrimTogetherVR::TickBridge::Retire();", client_main.find("void RunTiltedEnd()"))
     end_main_index = client_main.find("g_appInstance->EndMain();", client_main.find("void RunTiltedEnd()"))
-    if retire_index < 0 or end_main_index < 0 or retire_index >= end_main_index:
-        failures.append("Code/client/main.cpp: endpoint retirement must precede client teardown")
+    if retire_index < 0 or end_main_index < 0 or retire_index <= end_main_index:
+        failures.append("Code/client/main.cpp: endpoint retirement must follow client teardown and transport disconnect")
     for token in (
         "static int __stdcall HookVrWinMain",
         "~ShutdownGuard() { RunTiltedEnd(); }",
@@ -269,12 +269,20 @@ def main() -> int:
             ('LogShutdownPhase("launcher.game_main.returned")',),
         )
     )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "immersive_launcher" / "Main.cpp",
+            ('LogShutdownPhase("launcher.main.returning")',),
+        )
+    )
 
     for relative_path in (
         "Code/client/main.cpp",
         "Code/client/TiltedOnlineApp.cpp",
         "Code/client/World.cpp",
         "Code/immersive_launcher/Launcher.cpp",
+        "Code/immersive_launcher/Main.cpp",
     ):
         phase_text = (root / relative_path).read_text(encoding="utf-8")
         if 'spdlog::info("SkyrimTogetherVR shutdown phase=' in phase_text:

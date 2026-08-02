@@ -198,9 +198,11 @@ void DebugService::DisplayLocalComponent(LocalComponent& aLocalComponent, const 
     }
 
     auto& action = aLocalComponent.CurrentAction;
+    auto actionId = action.ActionId.LogFormat();
+    auto idleId = action.IdleId.LogFormat();
     ImGui::InputInt("Net Id", (int*)&aLocalComponent.Id, 0, 0, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::InputInt("Action Id", (int*)&action.ActionId, 0, 0, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::InputInt("Idle Id", (int*)&action.IdleId, 0, 0, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::InputScalar("Action Id", ImGuiDataType_U64, &actionId, nullptr, nullptr, "%llx", ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputScalar("Idle Id", ImGuiDataType_U64, &idleId, nullptr, nullptr, "%llx", ImGuiInputTextFlags_ReadOnly);
     ImGui::InputScalarN("State", ImGuiDataType_U32, &action.State1, 2, nullptr, nullptr, "%x", ImGuiInputTextFlags_ReadOnly);
 }
 

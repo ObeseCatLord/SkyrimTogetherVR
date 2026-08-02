@@ -1654,7 +1654,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 352
+          "line": 369
         }
       ],
       "resolvedId": 27244,
@@ -2901,7 +2901,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 187
+          "line": 192
         }
       ],
       "resolvedId": 38949,
@@ -2938,7 +2938,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 112
+          "line": 117
         },
         {
           "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
@@ -3007,7 +3007,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 111
+          "line": 116
         },
         {
           "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
@@ -3156,7 +3156,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 351
+          "line": 368
         }
       ],
       "resolvedId": 40488,
@@ -3172,7 +3172,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 349
+          "line": 366
         }
       ],
       "resolvedId": 40533,
@@ -3188,7 +3188,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 353
+          "line": 370
         }
       ],
       "resolvedId": 40535,
@@ -3204,7 +3204,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 354
+          "line": 371
         }
       ],
       "resolvedId": 40536,
@@ -3588,7 +3588,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 350
+          "line": 367
         }
       ],
       "resolvedId": 55497,
@@ -4334,7 +4334,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 171
+          "line": 176
         }
       ],
       "resolvedId": 232777,
@@ -4366,7 +4366,7 @@
         {
           "file": "Code/client/TiltedOnlineApp.cpp",
           "isRtti": false,
-          "line": 227
+          "line": 223
         }
       ],
       "resolvedId": 380768,
@@ -4755,7 +4755,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 113
+          "line": 118
         },
         {
           "file": "Code/client/Games/Skyrim/AnimationExperiments.cpp",
@@ -4776,7 +4776,7 @@
         {
           "file": "Code/client/Games/Animation.cpp",
           "isRtti": false,
-          "line": 70
+          "line": 75
         }
       ],
       "resolvedId": 403567,
@@ -4856,7 +4856,7 @@
         {
           "file": "Code/client/Games/Skyrim/PlayerCharacter.cpp",
           "isRtti": false,
-          "line": 143
+          "line": 160
         }
       ],
       "resolvedId": 517711,

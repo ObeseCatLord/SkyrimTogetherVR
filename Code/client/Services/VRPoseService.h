@@ -14,7 +14,7 @@ struct UpdateEvent;
 
 struct VRPoseService
 {
-    VRPoseService(entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept;
+    VRPoseService(entt::dispatcher& aDispatcher, TransportService& aTransport);
     ~VRPoseService() noexcept = default;
 
     TP_NOCOPYMOVE(VRPoseService);
@@ -30,10 +30,10 @@ private:
     void OnVRPoseUpdate(const NotifyVRPoseUpdate& acMessage) noexcept;
     void OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
-    void LogSnapshot() const noexcept;
+    void LogSnapshot() const;
     void PruneRemotePoses(double aDelta) noexcept;
-    void WritePoseStatusFile() noexcept;
-    void SendPoseUpdate() noexcept;
+    void WritePoseStatusFile();
+    void SendPoseUpdate();
 
     TransportService& m_transport;
     std::filesystem::path m_handoffDir;

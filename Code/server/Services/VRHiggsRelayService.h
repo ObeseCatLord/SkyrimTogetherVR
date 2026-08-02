@@ -27,7 +27,7 @@ private:
 
     void OnVRHiggsState(const PacketEvent<RequestVRHiggsState>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
-    [[nodiscard]] bool ShouldRelayHiggsState(uint32_t aPlayerId, const RequestVRHiggsState& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayHiggsState(uint32_t aPlayerId, const RequestVRHiggsState& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerHiggsRelayState> m_playerHiggsRelayState{};

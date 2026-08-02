@@ -73,11 +73,15 @@ VRActivationService::VRActivationService(World& aWorld, entt::dispatcher& aDispa
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRActivationService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRActivationService::OnDisconnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRActivationService native sink is owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetActivateEventData().RegisterSink(this);
     else
         spdlog::warn("VRActivationService could not register TESActivateEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 BSTEventResult VRActivationService::OnEvent(const TESActivateEvent* apEvent, const EventDispatcher<TESActivateEvent>* apSender)

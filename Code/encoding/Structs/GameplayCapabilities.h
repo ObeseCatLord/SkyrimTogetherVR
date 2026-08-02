@@ -4,10 +4,12 @@
 
 namespace SkyrimTogether::Protocol
 {
-// Revision 7 adds token-bound NPC ownership claims and atomic VR equipment
-// snapshots. Exact revision matching prevents older endpoint layouts from
-// being decoded as the current protocol.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 7;
+// Revision 10 seeds the negotiated semantic VR appearance in the character
+// assignment transaction so remote actors spawn with a complete baseline.
+// Exact matching prevents older endpoint layouts from being decoded as the
+// current protocol. Additive negotiated capability bits do not change this
+// revision because endpoints already intersect the advertised masks.
+inline constexpr std::uint32_t kGameplayProtocolRevision = 10;
 
 enum class GameplayCapability : std::uint64_t
 {
@@ -36,6 +38,7 @@ enum class GameplayCapability : std::uint64_t
     // continue authoritative movement/value/inventory replication at runtime.
     NpcOwnership = 1ull << 21,
     ExactAnimationActions = 1ull << 22,
+    InventoryStackTransactions = 1ull << 23,
 };
 
 using GameplayCapabilityMask = std::uint64_t;
@@ -72,20 +75,23 @@ inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
 // client requests it only while its mapped CommonLib bridge is actively able
 // to provide the complete bounded snapshots required by the original wire.
 inline constexpr GameplayCapabilityMask kVRNpcOwnershipCapabilities =
-    ToMask(GameplayCapability::NpcOwnership);
+    ToMask(GameplayCapability::NpcOwnership) |
+    ToMask(GameplayCapability::InventoryStackTransactions);
 
 inline constexpr GameplayCapabilityMask kVRExactAnimationActionCapabilities =
     ToMask(GameplayCapability::ExactAnimationActions);
+
+inline constexpr GameplayCapabilityMask kRemoteAvatarCoreCapabilities =
+    ToMask(GameplayCapability::RemoteAvatarLifecycle) |
+    ToMask(GameplayCapability::RemoteRootTransform) |
+    ToMask(GameplayCapability::RemoteSpatialTransfer) |
+    ToMask(GameplayCapability::AnimationGraphSnapshot);
 
 // Capabilities are added here only after both endpoints implement their full
 // semantics. Merely having message types or telemetry does not advertise them.
 // This aggregate is the existing client-side VR feature-gate request.
 inline constexpr GameplayCapabilityMask kRemoteAvatarCapabilities =
-    ToMask(GameplayCapability::RemoteAvatarLifecycle) |
-    ToMask(GameplayCapability::RemoteRootTransform) |
-    ToMask(GameplayCapability::RemoteSpatialTransfer) |
-    ToMask(GameplayCapability::AnimationGraphSnapshot) |
-    kVRRelayCapabilities;
+    kRemoteAvatarCoreCapabilities | kVRRelayCapabilities;
 
 inline constexpr GameplayCapabilityMask kServerCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
@@ -101,6 +107,7 @@ inline constexpr GameplayCapabilityMask kClientCapabilities =
 
 [[nodiscard]] constexpr bool CanOwnNpc(const GameplayCapabilityMask aMask) noexcept
 {
-    return !IsVrGameplayClient(aMask) || HasCapability(aMask, GameplayCapability::NpcOwnership);
+    return !IsVrGameplayClient(aMask) ||
+           (aMask & kVRNpcOwnershipCapabilities) == kVRNpcOwnershipCapabilities;
 }
 } // namespace SkyrimTogether::Protocol

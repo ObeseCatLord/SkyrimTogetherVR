@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <Structs/Inventory.h>
 
 struct World;
 struct UpdateEvent;
@@ -43,6 +44,8 @@ private:
         uint64_t ClientSessionNonce{};
         uint64_t ConnectionGeneration{};
         uint64_t LastTransactionId{};
+        Inventory LastFinalEquipment{};
+        bool HasFinalEquipment{};
     };
 
     World& m_world;

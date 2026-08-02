@@ -14,6 +14,7 @@
 #include <Messages/NotifyRemoveCharacter.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Services/TransportService.h>
+#include <Services/VRActorReplicationService.h>
 #include <Services/VRLocalGameplayService.h>
 #include <Structs/GameplayCapabilities.h>
 #include <Structs/MovementOrdering.h>
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <string_view>
 
 namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
 namespace AnimationGraphProtocol = SkyrimTogetherVR::AnimationGraphProtocol;
@@ -51,6 +53,7 @@ constexpr std::size_t kMaximumPendingLocalAnimationEvents = 32;
 }
 
 constexpr double kAssignmentRetrySeconds = 5.0;
+constexpr double kAssignmentBootstrapRetrySeconds = 2.0;
 constexpr double kLocalMovementIntervalSeconds = 0.1;
 constexpr double kMaxInterpolationDeltaSeconds = 0.1;
 constexpr double kStatusWriteIntervalSeconds = 1.0;
@@ -62,6 +65,8 @@ constexpr float kRotationConvergenceDot = 0.99999f;
 constexpr float kScaleConvergence = 0.0001f;
 constexpr std::size_t kMaxRemoteAvatars = 64;
 constexpr std::uint8_t kMaximumCreateAttempts = 3;
+constexpr std::uint32_t kMaximumAssignmentInventoryEntries = 512;
+constexpr std::uint32_t kMaximumAssignmentFactionEntries = 511;
 constexpr std::uint64_t kSnapshotHasPlayer = 1ull << 0;
 constexpr std::uint64_t kSnapshotHasCell = 1ull << 1;
 
@@ -85,6 +90,27 @@ constexpr std::uint64_t kSnapshotHasCell = 1ull << 1;
     return IsFinite(acRoot.PositionX) && IsFinite(acRoot.PositionY) && IsFinite(acRoot.PositionZ) &&
            IsFinite(acRoot.RotationX) && IsFinite(acRoot.RotationY) && IsFinite(acRoot.RotationZ) &&
            IsFinite(acRoot.RotationW) && IsFinite(acRoot.Scale);
+}
+
+[[nodiscard]] bool IsSafeAssignmentTintPath(const std::string_view acPath) noexcept
+{
+    if (acPath.empty() || acPath.size() > GameplayBridge::kMaximumAppearanceTexturePathBytes ||
+        acPath.front() == '/' || acPath.front() == '\\' ||
+        acPath.find(':') != std::string_view::npos || acPath.find('\0') != std::string_view::npos)
+        return false;
+    std::size_t segmentStart{};
+    while (segmentStart <= acPath.size()) {
+        const auto segmentEnd = acPath.find_first_of("/\\", segmentStart);
+        const auto segment = acPath.substr(
+            segmentStart,
+            segmentEnd == std::string_view::npos ? std::string_view::npos : segmentEnd - segmentStart);
+        if (segment.empty() || segment == "." || segment == "..")
+            return false;
+        if (segmentEnd == std::string_view::npos)
+            break;
+        segmentStart = segmentEnd + 1;
+    }
+    return true;
 }
 
 [[nodiscard]] bool NormalizeRotation(GameplayBridge::RootTransform& arRoot) noexcept
@@ -180,7 +206,7 @@ void InterpolateRoot(GameplayBridge::RootTransform& arCurrent, const GameplayBri
 }
 } // namespace
 
-bool VRAvatarService::QueueLocalAnimationEvent(const std::uint32_t aEventId) noexcept
+bool VRAvatarService::QueueLocalAnimationEvent(const std::uint32_t aEventId) noexcept try
 {
     const auto* eventName = LocalAnimationEventName(aEventId);
     if (!eventName || eventName[0] == '\0' || !m_connected || !m_transport.IsOnline() || !m_localServerId ||
@@ -193,6 +219,10 @@ bool VRAvatarService::QueueLocalAnimationEvent(const std::uint32_t aEventId) noe
     action.EventName = TiltedPhoques::String{eventName};
     m_pendingLocalAnimationEvents.push_back(std::move(action));
     return true;
+}
+catch (...)
+{
+    return false;
 }
 
 VRAvatarService::VRAvatarService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
@@ -213,7 +243,7 @@ VRAvatarService::VRAvatarService(World& aWorld, entt::dispatcher& aDispatcher, T
     m_removeCharacterConnection = aDispatcher.sink<NotifyRemoveCharacter>().connect<&VRAvatarService::OnRemoveCharacter>(this);
 }
 
-void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept
+void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept try
 {
     ConsumeBridgeEvents();
     if (!m_pendingSpawns.empty())
@@ -222,8 +252,19 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept
     const auto delta = std::clamp(acEvent.Delta, 0.0, kMaxInterpolationDeltaSeconds);
     if (m_connected && m_hasLocalSnapshot && !m_localServerId)
     {
-        m_assignmentElapsed += delta;
-        if (!m_assignmentPending || m_assignmentElapsed >= kAssignmentRetrySeconds)
+        if (!m_assignmentBootstrapReady && !m_assignmentBootstrapPermanentFailure) {
+            m_assignmentBootstrapElapsed += delta;
+            if (!m_assignmentBootstrapPending ||
+                m_assignmentBootstrapElapsed >= kAssignmentBootstrapRetrySeconds) {
+                m_assignmentBootstrapPending = false;
+                m_assignmentBootstrapActive = false;
+                TryRequestAssignmentBootstrap();
+            }
+        } else {
+            m_assignmentElapsed += delta;
+        }
+        if (m_assignmentBootstrapReady &&
+            (!m_assignmentPending || m_assignmentElapsed >= kAssignmentRetrySeconds))
         {
             m_assignmentPending = false;
             TryRequestLocalAssignment();
@@ -250,6 +291,11 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept
         WriteStatus();
     }
 }
+catch (...)
+{
+    spdlog::error("VR avatar update failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
 void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
@@ -262,6 +308,7 @@ void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
     m_assignmentElapsed = 0.0;
     m_localMovementElapsed = 0.0;
     m_assignmentPending = false;
+    ResetAssignmentBootstrap();
     m_connected = true;
     m_localPlayerId = acEvent.PlayerId;
     m_capabilityWarningLogged = false;
@@ -278,6 +325,8 @@ void VRAvatarService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 
 void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage) noexcept
 {
+    if (!acMessage.IsDecodedValid)
+        return;
     if (!m_connected || !m_assignmentPending || acMessage.Cookie != m_assignmentCookie)
         return;
 
@@ -288,8 +337,15 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
     }
 
     m_localServerId = acMessage.ServerId;
-    if (auto* localGameplay = m_world.ctx().find<VRLocalGameplayService>())
+    if (auto* localGameplay = m_world.ctx().find<VRLocalGameplayService>()) {
         localGameplay->SetLocalServerId(acMessage.ServerId);
+        if (m_assignmentBaseline.HasVRAppearance &&
+            !localGameplay->SeedLocalAppearance(m_assignmentBaseline.InitialVRAppearance)) {
+            spdlog::error("VR local appearance baseline could not be seeded after assignment");
+            TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+            return;
+        }
+    }
     if (m_remoteAvatars.erase(*m_localServerId) != 0)
         spdlog::warn("VR avatar canonical server-id conflict cleared for local server id {}", *m_localServerId);
     m_assignmentPending = false;
@@ -298,8 +354,10 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
     m_statusDirty = true;
 }
 
-void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept
+void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept try
 {
+    if (!acMessage.IsDecodedValid)
+        return;
     if (!m_connected || acMessage.ServerId == 0 ||
         (acMessage.IsPlayer && (acMessage.PlayerId == 0 || acMessage.PlayerId == m_localPlayerId)) ||
         (m_localServerId && acMessage.ServerId == *m_localServerId))
@@ -335,9 +393,17 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
         return;
     }
 
+    const auto localReferenceFormId = acMessage.IsPlayer ? 0 : m_world.GetModSystem().GetGameId(acMessage.FormId);
+
     if (const auto existingIt = m_remoteAvatars.find(acMessage.ServerId); existingIt != m_remoteAvatars.end())
     {
         auto& existing = existingIt->second;
+        if (existing.LocalReferenceFormId != localReferenceFormId)
+        {
+            spdlog::error("VR avatar server entity remapped to a different local reference; rebasing the gameplay epoch");
+            TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+            return;
+        }
         if (existing.PlayerId == acMessage.PlayerId && existing.RemovalRequested)
         {
             if (existing.DestroyPending)
@@ -386,7 +452,7 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
     avatar.IsPlayer = acMessage.IsPlayer;
     avatar.LocalActorBaseFormId = acMessage.IsPlayer ? m_localSnapshot.LocalActorBaseFormId :
         m_world.GetModSystem().GetGameId(acMessage.BaseId);
-    avatar.LocalReferenceFormId = acMessage.IsPlayer ? 0 : m_world.GetModSystem().GetGameId(acMessage.FormId);
+    avatar.LocalReferenceFormId = localReferenceFormId;
     if (avatar.LocalActorBaseFormId == 0)
     {
         spdlog::warn("VR avatar spawn rejected for server id {} because its actor base is unavailable", acMessage.ServerId);
@@ -411,10 +477,15 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
         SubmitCreateRemoteAvatar(acMessage.ServerId, it->second);
     }
 }
-
-void VRAvatarService::OnReferencesMoveRequest(const ServerReferencesMoveRequest& acMessage) noexcept
+catch (...)
 {
-    if (!m_connected || !m_hasLocalSnapshot)
+    spdlog::error("VR avatar spawn processing failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
+
+void VRAvatarService::OnReferencesMoveRequest(const ServerReferencesMoveRequest& acMessage) noexcept try
+{
+    if (!acMessage.IsDecodedValid || !m_connected || !m_hasLocalSnapshot)
         return;
 
     for (const auto& [serverId, update] : acMessage.Updates)
@@ -485,6 +556,11 @@ void VRAvatarService::OnReferencesMoveRequest(const ServerReferencesMoveRequest&
             ++m_sameSpaceCount;
     }
 }
+catch (...)
+{
+    spdlog::error("VR avatar movement processing failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
 void VRAvatarService::OnRemoveCharacter(const NotifyRemoveCharacter& acMessage) noexcept
 {
@@ -533,8 +609,14 @@ void VRAvatarService::ConsumeBridgeEvents() noexcept
         case GameplayBridge::EventKind::RemoteGameplayActionState:
             HandleBridgeRemoteGameplayActionState(event);
             break;
-        case GameplayBridge::EventKind::LocalGameplayAction:
+        case GameplayBridge::EventKind::AssignmentBootstrapRecord:
+            HandleBridgeAssignmentBootstrapRecord(event);
+            break;
         case GameplayBridge::EventKind::LocalGameplayTextChunk:
+            HandleBridgeAssignmentBootstrapText(event);
+            m_dispatcher.trigger(SkyrimTogetherVR::LocalGameplayBridgeEvent{event});
+            break;
+        case GameplayBridge::EventKind::LocalGameplayAction:
         case GameplayBridge::EventKind::LocalProjectileLaunch:
         case GameplayBridge::EventKind::LocalActorActionMetadata:
         case GameplayBridge::EventKind::LocalActorActionGraphChunk:
@@ -793,6 +875,7 @@ void VRAvatarService::HandleBridgeRemoteSpatialTransferState(const GameplayBridg
 
 void VRAvatarService::ResetSessionState() noexcept
 {
+    ResetAssignmentBootstrap();
     m_remoteAvatars.clear();
     m_pendingSpawns.clear();
     m_localSnapshot = {};
@@ -812,6 +895,7 @@ void VRAvatarService::ResetSessionState() noexcept
 
 void VRAvatarService::ResetLifecycleState() noexcept
 {
+    ResetAssignmentBootstrap();
     m_remoteAvatars.clear();
     m_pendingSpawns.clear();
     ResetStatusCounters();
@@ -829,9 +913,693 @@ void VRAvatarService::ResetLifecycleState() noexcept
     }
 }
 
+void VRAvatarService::HandleBridgeAssignmentBootstrapText(
+    const GameplayBridge::EventRecord& acEvent) noexcept try
+{
+    if (!m_assignmentBootstrapPending ||
+        acEvent.Header.Identity.ActionId != m_assignmentBootstrapActionId)
+        return;
+    const auto& payload = acEvent.Payload.LocalGameplayTextChunk;
+    const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
+    const bool isName = action == GameplayBridge::GameplayAction::SetName &&
+        payload.AuxiliaryLocalFormId == 0 && payload.ChunkCount <= 3;
+    const bool isTintPath = action == GameplayBridge::GameplayAction::SetTint &&
+        payload.AuxiliaryLocalFormId > 0 &&
+        payload.AuxiliaryLocalFormId <= GameplayBridge::kMaximumAppearanceTints &&
+        payload.ChunkCount <= 6;
+    if (payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value ||
+        payload.TargetLocalFormId != 0x14 ||
+        payload.Domain != static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::Appearance) ||
+        (!isName && !isTintPath) ||
+        payload.TextId != m_assignmentBootstrapRequestId ||
+        payload.Reserved0 != GameplayBridge::kGameplayTextAppearanceDeferred ||
+        payload.ChunkCount == 0 ||
+        payload.ChunkIndex >= payload.ChunkCount ||
+        payload.ByteCount == 0 || payload.ByteCount > GameplayBridge::kGameplayTextBytesPerChunk ||
+        !std::all_of(payload.Utf8Bytes + payload.ByteCount,
+                     payload.Utf8Bytes + GameplayBridge::kGameplayTextBytesPerChunk,
+                     [](const char aValue) noexcept { return aValue == '\0'; })) {
+        ResetAssignmentBootstrap();
+        return;
+    }
+
+    std::size_t tintIndex{};
+    AssignmentTintTextAssembly* assemblyPointer{};
+    if (isName) {
+        if (!m_assignmentBootstrapHasAppearanceCore) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        assemblyPointer = std::addressof(m_assignmentBootstrapNameText);
+    } else {
+        tintIndex = static_cast<std::size_t>(payload.AuxiliaryLocalFormId - 1);
+        if (!m_assignmentBootstrapTints[tintIndex] ||
+            !m_assignmentBootstrapTintPathsRequired[tintIndex]) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        assemblyPointer = std::addressof(m_assignmentBootstrapTintText[tintIndex]);
+    }
+    auto& assembly = *assemblyPointer;
+    if (assembly.Complete ||
+        (assembly.TextId != 0 &&
+         (assembly.TextId != payload.TextId || assembly.ChunkCount != payload.ChunkCount))) {
+        ResetAssignmentBootstrap();
+        return;
+    }
+    if (assembly.TextId == 0) {
+        assembly.TextId = payload.TextId;
+        assembly.ChunkCount = payload.ChunkCount;
+    }
+    const auto chunkBit = static_cast<std::uint16_t>(1u << payload.ChunkIndex);
+    if ((assembly.ReceivedMask & chunkBit) != 0) {
+        ResetAssignmentBootstrap();
+        return;
+    }
+    const auto offset = static_cast<std::size_t>(payload.ChunkIndex) *
+        GameplayBridge::kGameplayTextBytesPerChunk;
+    std::memcpy(assembly.Bytes.data() + offset, payload.Utf8Bytes, payload.ByteCount);
+    assembly.Lengths[payload.ChunkIndex] = payload.ByteCount;
+    assembly.ReceivedMask |= chunkBit;
+    const auto expectedMask = static_cast<std::uint16_t>((1u << payload.ChunkCount) - 1u);
+    if (assembly.ReceivedMask != expectedMask) {
+        m_assignmentBootstrapElapsed = 0.0;
+        return;
+    }
+
+    std::size_t pathLength{};
+    for (std::uint16_t chunk = 0; chunk < payload.ChunkCount; ++chunk) {
+        if (chunk + 1 != payload.ChunkCount &&
+            assembly.Lengths[chunk] != GameplayBridge::kGameplayTextBytesPerChunk) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        pathLength += assembly.Lengths[chunk];
+    }
+    const std::string_view text{assembly.Bytes.data(), pathLength};
+    if (isName) {
+        if (text.empty() || text.size() > VRAppearance::kMaximumNameBytes) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        std::memcpy(appearance.Name.data(), text.data(), text.size());
+        appearance.NameLength = static_cast<std::uint8_t>(text.size());
+    } else {
+        if (!IsSafeAssignmentTintPath(text)) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        auto& tints = m_assignmentBaseline.FaceTints.Entries;
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        if (tintIndex >= tints.size() || tintIndex >= appearance.TintCount) {
+            ResetAssignmentBootstrap();
+            return;
+        }
+        tints[tintIndex].Name.assign(text.data(), text.size());
+        auto& appearanceTint = appearance.Tints[tintIndex];
+        std::memcpy(appearanceTint.TexturePath.data(), text.data(), text.size());
+        appearanceTint.TexturePathLength = static_cast<std::uint8_t>(text.size());
+    }
+    assembly.Complete = true;
+    m_assignmentBootstrapElapsed = 0.0;
+}
+catch (...)
+{
+    spdlog::error("VR assignment appearance text assembly failed; rebasing the gameplay epoch");
+    ResetAssignmentBootstrap();
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
+
+void VRAvatarService::ResetAssignmentBootstrap() noexcept
+{
+    m_assignmentBaseline = {};
+    m_assignmentBootstrapRequestId = 0;
+    m_assignmentBootstrapActionId = 0;
+    m_assignmentBootstrapExpectedRecords = 0;
+    m_assignmentBootstrapNextOrdinal = 0;
+    m_assignmentBootstrapInventoryRecords = 0;
+    m_assignmentBootstrapQuestRecords = 0;
+    m_assignmentBootstrapNpcFactionRecords = 0;
+    m_assignmentBootstrapExtraFactionRecords = 0;
+    m_assignmentBootstrapOpenInventoryIndex = 0;
+    m_assignmentBootstrapInventoryEffectsRemaining = 0;
+    m_assignmentBootstrapElapsed = 0.0;
+    m_assignmentBootstrapPending = false;
+    m_assignmentBootstrapActive = false;
+    m_assignmentBootstrapReady = false;
+    m_assignmentBootstrapPermanentFailure = false;
+    m_assignmentBootstrapHasActorState = false;
+    m_assignmentBootstrapHasMagicEquipment = false;
+    m_assignmentBootstrapHasOpenInventory = false;
+    m_assignmentBootstrapHasInventoryExtra = false;
+    m_assignmentBootstrapActorValues.fill(false);
+    m_assignmentBootstrapTints.fill(false);
+    m_assignmentBootstrapTintPathsRequired.fill(false);
+    m_assignmentBootstrapTintText = {};
+    m_assignmentBootstrapNameText = {};
+    m_assignmentBootstrapFaceMorphs.fill(false);
+    m_assignmentBootstrapFaceParts.fill(false);
+    m_assignmentBootstrapHeadParts.fill(false);
+    m_assignmentBootstrapHasAppearanceCore = false;
+}
+
+void VRAvatarService::TryRequestAssignmentBootstrap() noexcept
+{
+    if (!m_connected || !m_transport.IsOnline() || m_localServerId || m_assignmentBootstrapReady ||
+        m_assignmentBootstrapPermanentFailure ||
+        m_assignmentBootstrapPending || !HasValidLocalSnapshot() ||
+        !SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
+        !GameplayBridge::HasCapability(
+            SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities(),
+            GameplayBridge::Capability::AssignmentBootstrap))
+        return;
+
+    GameplayBridge::CommandRecord command{};
+    command.Header.Kind = static_cast<std::uint16_t>(GameplayBridge::CommandKind::CaptureAssignmentBootstrap);
+    command.Header.PayloadSize = GameplayBridge::kFixedPayloadBytes;
+    command.Header.Identity.ServerInstanceNonce = m_transport.GetServerInstanceNonce();
+    command.Header.Identity.ConnectionGeneration = m_transport.GetConnectionGeneration();
+    command.Header.Identity.LifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    auto& payload = command.Payload.CaptureAssignmentBootstrap;
+    payload.TargetHandle = GameplayBridge::kLocalPlayerHandle;
+    payload.RequestId = m_nextAssignmentBootstrapRequestId++;
+    if (m_nextAssignmentBootstrapRequestId == 0)
+        m_nextAssignmentBootstrapRequestId = 1;
+    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
+        return;
+
+    m_assignmentBaseline = {};
+    m_assignmentBootstrapRequestId = payload.RequestId;
+    m_assignmentBootstrapActionId = command.Header.Identity.ActionId;
+    m_assignmentBootstrapExpectedRecords = 0;
+    m_assignmentBootstrapNextOrdinal = 0;
+    m_assignmentBootstrapInventoryRecords = 0;
+    m_assignmentBootstrapQuestRecords = 0;
+    m_assignmentBootstrapNpcFactionRecords = 0;
+    m_assignmentBootstrapExtraFactionRecords = 0;
+    m_assignmentBootstrapOpenInventoryIndex = 0;
+    m_assignmentBootstrapInventoryEffectsRemaining = 0;
+    m_assignmentBootstrapElapsed = 0.0;
+    m_assignmentBootstrapPending = true;
+    m_assignmentBootstrapActive = false;
+    m_assignmentBootstrapHasActorState = false;
+    m_assignmentBootstrapHasMagicEquipment = false;
+    m_assignmentBootstrapHasOpenInventory = false;
+    m_assignmentBootstrapHasInventoryExtra = false;
+    m_assignmentBootstrapActorValues.fill(false);
+    m_assignmentBootstrapTints.fill(false);
+    m_assignmentBootstrapTintPathsRequired.fill(false);
+    m_assignmentBootstrapTintText = {};
+    m_assignmentBootstrapNameText = {};
+    m_assignmentBootstrapFaceMorphs.fill(false);
+    m_assignmentBootstrapFaceParts.fill(false);
+    m_assignmentBootstrapHeadParts.fill(false);
+    m_assignmentBootstrapHasAppearanceCore = false;
+}
+
+void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
+    const GameplayBridge::EventRecord& acEvent) noexcept try
+{
+    const auto& payload = acEvent.Payload.AssignmentBootstrapRecord;
+    if (!m_assignmentBootstrapPending || payload.RequestId != m_assignmentBootstrapRequestId ||
+        acEvent.Header.Identity.ActionId != m_assignmentBootstrapActionId ||
+        !std::all_of(std::begin(payload.Reserved), std::end(payload.Reserved),
+                     [](const std::uint8_t aValue) { return aValue == 0; }))
+        return;
+
+    const auto kind = static_cast<GameplayBridge::AssignmentBootstrapRecordKind>(payload.RecordKind);
+    const auto fail = [&]() noexcept {
+        m_assignmentBaseline = {};
+        m_assignmentBootstrapActionId = 0;
+        m_assignmentBootstrapExpectedRecords = 0;
+        m_assignmentBootstrapNextOrdinal = 0;
+        m_assignmentBootstrapInventoryRecords = 0;
+        m_assignmentBootstrapQuestRecords = 0;
+        m_assignmentBootstrapNpcFactionRecords = 0;
+        m_assignmentBootstrapExtraFactionRecords = 0;
+        m_assignmentBootstrapOpenInventoryIndex = 0;
+        m_assignmentBootstrapInventoryEffectsRemaining = 0;
+        m_assignmentBootstrapElapsed = kAssignmentBootstrapRetrySeconds;
+        m_assignmentBootstrapPending = false;
+        m_assignmentBootstrapActive = false;
+        m_assignmentBootstrapHasActorState = false;
+        m_assignmentBootstrapHasMagicEquipment = false;
+        m_assignmentBootstrapHasOpenInventory = false;
+        m_assignmentBootstrapHasInventoryExtra = false;
+        m_assignmentBootstrapActorValues.fill(false);
+        m_assignmentBootstrapTints.fill(false);
+        m_assignmentBootstrapTintPathsRequired.fill(false);
+        m_assignmentBootstrapTintText = {};
+        m_assignmentBootstrapNameText = {};
+        m_assignmentBootstrapFaceMorphs.fill(false);
+        m_assignmentBootstrapFaceParts.fill(false);
+        m_assignmentBootstrapHeadParts.fill(false);
+        m_assignmentBootstrapHasAppearanceCore = false;
+    };
+    if (kind == GameplayBridge::AssignmentBootstrapRecordKind::Failure) {
+        if (payload.Ordinal != 0 || payload.TotalRecords != 1 || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA <= static_cast<std::int32_t>(GameplayBridge::CommandStatus::Success) ||
+            payload.ValueA > static_cast<std::int32_t>(GameplayBridge::CommandStatus::QueueOverflow) ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.Digest != 0) {
+            fail();
+            return;
+        }
+        spdlog::warn("VR assignment bootstrap failed with bridge status {}", payload.ValueA);
+        if (payload.ValueA == static_cast<std::int32_t>(GameplayBridge::CommandStatus::QueueOverflow))
+            m_assignmentBootstrapPermanentFailure = true;
+        fail();
+        return;
+    }
+
+    if (kind == GameplayBridge::AssignmentBootstrapRecordKind::Begin) {
+        if (m_assignmentBootstrapActive || payload.Ordinal != 0 ||
+            payload.TotalRecords < GameplayBridge::kSkyrimActorValueCount + 4 ||
+            payload.TotalRecords > SkyrimTogetherVR::VRAssignmentLimits::kMaximumLogicalBootstrapRecords ||
+            payload.LocalFormIdA != 0x14 || payload.LocalFormIdB == 0 || payload.RecordFlags != 0 ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA != 0 ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.Digest != 0) {
+            fail();
+            return;
+        }
+        m_assignmentBaseline = {};
+        m_assignmentBootstrapExpectedRecords = payload.TotalRecords;
+        m_assignmentBootstrapNextOrdinal = 1;
+        m_assignmentBootstrapActive = true;
+        m_assignmentBootstrapElapsed = 0.0;
+        return;
+    }
+
+    if (!m_assignmentBootstrapActive || payload.TotalRecords != m_assignmentBootstrapExpectedRecords ||
+        payload.Ordinal != m_assignmentBootstrapNextOrdinal) {
+        fail();
+        return;
+    }
+
+    auto mapRequired = [this](const std::uint32_t aLocalFormId, GameId& arServerFormId) {
+        return aLocalFormId != 0 && m_world.GetModSystem().GetServerModId(aLocalFormId, arServerFormId) &&
+               static_cast<bool>(arServerFormId);
+    };
+    auto mapOptional = [&mapRequired](const std::uint32_t aLocalFormId, GameId& arServerFormId) {
+        return aLocalFormId == 0 || mapRequired(aLocalFormId, arServerFormId);
+    };
+
+    switch (kind)
+    {
+    case GameplayBridge::AssignmentBootstrapRecordKind::ActorState:
+    {
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapDead |
+            GameplayBridge::kAssignmentBootstrapWeaponDrawn;
+        if (m_assignmentBootstrapHasActorState || (payload.RecordFlags & ~knownFlags) != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA <= 0 ||
+            payload.ValueA > std::numeric_limits<std::uint16_t>::max() || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        m_assignmentBaseline.CurrentActorData.IsDead =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapDead) != 0;
+        m_assignmentBaseline.CurrentActorData.IsWeaponDrawn =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapWeaponDrawn) != 0;
+        m_assignmentBaseline.InitialVRAppearance.Level = static_cast<std::uint16_t>(payload.ValueA);
+        m_assignmentBootstrapHasActorState = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::ActorValue:
+    {
+        if (payload.LocalFormIdA >= GameplayBridge::kSkyrimActorValueCount || payload.RecordFlags != 0 ||
+            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.ValueA != 0 || payload.ValueB != 0 || !std::isfinite(payload.ScalarA) ||
+            !std::isfinite(payload.ScalarB) || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        const auto index = static_cast<std::size_t>(payload.LocalFormIdA);
+        if (m_assignmentBootstrapActorValues[index]) {
+            fail();
+            return;
+        }
+        m_assignmentBaseline.CurrentActorData.InitialActorValues.ActorValuesList.insert_or_assign(
+            payload.LocalFormIdA, payload.ScalarA);
+        m_assignmentBaseline.CurrentActorData.InitialActorValues.ActorMaxValuesList.insert_or_assign(
+            payload.LocalFormIdA, payload.ScalarB);
+        m_assignmentBootstrapActorValues[index] = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::InventoryEntry:
+    {
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapInventoryQuestItem |
+            GameplayBridge::kAssignmentBootstrapInventoryWorn |
+            GameplayBridge::kAssignmentBootstrapInventoryWornLeft |
+            GameplayBridge::kAssignmentBootstrapInventoryWeapon |
+            GameplayBridge::kAssignmentBootstrapInventoryAmmo;
+        if ((m_assignmentBootstrapHasOpenInventory &&
+             (!m_assignmentBootstrapHasInventoryExtra || m_assignmentBootstrapInventoryEffectsRemaining != 0)) ||
+            ++m_assignmentBootstrapInventoryRecords > kMaximumAssignmentInventoryEntries ||
+            payload.LocalFormIdA == 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA <= 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0 ||
+            (payload.RecordFlags & ~knownFlags) != 0 ||
+            ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 &&
+             (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0)) {
+            fail();
+            return;
+        }
+        Inventory::Entry entry{};
+        if (!mapRequired(payload.LocalFormIdA, entry.BaseId)) {
+            fail();
+            return;
+        }
+        entry.Count = payload.ValueA;
+        entry.IsQuestItem = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryQuestItem) != 0;
+        entry.ExtraWorn = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWorn) != 0;
+        entry.ExtraWornLeft = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWornLeft) != 0;
+        entry.EquipmentFlags =
+            ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 ?
+                 Inventory::Entry::kEquipmentWeapon : 0u) |
+            ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0 ?
+                 Inventory::Entry::kEquipmentAmmo : 0u);
+        m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.push_back(std::move(entry));
+        m_assignmentBootstrapOpenInventoryIndex =
+            m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.size() - 1;
+        m_assignmentBootstrapHasOpenInventory = true;
+        m_assignmentBootstrapHasInventoryExtra = false;
+        m_assignmentBootstrapInventoryEffectsRemaining = 0;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::InventoryExtra:
+    {
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip |
+            GameplayBridge::kAssignmentBootstrapEnchantIsWeapon;
+        if (!m_assignmentBootstrapHasOpenInventory || m_assignmentBootstrapHasInventoryExtra ||
+            (payload.RecordFlags & ~knownFlags) != 0 || payload.LocalFormIdC > 5 ||
+            payload.LocalFormIdD > kMaximumAssignmentInventoryEntries || payload.ValueA < 0 ||
+            payload.ValueA > std::numeric_limits<std::uint16_t>::max() || payload.ValueB < 0 ||
+            !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) ||
+            payload.ScalarA < 0.0F || payload.ScalarB < 0.0F || payload.Digest != 0 ||
+            (payload.LocalFormIdA == 0 &&
+             (payload.ValueA != 0 || payload.LocalFormIdD != 0 ||
+              (payload.RecordFlags & knownFlags) != 0)) ||
+            (payload.LocalFormIdB == 0 && payload.ValueB != 0)) {
+            fail();
+            return;
+        }
+        auto& entry = m_assignmentBaseline.CurrentActorData.InitialInventory
+                          .Entries[m_assignmentBootstrapOpenInventoryIndex];
+        if (!mapOptional(payload.LocalFormIdA, entry.ExtraEnchantId) ||
+            !mapOptional(payload.LocalFormIdB, entry.ExtraPoisonId)) {
+            fail();
+            return;
+        }
+        entry.ExtraEnchantCharge = static_cast<std::uint16_t>(payload.ValueA);
+        entry.ExtraPoisonCount = static_cast<std::uint32_t>(payload.ValueB);
+        entry.ExtraSoulLevel = static_cast<std::int32_t>(payload.LocalFormIdC);
+        entry.ExtraCharge = payload.ScalarA;
+        entry.ExtraHealth = payload.ScalarB;
+        entry.ExtraEnchantRemoveUnequip =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip) != 0;
+        entry.EnchantData.IsWeapon =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantIsWeapon) != 0;
+        m_assignmentBootstrapInventoryEffectsRemaining = payload.LocalFormIdD;
+        m_assignmentBootstrapHasInventoryExtra = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::InventoryEffect:
+    {
+        if (!m_assignmentBootstrapHasOpenInventory || !m_assignmentBootstrapHasInventoryExtra ||
+            m_assignmentBootstrapInventoryEffectsRemaining == 0 || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA == 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 || payload.ValueB < 0 ||
+            !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        Inventory::EffectItem effect{};
+        if (!mapRequired(payload.LocalFormIdA, effect.EffectId)) {
+            fail();
+            return;
+        }
+        effect.Area = payload.ValueA;
+        effect.Duration = payload.ValueB;
+        effect.Magnitude = payload.ScalarA;
+        effect.RawCost = payload.ScalarB;
+        m_assignmentBaseline.CurrentActorData.InitialInventory
+            .Entries[m_assignmentBootstrapOpenInventoryIndex]
+            .EnchantData.Effects.push_back(effect);
+        --m_assignmentBootstrapInventoryEffectsRemaining;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::MagicEquipment:
+    {
+        auto& equipment = m_assignmentBaseline.CurrentActorData.InitialInventory.CurrentMagicEquipment;
+        if (m_assignmentBootstrapHasMagicEquipment || payload.RecordFlags != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0 ||
+            !mapOptional(payload.LocalFormIdA, equipment.LeftHandSpell) ||
+            !mapOptional(payload.LocalFormIdB, equipment.RightHandSpell) ||
+            !mapOptional(payload.LocalFormIdC, equipment.Shout)) {
+            fail();
+            return;
+        }
+        m_assignmentBootstrapHasMagicEquipment = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::Quest:
+    {
+        if (++m_assignmentBootstrapQuestRecords > SkyrimTogetherVR::VRAssignmentLimits::kMaximumQuestEntries ||
+            payload.LocalFormIdA == 0 || payload.RecordFlags != 0 || payload.LocalFormIdB != 0 ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA > std::numeric_limits<std::uint16_t>::max() || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        QuestLog::Entry entry{};
+        if (!mapRequired(payload.LocalFormIdA, entry.Id))
+            break;
+        entry.Stage = static_cast<std::uint16_t>(payload.ValueA);
+        if (std::find(m_assignmentBaseline.QuestContent.Entries.begin(),
+                      m_assignmentBaseline.QuestContent.Entries.end(), entry) !=
+            m_assignmentBaseline.QuestContent.Entries.end()) {
+            fail();
+            return;
+        }
+        m_assignmentBaseline.QuestContent.Entries.push_back(entry);
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::NpcFaction:
+    case GameplayBridge::AssignmentBootstrapRecordKind::ExtraFaction:
+    {
+        auto& recordCount = kind == GameplayBridge::AssignmentBootstrapRecordKind::NpcFaction ?
+            m_assignmentBootstrapNpcFactionRecords : m_assignmentBootstrapExtraFactionRecords;
+        if (++recordCount > kMaximumAssignmentFactionEntries || payload.LocalFormIdA == 0 ||
+            payload.RecordFlags != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < std::numeric_limits<std::int8_t>::min() ||
+            payload.ValueA > std::numeric_limits<std::int8_t>::max() || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        Faction faction{};
+        if (!mapRequired(payload.LocalFormIdA, faction.Id))
+            break;
+        faction.Rank = static_cast<std::int8_t>(payload.ValueA);
+        auto& factions = kind == GameplayBridge::AssignmentBootstrapRecordKind::NpcFaction ?
+            m_assignmentBaseline.FactionsContent.NpcFactions :
+            m_assignmentBaseline.FactionsContent.ExtraFactions;
+        if (std::find(factions.begin(), factions.end(), faction) != factions.end()) {
+            fail();
+            return;
+        }
+        factions.push_back(faction);
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::AppearanceCore:
+    {
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapHasFaceData |
+            GameplayBridge::kAssignmentBootstrapEssential;
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        if (m_assignmentBootstrapHasAppearanceCore || !m_assignmentBootstrapHasActorState ||
+            (payload.RecordFlags & ~knownFlags) != 0 || payload.LocalFormIdA == 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 || payload.ValueA > 1 ||
+            payload.ValueB <= 0 || payload.ValueB > std::numeric_limits<std::uint16_t>::max() ||
+            payload.ValueB != appearance.Level || !std::isfinite(payload.ScalarA) ||
+            payload.ScalarA < 0.0F || payload.ScalarA > 100.0F || payload.ScalarB != 0.0F ||
+            payload.Digest != 0 || !mapRequired(payload.LocalFormIdA, appearance.RaceId) ||
+            !mapOptional(payload.LocalFormIdB, appearance.HairColorId) ||
+            !mapOptional(payload.LocalFormIdC, appearance.FaceTextureId)) {
+            fail();
+            return;
+        }
+        appearance.SchemaVersion = VRAppearance::kSchemaVersion;
+        appearance.Sequence = 1;
+        appearance.Sex = static_cast<std::uint8_t>(payload.ValueA);
+        appearance.Weight = payload.ScalarA;
+        appearance.Essential =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEssential) != 0;
+        appearance.HasFaceData =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapHasFaceData) != 0;
+        m_assignmentBootstrapHasAppearanceCore = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::FaceMorph:
+    {
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        if (!m_assignmentBootstrapHasAppearanceCore || !appearance.HasFaceData || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA >= static_cast<std::int32_t>(VRAppearance::kFaceMorphCount) ||
+            payload.ValueB != 0 || !std::isfinite(payload.ScalarA) ||
+            std::abs(payload.ScalarA) > VRAppearance::kMaximumFaceMorphMagnitude ||
+            payload.ScalarB != 0.0F || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        const auto index = static_cast<std::size_t>(payload.ValueA);
+        if (m_assignmentBootstrapFaceMorphs[index]) {
+            fail();
+            return;
+        }
+        appearance.FaceMorphs[index] = payload.ScalarA;
+        m_assignmentBootstrapFaceMorphs[index] = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::FacePart:
+    {
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        if (!m_assignmentBootstrapHasAppearanceCore || !appearance.HasFaceData || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA >= static_cast<std::int32_t>(VRAppearance::kFacePartCount) ||
+            (payload.ValueB != VRAppearance::kFacePartDefault &&
+             (payload.ValueB < 0 || payload.ValueB > VRAppearance::kMaximumFacePartPreset)) ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0) {
+            fail();
+            return;
+        }
+        const auto index = static_cast<std::size_t>(payload.ValueA);
+        if (m_assignmentBootstrapFaceParts[index]) {
+            fail();
+            return;
+        }
+        appearance.FaceParts[index] = payload.ValueB;
+        m_assignmentBootstrapFaceParts[index] = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::HeadPart:
+    {
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        if (!m_assignmentBootstrapHasAppearanceCore || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA == 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA >= static_cast<std::int32_t>(VRAppearance::kMaximumHeadParts) ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.Digest != 0 || appearance.HeadPartCount >= VRAppearance::kMaximumHeadParts) {
+            fail();
+            return;
+        }
+        const auto slot = static_cast<std::uint8_t>(payload.ValueA);
+        if (m_assignmentBootstrapHeadParts[slot]) {
+            fail();
+            return;
+        }
+        GameId headPartId{};
+        if (!mapRequired(payload.LocalFormIdA, headPartId)) {
+            fail();
+            return;
+        }
+        appearance.HeadParts[appearance.HeadPartCount++] = {slot, headPartId};
+        m_assignmentBootstrapHeadParts[slot] = true;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::Tint:
+    {
+        if ((payload.RecordFlags & ~GameplayBridge::kAssignmentBootstrapTintHasTexturePath) != 0 ||
+            payload.LocalFormIdB >= GameplayBridge::kMaximumAppearanceTints ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA >= 15 || !std::isfinite(payload.ScalarA) || payload.ScalarA < 0.0F ||
+            payload.ScalarA > 1.0F || payload.ValueB != 0 || payload.ScalarB != 0.0F ||
+            payload.Digest != 0 || m_assignmentBootstrapTints[payload.LocalFormIdB] ||
+            !m_assignmentBootstrapHasAppearanceCore ||
+            payload.LocalFormIdB != m_assignmentBaseline.InitialVRAppearance.TintCount) {
+            fail();
+            return;
+        }
+        auto& tints = m_assignmentBaseline.FaceTints.Entries;
+        if (tints.size() <= payload.LocalFormIdB)
+            tints.resize(payload.LocalFormIdB + 1);
+        auto& tint = tints[payload.LocalFormIdB];
+        tint.Alpha = payload.ScalarA;
+        tint.Color = payload.LocalFormIdA;
+        tint.Type = static_cast<std::uint32_t>(payload.ValueA);
+        auto& appearance = m_assignmentBaseline.InitialVRAppearance;
+        appearance.Tints[payload.LocalFormIdB] = {
+            static_cast<std::uint8_t>(payload.ValueA), payload.LocalFormIdA, payload.ScalarA};
+        ++appearance.TintCount;
+        m_assignmentBootstrapTints[payload.LocalFormIdB] = true;
+        m_assignmentBootstrapTintPathsRequired[payload.LocalFormIdB] =
+            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapTintHasTexturePath) != 0;
+        break;
+    }
+    case GameplayBridge::AssignmentBootstrapRecordKind::End:
+        if (payload.Ordinal + 1 != payload.TotalRecords || payload.RecordFlags != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.Digest != 0 ||
+            !m_assignmentBootstrapHasActorState || !m_assignmentBootstrapHasMagicEquipment ||
+            !m_assignmentBootstrapHasAppearanceCore || !m_assignmentBootstrapNameText.Complete ||
+            (m_assignmentBootstrapHasOpenInventory &&
+             (!m_assignmentBootstrapHasInventoryExtra || m_assignmentBootstrapInventoryEffectsRemaining != 0)) ||
+            (m_assignmentBaseline.InitialVRAppearance.HasFaceData &&
+             (!std::all_of(m_assignmentBootstrapFaceMorphs.begin(), m_assignmentBootstrapFaceMorphs.end(),
+                           [](const bool aCaptured) { return aCaptured; }) ||
+              !std::all_of(m_assignmentBootstrapFaceParts.begin(), m_assignmentBootstrapFaceParts.end(),
+                           [](const bool aCaptured) { return aCaptured; }))) ||
+            !std::equal(m_assignmentBootstrapTintPathsRequired.begin(),
+                        m_assignmentBootstrapTintPathsRequired.end(),
+                        m_assignmentBootstrapTintText.begin(),
+                        [](const bool aRequired, const AssignmentTintTextAssembly& acText) {
+                            return !aRequired || acText.Complete;
+                        }) ||
+            !std::all_of(m_assignmentBootstrapActorValues.begin(), m_assignmentBootstrapActorValues.end(),
+                         [](const bool aCaptured) { return aCaptured; }) ||
+            !m_assignmentBaseline.InitialVRAppearance.IsValid()) {
+            fail();
+            return;
+        }
+        m_assignmentBaseline.HasQuestContent = true;
+        m_assignmentBaseline.HasFaceTints = !m_assignmentBaseline.FaceTints.Entries.empty();
+        m_assignmentBaseline.HasVRAppearance = true;
+        m_assignmentBootstrapActive = false;
+        m_assignmentBootstrapPending = false;
+        m_assignmentBootstrapReady = true;
+        m_assignmentBootstrapActionId = 0;
+        m_assignmentBootstrapElapsed = 0.0;
+        ++m_assignmentBootstrapNextOrdinal;
+        TryRequestLocalAssignment();
+        return;
+    default:
+        fail();
+        return;
+    }
+    m_assignmentBootstrapElapsed = 0.0;
+    ++m_assignmentBootstrapNextOrdinal;
+}
+catch (...)
+{
+    spdlog::error("VR assignment bootstrap assembly failed; rebasing the gameplay epoch");
+    ResetAssignmentBootstrap();
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
+
 void VRAvatarService::TryRequestLocalAssignment() noexcept
 {
-    if (!m_connected || !m_transport.IsOnline() || m_localServerId || m_assignmentPending || !HasValidLocalSnapshot())
+    if (!m_connected || !m_transport.IsOnline() || m_localServerId || m_assignmentPending ||
+        !m_assignmentBootstrapReady || !HasValidLocalSnapshot())
         return;
 
     GameId cellId{};
@@ -852,6 +1620,55 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
     request.WorldSpaceId = worldspaceId;
     request.Position = glm::vec3{m_localSnapshot.Root.PositionX, m_localSnapshot.Root.PositionY, m_localSnapshot.Root.PositionZ};
     request.Rotation = rotation;
+    try {
+        request.CurrentActorData = m_assignmentBaseline.CurrentActorData;
+        request.FactionsContent = m_assignmentBaseline.FactionsContent;
+        request.QuestContent = m_assignmentBaseline.QuestContent;
+        request.FaceTints = m_assignmentBaseline.FaceTints;
+        request.HasQuestContent = m_assignmentBaseline.HasQuestContent;
+        request.HasFaceTints = m_assignmentBaseline.HasFaceTints;
+        request.HasVRAppearance = m_assignmentBaseline.HasVRAppearance;
+        request.InitialVRAppearance = m_assignmentBaseline.InitialVRAppearance;
+        if (const auto* actorReplication = m_world.ctx().find<VRActorReplicationService>())
+            TP_UNUSED(actorReplication->TryGetLatestLocalActorAction(request.LatestAction));
+        if (m_localAnimationSnapshot.IsComplete())
+        {
+            auto& variables = request.LatestAction.Variables;
+            variables.Booleans.resize(AnimationGraphProtocol::kBooleanCount);
+            variables.Floats.resize(AnimationGraphProtocol::kFloatCount);
+            variables.Integers.resize(AnimationGraphProtocol::kIntegerCount);
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.Booleans.size(); ++index)
+                variables.Booleans[index] = m_localAnimationSnapshot.Booleans[index];
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.Floats.size(); ++index)
+                variables.Floats[index] = m_localAnimationSnapshot.Floats[index];
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.Integers.size(); ++index)
+                variables.Integers[index] = std::bit_cast<std::uint32_t>(m_localAnimationSnapshot.Integers[index]);
+        }
+    }
+    catch (...) {
+        spdlog::error("VR avatar assignment construction failed; discarding the bootstrap and rebasing the gameplay epoch");
+        m_assignmentCookie = 0;
+        m_assignmentElapsed = 0.0;
+        m_assignmentPending = false;
+        ResetAssignmentBootstrap();
+        TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+        return;
+    }
+
+    const auto preflight = m_transport.PreflightOutboundPacket(request);
+    if (preflight != TransportService::OutboundPacketPreflightResult::Fits) {
+        const auto* const reason = preflight == TransportService::OutboundPacketPreflightResult::Oversized ?
+            "exceeds the 64 KiB outbound packet limit" : "could not be serialized for the outbound packet limit";
+        spdlog::error("VR avatar assignment/bootstrap permanently failed: assembled AssignCharacterRequest {}", reason);
+        m_assignmentCookie = 0;
+        m_assignmentElapsed = 0.0;
+        m_assignmentPending = false;
+        m_assignmentBootstrapActive = false;
+        m_assignmentBootstrapReady = false;
+        m_assignmentBootstrapPermanentFailure = true;
+        m_statusDirty = true;
+        return;
+    }
 
     m_assignmentCookie = request.Cookie;
     m_assignmentPending = true;
@@ -862,7 +1679,7 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
     SkyrimTogetherVR::LogRuntimeCheckpoint("avatar.assignment_send.done");
 }
 
-void VRAvatarService::SendLocalMovement() noexcept
+void VRAvatarService::SendLocalMovement() noexcept try
 {
     if (!m_connected || !m_transport.IsOnline() || !m_localServerId || !HasValidLocalSnapshot())
         return;
@@ -901,6 +1718,11 @@ void VRAvatarService::SendLocalMovement() noexcept
         update.ActionEvents.push_back(action);
     if (m_transport.Send(request))
         m_pendingLocalAnimationEvents.clear();
+}
+catch (...)
+{
+    spdlog::error("VR local movement construction failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
 void VRAvatarService::UpdateRemoteAvatars(const double aDelta) noexcept
@@ -1107,7 +1929,7 @@ void VRAvatarService::SubmitDestroyRemoteAvatar(const std::uint32_t aServerId, R
     }
 }
 
-void VRAvatarService::CachePendingSpawn(const CharacterSpawnRequest& acMessage) noexcept
+void VRAvatarService::CachePendingSpawn(const CharacterSpawnRequest& acMessage) noexcept try
 {
     if (m_pendingSpawns.size() >= kMaxRemoteAvatars && m_pendingSpawns.find(acMessage.ServerId) == m_pendingSpawns.end())
     {
@@ -1117,8 +1939,13 @@ void VRAvatarService::CachePendingSpawn(const CharacterSpawnRequest& acMessage) 
     m_pendingSpawns.insert_or_assign(acMessage.ServerId, acMessage);
     m_statusDirty = true;
 }
+catch (...)
+{
+    spdlog::error("VR pending spawn retention failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
-void VRAvatarService::ProcessPendingSpawns() noexcept
+void VRAvatarService::ProcessPendingSpawns() noexcept try
 {
     if (m_pendingSpawns.empty() || !HasValidLocalSnapshot() || !CanSubmitAvatarCommands())
         return;
@@ -1131,11 +1958,16 @@ void VRAvatarService::ProcessPendingSpawns() noexcept
         OnCharacterSpawn(message);
     }
 }
+catch (...)
+{
+    spdlog::error("VR pending spawn processing failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
 bool VRAvatarService::StageRemoteAnimationSnapshot(
     RemoteAvatar& arAvatar,
     const AnimationVariables& acVariables,
-    const float aDirection) noexcept
+    const float aDirection) noexcept try
 {
     if (!IsFinite(aDirection) || acVariables.Booleans.size() != AnimationGraphProtocol::kBooleanCount ||
         acVariables.Floats.size() != AnimationGraphProtocol::kFloatCount ||
@@ -1163,6 +1995,10 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
     arAvatar.PendingAnimation = snapshot;
     arAvatar.HasPendingAnimation = true;
     return true;
+}
+catch (...)
+{
+    return false;
 }
 
 void VRAvatarService::SubmitRemoteAnimationSnapshot(const std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept
@@ -1482,6 +2318,27 @@ bool VRAvatarService::BuildRemoteGameplayCommandForServerId(
     arCommand.Payload.ApplyGameplayAction.TargetHandle = it->second.Handle;
     arCommand.Payload.ApplyGameplayAction.Domain = static_cast<std::uint16_t>(aDomain);
     arCommand.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(aAction);
+    return true;
+}
+
+bool VRAvatarService::BuildLocalNativeGameplayCommandForServerId(
+    const std::uint32_t aServerId, const std::uint32_t aLocalReferenceFormId,
+    const GameplayBridge::GameplayDomain aDomain, const GameplayBridge::GameplayAction aAction,
+    GameplayBridge::CommandRecord& arCommand) const noexcept
+{
+    arCommand = {};
+    if (!m_connected || !m_transport.IsOnline() || aServerId == 0 || aLocalReferenceFormId == 0 ||
+        !SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
+        SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == 0 ||
+        !GameplayBridge::IsActionInDomain(aDomain, aAction) ||
+        !BuildCommand(GameplayBridge::CommandKind::ApplyGameplayAction, aServerId, arCommand))
+        return false;
+
+    auto& payload = arCommand.Payload.ApplyGameplayAction;
+    payload.TargetHandle = {};
+    payload.TargetLocalFormId = aLocalReferenceFormId;
+    payload.Domain = static_cast<std::uint16_t>(aDomain);
+    payload.Action = static_cast<std::uint16_t>(aAction);
     return true;
 }
 

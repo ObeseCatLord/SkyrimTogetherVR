@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <Structs/GameId.h>
 
@@ -7,6 +8,8 @@ using TiltedPhoques::Vector;
 
 struct QuestLog
 {
+    static constexpr std::size_t kMaximumWireEntries = 0xFFFF;
+
     struct Entry
     {
         GameId Id;
@@ -18,6 +21,7 @@ struct QuestLog
     };
 
     Vector<Entry> Entries{};
+    bool IsDecodedValid{true};
 
     QuestLog() = default;
     ~QuestLog() = default;

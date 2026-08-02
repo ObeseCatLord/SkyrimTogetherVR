@@ -24,7 +24,7 @@ VRPoseRelayService::VRPoseRelayService(World& aWorld, entt::dispatcher& aDispatc
 {
 }
 
-void VRPoseRelayService::OnVRPoseUpdate(const PacketEvent<RequestVRPoseUpdate>& acMessage) noexcept
+void VRPoseRelayService::OnVRPoseUpdate(const PacketEvent<RequestVRPoseUpdate>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -58,6 +58,10 @@ void VRPoseRelayService::OnVRPoseUpdate(const PacketEvent<RequestVRPoseUpdate>& 
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR pose relay rejected an update after an allocation or fanout failure");
+}
 
 void VRPoseRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -65,7 +69,7 @@ void VRPoseRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
         m_playerPoseRelayState.erase(acEvent.pPlayer->GetId());
 }
 
-bool VRPoseRelayService::ShouldRelayPose(uint32_t aPlayerId, const RequestVRPoseUpdate& acRequest) noexcept
+bool VRPoseRelayService::ShouldRelayPose(uint32_t aPlayerId, const RequestVRPoseUpdate& acRequest)
 {
     const auto& pose = acRequest.Pose;
     if (pose.Sequence == 0 || !HasAnyVRPosePayload(pose))

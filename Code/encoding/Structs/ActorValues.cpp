@@ -1,5 +1,6 @@
 #include <Structs/ActorValues.h>
 #include <TiltedCore/Serialization.hpp>
+#include <cmath>
 
 using TiltedPhoques::Serialization;
 
@@ -32,19 +33,53 @@ void ActorValues::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexce
 
 void ActorValues::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    auto count = Serialization::ReadVarInt(aReader);
-    for (int i = 0; i < count; i++)
+    *this = {};
+    const auto count = Serialization::ReadVarInt(aReader);
+    if (count > kMaximumWireValues)
     {
-        auto key = Serialization::ReadVarInt(aReader);
-        auto value = Serialization::ReadFloat(aReader);
-        ActorValuesList.insert({key, value});
+        IsDecodedValid = false;
+        return;
     }
-
-    auto maxCount = Serialization::ReadVarInt(aReader);
-    for (int i = 0; i < maxCount; i++)
+    try
     {
-        auto key = Serialization::ReadVarInt(aReader);
-        auto value = Serialization::ReadFloat(aReader);
-        ActorMaxValuesList.insert({key, value});
+        for (uint64_t i = 0; i < count; i++)
+        {
+            const auto key = Serialization::ReadVarInt(aReader);
+            const auto value = Serialization::ReadFloat(aReader);
+            if (key >= kMaximumWireValues || !std::isfinite(value) ||
+                !ActorValuesList.insert({static_cast<std::uint32_t>(key), value}).second)
+            {
+                ActorValuesList.clear();
+                IsDecodedValid = false;
+                return;
+            }
+        }
+
+        const auto maxCount = Serialization::ReadVarInt(aReader);
+        if (maxCount > kMaximumWireValues)
+        {
+            ActorValuesList.clear();
+            IsDecodedValid = false;
+            return;
+        }
+        for (uint64_t i = 0; i < maxCount; i++)
+        {
+            const auto key = Serialization::ReadVarInt(aReader);
+            const auto value = Serialization::ReadFloat(aReader);
+            if (key >= kMaximumWireValues || !std::isfinite(value) ||
+                !ActorMaxValuesList.insert({static_cast<std::uint32_t>(key), value}).second)
+            {
+                ActorValuesList.clear();
+                ActorMaxValuesList.clear();
+                IsDecodedValid = false;
+                return;
+            }
+        }
+    }
+    catch (...)
+    {
+        ActorValuesList.clear();
+        ActorMaxValuesList.clear();
+        IsDecodedValid = false;
     }
 }

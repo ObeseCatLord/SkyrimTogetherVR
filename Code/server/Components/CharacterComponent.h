@@ -6,6 +6,7 @@
 
 #include <Structs/Tints.h>
 #include <Structs/Factions.h>
+#include <Structs/VRAppearance.h>
 
 struct CharacterComponent
 {
@@ -83,6 +84,8 @@ struct CharacterComponent
     FormIdComponent BaseId{};
     Tints FaceTints{};
     Factions FactionsContent{};
+    VRAppearance InitialVRAppearance{};
     uint16_t Flags{};
     int32_t PlayerId{};
+    bool HasVRAppearance{};
 };

@@ -25,7 +25,7 @@ private:
 
     void OnVRPoseUpdate(const PacketEvent<RequestVRPoseUpdate>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
-    [[nodiscard]] bool ShouldRelayPose(uint32_t aPlayerId, const RequestVRPoseUpdate& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayPose(uint32_t aPlayerId, const RequestVRPoseUpdate& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerPoseRelayState> m_playerPoseRelayState{};

@@ -351,8 +351,6 @@ void RunTiltedEnd() noexcept
 #if TP_SKYRIM_VR
     const auto currentThreadId = GetCurrentThreadId();
     const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
-    SkyrimTogetherVR::GameplayBridgeClient::Retire();
-    SkyrimTogetherVR::TickBridge::Retire();
     if (ownerThreadId != 0 && ownerThreadId != currentThreadId)
         spdlog::critical("SkyrimTogetherVR WinMain lifecycle shutdown ran on thread {}; owner is {}", currentThreadId, ownerThreadId);
     spdlog::info("SkyrimTogetherVR WinMain lifecycle shutdown hook reached on thread {}", currentThreadId);
@@ -373,6 +371,8 @@ void RunTiltedEnd() noexcept
     }
 
 #if TP_SKYRIM_VR
+    SkyrimTogetherVR::GameplayBridgeClient::Retire();
+    SkyrimTogetherVR::TickBridge::Retire();
     SkyrimTogetherVR::LogShutdownPhase("run_tilted_end.done");
 #endif
 }

@@ -12,7 +12,7 @@ struct UpdateEvent;
 
 namespace VRObjectAuthority
 {
-[[nodiscard]] bool AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick) noexcept;
+[[nodiscard]] bool AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick);
 [[nodiscard]] bool Release(const GameId& acObjectId, uint32_t aPlayerId) noexcept;
 void ReleasePlayer(uint32_t aPlayerId) noexcept;
 void Expire(uint64_t aTick) noexcept;
@@ -37,7 +37,7 @@ private:
     void OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
     void OnUpdate(const UpdateEvent&) noexcept;
-    [[nodiscard]] bool ShouldRelayGrab(uint32_t aPlayerId, const RequestVRGrabEvent& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayGrab(uint32_t aPlayerId, const RequestVRGrabEvent& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerGrabRelayState> m_playerGrabRelayState{};

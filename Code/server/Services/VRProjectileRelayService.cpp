@@ -33,7 +33,7 @@ VRProjectileRelayService::VRProjectileRelayService(World& aWorld, entt::dispatch
 {
 }
 
-void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRProjectileEvent>& acMessage) noexcept
+void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRProjectileEvent>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -67,6 +67,10 @@ void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRPr
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR projectile relay rejected an update after an allocation or fanout failure");
+}
 
 void VRProjectileRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -75,7 +79,7 @@ void VRProjectileRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) no
 }
 
 bool VRProjectileRelayService::ShouldRelayProjectile(
-    uint32_t aPlayerId, const RequestVRProjectileEvent& acRequest) noexcept
+    uint32_t aPlayerId, const RequestVRProjectileEvent& acRequest)
 {
     const auto& projectile = acRequest.Projectile;
     if (projectile.Sequence == 0 || !HasProjectileIntentContext(projectile))

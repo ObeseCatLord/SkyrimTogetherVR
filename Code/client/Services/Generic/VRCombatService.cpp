@@ -101,11 +101,15 @@ VRCombatService::VRCombatService(World& aWorld, entt::dispatcher& aDispatcher, T
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRCombatService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRCombatService::OnDisconnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRCombatService native sink is owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetHitEventData().RegisterSink(this);
     else
         spdlog::warn("VRCombatService could not register TESHitEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 BSTEventResult VRCombatService::OnEvent(const TESHitEvent* apEvent, const EventDispatcher<TESHitEvent>* apSender)

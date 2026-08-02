@@ -91,11 +91,15 @@ VRMagicService::VRMagicService(World& aWorld, entt::dispatcher& aDispatcher, Tra
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRMagicService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRMagicService::OnDisconnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRMagicService native sink is owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetMagicEffectApplyEventData().RegisterSink(this);
     else
         spdlog::warn("VRMagicService could not register TESMagicEffectApplyEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 BSTEventResult VRMagicService::OnEvent(const TESMagicEffectApplyEvent* apEvent, const EventDispatcher<TESMagicEffectApplyEvent>* apSender)

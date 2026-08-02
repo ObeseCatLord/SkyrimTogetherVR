@@ -12,6 +12,10 @@ local function build_vr_client(name, options)
     local remote_avatar_sync = options.remote_avatar_sync or false
     local remote_avatar_actor_targets = options.remote_avatar_actor_targets or false
     local observation_services = options.observation_services or false
+    local higgs_service = options.higgs_service
+    if higgs_service == nil then
+        higgs_service = observation_services
+    end
     local pose_service = options.pose_service or false
     local remote_player_proxy = options.remote_player_proxy or false
     local unvalidated_hooks = options.unvalidated_hooks or false
@@ -37,7 +41,7 @@ target(name)
     add_defines("TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
     add_defines("TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
     add_defines("TP_SKYRIM_VR_ENABLE_GRAB_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
-    add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
+    add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(higgs_service))
     add_defines("TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
     add_defines("TP_SKYRIM_VR_ENABLE_POSE_SERVICE=" .. vr_define_value(pose_service))
     add_defines("TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE=" .. vr_define_value(pose_service))
@@ -126,7 +130,11 @@ build_vr_client("SkyrimTogetherVRGameplayClient", {
     connection_only = false,
     remote_avatar_sync = true,
     remote_avatar_actor_targets = true,
-    observation_services = true,
+    -- CommonLib owns canonical game-event capture. Keep the old mapped-client
+    -- observation sinks out of gameplay builds; they use the blocked desktop
+    -- dispatcher shim and only duplicate canonical traffic.
+    observation_services = false,
+    higgs_service = true,
     pose_service = true,
     remote_player_proxy = true,
 })

@@ -48,6 +48,24 @@ afterward. The handoff generator requires the same clean committed worktree and
 includes the current checklist/documentation without raw Codex/session telemetry
 or unredacted runtime logs.
 
+When handoff updates are not authorized, `--skip-handoff` is required. It still
+performs the full Windows build/audit, SCP import, deterministic gameplay package,
+and package/evidence validation, but does not create, overwrite, regenerate,
+audit, or unzip a handoff archive:
+
+```bash
+Tools/SkyrimVR/build_winboat_gameplay.sh --skip-handoff <commit>
+```
+
+The option may also follow the optional commit:
+
+```bash
+Tools/SkyrimVR/build_winboat_gameplay.sh <commit> --skip-handoff
+```
+
+The helper prints `STVR_LINUX_GAMEPLAY_PACKAGE`, `STVR_LINUX_BUILD_EVIDENCE`, and
+an explicit `STVR_LOCAL_HANDOFF=SKIPPED` status in this mode.
+
 The helper stages its generated PowerShell driver as a temporary `.ps1` through
 the private SCP channel instead of passing it through `-EncodedCommand`, which
 avoids the Windows command-line length limit. Its exit trap removes that guest

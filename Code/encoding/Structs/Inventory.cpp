@@ -1,6 +1,9 @@
 #include <Structs/Inventory.h>
 #include <TiltedCore/Serialization.hpp>
 
+#include <cmath>
+#include <limits>
+
 using TiltedPhoques::Serialization;
 
 void Inventory::EffectItem::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -19,6 +22,17 @@ void Inventory::EffectItem::Deserialize(TiltedPhoques::Buffer::Reader& aReader) 
     Duration = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     RawCost = Serialization::ReadFloat(aReader);
     EffectId.Deserialize(aReader);
+}
+
+bool Inventory::EffectItem::operator==(const Inventory::EffectItem& acRhs) const noexcept
+{
+    return Magnitude == acRhs.Magnitude && Area == acRhs.Area && Duration == acRhs.Duration &&
+           RawCost == acRhs.RawCost && EffectId == acRhs.EffectId;
+}
+
+bool Inventory::EffectItem::operator!=(const Inventory::EffectItem& acRhs) const noexcept
+{
+    return !this->operator==(acRhs);
 }
 
 void Inventory::Entry::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -48,10 +62,12 @@ void Inventory::Entry::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const n
     Serialization::WriteBool(aWriter, ExtraWorn);
     Serialization::WriteBool(aWriter, ExtraWornLeft);
     Serialization::WriteBool(aWriter, IsQuestItem);
+    Serialization::WriteVarInt(aWriter, EquipmentFlags);
 }
 
 void Inventory::Entry::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
     BaseId.Deserialize(aReader);
     Count = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
 
@@ -59,12 +75,27 @@ void Inventory::Entry::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexc
 
     ExtraEnchantId.Deserialize(aReader);
     ExtraEnchantCharge = Serialization::ReadVarInt(aReader) & 0xFFFF;
-    uint64_t effectCount = Serialization::ReadVarInt(aReader);
-    for (uint64_t i = 0; i < effectCount; i++)
+    const uint64_t effectCount = Serialization::ReadVarInt(aReader);
+    if (effectCount > Inventory::kMaximumWireEffects)
     {
-        EffectItem effect;
-        effect.Deserialize(aReader);
-        EnchantData.Effects.push_back(effect);
+        IsDecodedValid = false;
+        return;
+    }
+    try
+    {
+        EnchantData.Effects.reserve(static_cast<std::size_t>(effectCount));
+        for (uint64_t i = 0; i < effectCount; i++)
+        {
+            EffectItem effect;
+            effect.Deserialize(aReader);
+            EnchantData.Effects.push_back(effect);
+        }
+    }
+    catch (...)
+    {
+        EnchantData.Effects.clear();
+        IsDecodedValid = false;
+        return;
     }
 
     ExtraHealth = Serialization::ReadFloat(aReader);
@@ -79,6 +110,43 @@ void Inventory::Entry::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexc
     ExtraWorn = Serialization::ReadBool(aReader);
     ExtraWornLeft = Serialization::ReadBool(aReader);
     IsQuestItem = Serialization::ReadBool(aReader);
+    EquipmentFlags = Serialization::ReadVarInt(aReader) & 0xFF;
+}
+
+bool Inventory::Entry::IsValidMutation() const noexcept
+{
+    constexpr auto knownEquipmentFlags = kEquipmentWeapon | kEquipmentAmmo;
+    const auto validRequiredId = [](const GameId& acId) noexcept { return acId.BaseId != 0; };
+    const auto validOptionalId = [&validRequiredId](const GameId& acId) noexcept {
+        return !acId || validRequiredId(acId);
+    };
+
+    if (!IsDecodedValid || !validRequiredId(BaseId) || Count == 0 || Count < -kMaximumMutationCount ||
+        Count > kMaximumMutationCount || !std::isfinite(ExtraCharge) || ExtraCharge < 0.0F ||
+        ExtraCharge > kMaximumMutationScalarMagnitude || !std::isfinite(ExtraHealth) || ExtraHealth < 0.0F ||
+        ExtraHealth > kMaximumMutationScalarMagnitude || !validOptionalId(ExtraEnchantId) ||
+        !validOptionalId(ExtraPoisonId) || ExtraSoulLevel < 0 || ExtraSoulLevel > 5 ||
+        EnchantData.Effects.size() > kMaximumMutationEffects ||
+        (EquipmentFlags & ~knownEquipmentFlags) != 0 ||
+        (EquipmentFlags & knownEquipmentFlags) == knownEquipmentFlags ||
+        ((EquipmentFlags & kEquipmentAmmo) != 0 && ExtraWornLeft) ||
+        (!ExtraEnchantId &&
+         (ExtraEnchantCharge != 0 || !EnchantData.Effects.empty() || EnchantData.IsWeapon ||
+          ExtraEnchantRemoveUnequip)) ||
+        (!ExtraPoisonId && ExtraPoisonCount != 0) ||
+        (ExtraPoisonId && ExtraPoisonCount == 0) ||
+        ExtraPoisonCount > static_cast<std::uint32_t>(kMaximumMutationCount))
+        return false;
+
+    for (const auto& effect : EnchantData.Effects)
+    {
+        if (!validRequiredId(effect.EffectId) || effect.Area < 0 || effect.Area > kMaximumMutationCount ||
+            effect.Duration < 0 || effect.Duration > kMaximumMutationCount || !std::isfinite(effect.Magnitude) ||
+            std::abs(effect.Magnitude) > kMaximumMutationScalarMagnitude || !std::isfinite(effect.RawCost) ||
+            effect.RawCost < 0.0F || effect.RawCost > kMaximumMutationScalarMagnitude)
+            return false;
+    }
+    return true;
 }
 
 bool Inventory::operator==(const Inventory& acRhs) const noexcept
@@ -114,12 +182,38 @@ void Inventory::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 
 void Inventory::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    uint32_t count = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
-    for (uint32_t i = 0; i < count; i++)
+    *this = {};
+    const uint64_t count = Serialization::ReadVarInt(aReader);
+    if (count > kMaximumWireEntries)
     {
-        Entry entry;
-        entry.Deserialize(aReader);
-        Entries.push_back(entry);
+        IsDecodedValid = false;
+        return;
+    }
+
+    std::size_t totalEffects{};
+    try
+    {
+        Entries.reserve(static_cast<std::size_t>(count));
+        for (uint64_t i = 0; i < count; i++)
+        {
+            Entry entry;
+            entry.Deserialize(aReader);
+            if (!entry.IsDecodedValid ||
+                entry.EnchantData.Effects.size() > kMaximumWireEffects - totalEffects)
+            {
+                Entries.clear();
+                IsDecodedValid = false;
+                return;
+            }
+            totalEffects += entry.EnchantData.Effects.size();
+            Entries.push_back(std::move(entry));
+        }
+    }
+    catch (...)
+    {
+        Entries.clear();
+        IsDecodedValid = false;
+        return;
     }
 
     CurrentMagicEquipment.Deserialize(aReader);
@@ -143,20 +237,45 @@ int32_t Inventory::GetEntryCountById(GameId& aItemId) const noexcept
     return entry->Count;
 }
 
-// TODO: unit testing
-void Inventory::AddOrRemoveEntry(const Entry& acEntry) noexcept
+bool Inventory::AddOrRemoveEntry(const Entry& acEntry) noexcept
 {
-    auto duplicate = std::find_if(Entries.begin(), Entries.end(), [acEntry](Entry& entry) { return entry.CanBeMerged(acEntry); });
+    if (!acEntry.IsValidMutation())
+        return false;
 
-    if (duplicate != Entries.end())
+    try
     {
-        duplicate->Count += acEntry.Count;
-        if (duplicate->Count <= 0)
-            Entries.erase(duplicate);
+        // Copy first so allocation, copy, and erase failures cannot alter the
+        // authoritative inventory. The swap below is the single commit point.
+        auto staged = Entries;
+        const auto duplicate = std::find_if(staged.begin(), staged.end(), [&acEntry](const Entry& acExisting) {
+            return acExisting.CanBeMerged(acEntry);
+        });
+
+        if (duplicate == staged.end())
+        {
+            if (acEntry.Count < 0)
+                return false;
+            staged.push_back(acEntry);
+        }
+        else
+        {
+            const auto count = static_cast<std::int64_t>(duplicate->Count) + acEntry.Count;
+            if (count < std::numeric_limits<std::int32_t>::min() ||
+                count > std::numeric_limits<std::int32_t>::max())
+                return false;
+
+            if (count <= 0)
+                staged.erase(duplicate);
+            else
+                duplicate->Count = static_cast<std::int32_t>(count);
+        }
+
+        Entries.swap(staged);
+        return true;
     }
-    else
+    catch (...)
     {
-        Entries.push_back(acEntry);
+        return false;
     }
 }
 

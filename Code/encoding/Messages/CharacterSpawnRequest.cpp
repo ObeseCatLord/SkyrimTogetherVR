@@ -20,10 +20,14 @@ void CharacterSpawnRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter)
     Serialization::WriteBool(aWriter, IsPlayer);
     Serialization::WriteBool(aWriter, IsWeaponDrawn);
     Serialization::WriteBool(aWriter, IsPlayerSummon);
+    Serialization::WriteBool(aWriter, HasVRAppearance);
+    if (HasVRAppearance)
+        InitialVRAppearance.Serialize(aWriter);
 }
 
 void CharacterSpawnRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    IsDecodedValid = true;
     ServerMessage::DeserializeRaw(aReader);
 
     ServerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
@@ -34,25 +38,78 @@ void CharacterSpawnRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReade
     Rotation.Deserialize(aReader);
 
     uint64_t dest = 0;
-    aReader.ReadBits(dest, 32);
+    if (!aReader.ReadBits(dest, 32))
+    {
+        IsDecodedValid = false;
+        return;
+    }
     ChangeFlags = dest & 0xFFFFFFFF;
 
-    AppearanceBuffer = Serialization::ReadString(aReader);
+    try
+    {
+        AppearanceBuffer = Serialization::ReadString(aReader);
+    }
+    catch (...)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     InventoryContent = {};
     InventoryContent.Deserialize(aReader);
+    if (!InventoryContent.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     FactionsContent = {};
     FactionsContent.Deserialize(aReader);
+    if (!FactionsContent.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     ActionsToReplay = {};
     ActionsToReplay.Deserialize(aReader);
+    if (!ActionsToReplay.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     FaceTints.Deserialize(aReader);
+    if (!FaceTints.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     InitialActorValues.Deserialize(aReader);
+    if (!InitialActorValues.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     PlayerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
 
     IsDead = Serialization::ReadBool(aReader);
     IsPlayer = Serialization::ReadBool(aReader);
     IsWeaponDrawn = Serialization::ReadBool(aReader);
     IsPlayerSummon = Serialization::ReadBool(aReader);
+
+    // Transport decoding has no message-local version or payload-length boundary
+    // after the legacy fields, so a missing extension bit is truncation.
+    std::uint64_t hasVRAppearance{};
+    if (!aReader.ReadBits(hasVRAppearance, 1))
+    {
+        IsDecodedValid = false;
+        return;
+    }
+    HasVRAppearance = hasVRAppearance != 0;
+    InitialVRAppearance = {};
+    if (HasVRAppearance) {
+        InitialVRAppearance.Deserialize(aReader);
+        if (!InitialVRAppearance.IsValid())
+            IsDecodedValid = false;
+    }
 }

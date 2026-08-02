@@ -20,6 +20,8 @@ constexpr std::uint32_t kMagicCastHostileEffectivenessOnly = 1u << 1;
 constexpr std::uint32_t kMagicCastDual = 1u << 2;
 constexpr std::uint32_t kMagicEffectAreaTarget = 1u << 0;
 constexpr std::uint32_t kMagicEffectDualCasted = 1u << 1;
+constexpr std::uint32_t kMagicEffectApplyHealPerkBonus = 1u << 3;
+constexpr std::uint32_t kMagicEffectApplyStaminaPerkBonus = 1u << 4;
 
 [[nodiscard]] bool HasOnlyFlags(const std::uint32_t a_flags, const std::uint32_t a_knownFlags) noexcept
 {
@@ -65,9 +67,11 @@ template <class T>
     const auto domain = static_cast<GameplayDomain>(payload.Domain);
     const auto action = static_cast<GameplayAction>(payload.Action);
 
+    const bool managedTarget = payload.TargetHandle.Value != 0 && payload.TargetLocalFormId == 0;
+    const bool localNativeTarget = payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0;
     if (a_command.Header.Kind != static_cast<std::uint16_t>(CommandKind::ApplyGameplayAction) ||
         a_command.Header.PayloadSize != kFixedPayloadBytes || a_command.Header.Flags != 0 || identity.Reserved0 != 0 ||
-        identity.SequenceId != 0 || identity.ActionId == 0 || payload.TargetHandle.Value == 0 || payload.Reserved0 != 0 ||
+        identity.SequenceId != 0 || identity.ActionId == 0 || (!managedTarget && !localNativeTarget) || payload.Reserved0 != 0 ||
         !std::all_of(std::begin(payload.ReservedTail), std::end(payload.ReservedTail), [](std::uint8_t a_value) { return a_value == 0; }) ||
         !CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration) || !HasFiniteScalars(payload) ||
         !IsActionInDomain(domain, action))
@@ -93,11 +97,30 @@ template <class T>
     const GameplayActionPayload& a_payload,
     const RE::Actor& a_actor) noexcept
 {
-    if (a_payload.TargetLocalFormId == 0)
+    if (a_payload.TargetHandle.Value != 0)
         return CommandStatus::Success;
 
     const auto* localTarget = ResolveLocalForm<RE::Actor>(a_payload.TargetLocalFormId);
     return localTarget == &a_actor ? CommandStatus::Success : CommandStatus::InvalidHandle;
+}
+
+[[nodiscard]] CommandStatus ResolveActionActor(
+    const CommandRecord& a_command, RE::NiPointer<RE::Actor>& ar_actor) noexcept
+{
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    if (payload.TargetHandle.Value != 0)
+        return AvatarManager::Get().ResolveGameplayActor(a_command, ar_actor);
+
+    ar_actor.reset(ResolveLocalForm<RE::Actor>(payload.TargetLocalFormId));
+    return ar_actor ? CommandStatus::Success : CommandStatus::MissingForm;
+}
+
+[[nodiscard]] CommandStatus ResolveMagicActorByHandle(
+    const BridgeIdentity& a_identity, const AdapterHandle a_handle,
+    RE::NiPointer<RE::Actor>& ar_actor) noexcept
+{
+    const auto status = AvatarManager::Get().ResolveActorByHandle(a_identity, a_handle, ar_actor);
+    return status == CommandStatus::InvalidHandle ? CommandStatus::Inactive : status;
 }
 
 [[nodiscard]] CommandStatus ValidateActionLayout(const GameplayActionPayload& a_payload) noexcept
@@ -127,7 +150,8 @@ template <class T>
     case GameplayAction::CastSpell:
         return a_payload.LocalFormIdA != 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
                    a_payload.ValueB == 0 && a_payload.ScalarA >= 0.0f && IsCastingSource(a_payload.ValueA) &&
-                   a_payload.SecondaryHandle.Value == 0 &&
+                   (a_payload.LocalFormIdB == 0 || a_payload.SecondaryHandle.Value == 0) &&
+                   a_payload.SecondaryHandle.Value != kLocalPlayerHandle.Value &&
                    HasOnlyFlags(a_payload.ActionFlags, kMagicCastNoHitEffectArt | kMagicCastHostileEffectivenessOnly | kMagicCastDual) ?
                    CommandStatus::Success :
                    CommandStatus::Malformed;
@@ -139,11 +163,15 @@ template <class T>
                    CommandStatus::Success :
                    CommandStatus::Malformed;
     case GameplayAction::ApplyMagicEffect:
-        return a_payload.LocalFormIdA != 0 && a_payload.LocalFormIdB != 0 && a_payload.LocalFormIdC == 0 &&
+        return a_payload.LocalFormIdA != 0 && a_payload.LocalFormIdB != 0 &&
                    a_payload.LocalFormIdD == 0 && a_payload.ValueB >= 0 && a_payload.ScalarA >= 0.0f &&
                    a_payload.ScalarB >= 0.0f && a_payload.ScalarC == 0.0f && a_payload.ScalarD == 0.0f &&
                    IsMagicEffectCastingSource(a_payload.ValueA) &&
-                   HasOnlyFlags(a_payload.ActionFlags, kMagicEffectAreaTarget | kMagicEffectDualCasted) ?
+                   (a_payload.LocalFormIdC == 0 || a_payload.SecondaryHandle.Value == 0) &&
+                   a_payload.SecondaryHandle.Value != kLocalPlayerHandle.Value &&
+                   HasOnlyFlags(a_payload.ActionFlags, kMagicEffectAreaTarget | kMagicEffectDualCasted |
+                                                        kMagicEffectApplyHealPerkBonus |
+                                                        kMagicEffectApplyStaminaPerkBonus) ?
                    CommandStatus::Success :
                    CommandStatus::Malformed;
     case GameplayAction::AddSpell:
@@ -208,22 +236,41 @@ template <class T>
     return target && a_actor.StartCombat(target.get()) ? CommandStatus::Success : CommandStatus::MissingForm;
 }
 
-[[nodiscard]] CommandStatus ExecuteCastSpell(const GameplayActionPayload& a_payload, RE::Actor& a_actor) noexcept
+[[nodiscard]] CommandStatus ExecuteCastSpell(const CommandRecord& a_command, RE::Actor& a_actor) noexcept
 {
+    const auto& a_payload = a_command.Payload.ApplyGameplayAction;
     if (a_payload.LocalFormIdA == 0 || a_payload.LocalFormIdC != 0 || a_payload.LocalFormIdD != 0 || a_payload.ValueB != 0 ||
         a_payload.ScalarA < 0.0f || !IsCastingSource(a_payload.ValueA) ||
+        (a_payload.LocalFormIdB != 0 && a_payload.SecondaryHandle.Value != 0) ||
+        a_payload.SecondaryHandle.Value == kLocalPlayerHandle.Value ||
         !HasOnlyFlags(a_payload.ActionFlags, kMagicCastNoHitEffectArt | kMagicCastHostileEffectivenessOnly | kMagicCastDual))
         return CommandStatus::Malformed;
 
     auto* spell = ResolveLocalForm<RE::MagicItem>(a_payload.LocalFormIdA);
     if (!spell)
         return CommandStatus::MissingForm;
-    auto* target = a_payload.LocalFormIdB != 0 ? ResolveLocalForm<RE::TESObjectREFR>(a_payload.LocalFormIdB) : &a_actor;
-    if (!target)
-        return CommandStatus::MissingForm;
+
+    RE::NiPointer<RE::Actor> remoteTarget;
+    RE::NiPointer<RE::TESObjectREFR> localTarget;
+    RE::TESObjectREFR* target = &a_actor;
+    if (a_payload.LocalFormIdB != 0) {
+        localTarget.reset(ResolveLocalForm<RE::TESObjectREFR>(a_payload.LocalFormIdB));
+        target = localTarget.get();
+        if (!target)
+            return CommandStatus::MissingForm;
+    } else if (a_payload.SecondaryHandle.Value != 0) {
+        const auto targetStatus = ResolveMagicActorByHandle(
+            a_command.Header.Identity, a_payload.SecondaryHandle, remoteTarget);
+        if (targetStatus != CommandStatus::Success)
+            return targetStatus;
+        target = remoteTarget.get();
+        if (!target)
+            return CommandStatus::Inactive;
+    }
+
     auto* caster = a_actor.GetMagicCaster(ToCastingSource(a_payload.ValueA));
     if (!caster)
-        return CommandStatus::EngineRejected;
+        return CommandStatus::Inactive;
     caster->SetDualCasting((a_payload.ActionFlags & kMagicCastDual) != 0);
 
     MagicHooks::ScopedRemoteMagicApplication suppressEcho;
@@ -256,15 +303,23 @@ template <class T>
 [[nodiscard]] CommandStatus ExecuteMagicEffect(const CommandRecord& a_command, RE::Actor& a_actor) noexcept
 {
     const auto& a_payload = a_command.Payload.ApplyGameplayAction;
-    if (a_payload.LocalFormIdA == 0 || a_payload.LocalFormIdB == 0 || a_payload.LocalFormIdC != 0 || a_payload.LocalFormIdD != 0 ||
+    if (a_payload.LocalFormIdA == 0 || a_payload.LocalFormIdB == 0 || a_payload.LocalFormIdD != 0 ||
         a_payload.ValueB < 0 || a_payload.ScalarA < 0.0f || a_payload.ScalarB < 0.0f ||
         a_payload.ScalarC != 0.0f || a_payload.ScalarD != 0.0f || !IsMagicEffectCastingSource(a_payload.ValueA) ||
-        !HasOnlyFlags(a_payload.ActionFlags, kMagicEffectAreaTarget | kMagicEffectDualCasted))
+        (a_payload.LocalFormIdC != 0 && a_payload.SecondaryHandle.Value != 0) ||
+        a_payload.SecondaryHandle.Value == kLocalPlayerHandle.Value ||
+        !HasOnlyFlags(a_payload.ActionFlags, kMagicEffectAreaTarget | kMagicEffectDualCasted |
+                                             kMagicEffectApplyHealPerkBonus |
+                                             kMagicEffectApplyStaminaPerkBonus))
         return CommandStatus::Malformed;
 
     auto* spell = ResolveLocalForm<RE::MagicItem>(a_payload.LocalFormIdA);
     if (!spell)
         return CommandStatus::MissingForm;
+    const bool applyHealPerkBonus = (a_payload.ActionFlags & kMagicEffectApplyHealPerkBonus) != 0;
+    const bool applyStaminaPerkBonus = (a_payload.ActionFlags & kMagicEffectApplyStaminaPerkBonus) != 0;
+    if (applyHealPerkBonus || applyStaminaPerkBonus)
+        return CommandStatus::Unsupported;
     RE::Effect* effect{};
     for (auto* candidate : spell->effects) {
         if (candidate && candidate->baseEffect && candidate->baseEffect->GetFormID() == a_payload.LocalFormIdB) {
@@ -280,10 +335,14 @@ template <class T>
 
     RE::NiPointer<RE::Actor> caster;
     if (a_payload.SecondaryHandle.Value != 0) {
-        const auto casterStatus = AvatarManager::Get().ResolveActorByHandle(
+        const auto casterStatus = ResolveMagicActorByHandle(
             a_command.Header.Identity, a_payload.SecondaryHandle, caster);
         if (casterStatus != CommandStatus::Success)
             return casterStatus;
+    } else if (a_payload.LocalFormIdC != 0) {
+        caster.reset(ResolveLocalForm<RE::Actor>(a_payload.LocalFormIdC));
+        if (!caster)
+            return CommandStatus::MissingForm;
     }
 
     RE::MagicTarget::AddTargetData data{};
@@ -296,8 +355,16 @@ template <class T>
     data.castingSource = ToCastingSource(a_payload.ValueA);
     data.areaTarget = (a_payload.ActionFlags & kMagicEffectAreaTarget) != 0;
     data.dualCasted = (a_payload.ActionFlags & kMagicEffectDualCasted) != 0;
-    MagicHooks::ScopedRemoteMagicApplication suppressEcho;
-    return target->AddTarget(data) ? CommandStatus::Success : CommandStatus::EngineRejected;
+    switch (MagicHooks::ApplyRemoteAddTarget(
+        *target, data, applyHealPerkBonus, applyStaminaPerkBonus)) {
+    case MagicHooks::RemoteAddTargetResult::Success:
+        return CommandStatus::Success;
+    case MagicHooks::RemoteAddTargetResult::PerkBonusUnsupported:
+        return CommandStatus::Unsupported;
+    case MagicHooks::RemoteAddTargetResult::EngineRejected:
+        return CommandStatus::EngineRejected;
+    }
+    return CommandStatus::EngineRejected;
 }
 
 [[nodiscard]] CommandStatus ExecuteAddRemoveSpell(const GameplayActionPayload& a_payload, RE::Actor& a_actor) noexcept
@@ -326,7 +393,7 @@ CommandStatus ExecuteCombatMagicAction(const CommandRecord& a_command) noexcept
             return layoutValidation;
 
         RE::NiPointer<RE::Actor> actor;
-        const auto resolved = AvatarManager::Get().ResolveGameplayActor(a_command, actor);
+        const auto resolved = ResolveActionActor(a_command, actor);
         if (resolved != CommandStatus::Success)
             return resolved;
 
@@ -343,7 +410,7 @@ CommandStatus ExecuteCombatMagicAction(const CommandRecord& a_command) noexcept
         case GameplayAction::LaunchProjectile:
             return CommandStatus::Unsupported;
         case GameplayAction::CastSpell:
-            return ExecuteCastSpell(payload, *actor);
+            return ExecuteCastSpell(a_command, *actor);
         case GameplayAction::InterruptCast:
             return ExecuteInterruptCast(payload, *actor);
         case GameplayAction::ApplyMagicEffect:

@@ -2,7 +2,10 @@
 
 #include "VRGameplayBridge.h"
 
+#include <vr_common/VRCanonicalEntity.h>
+
 #include <cmath>
+#include <limits>
 #include <new>
 #include <vector>
 
@@ -68,7 +71,7 @@ constexpr CapabilityMask kRequestedCapabilities =
     return header.Magic == kMappingMagic && header.AbiVersion == kMappingAbiVersion &&
            header.HeaderSize == sizeof(MappingHeader) && header.MappingSize == sizeof(GameplayBridgeMapping) &&
            header.PublisherProcessId == GetCurrentProcessId() && header.RuntimeVersion == kSkyrimVrRuntimeVersion &&
-           header.CapabilityRevision == kCapabilityRevision && header.Reserved0 == 0 &&
+           header.CapabilityRevision == kCapabilityRevision &&
            header.RequestedCapabilities.load(std::memory_order_acquire) == kRequestedCapabilities;
 }
 
@@ -94,22 +97,24 @@ constexpr CapabilityMask kRequestedCapabilities =
 [[nodiscard]] bool IdentityMatchesCurrent(const BridgeIdentity& acIdentity) noexcept
 {
     const auto& header = s_mapping->Header;
-    const auto nonce = header.ServerInstanceNonce.load(std::memory_order_acquire);
-    const auto generation = header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(header, session))
+        return false;
     const auto epoch = header.LifecycleEpoch.load(std::memory_order_acquire);
-    return acIdentity.Reserved0 == 0 && acIdentity.ServerInstanceNonce == nonce &&
-           acIdentity.ConnectionGeneration == generation && acIdentity.LifecycleEpoch == epoch;
+    return acIdentity.Reserved0 == 0 && acIdentity.ServerInstanceNonce == session.ServerInstanceNonce &&
+           acIdentity.ConnectionGeneration == session.ConnectionGeneration && acIdentity.LifecycleEpoch == epoch;
 }
 
 [[nodiscard]] bool IdentityIsCurrentOrUnspecified(const BridgeIdentity& acIdentity) noexcept
 {
     const auto& header = s_mapping->Header;
-    const auto nonce = header.ServerInstanceNonce.load(std::memory_order_acquire);
-    const auto generation = header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(header, session))
+        return false;
     const auto epoch = header.LifecycleEpoch.load(std::memory_order_acquire);
     return acIdentity.Reserved0 == 0 &&
-           (acIdentity.ServerInstanceNonce == 0 || acIdentity.ServerInstanceNonce == nonce) &&
-           (acIdentity.ConnectionGeneration == 0 || acIdentity.ConnectionGeneration == generation) &&
+           (acIdentity.ServerInstanceNonce == 0 || acIdentity.ServerInstanceNonce == session.ServerInstanceNonce) &&
+           (acIdentity.ConnectionGeneration == 0 || acIdentity.ConnectionGeneration == session.ConnectionGeneration) &&
            (acIdentity.LifecycleEpoch == 0 || acIdentity.LifecycleEpoch == epoch);
 }
 
@@ -144,6 +149,12 @@ constexpr CapabilityMask kRequestedCapabilities =
     return aValue <= static_cast<std::uint32_t>(CommandStatus::QueueOverflow);
 }
 
+[[nodiscard]] bool IsKnownAssignmentBootstrapRecordKind(const std::uint16_t aValue) noexcept
+{
+    return aValue >= static_cast<std::uint16_t>(AssignmentBootstrapRecordKind::Begin) &&
+           aValue <= static_cast<std::uint16_t>(AssignmentBootstrapRecordKind::HeadPart);
+}
+
 [[nodiscard]] bool IsValidProjectilePayload(const ApplyProjectileLaunchPayload& acPayload) noexcept
 {
     const auto bounded = [](const float aValue, const float aLimit) noexcept {
@@ -163,6 +174,15 @@ constexpr CapabilityMask kRequestedCapabilities =
            acPayload.Area <= kMaximumProjectileArea &&
            (acPayload.LaunchFlags & ~kProjectileLaunchKnownFlags) == 0 &&
            IsZero(acPayload.ReservedTail, sizeof(acPayload.ReservedTail));
+}
+
+[[nodiscard]] bool IsCanonicalNpcObservationPayload(const GameplayActionPayload& acPayload) noexcept
+{
+    return acPayload.TargetHandle.Value == 0 && acPayload.SecondaryHandle.Value == 0 &&
+           acPayload.TargetLocalFormId != 0 && acPayload.LocalFormIdA == 0 && acPayload.LocalFormIdB == 0 &&
+           acPayload.LocalFormIdC == 0 && acPayload.LocalFormIdD == 0 && acPayload.ValueA == 0 &&
+           acPayload.ValueB == 0 && acPayload.ScalarA == 0.0F && acPayload.ScalarB == 0.0F &&
+           acPayload.ScalarC == 0.0F && acPayload.ScalarD == 0.0F && acPayload.ActionFlags == 0;
 }
 
 [[nodiscard]] bool ValidateEvent(const EventRecord& acEvent) noexcept
@@ -240,8 +260,7 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
         const auto capability = CapabilityForDomain(domain);
-        const bool objectSnapshot = domain == GameplayDomain::Object &&
-            action >= GameplayAction::ObjectSnapshotBegin && action <= GameplayAction::ObjectSnapshotEnd;
+        const bool objectSnapshot = domain == GameplayDomain::Object && IsObjectSnapshotAction(action);
         return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
                header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
                ((objectSnapshot && payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0) ||
@@ -271,13 +290,17 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
         const auto capability = CapabilityForDomain(domain);
+        const bool deferredAppearanceText =
+            domain == GameplayDomain::Appearance && action == GameplayAction::SetTint &&
+            payload.Reserved0 == kGameplayTextAppearanceDeferred && payload.AuxiliaryLocalFormId >= 1 &&
+            payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints;
         return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
                header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
                payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.TextId != 0 &&
                IsActionInDomain(domain, action) && capability != static_cast<Capability>(0) &&
                payload.ChunkCount != 0 && payload.ChunkCount <= kMaximumGameplayTextChunks &&
                payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= kGameplayTextBytesPerChunk &&
-               payload.Reserved0 == 0 && payload.AuxiliaryLocalFormId == 0 &&
+               ((payload.Reserved0 == 0 && payload.AuxiliaryLocalFormId == 0) || deferredAppearanceText) &&
                IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
                       kGameplayTextBytesPerChunk - payload.ByteCount) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(capability));
@@ -339,6 +362,20 @@ constexpr CapabilityMask kRequestedCapabilities =
                       kGameplayTextBytesPerChunk - payload.ByteCount) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(Capability::ExactAnimationActions));
     }
+    case EventKind::AssignmentBootstrapRecord:
+    {
+        const auto& payload = acEvent.Payload.AssignmentBootstrapRecord;
+        return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
+               header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
+               payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.RequestId != 0 &&
+               IsKnownAssignmentBootstrapRecordKind(payload.RecordKind) &&
+               payload.TotalRecords >= 1 &&
+               payload.TotalRecords <= VRAssignmentLimits::kMaximumLogicalBootstrapRecords &&
+               payload.Ordinal < payload.TotalRecords && payload.Digest == 0 &&
+               std::isfinite(payload.ScalarA) && std::isfinite(payload.ScalarB) &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved)) &&
+               HasActiveCapabilities(static_cast<CapabilityMask>(Capability::AssignmentBootstrap));
+    }
     default:
         return false;
     }
@@ -368,6 +405,8 @@ constexpr CapabilityMask kRequestedCapabilities =
     case CommandKind::StageActorActionTextChunk:
     case CommandKind::ApplyActorAction:
         return static_cast<CapabilityMask>(Capability::ExactAnimationActions);
+    case CommandKind::CaptureAssignmentBootstrap:
+        return static_cast<CapabilityMask>(Capability::AssignmentBootstrap);
     default:
         return 0;
     }
@@ -421,7 +460,30 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto& payload = acCommand.Payload.ApplyGameplayAction;
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
-        const bool actorTarget = payload.TargetHandle.Value != 0;
+        const bool canonicalEntity = CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration);
+        const bool zeroEntity = identity.EntityId == 0 && identity.EntityGeneration == 0;
+        const bool inventoryTransaction = domain == GameplayDomain::Inventory && IsInventoryTransactionAction(action);
+        const bool npcObservation = domain == GameplayDomain::NpcOwnership &&
+                                    (action == GameplayAction::StartNpcObservation ||
+                                     action == GameplayAction::StopNpcObservation);
+        if (npcObservation) {
+            return identity.SequenceId == 0 && canonicalEntity && IsCanonicalNpcObservationPayload(payload) &&
+                   IsActionInDomain(domain, action) && CapabilityForDomain(domain) != static_cast<Capability>(0) &&
+                   payload.Reserved0 == 0 && IsZero(payload.ReservedTail, sizeof(payload.ReservedTail));
+        }
+        const bool remoteActor = payload.TargetHandle.Value >= kFirstRemoteAvatarHandle && canonicalEntity;
+        const bool localPlayer = payload.TargetHandle.Value == kLocalPlayerHandle.Value && canonicalEntity;
+        const bool localNativeOwnedActor = payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0 &&
+                                           canonicalEntity &&
+                                           ((domain == GameplayDomain::Magic &&
+                                             action >= GameplayAction::CastSpell &&
+                                             action <= GameplayAction::RemoveSpell) ||
+                                            (domain == GameplayDomain::Inventory &&
+                                             IsInventoryTransactionAction(action)));
+        // Keep the established zero-identity world-command path for existing
+        // domains while admitting the constrained native-owned actor shape.
+        const bool zeroIdentityWorld = payload.TargetHandle.Value == 0 && zeroEntity &&
+                                       (!inventoryTransaction || payload.TargetLocalFormId != 0);
         if (action == GameplayAction::ArmLocalCapture &&
             (domain != GameplayDomain::ActorState ||
              payload.TargetHandle.Value != kLocalPlayerHandle.Value || payload.SecondaryHandle.Value != 0 ||
@@ -431,8 +493,7 @@ constexpr CapabilityMask kRequestedCapabilities =
              payload.ScalarD != 0.0F || payload.ActionFlags != 0))
             return false;
         return identity.SequenceId == 0 &&
-               ((actorTarget && identity.EntityId != 0 && identity.EntityGeneration != 0) ||
-                (!actorTarget && identity.EntityId == 0 && identity.EntityGeneration == 0)) &&
+               (remoteActor || localPlayer || localNativeOwnedActor || zeroIdentityWorld) &&
                IsActionInDomain(domain, action) && CapabilityForDomain(domain) != static_cast<Capability>(0) &&
                std::isfinite(payload.ScalarA) && std::isfinite(payload.ScalarB) &&
                std::isfinite(payload.ScalarC) && std::isfinite(payload.ScalarD) && payload.Reserved0 == 0 &&
@@ -444,17 +505,24 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
         const bool actorTarget = payload.TargetHandle.Value != 0;
-        const bool textAction = action == GameplayAction::AnimationEvent || action == GameplayAction::SetName ||
-                                action == GameplayAction::ScriptAnimation || action == GameplayAction::Dialogue ||
-                                action == GameplayAction::Subtitle;
-        return identity.SequenceId == 0 && payload.TextId != 0 && textAction &&
+        const bool deferredAppearanceText =
+            domain == GameplayDomain::Appearance &&
+            payload.Reserved0 == kGameplayTextAppearanceDeferred &&
+            ((action == GameplayAction::SetName && payload.AuxiliaryLocalFormId == 0) ||
+             (action == GameplayAction::SetTint && payload.AuxiliaryLocalFormId >= 1 &&
+              payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints));
+        const bool ordinaryText = payload.Reserved0 == 0 &&
+            (action == GameplayAction::AnimationEvent || action == GameplayAction::SetName ||
+             action == GameplayAction::ScriptAnimation || action == GameplayAction::Dialogue ||
+             action == GameplayAction::Subtitle);
+        return identity.SequenceId == 0 && payload.TextId != 0 && (ordinaryText || deferredAppearanceText) &&
                ((actorTarget && identity.EntityId != 0 && identity.EntityGeneration != 0) ||
                 (!actorTarget && identity.EntityId == 0 && identity.EntityGeneration == 0)) &&
                IsActionInDomain(domain, action) && CapabilityForDomain(domain) != static_cast<Capability>(0) &&
                payload.ChunkCount != 0 && payload.ChunkCount <= kMaximumGameplayTextChunks &&
                payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= kGameplayTextBytesPerChunk &&
-               payload.Reserved0 == 0 &&
-               (action == GameplayAction::Subtitle || payload.AuxiliaryLocalFormId == 0) &&
+               (ordinaryText || deferredAppearanceText) &&
+               (deferredAppearanceText || action == GameplayAction::Subtitle || payload.AuxiliaryLocalFormId == 0) &&
                IsZero(reinterpret_cast<const std::uint8_t*>(payload.Utf8Bytes + payload.ByteCount),
                       kGameplayTextBytesPerChunk - payload.ByteCount);
     }
@@ -499,6 +567,14 @@ constexpr CapabilityMask kRequestedCapabilities =
                (payload.Type & ~0x7u) == 0 && payload.ActionFlags == 0 &&
                IsZero(payload.Reserved, sizeof(payload.Reserved));
     }
+    case CommandKind::CaptureAssignmentBootstrap:
+    {
+        const auto& payload = acCommand.Payload.CaptureAssignmentBootstrap;
+        return identity.EntityId == 0 && identity.EntityGeneration == 0 && identity.SequenceId == 0 &&
+               payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.RequestId != 0 &&
+               payload.CaptureFlags == 0 && payload.Reserved0 == 0 &&
+               IsZero(payload.Reserved, sizeof(payload.Reserved));
+    }
     case CommandKind::RetireEpoch:
     {
         const auto& payload = acCommand.Payload.RetireEpoch;
@@ -522,6 +598,27 @@ void RejectSubmission() noexcept
     if (value == 0)
         value = arCounter.fetch_add(1, std::memory_order_acq_rel) + 1;
     return value;
+}
+
+[[nodiscard]] bool ClaimCounterRange(
+    std::atomic<std::uint64_t>& arCounter,
+    const std::size_t aCount,
+    std::uint64_t& arFirst) noexcept
+{
+    if (aCount == 0)
+        return false;
+
+    const auto count = static_cast<std::uint64_t>(aCount);
+    auto current = arCounter.load(std::memory_order_acquire);
+    for (;;) {
+        if (current > std::numeric_limits<std::uint64_t>::max() - count)
+            return false;
+        if (arCounter.compare_exchange_weak(
+                current, current + count, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            arFirst = current + 1;
+            return arFirst != 0;
+        }
+    }
 }
 
 [[nodiscard]] bool IsBatchCommand(const CommandKind aKind) noexcept
@@ -589,7 +686,7 @@ bool Initialize() noexcept
         header.PublisherProcessId = GetCurrentProcessId();
         header.RuntimeVersion = kSkyrimVrRuntimeVersion;
         header.CapabilityRevision = kCapabilityRevision;
-        header.Reserved0 = 0;
+        header.SessionIdentityVersion.store(0, std::memory_order_relaxed);
         header.RequestedCapabilities.store(kRequestedCapabilities, std::memory_order_relaxed);
         header.AvailableCapabilities.store(0, std::memory_order_relaxed);
         header.ActiveCapabilities.store(0, std::memory_order_relaxed);
@@ -750,8 +847,7 @@ void UpdateSessionIdentity(const std::uint64_t aServerInstanceNonce, const std::
     if (!IsOwnerThread() || (state != EndpointState::Prepared && state != EndpointState::Ready))
         return;
 
-    s_mapping->Header.ServerInstanceNonce.store(aServerInstanceNonce, std::memory_order_release);
-    s_mapping->Header.ConnectionGeneration.store(aConnectionGeneration, std::memory_order_release);
+    TP_UNUSED(PublishSessionIdentity(s_mapping->Header, {aServerInstanceNonce, aConnectionGeneration}));
 }
 
 std::uint64_t GetLifecycleEpoch() noexcept
@@ -813,8 +909,13 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
 
     CommandRecord command = arCommand;
     auto& identity = command.Header.Identity;
-    identity.ServerInstanceNonce = s_mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire);
-    identity.ConnectionGeneration = s_mapping->Header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(s_mapping->Header, session)) {
+        RejectSubmission();
+        return false;
+    }
+    identity.ServerInstanceNonce = session.ServerInstanceNonce;
+    identity.ConnectionGeneration = session.ConnectionGeneration;
     identity.LifecycleEpoch = s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire);
 
     const bool isSequencedUpdate = kind == CommandKind::UpdateRemoteRootTransform ||
@@ -851,7 +952,7 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
     return true;
 }
 
-bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept
+bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept try
 {
     if (!apCommands || aCommandCount == 0 || aCommandCount > kDefaultCommandRingCapacity || !IsOperational())
     {
@@ -861,11 +962,17 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
 
     std::vector<CommandRecord> commands;
     commands.reserve(aCommandCount);
-    const auto nonce = s_mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire);
-    const auto generation = s_mapping->Header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(s_mapping->Header, session)) {
+        RejectSubmission();
+        return false;
+    }
+    const auto nonce = session.ServerInstanceNonce;
+    const auto generation = session.ConnectionGeneration;
     const auto epoch = s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire);
     BridgeIdentity transactionIdentity{};
     AdapterHandle transactionTarget{};
+    std::uint32_t transactionTargetLocalFormId{};
     GameplayDomain transactionDomain{};
     bool gameplayActionBatch{};
 
@@ -892,8 +999,9 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
         {
             const auto& payload = command.Payload.ApplyGameplayAction;
             const auto domain = static_cast<GameplayDomain>(payload.Domain);
-            if (payload.TargetHandle.Value == 0 || payload.TargetHandle.Value == kLocalPlayerHandle.Value ||
-                (index != 0 && (payload.TargetHandle.Value != transactionTarget.Value || domain != transactionDomain)))
+            if (index != 0 &&
+                (payload.TargetHandle.Value != transactionTarget.Value ||
+                 payload.TargetLocalFormId != transactionTargetLocalFormId || domain != transactionDomain))
             {
                 RejectSubmission();
                 return false;
@@ -901,6 +1009,7 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
             if (index == 0)
             {
                 transactionTarget = payload.TargetHandle;
+                transactionTargetLocalFormId = payload.TargetLocalFormId;
                 transactionDomain = domain;
             }
         }
@@ -926,7 +1035,10 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
             transactionIdentity = identity;
         else if (identity.EntityId != transactionIdentity.EntityId ||
                  identity.EntityGeneration != transactionIdentity.EntityGeneration ||
-                 identity.SequenceId != transactionIdentity.SequenceId)
+                 identity.SequenceId != transactionIdentity.SequenceId ||
+                 identity.ServerInstanceNonce != transactionIdentity.ServerInstanceNonce ||
+                 identity.ConnectionGeneration != transactionIdentity.ConnectionGeneration ||
+                 identity.LifecycleEpoch != transactionIdentity.LifecycleEpoch)
         {
             RejectSubmission();
             return false;
@@ -934,14 +1046,28 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
         commands.push_back(command);
     }
 
-    const auto actionId = ClaimNextCounter(s_lastBridgeAction);
-    if (actionId == 0)
+    if (gameplayActionBatch)
     {
-        RejectSubmission();
-        return false;
+        std::uint64_t firstActionId{};
+        if (!ClaimCounterRange(s_lastBridgeAction, commands.size(), firstActionId))
+        {
+            RejectSubmission();
+            return false;
+        }
+        for (std::size_t index = 0; index < commands.size(); ++index)
+            NormalizeBatchTransactionId(commands[index], firstActionId + index);
     }
-    for (auto& command : commands)
-        NormalizeBatchTransactionId(command, actionId);
+    else
+    {
+        const auto actionId = ClaimNextCounter(s_lastBridgeAction);
+        if (actionId == 0)
+        {
+            RejectSubmission();
+            return false;
+        }
+        for (auto& command : commands)
+            NormalizeBatchTransactionId(command, actionId);
+    }
 
     if (!TryPushBatch(s_mapping->Commands, commands.data(), commands.size()))
     {
@@ -953,6 +1079,205 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
         apCommands[index] = commands[index];
     s_mapping->Header.SubmittedCommandCount.fetch_add(commands.size(), std::memory_order_relaxed);
     return true;
+} catch (...) {
+    RejectSubmission();
+    return false;
+}
+
+bool TrySubmitAppearanceBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept try
+{
+    if (!apCommands || aCommandCount < 3 || aCommandCount > kDefaultCommandRingCapacity || !IsOperational()) {
+        RejectSubmission();
+        return false;
+    }
+
+    std::vector<CommandRecord> commands;
+    commands.reserve(aCommandCount);
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(s_mapping->Header, session)) {
+        RejectSubmission();
+        return false;
+    }
+    const auto nonce = session.ServerInstanceNonce;
+    const auto generation = session.ConnectionGeneration;
+    const auto epoch = s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire);
+    BridgeIdentity transactionIdentity{};
+    AdapterHandle transactionTarget{};
+
+    for (std::size_t index = 0; index < aCommandCount; ++index) {
+        auto command = apCommands[index];
+        const auto kind = static_cast<CommandKind>(command.Header.Kind);
+        if ((kind != CommandKind::ApplyGameplayAction && kind != CommandKind::ApplyGameplayTextChunk) ||
+            command.Header.PayloadSize != kFixedPayloadBytes || command.Header.Flags != 0 ||
+            command.Header.Identity.ActionId != 0 || !IdentityIsCurrentOrUnspecified(command.Header.Identity) ||
+            !ValidateCommandPayload(command)) {
+            RejectSubmission();
+            return false;
+        }
+
+        const auto target = kind == CommandKind::ApplyGameplayAction ?
+            command.Payload.ApplyGameplayAction.TargetHandle : command.Payload.ApplyGameplayTextChunk.TargetHandle;
+        const auto domain = static_cast<GameplayDomain>(kind == CommandKind::ApplyGameplayAction ?
+            command.Payload.ApplyGameplayAction.Domain : command.Payload.ApplyGameplayTextChunk.Domain);
+        if (target.Value < kFirstRemoteAvatarHandle || domain != GameplayDomain::Appearance) {
+            RejectSubmission();
+            return false;
+        }
+
+        auto& identity = command.Header.Identity;
+        identity.ServerInstanceNonce = nonce;
+        identity.ConnectionGeneration = generation;
+        identity.LifecycleEpoch = epoch;
+        if (index == 0) {
+            transactionIdentity = identity;
+            transactionTarget = target;
+        } else if (target.Value != transactionTarget.Value ||
+                   identity.EntityId != transactionIdentity.EntityId ||
+                   identity.EntityGeneration != transactionIdentity.EntityGeneration ||
+                   identity.SequenceId != 0) {
+            RejectSubmission();
+            return false;
+        }
+        commands.push_back(command);
+    }
+
+    const auto firstAction = static_cast<GameplayAction>(commands.front().Payload.ApplyGameplayAction.Action);
+    const auto lastKind = static_cast<CommandKind>(commands.back().Header.Kind);
+    const auto lastAction = lastKind == CommandKind::ApplyGameplayAction ?
+        static_cast<GameplayAction>(commands.back().Payload.ApplyGameplayAction.Action) : GameplayAction{};
+    if (static_cast<CommandKind>(commands.front().Header.Kind) != CommandKind::ApplyGameplayAction ||
+        firstAction != GameplayAction::BeginAppearance || lastKind != CommandKind::ApplyGameplayAction ||
+        lastAction != GameplayAction::CommitAppearance) {
+        RejectSubmission();
+        return false;
+    }
+
+    const auto expectedTintCount = commands.front().Payload.ApplyGameplayAction.ValueB;
+    if (expectedTintCount < 0 || expectedTintCount > kMaximumAppearanceTints) {
+        RejectSubmission();
+        return false;
+    }
+
+    std::uint32_t tintMask{};
+    std::uint32_t tintPathExpectedMask{};
+    std::uint32_t tintPathMask{};
+    std::size_t tintCount{};
+    std::size_t nameGroups{};
+    std::size_t semanticGroups{};
+    for (std::size_t index = 0; index < commands.size();) {
+        const auto kind = static_cast<CommandKind>(commands[index].Header.Kind);
+        if (kind == CommandKind::ApplyGameplayAction) {
+            const auto& payload = commands[index].Payload.ApplyGameplayAction;
+            const auto action = static_cast<GameplayAction>(payload.Action);
+            const bool terminal = index + 1 == commands.size();
+            if ((action == GameplayAction::BeginAppearance) != (index == 0) ||
+                (action == GameplayAction::CommitAppearance) != terminal ||
+                (!terminal && (payload.ActionFlags & kAppearanceDeferredRefresh) == 0)) {
+                RejectSubmission();
+                return false;
+            }
+            if (action == GameplayAction::SetTint) {
+                if (payload.ValueA < 0 || payload.ValueA >= expectedTintCount ||
+                    (payload.ActionFlags & ~(kAppearanceDeferredRefresh | kAppearanceTintHasTexturePath)) != 0) {
+                    RejectSubmission();
+                    return false;
+                }
+                const auto bit = 1u << static_cast<std::uint32_t>(payload.ValueA);
+                if ((tintMask & bit) != 0) {
+                    RejectSubmission();
+                    return false;
+                }
+                tintMask |= bit;
+                if ((payload.ActionFlags & kAppearanceTintHasTexturePath) != 0)
+                    tintPathExpectedMask |= bit;
+                ++tintCount;
+            } else if ((payload.ActionFlags & ~kAppearanceDeferredRefresh) != 0) {
+                RejectSubmission();
+                return false;
+            }
+            ++semanticGroups;
+            ++index;
+            continue;
+        }
+
+        const auto& first = commands[index].Payload.ApplyGameplayTextChunk;
+        const auto action = static_cast<GameplayAction>(first.Action);
+        if (first.Reserved0 != kGameplayTextAppearanceDeferred || first.ChunkIndex != 0 ||
+            (action != GameplayAction::SetName && action != GameplayAction::SetTint)) {
+            RejectSubmission();
+            return false;
+        }
+        if (action == GameplayAction::SetName) {
+            if (first.AuxiliaryLocalFormId != 0 || ++nameGroups != 1) {
+                RejectSubmission();
+                return false;
+            }
+        } else {
+            if (first.AuxiliaryLocalFormId == 0 || first.AuxiliaryLocalFormId > expectedTintCount) {
+                RejectSubmission();
+                return false;
+            }
+            const auto bit = 1u << (first.AuxiliaryLocalFormId - 1);
+            if ((tintPathMask & bit) != 0) {
+                RejectSubmission();
+                return false;
+            }
+            tintPathMask |= bit;
+        }
+
+        for (std::uint16_t chunk = 0; chunk < first.ChunkCount; ++chunk, ++index) {
+            if (index >= commands.size() ||
+                static_cast<CommandKind>(commands[index].Header.Kind) != CommandKind::ApplyGameplayTextChunk) {
+                RejectSubmission();
+                return false;
+            }
+            const auto& next = commands[index].Payload.ApplyGameplayTextChunk;
+            if (next.TargetHandle.Value != first.TargetHandle.Value || next.Domain != first.Domain ||
+                next.Action != first.Action || next.TextId != first.TextId || next.ChunkIndex != chunk ||
+                next.ChunkCount != first.ChunkCount || next.Reserved0 != first.Reserved0 ||
+                next.AuxiliaryLocalFormId != first.AuxiliaryLocalFormId) {
+                RejectSubmission();
+                return false;
+            }
+        }
+        ++semanticGroups;
+    }
+
+    if (nameGroups != 1 || tintCount != static_cast<std::size_t>(expectedTintCount) ||
+        tintPathMask != tintPathExpectedMask) {
+        RejectSubmission();
+        return false;
+    }
+
+    std::uint64_t firstActionId{};
+    if (!ClaimCounterRange(s_lastBridgeAction, semanticGroups, firstActionId)) {
+        RejectSubmission();
+        return false;
+    }
+    auto nextActionId = firstActionId;
+    for (std::size_t index = 0; index < commands.size();) {
+        const auto kind = static_cast<CommandKind>(commands[index].Header.Kind);
+        if (kind == CommandKind::ApplyGameplayAction) {
+            NormalizeBatchTransactionId(commands[index++], nextActionId++);
+            continue;
+        }
+        const auto chunkCount = commands[index].Payload.ApplyGameplayTextChunk.ChunkCount;
+        for (std::uint16_t chunk = 0; chunk < chunkCount; ++chunk)
+            NormalizeBatchTransactionId(commands[index++], nextActionId);
+        ++nextActionId;
+    }
+
+    if (!TryPushBatch(s_mapping->Commands, commands.data(), commands.size())) {
+        RejectSubmission();
+        return false;
+    }
+    for (std::size_t index = 0; index < commands.size(); ++index)
+        apCommands[index] = commands[index];
+    s_mapping->Header.SubmittedCommandCount.fetch_add(commands.size(), std::memory_order_relaxed);
+    return true;
+} catch (...) {
+    RejectSubmission();
+    return false;
 }
 
 CommandPumpResult PumpCommands(std::uint32_t aMaxCommands) noexcept

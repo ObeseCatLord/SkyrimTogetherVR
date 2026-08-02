@@ -27,7 +27,7 @@ constexpr float kMaximumActorValueMagnitude = 1'000'000.0F;
 }
 
 template <class TMap>
-[[nodiscard]] TMap FilterActorValues(const TMap& acValues) noexcept
+[[nodiscard]] TMap FilterActorValues(const TMap& acValues)
 {
     TMap values{};
     if (acValues.size() > kActorValueCount)
@@ -51,7 +51,7 @@ ActorValueService::ActorValueService(World& aWorld, entt::dispatcher& aDispatche
     m_deathStateConnection = aDispatcher.sink<PacketEvent<RequestDeathStateChange>>().connect<&ActorValueService::OnDeathStateChange>(this);
 }
 
-void ActorValueService::OnActorValueChanges(const PacketEvent<RequestActorValueChanges>& acMessage) const noexcept
+void ActorValueService::OnActorValueChanges(const PacketEvent<RequestActorValueChanges>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -78,8 +78,12 @@ void ActorValueService::OnActorValueChanges(const PacketEvent<RequestActorValueC
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    spdlog::error("Actor-value update rejected after an allocation or fanout failure");
+}
 
-void ActorValueService::OnActorMaxValueChanges(const PacketEvent<RequestActorMaxValueChanges>& acMessage) const noexcept
+void ActorValueService::OnActorMaxValueChanges(const PacketEvent<RequestActorMaxValueChanges>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -106,8 +110,12 @@ void ActorValueService::OnActorMaxValueChanges(const PacketEvent<RequestActorMax
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    spdlog::error("Actor max-value update rejected after an allocation or fanout failure");
+}
 
-void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthChangeBroadcast>& acMessage) const noexcept
+void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthChangeBroadcast>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -138,8 +146,12 @@ void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthC
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    spdlog::error("Health update rejected after an allocation or fanout failure");
+}
 
-void ActorValueService::OnDeathStateChange(const PacketEvent<RequestDeathStateChange>& acMessage) const noexcept
+void ActorValueService::OnDeathStateChange(const PacketEvent<RequestDeathStateChange>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -161,4 +173,8 @@ void ActorValueService::OnDeathStateChange(const PacketEvent<RequestDeathStateCh
     const entt::entity cEntity = static_cast<entt::entity>(message.Id);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.pPlayer))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+}
+catch (...)
+{
+    spdlog::error("Death-state update rejected after an allocation or fanout failure");
 }

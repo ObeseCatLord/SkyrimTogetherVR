@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <Client.hpp>
+#include <cstdint>
 #include <deque>
 #include <thread>
 #include <vector>
@@ -29,6 +30,13 @@ using TiltedPhoques::Client;
  */
 struct TransportService : Client
 {
+    enum class OutboundPacketPreflightResult : std::uint8_t
+    {
+        Fits,
+        Oversized,
+        Unserializable,
+    };
+
     TransportService(World& aWorld, entt::dispatcher& aDispatcher) noexcept;
     ~TransportService() noexcept = default;
 
@@ -38,6 +46,11 @@ struct TransportService : Client
     // bounded owner-thread queue. TiltedConnect's void send API cannot report
     // the later Steam Networking Sockets result.
     bool Send(const ClientMessage& acMessage) noexcept;
+
+    // Serializes exactly as Send does, without checking connection/queue state
+    // or enqueuing a packet.
+    [[nodiscard]] OutboundPacketPreflightResult PreflightOutboundPacket(
+        const ClientMessage& acMessage) const noexcept;
 
     void OnConsume(const void* apData, uint32_t aSize) override;
     void OnConnected() override;
@@ -52,7 +65,10 @@ struct TransportService : Client
     [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
     [[nodiscard]] uint64_t GetNegotiatedGameplayCapabilities() const noexcept { return m_negotiatedGameplayCapabilities; }
     [[nodiscard]] uint64_t GetRequestedGameplayCapabilities() const noexcept { return m_requestedGameplayCapabilities; }
-    [[nodiscard]] bool IsGameplayCleanupRequired() const noexcept { return m_gameplayCleanupRequired; }
+    [[nodiscard]] bool IsGameplayCleanupRequired() const noexcept
+    {
+        return m_gameplayCleanupRequired || m_gameplayIdentityClearPending;
+    }
     [[nodiscard]] bool RetireGameplaySession(SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason) noexcept;
 
 protected:
@@ -74,8 +90,32 @@ private:
         std::uint64_t ConnectionGeneration{};
     };
 
+    // A completed request remains cached through the current owner update so
+    // independent fault handlers for the same epoch coalesce.
+    struct GameplayRetirementRequest
+    {
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+        std::uint64_t OriginLifecycleEpoch{};
+        std::uint64_t ExpectedLifecycleEpoch{};
+        std::uint32_t Reason{};
+        std::uint32_t RetryFramesRemaining{};
+        bool Pending{};
+        bool Completed{};
+    };
+
     void DrainOutboundQueue() noexcept;
     void ClearOutboundQueue() noexcept;
+    void ClearGameplayRetirementState() noexcept;
+    void BeginGameplayRetirement(
+        SkyrimTogetherVR::GameplayBridge::EpochRetireReason aReason,
+        std::uint64_t aOriginLifecycleEpoch) noexcept;
+    void CompleteGameplayRetirement() noexcept;
+    void RetryGameplayRetirement() noexcept;
+    [[nodiscard]] bool IsGameplayRetirementRequestCurrent() const noexcept;
+    [[nodiscard]] bool AttemptGameplayRetirement() noexcept;
+    [[nodiscard]] OutboundPacketPreflightResult SerializeOutboundPacket(
+        const ClientMessage& acMessage, std::vector<std::uint8_t>* apSerialized) const noexcept;
 
     World& m_world;
     entt::dispatcher& m_dispatcher;
@@ -88,7 +128,9 @@ private:
     uint64_t m_serverInstanceNonce = 0;
     uint64_t m_negotiatedGameplayCapabilities = 0;
     uint64_t m_requestedGameplayCapabilities = 0;
+    GameplayRetirementRequest m_gameplayRetirement{};
     bool m_gameplayCleanupRequired = false;
+    bool m_gameplayIdentityClearPending = false;
     std::deque<PendingOutboundPacket> m_outboundQueue{};
     std::size_t m_outboundQueueBytes{};
     bool m_drainingOutboundQueue{};

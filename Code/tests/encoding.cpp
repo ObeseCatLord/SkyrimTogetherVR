@@ -14,6 +14,7 @@
 #include <catch2/catch.hpp>
 
 #include <Messages/ClientMessageFactory.h>
+#include <Messages/CharacterSpawnRequest.h>
 #include <Messages/NotifyEquipmentChanges.h>
 #include <Messages/NotifyOwnershipTransfer.h>
 #include <Messages/RequestEquipmentChanges.h>
@@ -21,6 +22,7 @@
 #include <Messages/ServerMessageFactory.h>
 #include <Structs/Vector2_NetQuantize.h>
 #include <Structs/VRActivationEvent.h>
+#include <Structs/VRAppearance.h>
 #include <Structs/VRCombatHitEvent.h>
 #include <Structs/VREquipmentUpdate.h>
 #include <Structs/VRGrabEvent.h>
@@ -130,6 +132,46 @@ GameId BuildGameId(uint32_t aModId, uint32_t aBaseId)
     result.ModId = aModId;
     result.BaseId = aBaseId;
     return result;
+}
+
+VRAppearance BuildMinimalVRAppearance()
+{
+    VRAppearance appearance{};
+    appearance.Sequence = 1;
+    appearance.RaceId = BuildGameId(1, 0x13746);
+    appearance.Sex = 0;
+    appearance.Weight = 50.0F;
+    appearance.Level = 1;
+    constexpr std::string_view name{"NPC"};
+    appearance.NameLength = static_cast<std::uint8_t>(name.size());
+    std::copy(name.begin(), name.end(), appearance.Name.begin());
+    return appearance;
+}
+
+void SetTintTexturePath(VRAppearanceTint& aTint, const std::string_view acPath)
+{
+    aTint.TexturePath = {};
+    aTint.TexturePathLength = static_cast<std::uint8_t>(acPath.size());
+    std::copy(acPath.begin(), acPath.end(), aTint.TexturePath.begin());
+}
+
+void WriteVRAppearancePrefix(TiltedPhoques::Buffer::Writer& aWriter)
+{
+    aWriter.WriteBits(VRAppearance::kSchemaVersion, 8);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, 1);
+    BuildGameId(1, 1).Serialize(aWriter);
+    aWriter.WriteBits(0, 8);
+    aWriter.WriteBits(0, 32);
+    aWriter.WriteBits(1, 16);
+    aWriter.WriteBits(0, 1);
+    const GameId empty{};
+    empty.Serialize(aWriter);
+    empty.Serialize(aWriter);
+    aWriter.WriteBits(0, 1);
+    for (std::uint8_t index = 0; index < VRAppearance::kFaceMorphCount; ++index)
+        aWriter.WriteBits(0, 32);
+    for (std::uint8_t index = 0; index < VRAppearance::kFacePartCount; ++index)
+        aWriter.WriteBits(0, 32);
 }
 
 VREquipmentUpdate BuildEquipmentUpdate()
@@ -1031,15 +1073,15 @@ TEST_CASE("Differential structures", "[encoding.differential]")
     {
         ActionEvent sendAction, recvAction;
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = BuildGameId(1, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = BuildGameId(2, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = BuildGameId(3, 963741);
         sendAction.Type = 4;
 
         {
@@ -1075,15 +1117,15 @@ TEST_CASE("Differential structures", "[encoding.differential]")
 
         TP_UNUSED(StringCache::Get().Add("test"))
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = BuildGameId(1, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = BuildGameId(2, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = BuildGameId(3, 963741);
         sendAction.Type = 4;
 
         {
@@ -1305,6 +1347,7 @@ TEST_CASE("Packets", "[encoding.packets]")
         entry.Count = 1;
         entry.ExtraWorn = true;
         entry.ExtraWornLeft = true;
+        entry.EquipmentFlags = Inventory::Entry::kEquipmentWeapon;
         sendMessage.CurrentInventory.CurrentMagicEquipment.RightHandSpell = BuildGameId(3, 0x6789);
         sendMessage.CurrentInventory.CurrentMagicEquipment.Shout = BuildGameId(4, 0x789A);
 
@@ -1328,6 +1371,7 @@ TEST_CASE("Packets", "[encoding.packets]")
         entry.BaseId = BuildGameId(5, 0x89AB);
         entry.Count = 2;
         entry.ExtraWornLeft = true;
+        entry.EquipmentFlags = Inventory::Entry::kEquipmentWeapon;
         sendMessage.FinalEquipment.CurrentMagicEquipment.LeftHandSpell = BuildGameId(6, 0x9ABC);
 
         Buffer::Writer writer(&buff);
@@ -1338,6 +1382,158 @@ TEST_CASE("Packets", "[encoding.packets]")
         recvMessage.DeserializeRaw(reader);
 
         REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("VRAppearance schema v2 round trip and validation")
+    {
+        Buffer buff(4096);
+        VRAppearance sendAppearance, recvAppearance;
+        sendAppearance.Sequence = 17;
+        sendAppearance.RaceId = BuildGameId(1, 0x1234);
+        sendAppearance.Sex = 1;
+        sendAppearance.Weight = 62.5F;
+        sendAppearance.Level = 37;
+        sendAppearance.Essential = true;
+        sendAppearance.HairColorId = BuildGameId(2, 0x2345);
+        sendAppearance.FaceTextureId = BuildGameId(3, 0x3456);
+        sendAppearance.HasFaceData = true;
+        for (std::size_t index = 0; index < sendAppearance.FaceMorphs.size(); ++index)
+            sendAppearance.FaceMorphs[index] = static_cast<float>(index) / 20.0F;
+        sendAppearance.FaceParts = {1, 2, 3, VRAppearance::kFacePartDefault};
+        constexpr std::string_view name{"VR Dragonborn"};
+        sendAppearance.NameLength = static_cast<std::uint8_t>(name.size());
+        std::copy(name.begin(), name.end(), sendAppearance.Name.begin());
+        sendAppearance.HeadPartCount = 1;
+        sendAppearance.HeadParts[0] = {2, BuildGameId(4, 0x4567)};
+        sendAppearance.TintCount = 2;
+        sendAppearance.Tints[0] = {6, 0x112233, 1.0F};
+        SetTintTexturePath(sendAppearance.Tints[0], "textures/actors/character/overlays/warpaint.dds");
+        sendAppearance.Tints[1] = {6, 0x445566, 0.5F};
+        REQUIRE(sendAppearance.IsValid());
+
+        Buffer::Writer writer(&buff);
+        sendAppearance.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        recvAppearance.Deserialize(reader);
+
+        REQUIRE(recvAppearance.IsValid());
+        REQUIRE(sendAppearance == recvAppearance);
+
+        auto invalidAppearance = sendAppearance;
+        invalidAppearance.SchemaVersion = 1;
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        invalidAppearance.Tints[0].Type = 15;
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        invalidAppearance.Tints[0].Alpha = 1.1F;
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        SetTintTexturePath(invalidAppearance.Tints[0], "/textures/warpaint.dds");
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures/../warpaint.dds");
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures//warpaint.dds");
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures:warpaint.dds");
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        invalidAppearance.Tints[0].TexturePathLength = 3;
+        invalidAppearance.Tints[0].TexturePath[0] = 'a';
+        invalidAppearance.Tints[0].TexturePath[1] = '\0';
+        invalidAppearance.Tints[0].TexturePath[2] = 'b';
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        invalidAppearance.Tints[0].TexturePathLength = 1;
+        invalidAppearance.Tints[0].TexturePath[0] = static_cast<char>(0xC3);
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+
+        invalidAppearance = sendAppearance;
+        invalidAppearance.Tints[0].TexturePath[invalidAppearance.Tints[0].TexturePathLength] = 'x';
+        REQUIRE_FALSE(invalidAppearance.IsValid());
+    }
+
+    SECTION("CharacterSpawnRequest preserves a semantic NPC appearance")
+    {
+        Buffer buff(4096);
+        CharacterSpawnRequest sendMessage, recvMessage;
+        sendMessage.ServerId = 0x4567;
+        sendMessage.FormId = BuildGameId(1, 0x1234);
+        sendMessage.BaseId = BuildGameId(1, 0x2345);
+        sendMessage.CellId = BuildGameId(1, 0x3456);
+        sendMessage.IsPlayer = false;
+        sendMessage.HasVRAppearance = true;
+        sendMessage.InitialVRAppearance = BuildMinimalVRAppearance();
+        REQUIRE(sendMessage.InitialVRAppearance.IsValid());
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        std::uint64_t opcode{};
+        reader.ReadBits(opcode, 8);
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(recvMessage.IsDecodedValid);
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("VRAppearance consumes oversized bounded fields")
+    {
+        {
+            Buffer buff(4096);
+            Buffer::Writer writer(&buff);
+            WriteVRAppearancePrefix(writer);
+            writer.WriteBits(128, 8);
+            for (std::uint8_t index = 0; index < 128; ++index)
+                writer.WriteBits('a', 8);
+            writer.WriteBits(0, 8);
+            writer.WriteBits(0, 8);
+            writer.WriteBits(0xA5, 8);
+
+            Buffer::Reader reader(&buff);
+            VRAppearance appearance;
+            appearance.Deserialize(reader);
+            std::uint64_t sentinel{};
+            reader.ReadBits(sentinel, 8);
+            REQUIRE_FALSE(appearance.IsValid());
+            REQUIRE(sentinel == 0xA5);
+        }
+
+        {
+            Buffer buff(4096);
+            Buffer::Writer writer(&buff);
+            WriteVRAppearancePrefix(writer);
+            writer.WriteBits(0, 8);
+            writer.WriteBits(0, 8);
+            writer.WriteBits(VRAppearance::kMaximumTints + 1, 8);
+            for (std::uint8_t index = 0; index <= VRAppearance::kMaximumTints; ++index)
+            {
+                writer.WriteBits(0, 8);
+                writer.WriteBits(0, 32);
+                writer.WriteBits(0, 32);
+                writer.WriteBits(0, 8);
+            }
+            writer.WriteBits(0xA5, 8);
+
+            Buffer::Reader reader(&buff);
+            VRAppearance appearance;
+            appearance.Deserialize(reader);
+            std::uint64_t sentinel{};
+            reader.ReadBits(sentinel, 8);
+            REQUIRE_FALSE(appearance.IsValid());
+            REQUIRE(sentinel == 0xA5);
+        }
     }
 
     SECTION("CancelAssignmentRequest")
@@ -1364,15 +1560,15 @@ TEST_CASE("Packets", "[encoding.packets]")
         Buffer buff(1000);
 
         ActionEvent sendAction;
-        sendAction.ActionId = 42;
+        sendAction.ActionId = BuildGameId(1, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = BuildGameId(2, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = BuildGameId(3, 963741);
         sendAction.Type = 4;
 
         AssignCharacterRequest sendMessage, recvMessage;
@@ -1402,6 +1598,69 @@ TEST_CASE("Packets", "[encoding.packets]")
         recvMessage.DeserializeRaw(reader);
 
         REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("AssignObjectsRequest and response preserve bounded object state")
+    {
+        ObjectData object{};
+        object.Id = BuildGameId(1, 0x1234);
+        object.CellId = BuildGameId(1, 0x5678);
+        object.WorldSpaceId = BuildGameId(1, 0x9ABC);
+        object.CurrentCoords = GridCellCoords{4, -7};
+        object.CurrentLockData.IsLocked = true;
+        object.CurrentLockData.LockLevel = 50;
+        Inventory::Entry entry{};
+        entry.BaseId = BuildGameId(1, 0xF);
+        entry.Count = 25;
+        object.CurrentInventory.Entries.push_back(entry);
+
+        AssignObjectsRequest sendRequest{};
+        sendRequest.Objects.push_back(object);
+        Buffer requestBuffer(4096);
+        Buffer::Writer requestWriter(&requestBuffer);
+        sendRequest.Serialize(requestWriter);
+        Buffer::Reader requestReader(&requestBuffer);
+        std::uint64_t opcode{};
+        requestReader.ReadBits(opcode, 8);
+        AssignObjectsRequest receivedRequest{};
+        receivedRequest.DeserializeRaw(requestReader);
+        REQUIRE(receivedRequest.IsDecodedValid);
+        REQUIRE(sendRequest == receivedRequest);
+
+        object.ServerId = 42;
+        object.IsSenderFirst = false;
+        AssignObjectsResponse sendResponse{};
+        sendResponse.Objects.push_back(object);
+        Buffer responseBuffer(4096);
+        Buffer::Writer responseWriter(&responseBuffer);
+        sendResponse.Serialize(responseWriter);
+        Buffer::Reader responseReader(&responseBuffer);
+        responseReader.ReadBits(opcode, 8);
+        AssignObjectsResponse receivedResponse{};
+        receivedResponse.DeserializeRaw(responseReader);
+        REQUIRE(receivedResponse.IsDecodedValid);
+        REQUIRE(sendResponse == receivedResponse);
+    }
+
+    SECTION("AssignObjectsRequest rejects an oversized nested inventory")
+    {
+        AssignObjectsRequest sendMessage{};
+        ObjectData object{};
+        object.Id = BuildGameId(1, 0x1234);
+        object.CellId = BuildGameId(1, 0x5678);
+        object.CurrentInventory.Entries.resize(Inventory::kMaximumWireEntries + 1);
+        sendMessage.Objects.push_back(std::move(object));
+
+        Buffer buffer(2 * 1024 * 1024);
+        Buffer::Writer writer(&buffer);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        std::uint64_t opcode{};
+        reader.ReadBits(opcode, 8);
+        AssignObjectsRequest received{};
+        received.DeserializeRaw(reader);
+        REQUIRE_FALSE(received.IsDecodedValid);
+        REQUIRE(received.Objects.empty());
     }
 
     GIVEN("ClientReferencesMoveRequest")

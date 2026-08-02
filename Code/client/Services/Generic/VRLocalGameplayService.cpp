@@ -17,6 +17,7 @@
 #include <Messages/RequestHealthChangeBroadcast.h>
 #include <Messages/RequestQuestUpdate.h>
 #include <Messages/RequestVRAppearance.h>
+#include <Messages/RequestVRGrabEvent.h>
 #include <Messages/RemoveSpellRequest.h>
 #include <Messages/PlayerLevelRequest.h>
 #include <Messages/ProjectileLaunchRequest.h>
@@ -55,12 +56,22 @@ constexpr std::uint32_t kGoldFormId = 0xF;
 constexpr std::uint32_t kHealthActorValue = 24;
 constexpr float kMaximumActorValueMagnitude = 1'000'000.0F;
 constexpr float kMaximumNetworkPosition = static_cast<float>((1 << 20) - 1);
+constexpr std::uint32_t kMagicEffectAreaTarget = 1u << 0;
+constexpr std::uint32_t kMagicEffectDualCasted = 1u << 1;
+constexpr std::uint32_t kMagicEffectHostile = 1u << 2;
+constexpr std::uint32_t kMagicEffectApplyHealPerkBonus = 1u << 3;
+constexpr std::uint32_t kMagicEffectApplyStaminaPerkBonus = 1u << 4;
+constexpr std::uint32_t kMagicEffectKnownFlags = kMagicEffectAreaTarget | kMagicEffectDualCasted |
+                                                  kMagicEffectHostile | kMagicEffectApplyHealPerkBonus |
+                                                  kMagicEffectApplyStaminaPerkBonus;
 constexpr std::size_t kMaximumPendingObjectSnapshots = 512;
-constexpr std::size_t kMaximumObjectSnapshotEntries = 512;
+constexpr std::uint32_t kMaximumObjectSnapshotItems = 512;
+constexpr std::uint32_t kMaximumObjectSnapshotEffects = 512;
+constexpr double kObjectSnapshotLifetime = 10.0;
 constexpr std::size_t kMaximumWornEquipmentEntries = 64;
 constexpr double kInventoryDeltaSuppressionLifetime = 5.0;
 constexpr std::size_t kMaximumPendingStatefulSends = 256;
-constexpr std::size_t kMaximumPendingInventoryDeltas = 256;
+constexpr std::size_t kMaximumPendingInventoryDeltas = GameplayBridge::kMaximumInventoryTransactionItems;
 constexpr std::uint64_t kAppearanceSendCoalesceKey = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kEquipmentSendCoalesceKey = kAppearanceSendCoalesceKey - 1;
 constexpr std::uint64_t kPlayerLevelSendCoalesceKey = kAppearanceSendCoalesceKey - 2;
@@ -104,7 +115,7 @@ constexpr std::uint64_t kPlayerLevelSendCoalesceKey = kAppearanceSendCoalesceKey
 template <class T>
 bool VRLocalGameplayService::SendStateful(T&& aRequest, const std::size_t aDomainIndex,
                                           const std::uint64_t aActionId, const bool aCoalesce,
-                                          const std::uint64_t aCoalesceKey) noexcept
+                                          const std::uint64_t aCoalesceKey) noexcept try
 {
     using Request = std::decay_t<T>;
     Request request{std::forward<T>(aRequest)};
@@ -122,6 +133,12 @@ bool VRLocalGameplayService::SendStateful(T&& aRequest, const std::size_t aDomai
             return true;
         },
         aCoalesce, aCoalesceKey);
+    return false;
+}
+catch (...)
+{
+    spdlog::error("VR local gameplay outbound staging failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
     return false;
 }
 
@@ -157,6 +174,27 @@ void VRLocalGameplayService::SetLocalServerId(const std::uint32_t aServerId) noe
     TryArmLocalCapture();
 }
 
+bool VRLocalGameplayService::SeedLocalAppearance(const VRAppearance& acAppearance) noexcept
+{
+    if (m_localServerId == 0 || !acAppearance.IsValid())
+        return false;
+    m_appearance = acAppearance;
+    m_appearanceDirty = false;
+    return true;
+}
+
+bool VRLocalGameplayService::IsCurrentBridgeRecord(
+    const GameplayBridge::MessageHeader& acHeader) const noexcept
+{
+    return SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
+        acHeader.Identity.ServerInstanceNonce != 0 &&
+        acHeader.Identity.ServerInstanceNonce == m_transport.GetServerInstanceNonce() &&
+        acHeader.Identity.ConnectionGeneration != 0 &&
+        acHeader.Identity.ConnectionGeneration == m_transport.GetConnectionGeneration() &&
+        acHeader.Identity.LifecycleEpoch != 0 &&
+        acHeader.Identity.LifecycleEpoch == SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+}
+
 void VRLocalGameplayService::ArmGoldInventoryDeltaSuppression(const std::int32_t aCount) noexcept
 {
     if (aCount >= 0 || aCount < -kMaximumInventoryDelta)
@@ -178,11 +216,19 @@ bool VRLocalGameplayService::HasGoldInventoryDeltaSuppression() const noexcept
     return m_pendingInventoryDeltaSuppression.Remaining > 0.0;
 }
 
-void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept
+void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
+    const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept try
 {
     const auto& record = acEvent.Record;
     if (!m_transport.IsOnline() || m_localServerId == 0)
         return;
+    if (!IsCurrentBridgeRecord(record.Header)) {
+        m_pendingObjectSnapshots.clear();
+        m_pendingInventoryTransactions.clear();
+        m_pendingEquipmentSnapshot = {};
+        m_nameAssembly = {};
+        return;
+    }
 
     if (record.Header.Kind == static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalProjectileLaunch))
     {
@@ -230,11 +276,17 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::
     const auto domain = static_cast<GameplayBridge::GameplayDomain>(payload.Domain);
     const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
     const bool objectSnapshot = domain == GameplayBridge::GameplayDomain::Object &&
-        action >= GameplayBridge::GameplayAction::ObjectSnapshotBegin &&
-        action <= GameplayBridge::GameplayAction::ObjectSnapshotEnd;
+        GameplayBridge::IsObjectSnapshotAction(action);
     if (objectSnapshot)
     {
         ApplyObjectSnapshot(record);
+        return;
+    }
+    const bool inventoryTransaction = domain == GameplayBridge::GameplayDomain::Inventory &&
+        GameplayBridge::IsInventoryTransactionAction(action);
+    if (inventoryTransaction)
+    {
+        ApplyInventoryTransaction(record);
         return;
     }
     const bool equipmentSnapshotAction = domain == GameplayBridge::GameplayDomain::Equipment &&
@@ -354,22 +406,22 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::
             payload.ScalarA < 0.0F || payload.ScalarA > kMaximumActorValueMagnitude ||
             !std::isfinite(payload.ScalarB) || payload.ScalarB < 0.0F ||
             payload.ScalarB > kMaximumActorValueMagnitude || payload.ScalarC != 0.0F ||
-            payload.ScalarD != 0.0F || (payload.ActionFlags & ~0x7u) != 0)
+            payload.ScalarD != 0.0F || (payload.ActionFlags & ~kMagicEffectKnownFlags) != 0)
             return;
 
         AddTargetRequest request{};
         request.TargetId = GetServerIdForLocalActor(payload.TargetLocalFormId);
         request.CasterId = payload.LocalFormIdC != 0 ? GetServerIdForLocalActor(payload.LocalFormIdC) : 0;
         if (request.TargetId == 0 || (payload.LocalFormIdC != 0 && request.CasterId == 0) ||
-            ((payload.ActionFlags & 0x4u) != 0 && request.TargetId != m_localServerId &&
+            ((payload.ActionFlags & kMagicEffectHostile) != 0 && request.TargetId != m_localServerId &&
              !m_world.GetServerSettings().PvpEnabled) ||
             !m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, request.SpellId) || !request.SpellId ||
             !m_world.GetModSystem().GetServerModId(payload.LocalFormIdB, request.EffectId) || !request.EffectId)
             return;
         request.Magnitude = payload.ScalarA;
-        request.IsDualCasting = (payload.ActionFlags & 0x2u) != 0;
-        request.ApplyHealPerkBonus = false;
-        request.ApplyStaminaPerkBonus = false;
+        request.IsDualCasting = (payload.ActionFlags & kMagicEffectDualCasted) != 0;
+        request.ApplyHealPerkBonus = (payload.ActionFlags & kMagicEffectApplyHealPerkBonus) != 0;
+        request.ApplyStaminaPerkBonus = (payload.ActionFlags & kMagicEffectApplyStaminaPerkBonus) != 0;
         TP_UNUSED(SendStateful(std::move(request), domainIndex, record.Header.Identity.ActionId, false, 0));
         return;
     }
@@ -434,6 +486,34 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::
                                static_cast<std::uint64_t>(action) << 32 | payload.LocalFormIdA));
         return;
     }
+    case GameplayBridge::GameplayAction::HiggsGrab:
+    case GameplayBridge::GameplayAction::HiggsDrop:
+    {
+        if (domain != GameplayBridge::GameplayDomain::Higgs || payload.LocalFormIdA == 0 ||
+            payload.LocalFormIdB == 0 || payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.ValueA > std::numeric_limits<std::uint8_t>::max() || payload.ValueB != 0 ||
+            payload.ScalarA < -kMaximumNetworkPosition || payload.ScalarA > kMaximumNetworkPosition ||
+            payload.ScalarB < -kMaximumNetworkPosition || payload.ScalarB > kMaximumNetworkPosition ||
+            payload.ScalarC < -kMaximumNetworkPosition || payload.ScalarC > kMaximumNetworkPosition ||
+            payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return;
+
+        RequestVRGrabEvent request{};
+        auto& grab = request.Grab;
+        grab.Sequence = ++m_vrGrabSequence;
+        if (grab.Sequence == 0)
+            grab.Sequence = ++m_vrGrabSequence;
+        if (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, grab.ObjectId) || !grab.ObjectId ||
+            !m_world.GetModSystem().GetServerModId(payload.LocalFormIdB, grab.CellId) || !grab.CellId ||
+            (payload.LocalFormIdC != 0 &&
+             (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdC, grab.WorldSpaceId) || !grab.WorldSpaceId)))
+            return;
+        grab.Position = glm::vec3{payload.ScalarA, payload.ScalarB, payload.ScalarC};
+        grab.FormType = static_cast<std::uint8_t>(payload.ValueA);
+        grab.Grabbed = action == GameplayBridge::GameplayAction::HiggsGrab;
+        TP_UNUSED(SendStateful(std::move(request), domainIndex, record.Header.Identity.ActionId, false, 0));
+        return;
+    }
     case GameplayBridge::GameplayAction::DrawWeapon:
     {
         if (domain != GameplayBridge::GameplayDomain::Animation || !IsKnownBoolean(payload.ValueA) ||
@@ -453,8 +533,11 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::
     case GameplayBridge::GameplayAction::SetActorValue:
     case GameplayBridge::GameplayAction::SetActorMaximum:
     {
-        if (domain != GameplayBridge::GameplayDomain::ActorState || payload.LocalFormIdA == 0 ||
-            !std::isfinite(payload.ScalarA) || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+        if (domain != GameplayBridge::GameplayDomain::ActorState ||
+            payload.LocalFormIdA >= GameplayBridge::kSkyrimActorValueCount ||
+            !std::isfinite(payload.ScalarA) ||
+            std::abs(payload.ScalarA) > kMaximumActorValueMagnitude ||
+            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
             payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
             payload.ScalarB != 0.0F || payload.ScalarC != 0.0F || payload.ScalarD != 0.0F ||
             payload.ActionFlags != 0)
@@ -608,6 +691,11 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(const SkyrimTogetherVR::
         return;
     }
 }
+catch (...)
+{
+    spdlog::error("VR local gameplay event processing failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
 bool VRLocalGameplayService::ApplyAppearanceAction(const GameplayBridge::EventRecord& acRecord) noexcept
 {
@@ -640,6 +728,50 @@ bool VRLocalGameplayService::ApplyAppearanceAction(const GameplayBridge::EventRe
             return false;
         m_appearance.Weight = payload.ScalarA;
         break;
+    case GameplayBridge::GameplayAction::SetHairColor:
+    case GameplayBridge::GameplayAction::SetFaceTexture:
+        if (payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.ValueA != 0 || payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0 ||
+            (payload.LocalFormIdA != 0 &&
+             (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, gameId) || !gameId)))
+            return false;
+        if (action == GameplayBridge::GameplayAction::SetHairColor)
+            m_appearance.HairColorId = gameId;
+        else
+            m_appearance.FaceTextureId = gameId;
+        break;
+    case GameplayBridge::GameplayAction::SetFaceMorph:
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 || payload.ValueA >= VRAppearance::kFaceMorphCount ||
+            payload.ValueB != 0 || !std::isfinite(payload.ScalarA) ||
+            std::abs(payload.ScalarA) > VRAppearance::kMaximumFaceMorphMagnitude || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return false;
+        m_appearance.HasFaceData = true;
+        m_appearance.FaceMorphs[static_cast<std::size_t>(payload.ValueA)] = payload.ScalarA;
+        break;
+    case GameplayBridge::GameplayAction::SetFacePart:
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA < 0 || payload.ValueA >= VRAppearance::kFacePartCount ||
+            (payload.ValueB != VRAppearance::kFacePartDefault &&
+             (payload.ValueB < 0 || payload.ValueB > VRAppearance::kMaximumFacePartPreset)) ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return false;
+        m_appearance.HasFaceData = true;
+        m_appearance.FaceParts[static_cast<std::size_t>(payload.ValueA)] = payload.ValueB;
+        break;
+    case GameplayBridge::GameplayAction::ResetFaceData:
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 || payload.ScalarA != 0.0F ||
+            payload.ScalarB != 0.0F || payload.ScalarC != 0.0F || payload.ScalarD != 0.0F ||
+            payload.ActionFlags != 0)
+            return false;
+        m_appearance.HasFaceData = false;
+        m_appearance.FaceMorphs = {};
+        m_appearance.FaceParts = {};
+        break;
     case GameplayBridge::GameplayAction::SetHeadPart:
     {
         if (payload.ValueA < 0 || payload.ValueA >= VRAppearance::kMaximumHeadParts || payload.LocalFormIdA == 0 ||
@@ -654,7 +786,9 @@ bool VRLocalGameplayService::ApplyAppearanceAction(const GameplayBridge::EventRe
             if (m_appearance.HeadParts[index].Slot == slot)
             {
                 m_appearance.HeadParts[index].FormId = gameId;
-                return PublishAppearance(payload.Domain, acRecord.Header.Identity.ActionId);
+                m_appearanceDirty = true;
+                MarkActionAccepted(payload.Domain, acRecord.Header.Identity.ActionId);
+                return true;
             }
         }
         if (count >= VRAppearance::kMaximumHeadParts)
@@ -663,26 +797,48 @@ bool VRLocalGameplayService::ApplyAppearanceAction(const GameplayBridge::EventRe
         ++m_appearance.HeadPartCount;
         break;
     }
+    case GameplayBridge::GameplayAction::ClearHeadPart:
+    {
+        if (payload.ValueA < 0 || payload.ValueA >= VRAppearance::kMaximumHeadParts || payload.LocalFormIdA != 0 ||
+            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return false;
+        const auto slot = static_cast<std::uint8_t>(payload.ValueA);
+        for (std::uint8_t index = 0; index < m_appearance.HeadPartCount; ++index) {
+            if (m_appearance.HeadParts[index].Slot != slot)
+                continue;
+            for (std::uint8_t next = static_cast<std::uint8_t>(index + 1);
+                 next < m_appearance.HeadPartCount; ++next)
+                m_appearance.HeadParts[next - 1] = m_appearance.HeadParts[next];
+            --m_appearance.HeadPartCount;
+            m_appearance.HeadParts[m_appearance.HeadPartCount] = {};
+            break;
+        }
+        break;
+    }
+    case GameplayBridge::GameplayAction::ResetTints:
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return false;
+        m_appearance.TintCount = 0;
+        m_appearance.Tints = {};
+        break;
     case GameplayBridge::GameplayAction::SetTint:
     {
-        if (payload.ValueA != static_cast<std::int32_t>(GameplayBridge::kSupportedSkinTintType) || payload.LocalFormIdA != 0 ||
-            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueB != 0 || !std::isfinite(payload.ScalarA) ||
+        if (payload.ValueA < 0 || payload.ValueA >= VRAppearance::kMaximumTints || payload.LocalFormIdA != 0 ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueB < 0 || payload.ValueB >= 15 ||
+            !std::isfinite(payload.ScalarA) ||
             payload.ScalarA < 0.0F || payload.ScalarA > 1.0F || payload.ScalarB != 0.0F ||
             payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
             return false;
-        const auto type = static_cast<std::uint8_t>(payload.ValueA);
-        auto count = m_appearance.TintCount;
-        for (std::uint8_t index = 0; index < count; ++index)
-        {
-            if (m_appearance.Tints[index].Type == type)
-            {
-                m_appearance.Tints[index] = {type, payload.LocalFormIdB, payload.ScalarA};
-                return PublishAppearance(payload.Domain, acRecord.Header.Identity.ActionId);
-            }
-        }
-        if (count >= VRAppearance::kMaximumTints)
+        const auto index = static_cast<std::uint8_t>(payload.ValueA);
+        if (index != m_appearance.TintCount)
             return false;
-        m_appearance.Tints[count] = {type, payload.LocalFormIdB, payload.ScalarA};
+        m_appearance.Tints[index] = {
+            static_cast<std::uint8_t>(payload.ValueB), payload.LocalFormIdB, payload.ScalarA};
         ++m_appearance.TintCount;
         break;
     }
@@ -727,26 +883,49 @@ bool VRLocalGameplayService::ApplyAppearanceAction(const GameplayBridge::EventRe
             return false;
         m_appearance.Essential = payload.ValueA != 0;
         break;
+    case GameplayBridge::GameplayAction::CommitAppearance:
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return false;
+        if (!m_appearanceDirty) {
+            MarkActionAccepted(payload.Domain, acRecord.Header.Identity.ActionId);
+            return true;
+        }
+        if (!PublishAppearance(payload.Domain, acRecord.Header.Identity.ActionId))
+            return false;
+        m_appearanceDirty = false;
+        return true;
     default:
         return false;
     }
 
-    return PublishAppearance(payload.Domain, acRecord.Header.Identity.ActionId);
+    m_appearanceDirty = true;
+    MarkActionAccepted(payload.Domain, acRecord.Header.Identity.ActionId);
+    return true;
 }
 
 bool VRLocalGameplayService::AcceptAppearanceText(const GameplayBridge::EventRecord& acRecord) const noexcept
 {
     const auto& header = acRecord.Header;
     const auto& payload = acRecord.Payload.LocalGameplayTextChunk;
-    return header.Kind == static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayTextChunk) &&
+    const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
+    const bool name = action == GameplayBridge::GameplayAction::SetName && payload.Reserved0 == 0 &&
+                      payload.AuxiliaryLocalFormId == 0 && payload.ChunkCount <= 3;
+    const bool tintPath = action == GameplayBridge::GameplayAction::SetTint &&
+                          payload.Reserved0 == GameplayBridge::kGameplayTextAppearanceDeferred &&
+                          payload.AuxiliaryLocalFormId >= 1 &&
+                          payload.AuxiliaryLocalFormId <= VRAppearance::kMaximumTints &&
+                          payload.ChunkCount <= 6;
+    return IsCurrentBridgeRecord(header) &&
+           header.Kind == static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayTextChunk) &&
            header.PayloadSize == GameplayBridge::kFixedPayloadBytes && header.Flags == 0 &&
            header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 && header.Identity.SequenceId == 0 &&
            header.Identity.ActionId != 0 && payload.TargetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value &&
            payload.TargetLocalFormId != 0 && payload.Domain == static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::Appearance) &&
-           payload.Action == static_cast<std::uint16_t>(GameplayBridge::GameplayAction::SetName) && payload.TextId != 0 &&
-           payload.ChunkCount != 0 && payload.ChunkCount <= 3 && payload.ChunkIndex < payload.ChunkCount &&
-           payload.ByteCount <= GameplayBridge::kGameplayTextBytesPerChunk && payload.Reserved0 == 0 &&
-           payload.AuxiliaryLocalFormId == 0;
+           (name || tintPath) && payload.TextId != 0 && payload.ChunkCount != 0 &&
+           payload.ChunkIndex < payload.ChunkCount && payload.ByteCount <= GameplayBridge::kGameplayTextBytesPerChunk;
 }
 
 bool VRLocalGameplayService::ApplyAppearanceText(const GameplayBridge::EventRecord& acRecord) noexcept
@@ -758,8 +937,15 @@ bool VRLocalGameplayService::ApplyAppearanceText(const GameplayBridge::EventReco
         acRecord.Header.Identity.ActionId <= m_lastActionIdByDomain[static_cast<std::size_t>(GameplayBridge::GameplayDomain::Appearance)])
         return false;
 
-    if (m_nameAssembly.TextId != payload.TextId || m_nameAssembly.ChunkCount != payload.ChunkCount)
-        m_nameAssembly = {payload.TextId, payload.ChunkCount};
+    if (m_nameAssembly.TextId != payload.TextId || m_nameAssembly.ChunkCount != payload.ChunkCount ||
+        m_nameAssembly.Action != payload.Action ||
+        m_nameAssembly.AuxiliaryLocalFormId != payload.AuxiliaryLocalFormId) {
+        m_nameAssembly = {};
+        m_nameAssembly.TextId = payload.TextId;
+        m_nameAssembly.ChunkCount = payload.ChunkCount;
+        m_nameAssembly.Action = payload.Action;
+        m_nameAssembly.AuxiliaryLocalFormId = payload.AuxiliaryLocalFormId;
+    }
     const auto offset = static_cast<std::size_t>(payload.ChunkIndex) * GameplayBridge::kGameplayTextBytesPerChunk;
     std::memcpy(m_nameAssembly.Bytes.data() + offset, payload.Utf8Bytes, payload.ByteCount);
     m_nameAssembly.Lengths[payload.ChunkIndex] = payload.ByteCount;
@@ -776,13 +962,26 @@ bool VRLocalGameplayService::ApplyAppearanceText(const GameplayBridge::EventReco
             return false;
         nameLength += m_nameAssembly.Lengths[index];
     }
-    if (nameLength > VRAppearance::kMaximumNameBytes)
-        return false;
-    m_appearance.Name = {};
-    std::memcpy(m_appearance.Name.data(), m_nameAssembly.Bytes.data(), nameLength);
-    m_appearance.NameLength = static_cast<std::uint8_t>(nameLength);
-    return PublishAppearance(static_cast<std::size_t>(GameplayBridge::GameplayDomain::Appearance),
-                             acRecord.Header.Identity.ActionId);
+    const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
+    if (action == GameplayBridge::GameplayAction::SetName) {
+        if (nameLength == 0 || nameLength > VRAppearance::kMaximumNameBytes)
+            return false;
+        m_appearance.Name = {};
+        std::memcpy(m_appearance.Name.data(), m_nameAssembly.Bytes.data(), nameLength);
+        m_appearance.NameLength = static_cast<std::uint8_t>(nameLength);
+    } else {
+        if (nameLength == 0 || nameLength > VRAppearanceTint::kMaximumTexturePathBytes ||
+            payload.AuxiliaryLocalFormId == 0 || payload.AuxiliaryLocalFormId > m_appearance.TintCount)
+            return false;
+        auto& tint = m_appearance.Tints[payload.AuxiliaryLocalFormId - 1];
+        tint.TexturePath = {};
+        std::memcpy(tint.TexturePath.data(), m_nameAssembly.Bytes.data(), nameLength);
+        tint.TexturePathLength = static_cast<std::uint8_t>(nameLength);
+    }
+    m_appearanceDirty = true;
+    MarkActionAccepted(static_cast<std::size_t>(GameplayBridge::GameplayDomain::Appearance),
+                       acRecord.Header.Identity.ActionId);
+    return true;
 }
 
 bool VRLocalGameplayService::PublishAppearance(const std::size_t aDomainIndex,
@@ -800,7 +999,198 @@ bool VRLocalGameplayService::PublishAppearance(const std::size_t aDomainIndex,
     return SendStateful(std::move(request), aDomainIndex, aActionId, true, kAppearanceSendCoalesceKey);
 }
 
-bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventRecord& acRecord) noexcept
+bool VRLocalGameplayService::ApplyInventoryTransaction(const GameplayBridge::EventRecord& acRecord) noexcept try
+{
+    const auto& header = acRecord.Header;
+    const auto& payload = acRecord.Payload.LocalGameplayAction;
+    const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
+    const auto ownerFormId = payload.TargetLocalFormId;
+    const auto reject = [this, ownerFormId]() {
+        m_pendingInventoryTransactions.erase(ownerFormId);
+        return false;
+    };
+    const auto sameTransaction = [&header](const PendingInventoryTransaction& acPending) {
+        return acPending.ActionId == header.Identity.ActionId &&
+               acPending.ServerInstanceNonce == header.Identity.ServerInstanceNonce &&
+               acPending.ConnectionGeneration == header.Identity.ConnectionGeneration &&
+               acPending.LifecycleEpoch == header.Identity.LifecycleEpoch;
+    };
+
+    if (action == GameplayBridge::GameplayAction::InventoryTransactionBegin) {
+        if (payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA <= 0 ||
+            payload.ValueA > static_cast<std::int32_t>(GameplayBridge::kMaximumInventoryTransactionItems) ||
+            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return reject();
+        const auto serverId = GetServerIdForLocalInventoryOwner(ownerFormId);
+        if (serverId == 0)
+            return reject();
+        if (const auto existing = m_pendingInventoryTransactions.find(ownerFormId);
+            existing != m_pendingInventoryTransactions.end()) {
+            if (sameTransaction(existing->second))
+                return reject();
+            if (existing->second.ActionId > header.Identity.ActionId)
+                return false;
+            m_pendingInventoryTransactions.erase(existing);
+        }
+        if (m_pendingInventoryTransactions.size() >= kMaximumPendingObjectSnapshots)
+            return false;
+        PendingInventoryTransaction pending{};
+        pending.ActionId = header.Identity.ActionId;
+        pending.ServerInstanceNonce = header.Identity.ServerInstanceNonce;
+        pending.ConnectionGeneration = header.Identity.ConnectionGeneration;
+        pending.LifecycleEpoch = header.Identity.LifecycleEpoch;
+        pending.ServerId = serverId;
+        pending.ExpectedItems = static_cast<std::uint16_t>(payload.ValueA);
+        pending.Items.reserve(pending.ExpectedItems);
+        pending.Drops.reserve(pending.ExpectedItems);
+        pending.Suppressed.reserve(pending.ExpectedItems);
+        m_pendingInventoryTransactions.insert_or_assign(ownerFormId, std::move(pending));
+        return true;
+    }
+
+    const auto pending = m_pendingInventoryTransactions.find(ownerFormId);
+    if (pending == m_pendingInventoryTransactions.end() || !sameTransaction(pending->second))
+        return reject();
+    auto& transaction = pending->second;
+    const auto mapRequired = [this](const std::uint32_t aLocalId, GameId& arId) {
+        return aLocalId != 0 && m_world.GetModSystem().GetServerModId(aLocalId, arId) && static_cast<bool>(arId);
+    };
+    const auto mapOptional = [this](const std::uint32_t aLocalId, GameId& arId) {
+        return aLocalId == 0 ||
+               (m_world.GetModSystem().GetServerModId(aLocalId, arId) && static_cast<bool>(arId));
+    };
+    switch (action) {
+    case GameplayBridge::GameplayAction::InventoryTransactionItem:
+    {
+        if (transaction.Items.size() >= transaction.ExpectedItems ||
+            (transaction.Items.size() != 0 &&
+             (!transaction.HasOpenItemExtra || transaction.EffectsRemaining != 0)) ||
+            payload.LocalFormIdA == 0 || payload.LocalFormIdB != transaction.ExpectedItems ||
+            payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA == 0 ||
+            payload.ValueA < -kMaximumInventoryDelta || payload.ValueA > kMaximumInventoryDelta ||
+            payload.ValueB != static_cast<std::int32_t>(transaction.Items.size()) ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F ||
+            (payload.ActionFlags & ~GameplayBridge::kInventoryTransactionItemWireKnownFlags) != 0 ||
+            ((payload.ActionFlags & GameplayBridge::kInventoryDrop) != 0 && payload.ValueA >= 0))
+            return reject();
+        Inventory::Entry item{};
+        if (!mapRequired(payload.LocalFormIdA, item.BaseId))
+            return reject();
+        item.Count = payload.ValueA;
+        item.IsQuestItem = (payload.ActionFlags & GameplayBridge::kInventoryTransactionQuestItem) != 0;
+        item.ExtraWorn = (payload.ActionFlags & GameplayBridge::kInventoryTransactionWorn) != 0;
+        item.ExtraWornLeft = (payload.ActionFlags & GameplayBridge::kInventoryTransactionWornLeft) != 0;
+        item.EquipmentFlags =
+            ((payload.ActionFlags & GameplayBridge::kInventoryTransactionWeapon) != 0 ?
+                 Inventory::Entry::kEquipmentWeapon : 0u) |
+            ((payload.ActionFlags & GameplayBridge::kInventoryTransactionAmmo) != 0 ?
+                 Inventory::Entry::kEquipmentAmmo : 0u);
+        transaction.Items.push_back(std::move(item));
+        transaction.Drops.push_back((payload.ActionFlags & GameplayBridge::kInventoryDrop) != 0);
+        transaction.Suppressed.push_back(ConsumeInventoryDeltaSuppression(payload));
+        transaction.OpenItemIndex = transaction.Items.size() - 1;
+        transaction.HasOpenItemExtra = false;
+        return true;
+    }
+    case GameplayBridge::GameplayAction::InventoryTransactionItemExtra:
+    {
+        if (transaction.Items.empty() || transaction.HasOpenItemExtra ||
+            transaction.OpenItemIndex != transaction.Items.size() - 1 || payload.LocalFormIdC > 5 ||
+            payload.LocalFormIdD > GameplayBridge::kMaximumInventoryTransactionEffects ||
+            payload.ValueA < 0 || payload.ValueA > std::numeric_limits<std::uint16_t>::max() ||
+            payload.ValueB < 0 || !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) ||
+            payload.ScalarA < 0.0F || payload.ScalarA > Inventory::Entry::kMaximumMutationScalarMagnitude ||
+            payload.ScalarB < 0.0F || payload.ScalarB > Inventory::Entry::kMaximumMutationScalarMagnitude ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F ||
+            (payload.ActionFlags & ~GameplayBridge::kInventoryTransactionExtraKnownFlags) != 0 ||
+            (payload.LocalFormIdA == 0 &&
+             (payload.ValueA != 0 || payload.LocalFormIdD != 0 || payload.ActionFlags != 0)) ||
+            ((payload.LocalFormIdB == 0) != (payload.ValueB == 0)) ||
+            transaction.TotalEffects > GameplayBridge::kMaximumInventoryTransactionEffects - payload.LocalFormIdD)
+            return reject();
+        auto& item = transaction.Items[transaction.OpenItemIndex];
+        if (!mapOptional(payload.LocalFormIdA, item.ExtraEnchantId) ||
+            !mapOptional(payload.LocalFormIdB, item.ExtraPoisonId))
+            return reject();
+        item.ExtraSoulLevel = static_cast<std::int32_t>(payload.LocalFormIdC);
+        item.ExtraEnchantCharge = static_cast<std::uint16_t>(payload.ValueA);
+        item.ExtraPoisonCount = static_cast<std::uint32_t>(payload.ValueB);
+        item.ExtraCharge = payload.ScalarA;
+        item.ExtraHealth = payload.ScalarB;
+        item.ExtraEnchantRemoveUnequip =
+            (payload.ActionFlags & GameplayBridge::kInventoryTransactionEnchantRemoveUnequip) != 0;
+        item.EnchantData.IsWeapon =
+            (payload.ActionFlags & GameplayBridge::kInventoryTransactionEnchantIsWeapon) != 0;
+        transaction.EffectsRemaining = payload.LocalFormIdD;
+        transaction.TotalEffects += payload.LocalFormIdD;
+        transaction.HasOpenItemExtra = true;
+        return true;
+    }
+    case GameplayBridge::GameplayAction::InventoryTransactionItemEffect:
+    {
+        if (transaction.Items.empty() || !transaction.HasOpenItemExtra ||
+            transaction.EffectsRemaining == 0 || payload.LocalFormIdA == 0 ||
+            payload.LocalFormIdB != transaction.OpenItemIndex ||
+            payload.LocalFormIdC != transaction.Items[transaction.OpenItemIndex].EnchantData.Effects.size() ||
+            payload.LocalFormIdD != transaction.Items[transaction.OpenItemIndex].EnchantData.Effects.size() +
+                transaction.EffectsRemaining || payload.ValueA < 0 || payload.ValueB < 0 ||
+            !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) ||
+            std::abs(payload.ScalarA) > Inventory::Entry::kMaximumMutationScalarMagnitude ||
+            payload.ScalarB < 0.0F || payload.ScalarB > Inventory::Entry::kMaximumMutationScalarMagnitude ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return reject();
+        Inventory::EffectItem effect{};
+        if (!mapRequired(payload.LocalFormIdA, effect.EffectId))
+            return reject();
+        effect.Area = payload.ValueA;
+        effect.Duration = payload.ValueB;
+        effect.Magnitude = payload.ScalarA;
+        effect.RawCost = payload.ScalarB;
+        transaction.Items[transaction.OpenItemIndex].EnchantData.Effects.push_back(std::move(effect));
+        --transaction.EffectsRemaining;
+        return true;
+    }
+    case GameplayBridge::GameplayAction::InventoryTransactionEnd:
+        if (transaction.Items.size() != transaction.ExpectedItems || transaction.Items.empty() ||
+            !transaction.HasOpenItemExtra || transaction.EffectsRemaining != 0 ||
+            payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return reject();
+        bool queuedAny{};
+        for (std::size_t index = 0; index < transaction.Items.size(); ++index) {
+            if (!transaction.Items[index].IsValidMutation())
+                return reject();
+            if (!transaction.Suppressed[index]) {
+                queuedAny = true;
+                QueuePendingInventoryChange(transaction.ServerId, std::move(transaction.Items[index]),
+                                            transaction.Drops[index],
+                                            static_cast<std::size_t>(GameplayBridge::GameplayDomain::Inventory),
+                                            header.Identity.ActionId);
+            }
+        }
+        if (!queuedAny)
+            MarkActionAccepted(static_cast<std::size_t>(GameplayBridge::GameplayDomain::Inventory),
+                               header.Identity.ActionId);
+        m_pendingInventoryTransactions.erase(pending);
+        return true;
+    default:
+        return reject();
+    }
+}
+catch (...)
+{
+    m_pendingInventoryTransactions.erase(acRecord.Payload.LocalGameplayAction.TargetLocalFormId);
+    spdlog::error("VR inventory transaction assembly failed; rebasing the gameplay epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    return false;
+}
+
+bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventRecord& acRecord) noexcept try
 {
     const auto& payload = acRecord.Payload.LocalGameplayAction;
     const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
@@ -813,15 +1203,21 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
     if (action == GameplayBridge::GameplayAction::ObjectSnapshotBegin)
     {
         if (payload.TargetHandle.Value != 0 || payload.TargetLocalFormId == 0 || payload.SecondaryHandle.Value != 0 ||
-            payload.LocalFormIdA == 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.LocalFormIdA == 0 ||
+            payload.LocalFormIdC > kMaximumObjectSnapshotItems ||
+            payload.LocalFormIdD != 0 ||
             payload.ValueA < 0 || payload.ValueA > 2 || payload.ValueB < -1 || payload.ValueB > 255 ||
             payload.ScalarA < -kMaximumNetworkPosition || payload.ScalarA > kMaximumNetworkPosition ||
             payload.ScalarB < -kMaximumNetworkPosition || payload.ScalarB > kMaximumNetworkPosition ||
             payload.ScalarC < -kMaximumNetworkPosition || payload.ScalarC > kMaximumNetworkPosition ||
             payload.ScalarD != 0.0F ||
             (payload.ActionFlags & ~(GameplayBridge::kObjectSnapshotContainer |
-                                     GameplayBridge::kObjectSnapshotPlayerHome)) != 0)
+                                     GameplayBridge::kObjectSnapshotPlayerHome)) != 0 ||
+            ((payload.ActionFlags & GameplayBridge::kObjectSnapshotContainer) == 0 &&
+             payload.LocalFormIdC != 0)) {
+            m_pendingObjectSnapshots.erase(payload.TargetLocalFormId);
             return false;
+        }
 
         auto existing = m_pendingObjectSnapshots.find(payload.TargetLocalFormId);
         if (existing == m_pendingObjectSnapshots.end() &&
@@ -829,6 +1225,10 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
             return false;
 
         PendingObjectSnapshot pending{};
+        pending.ActionId = acRecord.Header.Identity.ActionId;
+        pending.ExpectedItems = payload.LocalFormIdC;
+        pending.IsContainer =
+            (payload.ActionFlags & GameplayBridge::kObjectSnapshotContainer) != 0;
         pending.Ignore = (payload.ActionFlags & GameplayBridge::kObjectSnapshotPlayerHome) != 0 &&
                          !m_world.GetServerSettings().SyncPlayerHomes;
         if (!pending.Ignore)
@@ -852,36 +1252,145 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
     auto pending = m_pendingObjectSnapshots.find(payload.TargetLocalFormId);
     if (pending == m_pendingObjectSnapshots.end())
         return false;
+    const auto rejectPending = [&]() {
+        m_pendingObjectSnapshots.erase(pending);
+        return false;
+    };
 
     if (action == GameplayBridge::GameplayAction::ObjectSnapshotItem)
     {
-        if (payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 || payload.LocalFormIdA == 0 ||
-            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
-            payload.ValueA <= 0 || payload.ValueA > kMaximumInventoryDelta || payload.ValueB != 0 ||
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapInventoryQuestItem |
+            GameplayBridge::kAssignmentBootstrapInventoryWorn |
+            GameplayBridge::kAssignmentBootstrapInventoryWornLeft |
+            GameplayBridge::kAssignmentBootstrapInventoryWeapon |
+            GameplayBridge::kAssignmentBootstrapInventoryAmmo;
+        if (pending->second.ActionId != acRecord.Header.Identity.ActionId || !pending->second.IsContainer ||
+            (pending->second.HasOpenInventory &&
+             (!pending->second.HasInventoryExtra || pending->second.InventoryEffectsRemaining != 0)) ||
+            payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 || payload.LocalFormIdA == 0 ||
+            payload.LocalFormIdB != pending->second.ExpectedItems || payload.LocalFormIdC != 0 ||
+            payload.LocalFormIdD != 0 || payload.ValueA <= 0 || payload.ValueB < 0 ||
+            static_cast<std::uint32_t>(payload.ValueB) != pending->second.NextItemOrdinal ||
+            pending->second.NextItemOrdinal >= pending->second.ExpectedItems ||
             payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
-            payload.ScalarD != 0.0F || (payload.ActionFlags & ~GameplayBridge::kInventoryQuestItem) != 0)
-            return false;
+            payload.ScalarD != 0.0F || (payload.ActionFlags & ~knownFlags) != 0 ||
+            ((payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 &&
+             (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0))
+            return rejectPending();
 
         if (!pending->second.Ignore)
         {
-            if (pending->second.Data.CurrentInventory.Entries.size() >= kMaximumObjectSnapshotEntries)
-                return false;
             Inventory::Entry entry{};
             entry.Count = payload.ValueA;
-            entry.IsQuestItem = (payload.ActionFlags & GameplayBridge::kInventoryQuestItem) != 0;
+            entry.IsQuestItem =
+                (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryQuestItem) != 0;
+            entry.ExtraWorn =
+                (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryWorn) != 0;
+            entry.ExtraWornLeft =
+                (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryWornLeft) != 0;
+            entry.EquipmentFlags =
+                ((payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 ?
+                     Inventory::Entry::kEquipmentWeapon : 0u) |
+                ((payload.ActionFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0 ?
+                     Inventory::Entry::kEquipmentAmmo : 0u);
             if (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, entry.BaseId) || !entry.BaseId)
-                return false;
+                return rejectPending();
             pending->second.Data.CurrentInventory.Entries.push_back(std::move(entry));
+            pending->second.OpenInventoryIndex = pending->second.Data.CurrentInventory.Entries.size() - 1;
         }
+        pending->second.HasOpenInventory = true;
+        pending->second.HasInventoryExtra = false;
+        pending->second.InventoryEffectsRemaining = 0;
+        return true;
+    }
+
+    if (action == GameplayBridge::GameplayAction::ObjectSnapshotItemExtra)
+    {
+        constexpr auto knownFlags = GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip |
+            GameplayBridge::kAssignmentBootstrapEnchantIsWeapon;
+        if (pending->second.ActionId != acRecord.Header.Identity.ActionId ||
+            !pending->second.HasOpenInventory || pending->second.HasInventoryExtra ||
+            payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 ||
+            (payload.ActionFlags & ~knownFlags) != 0 || payload.LocalFormIdC > 5 ||
+            payload.LocalFormIdD > kMaximumObjectSnapshotEffects ||
+            payload.ValueA < 0 || payload.ValueA > std::numeric_limits<std::uint16_t>::max() ||
+            payload.ValueB < 0 || !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) ||
+            payload.ScalarA < 0.0F || payload.ScalarB < 0.0F || payload.ScalarC != 0.0F ||
+            payload.ScalarD != 0.0F ||
+            (payload.LocalFormIdA == 0 &&
+             (payload.ValueA != 0 || payload.LocalFormIdD != 0 ||
+              (payload.ActionFlags & knownFlags) != 0)) ||
+            (payload.LocalFormIdB == 0 && payload.ValueB != 0) ||
+            pending->second.TotalEffects > kMaximumObjectSnapshotEffects - payload.LocalFormIdD)
+            return rejectPending();
+
+        if (!pending->second.Ignore) {
+            auto& entry = pending->second.Data.CurrentInventory.Entries[pending->second.OpenInventoryIndex];
+            const auto mapOptional = [this](const std::uint32_t aLocalId, GameId& arId) {
+                return aLocalId == 0 ||
+                       (m_world.GetModSystem().GetServerModId(aLocalId, arId) && static_cast<bool>(arId));
+            };
+            if (!mapOptional(payload.LocalFormIdA, entry.ExtraEnchantId) ||
+                !mapOptional(payload.LocalFormIdB, entry.ExtraPoisonId))
+                return rejectPending();
+            entry.ExtraEnchantCharge = static_cast<std::uint16_t>(payload.ValueA);
+            entry.ExtraPoisonCount = static_cast<std::uint32_t>(payload.ValueB);
+            entry.ExtraSoulLevel = static_cast<std::int32_t>(payload.LocalFormIdC);
+            entry.ExtraCharge = payload.ScalarA;
+            entry.ExtraHealth = payload.ScalarB;
+            entry.ExtraEnchantRemoveUnequip =
+                (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip) != 0;
+            entry.EnchantData.IsWeapon =
+                (payload.ActionFlags & GameplayBridge::kAssignmentBootstrapEnchantIsWeapon) != 0;
+        }
+        pending->second.HasInventoryExtra = true;
+        pending->second.InventoryEffectsRemaining = payload.LocalFormIdD;
+        pending->second.TotalEffects += payload.LocalFormIdD;
+        if (payload.LocalFormIdD == 0)
+            ++pending->second.NextItemOrdinal;
+        return true;
+    }
+
+    if (action == GameplayBridge::GameplayAction::ObjectSnapshotItemEffect)
+    {
+        if (pending->second.ActionId != acRecord.Header.Identity.ActionId ||
+            !pending->second.HasOpenInventory || !pending->second.HasInventoryExtra ||
+            pending->second.InventoryEffectsRemaining == 0 || payload.TargetHandle.Value != 0 ||
+            payload.SecondaryHandle.Value != 0 || payload.LocalFormIdA == 0 || payload.ValueA < 0 ||
+            payload.ValueB < 0 || payload.LocalFormIdB != pending->second.NextItemOrdinal ||
+            payload.LocalFormIdD == 0 || payload.LocalFormIdC >= payload.LocalFormIdD ||
+            payload.LocalFormIdD != pending->second.InventoryEffectsRemaining + payload.LocalFormIdC ||
+            !std::isfinite(payload.ScalarA) || !std::isfinite(payload.ScalarB) ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
+            return rejectPending();
+        if (!pending->second.Ignore) {
+            Inventory::EffectItem effect{};
+            if (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, effect.EffectId) || !effect.EffectId)
+                return rejectPending();
+            effect.Area = payload.ValueA;
+            effect.Duration = payload.ValueB;
+            effect.Magnitude = payload.ScalarA;
+            effect.RawCost = payload.ScalarB;
+            pending->second.Data.CurrentInventory.Entries[pending->second.OpenInventoryIndex]
+                .EnchantData.Effects.push_back(effect);
+        }
+        --pending->second.InventoryEffectsRemaining;
+        if (pending->second.InventoryEffectsRemaining == 0)
+            ++pending->second.NextItemOrdinal;
         return true;
     }
 
     if (action != GameplayBridge::GameplayAction::ObjectSnapshotEnd || payload.TargetHandle.Value != 0 ||
-        payload.SecondaryHandle.Value != 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+        pending->second.ActionId != acRecord.Header.Identity.ActionId ||
+        payload.SecondaryHandle.Value != 0 || payload.LocalFormIdA != pending->second.ExpectedItems ||
+        pending->second.NextItemOrdinal != pending->second.ExpectedItems ||
+        (pending->second.HasOpenInventory &&
+         (!pending->second.HasInventoryExtra || pending->second.InventoryEffectsRemaining != 0)) ||
+        payload.LocalFormIdB != 0 ||
         payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA != 0 || payload.ValueB != 0 ||
         payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
         payload.ScalarD != 0.0F || payload.ActionFlags != 0)
-        return false;
+        return rejectPending();
 
     auto complete = std::move(pending->second);
     m_pendingObjectSnapshots.erase(pending);
@@ -896,8 +1405,14 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
     return SendStateful(std::move(request), domainIndex, acRecord.Header.Identity.ActionId, true,
                         static_cast<std::uint64_t>(payload.TargetLocalFormId));
 }
+catch (...)
+{
+    spdlog::error("VR object snapshot assembly failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    return false;
+}
 
-bool VRLocalGameplayService::ApplyEquipmentSnapshot(const GameplayBridge::EventRecord& acRecord) noexcept
+bool VRLocalGameplayService::ApplyEquipmentSnapshot(const GameplayBridge::EventRecord& acRecord) noexcept try
 {
     const auto& header = acRecord.Header;
     const auto& payload = acRecord.Payload.LocalGameplayAction;
@@ -992,6 +1507,8 @@ bool VRLocalGameplayService::ApplyEquipmentSnapshot(const GameplayBridge::EventR
         entry.Count = item.Count;
         entry.ExtraWorn = item.Worn;
         entry.ExtraWornLeft = item.WornLeft;
+        entry.EquipmentFlags = (item.Weapon ? Inventory::Entry::kEquipmentWeapon : 0u) |
+                               (item.Ammo ? Inventory::Entry::kEquipmentAmmo : 0u);
         if (!m_world.GetModSystem().GetServerModId(item.LocalFormId, item.ServerFormId) || !item.ServerFormId) {
             clearPartial();
             return false;
@@ -1056,8 +1573,15 @@ bool VRLocalGameplayService::ApplyEquipmentSnapshot(const GameplayBridge::EventR
     clearPartial();
     return true;
 }
+catch (...)
+{
+    m_pendingEquipmentSnapshot = {};
+    spdlog::error("VR equipment snapshot assembly failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    return false;
+}
 
-bool VRLocalGameplayService::ApplyProjectileLaunch(const GameplayBridge::EventRecord& acRecord) noexcept
+bool VRLocalGameplayService::ApplyProjectileLaunch(const GameplayBridge::EventRecord& acRecord) noexcept try
 {
     const auto& header = acRecord.Header;
     const auto& payload = acRecord.Payload.LocalProjectileLaunch;
@@ -1124,6 +1648,12 @@ bool VRLocalGameplayService::ApplyProjectileLaunch(const GameplayBridge::EventRe
         false, 0);
     return false;
 }
+catch (...)
+{
+    spdlog::error("VR projectile staging failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    return false;
+}
 
 void VRLocalGameplayService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
@@ -1159,7 +1689,7 @@ void VRLocalGameplayService::MarkActionAccepted(const std::size_t aDomainIndex,
 }
 
 void VRLocalGameplayService::QueuePendingStatefulSend(std::function<bool()>&& aTrySend, const bool aCoalesce,
-                                                      const std::uint64_t aCoalesceKey) noexcept
+                                                      const std::uint64_t aCoalesceKey) noexcept try
 {
     if (aCoalesce)
     {
@@ -1191,37 +1721,51 @@ void VRLocalGameplayService::QueuePendingStatefulSend(std::function<bool()>&& aT
     m_pendingStatefulSends.push_back(
         {std::move(aTrySend), aCoalesceKey, aCoalesce, ++m_nextPendingSendOrder});
 }
+catch (...)
+{
+    spdlog::error("VR local gameplay retry queue allocation failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
 
 void VRLocalGameplayService::QueuePendingInventoryDelta(const GameId aBaseId, const std::int32_t aCount,
                                                         const bool aIsQuestItem, const bool aDrop,
                                                         const std::size_t aDomainIndex,
                                                         const std::uint64_t aActionId) noexcept
 {
-    if (m_pendingInventoryDeltas.empty() && m_pendingStatefulSends.empty())
-    {
+    Inventory::Entry item{};
+    item.BaseId = aBaseId;
+    item.Count = aCount;
+    item.IsQuestItem = aIsQuestItem;
+    QueuePendingInventoryChange(m_localServerId, std::move(item), aDrop, aDomainIndex, aActionId);
+}
+
+void VRLocalGameplayService::QueuePendingInventoryChange(
+    const std::uint32_t aServerId, Inventory::Entry aItem, const bool aDrop,
+    const std::size_t aDomainIndex, const std::uint64_t aActionId) noexcept try
+{
+    if (aServerId == 0 || !aItem.IsValidMutation())
+        return;
+    if (m_pendingInventoryDeltas.empty() && m_pendingStatefulSends.empty()) {
         RequestInventoryChanges request{};
-        request.ServerId = m_localServerId;
-        request.Item.BaseId = aBaseId;
-        request.Item.Count = aCount;
-        request.Item.IsQuestItem = aIsQuestItem;
+        request.ServerId = aServerId;
+        request.Item = aItem;
         request.Drop = aDrop;
         request.UpdateClients = true;
-        if (m_transport.Send(request))
-        {
+        if (m_transport.Send(request)) {
             MarkActionAccepted(aDomainIndex, aActionId);
             return;
         }
     }
-
     if (!m_pendingInventoryDeltas.empty())
     {
         auto& previous = m_pendingInventoryDeltas.back();
-        const auto combined = static_cast<std::int64_t>(previous.Count) + aCount;
-        if (previous.Order == m_nextPendingSendOrder && previous.BaseId == aBaseId &&
-            previous.IsQuestItem == aIsQuestItem && previous.Drop == aDrop &&
-            combined >= -kMaximumInventoryDelta && combined <= kMaximumInventoryDelta)
+        const auto combined = static_cast<std::int64_t>(previous.Item.Count) + aItem.Count;
+        if (previous.Order == m_nextPendingSendOrder && previous.ServerId == aServerId &&
+            previous.Item.CanBeMerged(aItem) && previous.Drop == aDrop &&
+            combined >= -Inventory::Entry::kMaximumMutationCount &&
+            combined <= Inventory::Entry::kMaximumMutationCount)
         {
-            previous.Count = static_cast<std::int32_t>(combined);
+            previous.Item.Count = static_cast<std::int32_t>(combined);
             previous.ActionId = aActionId;
             return;
         }
@@ -1240,10 +1784,15 @@ void VRLocalGameplayService::QueuePendingInventoryDelta(const GameId aBaseId, co
         m_pendingSendLifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
     }
     m_pendingInventoryDeltas.push_back(
-        {aBaseId, aCount, aDomainIndex, aActionId, aIsQuestItem, aDrop, ++m_nextPendingSendOrder});
+        {aServerId, std::move(aItem), aDomainIndex, aActionId, false, aDrop, ++m_nextPendingSendOrder});
+}
+catch (...)
+{
+    spdlog::error("VR inventory retry queue allocation failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
-void VRLocalGameplayService::TrySendPendingOutbound() noexcept
+void VRLocalGameplayService::TrySendPendingOutbound() noexcept try
 {
     while (!m_pendingStatefulSends.empty() || !m_pendingInventoryDeltas.empty())
     {
@@ -1260,10 +1809,8 @@ void VRLocalGameplayService::TrySendPendingOutbound() noexcept
 
         const auto& pending = m_pendingInventoryDeltas.front();
         RequestInventoryChanges request{};
-        request.ServerId = m_localServerId;
-        request.Item.BaseId = pending.BaseId;
-        request.Item.Count = pending.Count;
-        request.Item.IsQuestItem = pending.IsQuestItem;
+        request.ServerId = pending.ServerId;
+        request.Item = pending.Item;
         request.Drop = pending.Drop;
         request.UpdateClients = true;
         if (!m_transport.Send(request))
@@ -1271,6 +1818,11 @@ void VRLocalGameplayService::TrySendPendingOutbound() noexcept
         MarkActionAccepted(pending.DomainIndex, pending.ActionId);
         m_pendingInventoryDeltas.pop_front();
     }
+}
+catch (...)
+{
+    spdlog::error("VR local gameplay retry processing failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
 void VRLocalGameplayService::TryArmLocalCapture() noexcept
@@ -1308,7 +1860,7 @@ void VRLocalGameplayService::TryArmLocalCapture() noexcept
     }
 }
 
-void VRLocalGameplayService::OnUpdate(const UpdateEvent& acEvent) noexcept
+void VRLocalGameplayService::OnUpdate(const UpdateEvent& acEvent) noexcept try
 {
     if (m_localServerId != 0 && m_pendingSendServerInstanceNonce != 0 &&
         (!SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
@@ -1326,6 +1878,24 @@ void VRLocalGameplayService::OnUpdate(const UpdateEvent& acEvent) noexcept
     }
 
     TryArmLocalCapture();
+
+    if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0) {
+        for (auto snapshot = m_pendingObjectSnapshots.begin(); snapshot != m_pendingObjectSnapshots.end();) {
+            snapshot->second.Elapsed += acEvent.Delta;
+            if (snapshot->second.Elapsed >= kObjectSnapshotLifetime)
+                snapshot = m_pendingObjectSnapshots.erase(snapshot);
+            else
+                ++snapshot;
+        }
+        for (auto transaction = m_pendingInventoryTransactions.begin();
+             transaction != m_pendingInventoryTransactions.end();) {
+            transaction->second.Elapsed += acEvent.Delta;
+            if (transaction->second.Elapsed >= kObjectSnapshotLifetime)
+                transaction = m_pendingInventoryTransactions.erase(transaction);
+            else
+                ++transaction;
+        }
+    }
 
     if (!m_pendingStatefulSends.empty() || !m_pendingInventoryDeltas.empty())
     {
@@ -1384,6 +1954,11 @@ void VRLocalGameplayService::OnUpdate(const UpdateEvent& acEvent) noexcept
         if (m_pendingInventoryDeltaSuppression.Remaining <= 0.0)
             CancelGoldInventoryDeltaSuppression();
     }
+}
+catch (...)
+{
+    spdlog::error("VR local gameplay update failed; rebasing the native capture epoch");
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
 void VRLocalGameplayService::FlushPendingHealthDelta() noexcept
@@ -1446,7 +2021,8 @@ bool VRLocalGameplayService::AcceptAction(const GameplayBridge::EventRecord& acR
     const auto action = static_cast<GameplayBridge::GameplayAction>(payload.Action);
     const auto domainIndex = static_cast<std::size_t>(payload.Domain);
 
-    if (header.Kind != static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayAction) ||
+    if (!IsCurrentBridgeRecord(header) ||
+        header.Kind != static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayAction) ||
         header.PayloadSize != GameplayBridge::kFixedPayloadBytes || header.Flags != 0 || header.Identity.EntityId != 0 ||
         header.Identity.EntityGeneration != 0 || header.Identity.SequenceId != 0 || header.Identity.ActionId == 0 ||
         payload.SecondaryHandle.Value != 0 ||
@@ -1457,11 +2033,31 @@ bool VRLocalGameplayService::AcceptAction(const GameplayBridge::EventRecord& acR
         return false;
 
     const bool objectSnapshot = domain == GameplayBridge::GameplayDomain::Object &&
-        action >= GameplayBridge::GameplayAction::ObjectSnapshotBegin &&
-        action <= GameplayBridge::GameplayAction::ObjectSnapshotEnd;
-    if ((!objectSnapshot && payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value) ||
+        GameplayBridge::IsObjectSnapshotAction(action);
+    const bool inventoryTransaction = domain == GameplayBridge::GameplayDomain::Inventory &&
+        GameplayBridge::IsInventoryTransactionAction(action);
+    if ((!objectSnapshot && !inventoryTransaction &&
+         payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value) ||
+        (inventoryTransaction &&
+         (payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value || payload.TargetLocalFormId == 0)) ||
         (objectSnapshot && (payload.TargetHandle.Value != 0 || payload.TargetLocalFormId == 0)))
         return false;
+
+    if (objectSnapshot && action != GameplayBridge::GameplayAction::ObjectSnapshotBegin) {
+        const auto pending = m_pendingObjectSnapshots.find(payload.TargetLocalFormId);
+        if (pending != m_pendingObjectSnapshots.end() &&
+            pending->second.ActionId == acRecord.Header.Identity.ActionId)
+            return true;
+    }
+    if (inventoryTransaction && action != GameplayBridge::GameplayAction::InventoryTransactionBegin) {
+        const auto pending = m_pendingInventoryTransactions.find(payload.TargetLocalFormId);
+        if (pending != m_pendingInventoryTransactions.end() &&
+            pending->second.ActionId == acRecord.Header.Identity.ActionId &&
+            pending->second.ServerInstanceNonce == acRecord.Header.Identity.ServerInstanceNonce &&
+            pending->second.ConnectionGeneration == acRecord.Header.Identity.ConnectionGeneration &&
+            pending->second.LifecycleEpoch == acRecord.Header.Identity.LifecycleEpoch)
+            return true;
+    }
 
     return !m_hasActionIdByDomain[domainIndex] ||
            acRecord.Header.Identity.ActionId > m_lastActionIdByDomain[domainIndex];
@@ -1492,6 +2088,31 @@ std::uint32_t VRLocalGameplayService::GetServerIdForLocalActor(const std::uint32
     return 0;
 }
 
+std::uint32_t VRLocalGameplayService::GetServerIdForLocalInventoryOwner(
+    const std::uint32_t aLocalFormId) const noexcept
+{
+    if (aLocalFormId == 0)
+        return 0;
+    constexpr std::uint32_t kPlayerReferenceFormId = 0x14;
+    if (aLocalFormId == kPlayerReferenceFormId)
+        return m_localServerId;
+    if (const auto* ownership = m_world.ctx().find<VRNpcOwnershipService>()) {
+        if (const auto serverId = ownership->GetServerIdForLocalReference(aLocalFormId); serverId != 0)
+            return serverId;
+    }
+    const auto objects = m_world.view<FormIdComponent, ObjectComponent>();
+    std::uint32_t serverId{};
+    for (const auto entity : objects) {
+        if (objects.get<FormIdComponent>(entity).Id != aLocalFormId)
+            continue;
+        const auto candidate = objects.get<ObjectComponent>(entity).Id;
+        if (candidate == 0 || serverId != 0)
+            return 0;
+        serverId = candidate;
+    }
+    return serverId;
+}
+
 bool VRLocalGameplayService::ConsumeInventoryDeltaSuppression(
     const GameplayBridge::GameplayActionPayload& acPayload) noexcept
 {
@@ -1509,7 +2130,9 @@ void VRLocalGameplayService::ResetSessionState() noexcept
     m_hasActionIdByDomain.fill(false);
     m_appearance = {};
     m_nameAssembly = {};
+    m_appearanceDirty = false;
     m_pendingObjectSnapshots.clear();
+    m_pendingInventoryTransactions.clear();
     m_pendingEquipmentSnapshot = {};
     m_equipmentBaseline = {};
     m_hasEquipmentBaseline = false;
@@ -1543,4 +2166,5 @@ void VRLocalGameplayService::ResetSessionState() noexcept
     m_pendingHealthDelta = 0.0F;
     m_healthSendElapsed = 0.0;
     m_lastLocalProjectileSequence = 0;
+    m_vrGrabSequence = 0;
 }

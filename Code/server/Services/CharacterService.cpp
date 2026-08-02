@@ -44,15 +44,340 @@
 #include <Messages/NotifyRelinquishControl.h>
 #include <Structs/MovementOrdering.h>
 #include <Structs/GameplayCapabilities.h>
+#include <Services/VRAppearanceRelayService.h>
 #include <vr_common/VRAnimationGraphProtocol.h>
+#include <vr_common/VRAssignmentLimits.h>
 
 #include <Setting.h>
 
 #include <cmath>
+#include <utility>
 namespace
 {
 Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Syncs combat XP within the party", true};
 constexpr auto kOwnershipGrantLifetime = std::chrono::seconds(5);
+constexpr std::size_t kActorValueCount = 164;
+constexpr std::size_t kMaximumVRAssignmentInventoryEntries = 512;
+constexpr std::size_t kMaximumVRAssignmentInventoryEffects = 512;
+constexpr float kMaximumActorValueMagnitude = 1'000'000.0F;
+constexpr float kMaximumInventoryScalarMagnitude = 1'000'000.0F;
+
+[[nodiscard]] bool HasAssignmentAction(const ActionEvent& acAction) noexcept;
+[[nodiscard]] bool IsValidAssignmentAction(const ActionEvent& acAction) noexcept;
+
+void LogCharacterServiceFailure(const char* apOperation) noexcept
+{
+    try
+    {
+        spdlog::error("Character service {} failed; authoritative state was retained", apOperation);
+    }
+    catch (...)
+    {
+    }
+}
+
+void SwapActorValues(ActorValues& aLeft, ActorValues& aRight) noexcept
+{
+    aLeft.ActorValuesList.swap(aRight.ActorValuesList);
+    aLeft.ActorMaxValuesList.swap(aRight.ActorMaxValuesList);
+    const bool decodedValid = aLeft.IsDecodedValid;
+    aLeft.IsDecodedValid = aRight.IsDecodedValid;
+    aRight.IsDecodedValid = decodedValid;
+}
+
+void SwapInventory(Inventory& aLeft, Inventory& aRight) noexcept
+{
+    aLeft.Entries.swap(aRight.Entries);
+    using std::swap;
+    swap(aLeft.CurrentMagicEquipment, aRight.CurrentMagicEquipment);
+    const bool decodedValid = aLeft.IsDecodedValid;
+    aLeft.IsDecodedValid = aRight.IsDecodedValid;
+    aRight.IsDecodedValid = decodedValid;
+}
+
+void SwapFactions(Factions& aLeft, Factions& aRight) noexcept
+{
+    aLeft.NpcFactions.swap(aRight.NpcFactions);
+    aLeft.ExtraFactions.swap(aRight.ExtraFactions);
+    const bool decodedValid = aLeft.IsDecodedValid;
+    aLeft.IsDecodedValid = aRight.IsDecodedValid;
+    aRight.IsDecodedValid = decodedValid;
+}
+
+void SwapAnimationVariables(AnimationVariables& aLeft, AnimationVariables& aRight) noexcept
+{
+    aLeft.Booleans.swap(aRight.Booleans);
+    aLeft.Integers.swap(aRight.Integers);
+    aLeft.Floats.swap(aRight.Floats);
+    const bool decodedValid = aLeft.IsDecodedValid;
+    aLeft.IsDecodedValid = aRight.IsDecodedValid;
+    aRight.IsDecodedValid = decodedValid;
+}
+
+struct PendingActorData
+{
+    ActorValues Values{};
+    Inventory Content{};
+};
+
+void PrepareActorData(const ActorData& acActorData, const bool aHasActorValues,
+    const bool aHasInventory, PendingActorData& aPending)
+{
+    if (aHasActorValues)
+        aPending.Values = acActorData.InitialActorValues;
+    if (aHasInventory)
+        aPending.Content = acActorData.InitialInventory;
+}
+
+void CommitActorData(ActorValuesComponent* apActorValuesComponent,
+                     InventoryComponent* apInventoryComponent,
+                     CharacterComponent* apCharacterComponent,
+    const ActorData& acActorData, PendingActorData& aPending) noexcept
+{
+    if (apActorValuesComponent)
+        SwapActorValues(apActorValuesComponent->CurrentActorValues, aPending.Values);
+    if (apInventoryComponent)
+        SwapInventory(apInventoryComponent->Content, aPending.Content);
+    if (apCharacterComponent)
+    {
+        apCharacterComponent->SetDead(acActorData.IsDead);
+        apCharacterComponent->SetWeaponDrawn(acActorData.IsWeaponDrawn);
+    }
+}
+
+[[nodiscard]] bool IsValidRequiredGameId(const GameId& acId) noexcept
+{
+    return acId.BaseId != 0;
+}
+
+[[nodiscard]] bool IsValidOptionalGameId(const GameId& acId) noexcept
+{
+    return !acId || IsValidRequiredGameId(acId);
+}
+
+[[nodiscard]] bool IsValidActorValues(const ActorValues& acValues, const bool aRequireComplete) noexcept
+{
+    if (!acValues.IsDecodedValid || acValues.ActorValuesList.size() > kActorValueCount ||
+        acValues.ActorMaxValuesList.size() > kActorValueCount ||
+        (aRequireComplete && (acValues.ActorValuesList.size() != kActorValueCount ||
+                              acValues.ActorMaxValuesList.size() != kActorValueCount)))
+        return false;
+
+    const auto validMap = [aRequireComplete](const auto& acMap) noexcept {
+        for (const auto& [id, value] : acMap)
+        {
+            if (id >= kActorValueCount || !std::isfinite(value) ||
+                std::abs(value) > kMaximumActorValueMagnitude)
+                return false;
+        }
+        if (aRequireComplete)
+            for (std::uint32_t id = 0; id < kActorValueCount; ++id)
+                if (acMap.find(id) == acMap.end())
+                    return false;
+        return true;
+    };
+    return validMap(acValues.ActorValuesList) && validMap(acValues.ActorMaxValuesList);
+}
+
+[[nodiscard]] bool IsValidAssignmentInventory(const Inventory& acInventory, const bool aIsVR) noexcept
+{
+    const auto maximumEntries = aIsVR ? kMaximumVRAssignmentInventoryEntries : Inventory::kMaximumWireEntries;
+    const auto maximumEffects = aIsVR ? kMaximumVRAssignmentInventoryEffects : Inventory::kMaximumWireEffects;
+    if (!acInventory.IsDecodedValid || acInventory.Entries.size() > maximumEntries ||
+        !IsValidOptionalGameId(acInventory.CurrentMagicEquipment.LeftHandSpell) ||
+        !IsValidOptionalGameId(acInventory.CurrentMagicEquipment.RightHandSpell) ||
+        !IsValidOptionalGameId(acInventory.CurrentMagicEquipment.Shout))
+        return false;
+
+    std::size_t effectCount{};
+    for (const auto& entry : acInventory.Entries)
+    {
+        constexpr auto knownEquipmentFlags = Inventory::Entry::kEquipmentWeapon |
+            Inventory::Entry::kEquipmentAmmo;
+        if (!entry.IsDecodedValid || !IsValidRequiredGameId(entry.BaseId) || entry.Count <= 0 ||
+            !std::isfinite(entry.ExtraCharge) || entry.ExtraCharge < 0.0F ||
+            entry.ExtraCharge > kMaximumInventoryScalarMagnitude ||
+            !std::isfinite(entry.ExtraHealth) || entry.ExtraHealth < 0.0F ||
+            entry.ExtraHealth > kMaximumInventoryScalarMagnitude ||
+            !IsValidOptionalGameId(entry.ExtraEnchantId) ||
+            !IsValidOptionalGameId(entry.ExtraPoisonId) || entry.ExtraSoulLevel < 0 ||
+            entry.ExtraSoulLevel > 5 || (entry.EquipmentFlags & ~knownEquipmentFlags) != 0 ||
+            (entry.EquipmentFlags & knownEquipmentFlags) == knownEquipmentFlags ||
+            entry.EnchantData.Effects.size() > maximumEffects - effectCount ||
+            (!entry.ExtraEnchantId &&
+             (entry.ExtraEnchantCharge != 0 || !entry.EnchantData.Effects.empty() ||
+              entry.EnchantData.IsWeapon || entry.ExtraEnchantRemoveUnequip)) ||
+            (!entry.ExtraPoisonId && entry.ExtraPoisonCount != 0) ||
+            entry.ExtraPoisonCount > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()))
+            return false;
+
+        effectCount += entry.EnchantData.Effects.size();
+        for (const auto& effect : entry.EnchantData.Effects)
+        {
+            if (!IsValidRequiredGameId(effect.EffectId) || effect.Area < 0 || effect.Duration < 0 ||
+                !std::isfinite(effect.Magnitude) ||
+                std::abs(effect.Magnitude) > kMaximumInventoryScalarMagnitude ||
+                !std::isfinite(effect.RawCost) || effect.RawCost < 0.0F ||
+                effect.RawCost > kMaximumInventoryScalarMagnitude)
+                return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsValidAssignmentFactions(const Factions& acFactions) noexcept
+{
+    if (!acFactions.IsDecodedValid || acFactions.NpcFactions.size() > Factions::kMaximumWireEntries ||
+        acFactions.ExtraFactions.size() > Factions::kMaximumWireEntries)
+        return false;
+
+    const auto validList = [](const auto& acList) noexcept {
+        for (std::size_t index = 0; index < acList.size(); ++index)
+        {
+            if (!IsValidRequiredGameId(acList[index].Id))
+                return false;
+            for (std::size_t prior = 0; prior < index; ++prior)
+                if (acList[prior].Id == acList[index].Id)
+                    return false;
+        }
+        return true;
+    };
+    return validList(acFactions.NpcFactions) && validList(acFactions.ExtraFactions);
+}
+
+[[nodiscard]] bool IsValidAssignmentQuests(const QuestLog& acQuests) noexcept
+{
+    if (!acQuests.IsDecodedValid ||
+        acQuests.Entries.size() > SkyrimTogetherVR::VRAssignmentLimits::kMaximumQuestEntries)
+        return false;
+    for (std::size_t index = 0; index < acQuests.Entries.size(); ++index)
+    {
+        if (!IsValidRequiredGameId(acQuests.Entries[index].Id))
+            return false;
+        for (std::size_t prior = 0; prior < index; ++prior)
+            if (acQuests.Entries[prior].Id == acQuests.Entries[index].Id)
+                return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsValidAssignmentTints(const Tints& acTints, const bool aIsVR) noexcept
+{
+    const auto maximumTints = aIsVR ? static_cast<std::size_t>(VRAppearance::kMaximumTints) :
+                                      Tints::kMaximumWireEntries;
+    if (!acTints.IsDecodedValid || acTints.Entries.size() > maximumTints)
+        return false;
+    for (const auto& tint : acTints.Entries)
+        if (!tint.Name.IsDecodedValid || tint.Name.size() > CachedString::kMaximumWireBytes ||
+            tint.Type >= 15 || !std::isfinite(tint.Alpha) || tint.Alpha < 0.0F || tint.Alpha > 1.0F)
+            return false;
+    return true;
+}
+
+[[nodiscard]] bool IsValidVRAppearanceIdentity(const VRAppearance& acAppearance) noexcept
+{
+    if (!acAppearance.IsValid() || !IsValidRequiredGameId(acAppearance.RaceId) ||
+        !IsValidOptionalGameId(acAppearance.HairColorId) ||
+        !IsValidOptionalGameId(acAppearance.FaceTextureId))
+        return false;
+    for (std::uint8_t index = 0; index < acAppearance.HeadPartCount; ++index)
+        if (!IsValidRequiredGameId(acAppearance.HeadParts[index].FormId))
+            return false;
+    return true;
+}
+
+[[nodiscard]] bool IsValidActorData(const ActorData& acActorData, const bool aIsVR) noexcept
+{
+    return acActorData.IsDecodedValid() && IsValidActorValues(acActorData.InitialActorValues, aIsVR) &&
+           IsValidAssignmentInventory(acActorData.InitialInventory, aIsVR);
+}
+
+[[nodiscard]] bool IsValidAssignmentRequest(const AssignCharacterRequest& acMessage,
+                                            const Player& acPlayer) noexcept
+{
+    const auto capabilities = acPlayer.GetGameplayCapabilities();
+    const bool isVR = SkyrimTogether::Protocol::IsVrGameplayClient(capabilities);
+    const bool supportsVRAppearance = SkyrimTogether::Protocol::HasCapability(
+        capabilities, SkyrimTogether::Protocol::GameplayCapability::VRAppearanceRelay);
+    const bool isPlayer = acMessage.ReferenceId.ModId == 0 && acMessage.ReferenceId.BaseId == 0x14;
+    const bool isTemporary = acMessage.ReferenceId.ModId == std::numeric_limits<std::uint32_t>::max();
+
+    if (!acMessage.IsDecodedValid() ||
+        !IsValidRequiredGameId(acMessage.ReferenceId) || !IsValidRequiredGameId(acMessage.CellId) ||
+        !IsValidOptionalGameId(acMessage.WorldSpaceId) ||
+        (!isPlayer && (isVR || isTemporary) && !IsValidRequiredGameId(acMessage.FormId)) ||
+        (!isPlayer && !isVR && !isTemporary && !IsValidOptionalGameId(acMessage.FormId)) ||
+        (isPlayer && acMessage.FormId) ||
+        !std::isfinite(acMessage.Position.x) || !std::isfinite(acMessage.Position.y) ||
+        !std::isfinite(acMessage.Position.z) || !std::isfinite(acMessage.Rotation.x) ||
+        !std::isfinite(acMessage.Rotation.y) || !IsValidActorData(acMessage.CurrentActorData, isVR) ||
+        !IsValidAssignmentFactions(acMessage.FactionsContent) ||
+        !IsValidAssignmentQuests(acMessage.QuestContent) ||
+        !IsValidAssignmentTints(acMessage.FaceTints, isVR) ||
+        (!acMessage.HasQuestContent && !acMessage.QuestContent.Entries.empty()) ||
+        (!acMessage.HasFaceTints && !acMessage.FaceTints.Entries.empty()) ||
+        (HasAssignmentAction(acMessage.LatestAction) && !IsValidAssignmentAction(acMessage.LatestAction)))
+        return false;
+
+    if (!isVR)
+        return !acMessage.HasVRAppearance;
+
+    if (!supportsVRAppearance)
+        return false;
+
+    if (!isPlayer)
+        return acMessage.HasVRAppearance && acMessage.AppearanceBuffer.empty() &&
+               acMessage.ChangeFlags == 0 && !acMessage.HasQuestContent && !acMessage.HasFaceTints &&
+               acMessage.InitialVRAppearance.Sequence == 1 &&
+               acMessage.InitialVRAppearance.TintCount == 0 &&
+               acMessage.FaceTints.Entries.empty() &&
+               IsValidVRAppearanceIdentity(acMessage.InitialVRAppearance);
+
+    if (!acMessage.HasVRAppearance ||
+        !acMessage.AppearanceBuffer.empty() || acMessage.ChangeFlags != 0 ||
+        acMessage.InitialVRAppearance.Sequence != 1 ||
+        !IsValidVRAppearanceIdentity(acMessage.InitialVRAppearance) ||
+        acMessage.InitialVRAppearance.TintCount != acMessage.FaceTints.Entries.size())
+        return false;
+
+    for (std::uint8_t index = 0; index < acMessage.InitialVRAppearance.TintCount; ++index)
+    {
+        const auto& semantic = acMessage.InitialVRAppearance.Tints[index];
+        const auto& legacy = acMessage.FaceTints.Entries[index];
+        if (semantic.Type != legacy.Type || semantic.Color != legacy.Color || semantic.Alpha != legacy.Alpha)
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool HasAssignmentAction(const ActionEvent& acAction) noexcept
+{
+    return static_cast<bool>(acAction.ActionId) || !acAction.EventName.empty();
+}
+
+[[nodiscard]] bool IsValidAssignmentAction(const ActionEvent& acAction) noexcept
+{
+    const auto validRequiredForm = [](const GameId& acId) noexcept { return acId.BaseId != 0; };
+    const auto validOptionalForm = [&validRequiredForm](const GameId& acId) noexcept {
+        return !acId || validRequiredForm(acId);
+    };
+    return acAction.IsDecodedValid && acAction.EventName.IsDecodedValid &&
+           acAction.TargetEventName.IsDecodedValid && acAction.Variables.IsDecodedValid &&
+           validOptionalForm(acAction.ActionId) && validOptionalForm(acAction.TargetId) &&
+           validOptionalForm(acAction.IdleId) && (acAction.Type & ~0x7u) == 0 &&
+           (acAction.ActionId || (!acAction.TargetId && !acAction.IdleId)) &&
+           acAction.EventName.size() <= 127 && acAction.TargetEventName.size() <= 127 &&
+           std::find(acAction.EventName.begin(), acAction.EventName.end(), '\0') == acAction.EventName.end() &&
+           std::find(acAction.TargetEventName.begin(), acAction.TargetEventName.end(), '\0') ==
+               acAction.TargetEventName.end() &&
+           ((acAction.Variables.Booleans.empty() && acAction.Variables.Floats.empty() &&
+             acAction.Variables.Integers.empty()) ||
+            (acAction.Variables.Booleans.size() == SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount &&
+             acAction.Variables.Floats.size() == SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount &&
+             acAction.Variables.Integers.size() == SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount)) &&
+           std::all_of(acAction.Variables.Floats.begin(), acAction.Variables.Floats.end(),
+                       [](const float aValue) noexcept { return std::isfinite(aValue); });
+}
 
 [[nodiscard]] bool MatchesOwnershipGrantSession(const Player* apPlayer, const ConnectionId_t aConnectionId,
                                                 const std::uint64_t aConnectionGeneration,
@@ -64,7 +389,7 @@ constexpr auto kOwnershipGrantLifetime = std::chrono::seconds(5);
 }
 }
 
-CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
+CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
     , m_updateConnection(aDispatcher.sink<UpdateEvent>().connect<&CharacterService::OnUpdate>(this))
     , m_interiorCellChangeEventConnection(aDispatcher.sink<CharacterInteriorCellChangeEvent>().connect<&CharacterService::OnCharacterInteriorCellChange>(this))
@@ -88,73 +413,101 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
 {
 }
 
-void CharacterService::Serialize(World& aRegistry, entt::entity aEntity, CharacterSpawnRequest* apSpawnRequest) noexcept
+bool CharacterService::Serialize(World& aRegistry, entt::entity aEntity,
+                                 CharacterSpawnRequest* apSpawnRequest) noexcept try
 {
-    const auto& characterComponent = aRegistry.get<CharacterComponent>(aEntity);
+    if (!apSpawnRequest)
+        return false;
 
-    apSpawnRequest->ServerId = World::ToInteger(aEntity);
-    apSpawnRequest->AppearanceBuffer = characterComponent.SaveBuffer;
-    apSpawnRequest->ChangeFlags = characterComponent.ChangeFlags;
-    apSpawnRequest->FaceTints = characterComponent.FaceTints;
-    apSpawnRequest->FactionsContent = characterComponent.FactionsContent;
-    apSpawnRequest->IsDead = characterComponent.IsDead();
-    apSpawnRequest->IsPlayer = characterComponent.IsPlayer();
-    apSpawnRequest->IsWeaponDrawn = characterComponent.IsWeaponDrawn();
-    apSpawnRequest->IsPlayerSummon = characterComponent.IsPlayerSummon();
-    apSpawnRequest->PlayerId = characterComponent.PlayerId;
+    CharacterSpawnRequest serialized{};
+    const auto& characterComponent = aRegistry.get<CharacterComponent>(aEntity);
+    const auto semanticNpc = characterComponent.HasVRAppearance && !characterComponent.IsPlayer();
+    if ((characterComponent.HasVRAppearance && !characterComponent.InitialVRAppearance.IsValid()) ||
+        (semanticNpc && (characterComponent.InitialVRAppearance.TintCount != 0 ||
+                         !characterComponent.SaveBuffer.empty() || characterComponent.ChangeFlags != 0 ||
+                         !characterComponent.FaceTints.Entries.empty())))
+        return false;
+
+    serialized.ServerId = World::ToInteger(aEntity);
+    serialized.AppearanceBuffer = characterComponent.SaveBuffer;
+    serialized.ChangeFlags = characterComponent.ChangeFlags;
+    serialized.FaceTints = characterComponent.FaceTints;
+    serialized.FactionsContent = characterComponent.FactionsContent;
+    serialized.IsDead = characterComponent.IsDead();
+    serialized.IsPlayer = characterComponent.IsPlayer();
+    serialized.IsWeaponDrawn = characterComponent.IsWeaponDrawn();
+    serialized.IsPlayerSummon = characterComponent.IsPlayerSummon();
+    serialized.PlayerId = characterComponent.PlayerId;
+    serialized.HasVRAppearance = characterComponent.HasVRAppearance;
+    if (serialized.HasVRAppearance)
+        serialized.InitialVRAppearance = characterComponent.InitialVRAppearance;
 
     const auto* pFormIdComponent = aRegistry.try_get<FormIdComponent>(aEntity);
     if (pFormIdComponent)
     {
-        apSpawnRequest->FormId = pFormIdComponent->Id;
+        serialized.FormId = pFormIdComponent->Id;
     }
 
     const auto* pInventoryComponent = aRegistry.try_get<InventoryComponent>(aEntity);
     if (pInventoryComponent)
     {
-        apSpawnRequest->InventoryContent = pInventoryComponent->Content;
+        serialized.InventoryContent = pInventoryComponent->Content;
     }
 
     const auto* pActorValuesComponent = aRegistry.try_get<ActorValuesComponent>(aEntity);
     if (pActorValuesComponent)
     {
-        apSpawnRequest->InitialActorValues = pActorValuesComponent->CurrentActorValues;
+        serialized.InitialActorValues = pActorValuesComponent->CurrentActorValues;
     }
 
     if (characterComponent.BaseId)
     {
-        apSpawnRequest->BaseId = characterComponent.BaseId.Id;
+        serialized.BaseId = characterComponent.BaseId.Id;
     }
 
     const auto* pMovementComponent = aRegistry.try_get<MovementComponent>(aEntity);
     if (pMovementComponent)
     {
-        apSpawnRequest->Position = pMovementComponent->Position;
-        apSpawnRequest->Rotation.x = pMovementComponent->Rotation.x;
-        apSpawnRequest->Rotation.y = pMovementComponent->Rotation.z;
+        serialized.Position = pMovementComponent->Position;
+        serialized.Rotation.x = pMovementComponent->Rotation.x;
+        serialized.Rotation.y = pMovementComponent->Rotation.z;
     }
 
     const auto* pCellIdComponent = aRegistry.try_get<CellIdComponent>(aEntity);
     if (pCellIdComponent)
     {
-        apSpawnRequest->CellId = pCellIdComponent->Cell;
+        serialized.CellId = pCellIdComponent->Cell;
     }
 
     auto& animationComponent = aRegistry.get<AnimationComponent>(aEntity);
-    apSpawnRequest->ActionsToReplay = animationComponent.ActionsReplayCache.FormRefinedReplayChain();
+    serialized.ActionsToReplay = animationComponent.ActionsReplayCache.FormRefinedReplayChain();
+
+    using std::swap;
+    swap(*apSpawnRequest, serialized);
+    return true;
+}
+catch (...)
+{
+    LogCharacterServiceFailure("serialization");
+    return false;
 }
 
-void CharacterService::OnUpdate(const UpdateEvent&) const noexcept
+void CharacterService::OnUpdate(const UpdateEvent&) const noexcept try
 {
     ExpireOwnershipGrants();
     ProcessFactionsChanges();
     ProcessMovementChanges();
 }
+catch (...)
+{
+    LogCharacterServiceFailure("update processing");
+}
 
-void CharacterService::OnCharacterExteriorCellChange(const CharacterExteriorCellChangeEvent& acEvent) const noexcept
+void CharacterService::OnCharacterExteriorCellChange(const CharacterExteriorCellChangeEvent& acEvent) const noexcept try
 {
     CharacterSpawnRequest spawnMessage;
-    Serialize(m_world, acEvent.Entity, &spawnMessage);
+    if (!Serialize(m_world, acEvent.Entity, &spawnMessage))
+        return;
 
     NotifyRemoveCharacter removeMessage;
     removeMessage.ServerId = World::ToInteger(acEvent.Entity);
@@ -174,11 +527,16 @@ void CharacterService::OnCharacterExteriorCellChange(const CharacterExteriorCell
         }
     }
 }
+catch (...)
+{
+    LogCharacterServiceFailure("exterior-cell character fanout");
+}
 
-void CharacterService::OnCharacterInteriorCellChange(const CharacterInteriorCellChangeEvent& acEvent) const noexcept
+void CharacterService::OnCharacterInteriorCellChange(const CharacterInteriorCellChangeEvent& acEvent) const noexcept try
 {
     CharacterSpawnRequest spawnMessage;
-    Serialize(m_world, acEvent.Entity, &spawnMessage);
+    if (!Serialize(m_world, acEvent.Entity, &spawnMessage))
+        return;
 
     NotifyRemoveCharacter removeMessage;
     removeMessage.ServerId = World::ToInteger(acEvent.Entity);
@@ -194,9 +552,21 @@ void CharacterService::OnCharacterInteriorCellChange(const CharacterInteriorCell
             pPlayer->Send(removeMessage);
     }
 }
-
-void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept
+catch (...)
 {
+    LogCharacterServiceFailure("interior-cell character fanout");
+}
+
+void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept try
+{
+    if (!acMessage.pPlayer || !IsValidAssignmentRequest(acMessage.Packet, *acMessage.pPlayer))
+    {
+        if (acMessage.pPlayer)
+            spdlog::warn("Client {:X} sent an invalid character assignment payload",
+                         acMessage.pPlayer->GetConnectionId());
+        return;
+    }
+
     auto& message = acMessage.Packet;
     const auto& refId = message.ReferenceId;
 
@@ -207,6 +577,34 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
         spdlog::warn("VR client {:X} attempted NPC assignment without negotiated NPC ownership capability",
                      acMessage.pPlayer->GetConnectionId());
         return;
+    }
+
+    // Player assignment is retried by the client until its response arrives.
+    // Unlike persistent references, the player has no FormIdComponent lookup,
+    // so use the session-owned entity to make those retries idempotent.
+    if (isPlayer)
+    {
+        const auto existing = acMessage.pPlayer->GetCharacter();
+        if (existing)
+        {
+            if (!m_world.valid(*existing) ||
+                !m_world.all_of<OwnerComponent, CharacterComponent>(*existing) ||
+                m_world.get<OwnerComponent>(*existing).GetOwner() != acMessage.pPlayer ||
+                !m_world.get<CharacterComponent>(*existing).IsPlayer())
+            {
+                spdlog::error("Player {:X} has an invalid retained character assignment",
+                              acMessage.pPlayer->GetConnectionId());
+                return;
+            }
+
+            AssignCharacterResponse response{};
+            response.Cookie = message.Cookie;
+            response.ServerId = World::ToInteger(*existing);
+            response.PlayerId = acMessage.pPlayer->GetId();
+            response.Owner = true;
+            acMessage.pPlayer->Send(response);
+            return;
+        }
     }
 
     // Check if id is the player
@@ -248,8 +646,8 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
                 // Transfer ownership if owning player is in the same party as the owner
                 if (std::find(pParty->Members.begin(), pParty->Members.end(), pOwningPlayer) != pParty->Members.end())
                 {
-                    TransferOwnership(acMessage.pPlayer, World::ToInteger(*itor), acMessage.Packet.CurrentActorData);
-                    isOwner = true;
+                    isOwner = TransferOwnership(acMessage.pPlayer, World::ToInteger(*itor),
+                                                  acMessage.Packet.CurrentActorData);
                 }
             }
 
@@ -280,8 +678,12 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
     // This entity has no owner create it
     CreateCharacter(acMessage);
 }
+catch (...)
+{
+    LogCharacterServiceFailure("assignment request");
+}
 
-void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwnershipTransfer>& acMessage) const noexcept
+void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwnershipTransfer>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
     const entt::entity cEntity = static_cast<entt::entity>(message.ServerId);
@@ -317,6 +719,12 @@ void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwner
         return;
     }
 
+    const auto invalidOwnerIt = std::find(characterOwnerComponent.InvalidOwners.begin(),
+                                          characterOwnerComponent.InvalidOwners.end(), acMessage.pPlayer);
+    const bool addInvalidOwner = invalidOwnerIt == characterOwnerComponent.InvalidOwners.end();
+    if (addInvalidOwner)
+        characterOwnerComponent.InvalidOwners.reserve(characterOwnerComponent.InvalidOwners.size() + 1);
+
     if (message.WorldSpaceId || message.CellId)
     {
         if (!m_world.all_of<FormIdComponent, MovementComponent>(cEntity))
@@ -341,15 +749,18 @@ void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwner
         GameServer::Get()->SendToPlayers(notify, acMessage.pPlayer);
     }
 
-    if (std::find(characterOwnerComponent.InvalidOwners.begin(), characterOwnerComponent.InvalidOwners.end(), acMessage.pPlayer) ==
-        characterOwnerComponent.InvalidOwners.end())
+    if (addInvalidOwner)
         characterOwnerComponent.InvalidOwners.push_back(acMessage.pPlayer);
     m_pendingOwnershipGrants.erase(message.ServerId);
 
     m_world.GetDispatcher().trigger(OwnershipTransferEvent(cEntity));
 }
+catch (...)
+{
+    LogCharacterServiceFailure("ownership-transfer request");
+}
 
-void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& acEvent) const noexcept
+void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& acEvent) const noexcept try
 {
     const auto serverId = World::ToInteger(acEvent.Entity);
     m_pendingOwnershipGrants.erase(serverId);
@@ -391,10 +802,10 @@ void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& ac
 
         if (characterComponent.IsPlayer())
         {
+            pPlayer->Send(response);
             ownerComponent.SetOwner(pPlayer);
             if (auto* movementComponent = m_world.try_get<MovementComponent>(acEvent.Entity))
                 movementComponent->HasTick = false;
-            pPlayer->Send(response);
             foundOwner = true;
             break;
         }
@@ -427,33 +838,58 @@ void CharacterService::OnOwnershipTransferEvent(const OwnershipTransferEvent& ac
     if (!foundOwner)
         m_world.GetDispatcher().trigger(CharacterRemoveEvent(response.ServerId));
 }
+catch (...)
+{
+    LogCharacterServiceFailure("ownership-transfer selection");
+}
 
 void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept
 {
-    m_pendingOwnershipGrants.erase(acEvent.ServerId);
-    const auto entity = static_cast<entt::entity>(acEvent.ServerId);
-    if (!m_world.valid(entity) || !m_world.all_of<OwnerComponent>(entity))
-        return;
-    const auto& characterOwnerComponent = m_world.get<OwnerComponent>(entity);
-
-    GameServer::Get()->GetWorld().GetScriptService().HandleCharacterDestoy(entity);
-
-    NotifyRemoveCharacter response;
-    response.ServerId = acEvent.ServerId;
-
-    for (auto pPlayer : m_world.GetPlayerManager())
+    try
     {
-        if (characterOwnerComponent.GetOwner() == pPlayer)
-            continue;
+        m_pendingOwnershipGrants.erase(acEvent.ServerId);
+        const auto entity = static_cast<entt::entity>(acEvent.ServerId);
+        if (!m_world.valid(entity) || !m_world.all_of<OwnerComponent>(entity))
+            return;
+        const auto& characterOwnerComponent = m_world.get<OwnerComponent>(entity);
 
-        pPlayer->Send(response);
+        try
+        {
+            GameServer::Get()->GetWorld().GetScriptService().HandleCharacterDestoy(entity);
+        }
+        catch (...)
+        {
+            LogCharacterServiceFailure("character-destroy script callback");
+        }
+
+        NotifyRemoveCharacter response;
+        response.ServerId = acEvent.ServerId;
+
+        for (auto pPlayer : m_world.GetPlayerManager())
+        {
+            if (characterOwnerComponent.GetOwner() == pPlayer)
+                continue;
+
+            try
+            {
+                pPlayer->Send(response);
+            }
+            catch (...)
+            {
+                LogCharacterServiceFailure("character-removal notification");
+            }
+        }
+
+        m_world.destroy(entity);
+        spdlog::debug("Character destroyed {:X}", acEvent.ServerId);
     }
-
-    m_world.destroy(entity);
-    spdlog::debug("Character destroyed {:X}", acEvent.ServerId);
+    catch (...)
+    {
+        LogCharacterServiceFailure("character removal");
+    }
 }
 
-void CharacterService::OnOwnershipClaimRequest(const PacketEvent<RequestOwnershipClaim>& acMessage) const noexcept
+void CharacterService::OnOwnershipClaimRequest(const PacketEvent<RequestOwnershipClaim>& acMessage) const noexcept try
 {
     const auto& message = acMessage.Packet;
     const auto entity = static_cast<entt::entity>(message.ServerId);
@@ -465,7 +901,7 @@ void CharacterService::OnOwnershipClaimRequest(const PacketEvent<RequestOwnershi
     if (characterComponent.IsPlayer())
     {
         // Player-character ownership keeps the legacy protocol behavior.
-        TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData);
+        static_cast<void>(TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData));
         return;
     }
 
@@ -502,10 +938,14 @@ void CharacterService::OnOwnershipClaimRequest(const PacketEvent<RequestOwnershi
         !acMessage.pPlayer->GetCellComponent().IsInRange(m_world.get<CellIdComponent>(entity), characterComponent.IsDragon()))
         return;
 
-    TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData);
+    static_cast<void>(TransferOwnership(acMessage.pPlayer, message.ServerId, message.NewActorData));
+}
+catch (...)
+{
+    LogCharacterServiceFailure("ownership claim");
 }
 
-void CharacterService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noexcept
+void CharacterService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noexcept try
 {
     if (!acEvent.pPlayer)
         return;
@@ -516,11 +956,16 @@ void CharacterService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noex
             ++it;
     }
 }
+catch (...)
+{
+    LogCharacterServiceFailure("ownership-grant cleanup");
+}
 
-void CharacterService::OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept
+void CharacterService::OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept try
 {
     CharacterSpawnRequest message;
-    Serialize(m_world, acEvent.Entity, &message);
+    if (!Serialize(m_world, acEvent.Entity, &message))
+        return;
 
     const auto& ownerComp = m_world.get<OwnerComponent>(acEvent.Entity);
     if (!GameServer::Get()->SendToPlayersInRange(message, acEvent.Entity, ownerComp.GetOwner()))
@@ -528,9 +973,16 @@ void CharacterService::OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) 
 
     GameServer::Get()->GetWorld().GetScriptService().HandleCharacterSpawn(acEvent.Entity);
 }
-
-void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept
+catch (...)
 {
+    LogCharacterServiceFailure("character-spawn fanout");
+}
+
+void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept try
+{
+    if (!acMessage.pPlayer || !acMessage.Packet.IsDecodedValid)
+        return;
+
     OwnerView<AnimationComponent, MovementComponent, CellIdComponent> view(m_world, acMessage.GetSender());
 
     auto& message = acMessage.Packet;
@@ -553,20 +1005,13 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
 
         if (!SkyrimTogether::Protocol::IsNewerMovementTick(movementComponent.HasTick, movementComponent.Tick, message.Tick))
             continue;
-        movementComponent.Tick = message.Tick;
-        movementComponent.HasTick = true;
 
         auto& update = entry.second;
         auto& movement = update.UpdatedMovement;
 
-        movementComponent.Position = movement.Position;
-        movementComponent.Rotation = glm::vec3(movement.Rotation.x, 0.f, movement.Rotation.y);
-        movementComponent.Variables = movement.Variables;
-        movementComponent.Direction = movement.Direction;
-
-        cellIdComponent.Cell = movement.CellId;
-        cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
-        cellIdComponent.CenterCoords = GridCellCoords::CalculateGridCellCoords(movement.Position.x, movement.Position.y);
+        AnimationVariables variables = movement.Variables;
+        ActionEvent currentAction = animationComponent.CurrentAction;
+        Vector<ActionEvent> pendingActions = animationComponent.Actions;
 
         for (auto& action : update.ActionEvents)
         {
@@ -574,27 +1019,55 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
             if (canceled)
                 continue;
 
-            animationComponent.CurrentAction = action;
-
-            animationComponent.Actions.push_back(animationComponent.CurrentAction);
+            currentAction = action;
+            pendingActions.push_back(currentAction);
         }
 
+        const auto centerCoords = GridCellCoords::CalculateGridCellCoords(movement.Position.x, movement.Position.y);
+
+        movementComponent.Tick = message.Tick;
+        movementComponent.HasTick = true;
+        movementComponent.Position = movement.Position;
+        movementComponent.Rotation = glm::vec3(movement.Rotation.x, 0.f, movement.Rotation.y);
+        SwapAnimationVariables(movementComponent.Variables, variables);
+        movementComponent.Direction = movement.Direction;
+
+        cellIdComponent.Cell = movement.CellId;
+        cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
+        cellIdComponent.CenterCoords = centerCoords;
+
+        swap(animationComponent.CurrentAction, currentAction);
+        animationComponent.Actions.swap(pendingActions);
         animationComponent.ActionsReplayCache.AppendAll(update.ActionEvents);
 
         movementComponent.Sent = false;
     }
 }
+catch (...)
+{
+    LogCharacterServiceFailure("movement request");
+}
 
-void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionRequest>& acMessage) const noexcept
+void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionRequest>& acMessage) const noexcept try
 {
     const auto& message = acMessage.Packet;
     const auto& action = message.Action;
+    const auto validRequiredForm = [](const GameId& acId) noexcept { return acId.BaseId != 0; };
+    const auto validOptionalForm = [&validRequiredForm](const GameId& acId) noexcept {
+        return !acId || validRequiredForm(acId);
+    };
     if (!acMessage.pPlayer ||
         !SkyrimTogether::Protocol::HasCapability(
             acMessage.pPlayer->GetGameplayCapabilities(),
             SkyrimTogether::Protocol::GameplayCapability::ExactAnimationActions) ||
-        message.ServerId == 0 || action.ActionId == 0 || (action.Type & ~0x7u) != 0 ||
+        !action.IsDecodedValid || !action.EventName.IsDecodedValid ||
+        !action.TargetEventName.IsDecodedValid || !action.Variables.IsDecodedValid ||
+        message.ServerId == 0 || !validRequiredForm(action.ActionId) ||
+        !validOptionalForm(action.TargetId) || !validOptionalForm(action.IdleId) ||
+        (action.Type & ~0x7u) != 0 ||
         action.EventName.size() > 127 || action.TargetEventName.size() > 127 ||
+        std::find(action.EventName.begin(), action.EventName.end(), '\0') != action.EventName.end() ||
+        std::find(action.TargetEventName.begin(), action.TargetEventName.end(), '\0') != action.TargetEventName.end() ||
         action.Variables.Booleans.size() != SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount ||
         action.Variables.Floats.size() != SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount ||
         action.Variables.Integers.size() != SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount ||
@@ -622,12 +1095,21 @@ void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionR
         return;
 
     auto& animationComponent = view.get<AnimationComponent>(*itor);
-    animationComponent.CurrentAction = message.Action;
-    animationComponent.Actions.push_back(animationComponent.CurrentAction);
-    animationComponent.ActionsReplayCache.AppendAll(Vector<ActionEvent>{animationComponent.CurrentAction});
+    ActionEvent currentAction = message.Action;
+    Vector<ActionEvent> pendingActions = animationComponent.Actions;
+    pendingActions.push_back(currentAction);
+
+    using std::swap;
+    swap(animationComponent.CurrentAction, currentAction);
+    animationComponent.Actions.swap(pendingActions);
+    animationComponent.ActionsReplayCache.Append(animationComponent.CurrentAction);
+}
+catch (...)
+{
+    LogCharacterServiceFailure("actor action request");
 }
 
-void CharacterService::OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept
+void CharacterService::OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept try
 {
     OwnerView<CharacterComponent> view(m_world, acMessage.GetSender());
 
@@ -641,12 +1123,17 @@ void CharacterService::OnFactionsChanges(const PacketEvent<RequestFactionsChange
             continue;
 
         auto& characterComponent = view.get<CharacterComponent>(*it);
-        characterComponent.FactionsContent = factions;
+        Factions replacement = factions;
+        SwapFactions(characterComponent.FactionsContent, replacement);
         characterComponent.SetDirtyFactions(true);
     }
 }
+catch (...)
+{
+    LogCharacterServiceFailure("faction request");
+}
 
-void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept
+void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -671,8 +1158,12 @@ void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    LogCharacterServiceFailure("mount fanout");
+}
 
-void CharacterService::OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept
+void CharacterService::OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
     const auto actor = static_cast<entt::entity>(message.ActorId);
@@ -688,9 +1179,16 @@ void CharacterService::OnNewPackageRequest(const PacketEvent<NewPackageRequest>&
     if (!GameServer::Get()->SendToPlayersInRange(notify, actor, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
-
-void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMessage) const noexcept
+catch (...)
 {
+    LogCharacterServiceFailure("package fanout");
+}
+
+void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMessage) const noexcept try
+{
+    if (!acMessage.pPlayer)
+        return;
+
     auto view = m_world.view<OwnerComponent, CharacterComponent>();
     auto it = view.find(static_cast<entt::entity>(acMessage.Packet.ActorId));
     if (it == view.end())
@@ -701,17 +1199,23 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
 
     auto& ownerComponent = view.get<OwnerComponent>(*it);
 
-    // Replay cache needs to be cleared when a character respawns
-    m_world.try_get<AnimationComponent>(*it)->ActionsReplayCache.Clear();
+    auto* const pAnimationComponent = m_world.try_get<AnimationComponent>(*it);
+    if (!pAnimationComponent)
+        return;
 
     if (ownerComponent.GetOwner() == acMessage.pPlayer)
     {
         if (!acMessage.Packet.AppearanceBuffer.empty())
         {
             auto& characterComponent = view.get<CharacterComponent>(*it);
-            characterComponent.SaveBuffer = acMessage.Packet.AppearanceBuffer;
+            String appearanceBuffer = acMessage.Packet.AppearanceBuffer;
+            using std::swap;
+            swap(characterComponent.SaveBuffer, appearanceBuffer);
             characterComponent.ChangeFlags = acMessage.Packet.ChangeFlags;
         }
+
+        // Replay cache needs to be cleared when a character respawns.
+        pAnimationComponent->ActionsReplayCache.Clear();
 
         NotifyRespawn notify;
         notify.ActorId = acMessage.Packet.ActorId;
@@ -722,13 +1226,18 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
     else
     {
         CharacterSpawnRequest message;
-        Serialize(m_world, *it, &message);
+        if (!Serialize(m_world, *it, &message))
+            return;
 
         acMessage.GetSender()->Send(message);
     }
 }
+catch (...)
+{
+    LogCharacterServiceFailure("respawn request");
+}
 
-void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept
+void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept try
 {
     if (!bEnableXpSync || !acMessage.pPlayer || !std::isfinite(acMessage.Packet.Experience) ||
         acMessage.Packet.Experience <= 0.0F || acMessage.Packet.Experience > 100000.0F)
@@ -740,8 +1249,12 @@ void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceR
     const auto& partyComponent = acMessage.pPlayer->GetParty();
     GameServer::Get()->SendToParty(notify, partyComponent, acMessage.GetSender());
 }
+catch (...)
+{
+    LogCharacterServiceFailure("experience fanout");
+}
 
-void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acMessage) const noexcept
+void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -753,8 +1266,12 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    LogCharacterServiceFailure("dialogue fanout");
+}
 
-void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept
+void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -767,17 +1284,82 @@ void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acM
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
-
-void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept
+catch (...)
 {
-    auto& message = acMessage.Packet;
+    LogCharacterServiceFailure("subtitle fanout");
+}
 
+void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept try
+{
+    if (!acMessage.pPlayer || !IsValidAssignmentRequest(acMessage.Packet, *acMessage.pPlayer))
+        return;
+
+    auto& message = acMessage.Packet;
     const auto gameId = message.ReferenceId;
     const auto baseId = message.FormId;
+    const auto isPlayer = (gameId.ModId == 0 && gameId.BaseId == 0x14);
+
+    const auto capabilities = acMessage.pPlayer->GetGameplayCapabilities();
+    const bool supportsVRAppearance = SkyrimTogether::Protocol::IsVrGameplayClient(capabilities) &&
+                                      SkyrimTogether::Protocol::HasCapability(
+                                          capabilities,
+                                          SkyrimTogether::Protocol::GameplayCapability::VRAppearanceRelay);
+    if (message.HasVRAppearance != supportsVRAppearance ||
+        (message.HasVRAppearance && !message.InitialVRAppearance.IsValid()))
+    {
+        spdlog::warn("Player {:x} sent a missing or invalid negotiated initial appearance",
+                     acMessage.pPlayer->GetConnectionId());
+        return;
+    }
+
+    QuestLog previousQuestContent{};
+    QuestLog replacementQuestContent{};
+    if (isPlayer && message.HasQuestContent)
+    {
+        previousQuestContent = acMessage.pPlayer->GetQuestLogComponent().QuestContent;
+        replacementQuestContent = message.QuestContent;
+    }
 
     const auto cEntity = m_world.create();
+    struct AssignmentRollback
+    {
+        World& ServerWorld;
+        Player* pPlayer;
+        entt::entity Entity;
+        VRAppearanceRelayService* pAppearanceService{};
+        QuestLog PreviousQuestContent{};
+        std::uint32_t AppearancePlayerId{};
+        std::uint32_t AppearanceSequence{};
+        bool CharacterAssigned{};
+        bool QuestChanged{};
+        bool AppearanceSeeded{};
+        bool Committed{};
+
+        ~AssignmentRollback() noexcept
+        {
+            if (Committed)
+                return;
+
+            if (pPlayer && CharacterAssigned)
+                TP_UNUSED(pPlayer->ClearCharacter(Entity));
+            if (pPlayer && QuestChanged)
+            {
+                try
+                {
+                    pPlayer->GetQuestLogComponent().QuestContent = std::move(PreviousQuestContent);
+                }
+                catch (...)
+                {
+                    spdlog::critical("Failed to restore quest state after rejected character assignment");
+                }
+            }
+            if (pAppearanceService && AppearanceSeeded)
+                pAppearanceService->DiscardSeededAppearance(AppearancePlayerId, AppearanceSequence);
+            if (ServerWorld.valid(Entity))
+                ServerWorld.destroy(Entity);
+        }
+    } assignmentRollback{m_world, acMessage.pPlayer, cEntity};
     const auto isTemporary = gameId.ModId == std::numeric_limits<uint32_t>::max();
-    const auto isPlayer = (gameId.ModId == 0 && gameId.BaseId == 0x14);
     const auto isCustom = isPlayer || isTemporary;
 
     // For player characters and temporary forms
@@ -816,6 +1398,11 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     characterComponent.SetDragon(message.IsDragon);
     characterComponent.SetMount(message.IsMount);
     characterComponent.SetPlayerSummon(message.IsPlayerSummon);
+    if (message.HasVRAppearance)
+    {
+        characterComponent.InitialVRAppearance = message.InitialVRAppearance;
+        characterComponent.HasVRAppearance = true;
+    }
 
     auto& inventoryComponent = m_world.emplace<InventoryComponent>(cEntity);
     inventoryComponent.Content = message.CurrentActorData.InitialInventory;
@@ -831,20 +1418,49 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     movementComponent.Rotation = {message.Rotation.x, 0.f, message.Rotation.y};
     movementComponent.Sent = false;
 
-    m_world.emplace<AnimationComponent>(cEntity);
+    auto& animationComponent = m_world.emplace<AnimationComponent>(cEntity);
+    if (HasAssignmentAction(message.LatestAction))
+    {
+        if (!IsValidAssignmentAction(message.LatestAction))
+        {
+            m_world.destroy(cEntity);
+            spdlog::warn("Player {:x} sent an invalid initial animation action", acMessage.pPlayer->GetConnectionId());
+            return;
+        }
+        animationComponent.CurrentAction = message.LatestAction;
+        animationComponent.ActionsReplayCache.Append(animationComponent.CurrentAction);
+    }
 
-    // If this is a player character store a ref and trigger an event
+    if (isPlayer && message.HasVRAppearance)
+    {
+        auto& appearanceService = m_world.ctx().at<VRAppearanceRelayService>();
+        if (!appearanceService.SeedAppearance(acMessage.pPlayer->GetId(), message.InitialVRAppearance))
+        {
+            spdlog::warn("Player {:x} initial appearance could not be retained",
+                         acMessage.pPlayer->GetConnectionId());
+            return;
+        }
+        assignmentRollback.pAppearanceService = &appearanceService;
+        assignmentRollback.AppearancePlayerId = acMessage.pPlayer->GetId();
+        assignmentRollback.AppearanceSequence = message.InitialVRAppearance.Sequence;
+        assignmentRollback.AppearanceSeeded = true;
+    }
+
+    // Establish player-owned state before publishing the assignment response.
+    // The rollback restores it if response serialization or queueing fails.
     if (isPlayer)
     {
         const auto pPlayer = acMessage.pPlayer;
 
         pPlayer->SetCharacter(cEntity);
+        assignmentRollback.CharacterAssigned = true;
         if (message.HasQuestContent)
-            pPlayer->GetQuestLogComponent().QuestContent = message.QuestContent;
+        {
+            pPlayer->GetQuestLogComponent().QuestContent = std::move(replacementQuestContent);
+            assignmentRollback.PreviousQuestContent = std::move(previousQuestContent);
+            assignmentRollback.QuestChanged = true;
+        }
         characterComponent.PlayerId = pPlayer->GetId();
-
-        auto& dispatcher = m_world.GetDispatcher();
-        dispatcher.trigger(PlayerEnterWorldEvent(pPlayer));
     }
 
     AssignCharacterResponse response{};
@@ -855,21 +1471,33 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
 
     pServer->Send(acMessage.pPlayer->GetConnectionId(), response);
 
+    // The owner now has a usable server ID. Event callbacks may publish it to
+    // other systems and clients, so the assignment is committed first.
+    assignmentRollback.Committed = true;
+
     auto& dispatcher = m_world.GetDispatcher();
+    if (isPlayer)
+        dispatcher.trigger(PlayerEnterWorldEvent(acMessage.pPlayer));
     dispatcher.trigger(CharacterSpawnedEvent(cEntity));
 }
-
-void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServerId,
-                                         const ActorData& acActorData) const noexcept
+catch (...)
 {
-    if (!apPlayer)
-        return;
+    LogCharacterServiceFailure("character creation");
+}
+
+bool CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServerId,
+                                         const ActorData& acActorData) const noexcept try
+{
+    if (!apPlayer || !IsValidActorData(
+                         acActorData,
+                         SkyrimTogether::Protocol::IsVrGameplayClient(apPlayer->GetGameplayCapabilities())))
+        return false;
     auto view = m_world.view<OwnerComponent>();
     const auto it = view.find(static_cast<entt::entity>(acServerId));
     if (it == view.end())
     {
         spdlog::warn("Client {:X} requested ownership of an entity that doesn't exist ({:X})!", apPlayer->GetConnectionId(), acServerId);
-        return;
+        return false;
     }
 
     const auto* character = m_world.try_get<CharacterComponent>(*it);
@@ -878,24 +1506,37 @@ void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
     {
         spdlog::warn("VR client {:X} attempted NPC ownership claim without negotiated capability",
                      apPlayer->GetConnectionId());
-        return;
+        return false;
     }
 
     auto& characterOwnerComponent = view.get<OwnerComponent>(*it);
+    auto* const pPreviousOwner = characterOwnerComponent.GetOwner();
+    auto* const pActorValuesComponent = m_world.try_get<ActorValuesComponent>(*it);
+    auto* const pInventoryComponent = m_world.try_get<InventoryComponent>(*it);
+    auto* const pCharacterComponent = m_world.try_get<CharacterComponent>(*it);
+    PendingActorData pendingActorData{};
+    PrepareActorData(acActorData, pActorValuesComponent != nullptr, pInventoryComponent != nullptr,
+                     pendingActorData);
 
-    if (characterOwnerComponent.GetOwner() && characterOwnerComponent.GetOwner() != apPlayer)
+    if (pPreviousOwner && pPreviousOwner != apPlayer)
     {
         NotifyRelinquishControl notify;
         notify.ServerId = acServerId;
-        characterOwnerComponent.pOwner->Send(notify);
+        pPreviousOwner->Send(notify);
     }
+
+    CommitActorData(pActorValuesComponent, pInventoryComponent, pCharacterComponent, acActorData,
+                    pendingActorData);
 
     characterOwnerComponent.SetOwner(apPlayer);
     characterOwnerComponent.InvalidOwners.clear();
     if (auto* movementComponent = m_world.try_get<MovementComponent>(*it))
         movementComponent->HasTick = false;
 
-    BroadcastActorData(apPlayer, *it, acActorData);
+    // Ownership is now committed. A later notification failure must not put
+    // the entity back under an owner that has already relinquished control.
+    if (!BroadcastActorData(apPlayer, *it, acActorData))
+        LogCharacterServiceFailure("ownership actor-data fanout");
 
     if (character && !character->IsPlayer() &&
         SkyrimTogether::Protocol::HasCapability(
@@ -906,13 +1547,26 @@ void CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
         completion.ServerId = acServerId;
         // A zero token is the explicit completion acknowledgment, never a grant.
         completion.GrantToken = 0;
-        apPlayer->Send(completion);
+        try
+        {
+            apPlayer->Send(completion);
+        }
+        catch (...)
+        {
+            LogCharacterServiceFailure("ownership completion notification");
+        }
     }
 
     spdlog::debug("\tOwnership claimed {:X}", acServerId);
+    return true;
+}
+catch (...)
+{
+    LogCharacterServiceFailure("ownership transfer");
+    return false;
 }
 
-void CharacterService::ExpireOwnershipGrants() const noexcept
+void CharacterService::ExpireOwnershipGrants() const noexcept try
 {
     const auto now = std::chrono::steady_clock::now();
     for (auto it = m_pendingOwnershipGrants.begin(); it != m_pendingOwnershipGrants.end();) {
@@ -922,9 +1576,16 @@ void CharacterService::ExpireOwnershipGrants() const noexcept
             ++it;
     }
 }
-
-ActorData CharacterService::BuildActorData(const entt::entity acEntity) const noexcept
+catch (...)
 {
+    LogCharacterServiceFailure("ownership-grant expiry");
+}
+
+bool CharacterService::BuildActorData(const entt::entity acEntity, ActorData* apActorData) const noexcept try
+{
+    if (!apActorData)
+        return false;
+
     ActorData actorData{};
 
     const auto* pActorValuesComponent = m_world.try_get<ActorValuesComponent>(acEntity);
@@ -947,44 +1608,52 @@ ActorData CharacterService::BuildActorData(const entt::entity acEntity) const no
         actorData.IsWeaponDrawn = pCharacterComponent->IsWeaponDrawn();
     }
 
-    return actorData;
+    using std::swap;
+    swap(*apActorData, actorData);
+    return true;
+}
+catch (...)
+{
+    LogCharacterServiceFailure("actor-data snapshot");
+    return false;
 }
 
-void CharacterService::ApplyActorData(const entt::entity acEntity, const ActorData& acActorData) const noexcept
+bool CharacterService::ApplyActorData(const entt::entity acEntity, const ActorData& acActorData) const noexcept try
 {
     auto* pActorValuesComponent = m_world.try_get<ActorValuesComponent>(acEntity);
-    if (pActorValuesComponent)
-    {
-        pActorValuesComponent->CurrentActorValues = acActorData.InitialActorValues;
-    }
-
     auto* pInventoryComponent = m_world.try_get<InventoryComponent>(acEntity);
-    if (pInventoryComponent)
-    {
-        pInventoryComponent->Content = acActorData.InitialInventory;
-    }
-
     auto* pCharacterComponent = m_world.try_get<CharacterComponent>(acEntity);
-    if (pCharacterComponent)
-    {
-        pCharacterComponent->SetDead(acActorData.IsDead);
-        pCharacterComponent->SetWeaponDrawn(acActorData.IsWeaponDrawn);
-    }
+
+    // Construct every variable-sized replacement before changing world state.
+    PendingActorData pendingActorData{};
+    PrepareActorData(acActorData, pActorValuesComponent != nullptr, pInventoryComponent != nullptr,
+                     pendingActorData);
+    CommitActorData(pActorValuesComponent, pInventoryComponent, pCharacterComponent, acActorData,
+                    pendingActorData);
+    return true;
+}
+catch (...)
+{
+    LogCharacterServiceFailure("actor-data application");
+    return false;
 }
 
-void CharacterService::BroadcastActorData(Player* apPlayer, const entt::entity acEntity,
-                                          const ActorData& acActorData) const noexcept
+bool CharacterService::BroadcastActorData(Player* apPlayer, const entt::entity acEntity,
+                                          const ActorData& acActorData) const noexcept try
 {
-    ApplyActorData(acEntity, acActorData);
-
     NotifySpawnData notifySpawnData;
     notifySpawnData.Id = World::ToInteger(acEntity);
     notifySpawnData.NewActorData = acActorData;
 
-    GameServer::Get()->SendToPlayersInRange(notifySpawnData, acEntity, apPlayer);
+    return GameServer::Get()->SendToPlayersInRange(notifySpawnData, acEntity, apPlayer);
+}
+catch (...)
+{
+    LogCharacterServiceFailure("actor-data fanout");
+    return false;
 }
 
-void CharacterService::ProcessFactionsChanges() const noexcept
+void CharacterService::ProcessFactionsChanges() const noexcept try
 {
     static std::chrono::steady_clock::time_point lastSendTimePoint;
     constexpr auto cDelayBetweenSnapshots = 2000ms;
@@ -992,8 +1661,6 @@ void CharacterService::ProcessFactionsChanges() const noexcept
     const auto now = std::chrono::steady_clock::now();
     if (now - lastSendTimePoint < cDelayBetweenSnapshots)
         return;
-
-    lastSendTimePoint = now;
 
     const auto characterView = m_world.view<CellIdComponent, CharacterComponent, OwnerComponent>();
 
@@ -1023,17 +1690,30 @@ void CharacterService::ProcessFactionsChanges() const noexcept
             change = characterComponent.FactionsContent;
         }
 
-        characterComponent.SetDirtyFactions(false);
     }
 
-    for (auto [pPlayer, message] : messages)
+    for (auto& [pPlayer, message] : messages)
     {
         if (!message.Changes.empty())
             pPlayer->Send(message);
     }
+
+    for (auto entity : characterView)
+    {
+        auto& characterComponent = characterView.get<CharacterComponent>(entity);
+        if (characterComponent.IsDirtyFactions())
+            characterComponent.SetDirtyFactions(false);
+    }
+
+    lastSendTimePoint = now;
+}
+catch (...)
+{
+    // Dirty flags remain set so the next snapshot can retry the entire fanout.
+    LogCharacterServiceFailure("faction snapshot fanout");
 }
 
-void CharacterService::ProcessMovementChanges() const noexcept
+void CharacterService::ProcessMovementChanges() const noexcept try
 {
     static std::chrono::steady_clock::time_point lastSendTimePoint;
     constexpr auto cDelayBetweenSnapshots = 1000ms / 50;
@@ -1041,8 +1721,6 @@ void CharacterService::ProcessMovementChanges() const noexcept
     const auto now = std::chrono::steady_clock::now();
     if (now - lastSendTimePoint < cDelayBetweenSnapshots)
         return;
-
-    lastSendTimePoint = now;
 
     const auto characterView = m_world.view<CharacterComponent, CellIdComponent, MovementComponent, AnimationComponent, OwnerComponent>();
 
@@ -1093,17 +1771,24 @@ void CharacterService::ProcessMovementChanges() const noexcept
         }
     }
 
-    m_world.view<AnimationComponent>().each([](AnimationComponent& animationComponent)
-    {
-        // Remove actions we've sent
-        animationComponent.Actions.clear();
-    });
-
-    m_world.view<MovementComponent>().each([](MovementComponent& movementComponent) { movementComponent.Sent = true; });
-
     for (auto& [pPlayer, message] : messages)
     {
         if (!message.Updates.empty())
             pPlayer->Send(message);
     }
+
+    m_world.view<AnimationComponent>().each([](AnimationComponent& animationComponent)
+    {
+        // Remove actions only after every recipient accepted its snapshot.
+        animationComponent.Actions.clear();
+    });
+
+    m_world.view<MovementComponent>().each([](MovementComponent& movementComponent) { movementComponent.Sent = true; });
+
+    lastSendTimePoint = now;
+}
+catch (...)
+{
+    // Preserve actions and unsent movement for the next snapshot attempt.
+    LogCharacterServiceFailure("movement snapshot fanout");
 }

@@ -8,6 +8,9 @@ using TiltedPhoques::Vector;
 struct AssignObjectsRequest final : ClientMessage
 {
     static constexpr ClientOpcode Opcode = kAssignObjectsRequest;
+    static constexpr std::size_t kMaximumWireObjects = 255;
+    static constexpr std::size_t kMaximumTotalInventoryEntries = 4096;
+    static constexpr std::size_t kMaximumTotalInventoryEffects = 4096;
 
     AssignObjectsRequest()
         : ClientMessage(Opcode)
@@ -22,4 +25,5 @@ struct AssignObjectsRequest final : ClientMessage
     bool operator==(const AssignObjectsRequest& acRhs) const noexcept { return Objects == acRhs.Objects && GetOpcode() == acRhs.GetOpcode(); }
 
     Vector<ObjectData> Objects{};
+    bool IsDecodedValid{true};
 };

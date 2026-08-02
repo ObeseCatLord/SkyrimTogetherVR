@@ -1,5 +1,6 @@
 #include <Structs/AnimationVariables.h>
 #include <TiltedCore/Serialization.hpp>
+#include <cmath>
 #include <iostream>
 
 bool AnimationVariables::operator==(const AnimationVariables& acRhs) const noexcept
@@ -108,27 +109,66 @@ void AnimationVariables::GenerateDiff(const AnimationVariables& aPrevious, Tilte
 // The Changed? table is scanned and for each true bit, the corresponsing Integer
 // or Float is deserialized.
 // 
-void AnimationVariables::ApplyDiff(TiltedPhoques::Buffer::Reader& aReader)
+bool AnimationVariables::ApplyDiff(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
-    size_t booleansSize = TiltedPhoques::Serialization::ReadVarInt(aReader);
-    size_t integersSize = TiltedPhoques::Serialization::ReadVarInt(aReader);
-    size_t floatsSize   = TiltedPhoques::Serialization::ReadVarInt(aReader);
-    if (Integers.size() != integersSize)
-        Integers.assign(integersSize, 0);
-    if (Floats.size() != floatsSize)
-        Floats.assign(floatsSize, 0.f);
-    
-    TiltedPhoques::Vector<bool> changedVector(booleansSize + integersSize + floatsSize);
-    auto chars = TiltedPhoques::Serialization::ReadString(aReader);
-    String_to_VectorBool(chars, changedVector);
+    try
+    {
+        const auto booleansSize = TiltedPhoques::Serialization::ReadVarInt(aReader);
+        const auto integersSize = TiltedPhoques::Serialization::ReadVarInt(aReader);
+        const auto floatsSize = TiltedPhoques::Serialization::ReadVarInt(aReader);
+        if (booleansSize > kMaximumBooleanCount || integersSize > kMaximumIntegerCount ||
+            floatsSize > kMaximumFloatCount || booleansSize > kMaximumTotalCount - integersSize ||
+            booleansSize + integersSize > kMaximumTotalCount - floatsSize)
+        {
+            IsDecodedValid = false;
+            return false;
+        }
 
-    Booleans.assign(changedVector.begin(), changedVector.begin() + booleansSize);
+        const auto totalSize = static_cast<std::size_t>(booleansSize + integersSize + floatsSize);
+        auto integers = Integers;
+        auto floats = Floats;
+        if (integers.size() != integersSize)
+            integers.assign(static_cast<std::size_t>(integersSize), 0);
+        if (floats.size() != floatsSize)
+            floats.assign(static_cast<std::size_t>(floatsSize), 0.f);
 
-    auto biter = changedVector.begin() + booleansSize;
-    for (size_t i = 0; i < integersSize; i++)
-        if (*biter++)
-            Integers[i] = TiltedPhoques::Serialization::ReadVarInt(aReader);
-    for (size_t i = 0; i < floatsSize; i++)
-        if (*biter++)
-            Floats[i] = TiltedPhoques::Serialization::ReadFloat(aReader);
+        TiltedPhoques::Vector<bool> changedVector(totalSize);
+        const auto chars = TiltedPhoques::Serialization::ReadString(aReader);
+        if (chars.size() != (totalSize + 7) / 8)
+        {
+            IsDecodedValid = false;
+            return false;
+        }
+        String_to_VectorBool(chars, changedVector);
+
+        TiltedPhoques::Vector<bool> booleans(
+            changedVector.begin(), changedVector.begin() + static_cast<std::ptrdiff_t>(booleansSize));
+        auto biter = changedVector.begin() + static_cast<std::ptrdiff_t>(booleansSize);
+        for (std::size_t i = 0; i < integersSize; i++)
+            if (*biter++)
+                integers[i] = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        for (std::size_t i = 0; i < floatsSize; i++)
+        {
+            if (!*biter++)
+                continue;
+            const auto value = TiltedPhoques::Serialization::ReadFloat(aReader);
+            if (!std::isfinite(value))
+            {
+                IsDecodedValid = false;
+                return false;
+            }
+            floats[i] = value;
+        }
+
+        Booleans = std::move(booleans);
+        Integers = std::move(integers);
+        Floats = std::move(floats);
+        IsDecodedValid = true;
+        return true;
+    }
+    catch (...)
+    {
+        IsDecodedValid = false;
+        return false;
+    }
 }

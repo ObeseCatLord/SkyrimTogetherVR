@@ -1,5 +1,7 @@
 #include <Structs/Movement.h>
 #include <TiltedCore/Serialization.hpp>
+#include <cmath>
+#include <cstring>
 
 using TiltedPhoques::Serialization;
 
@@ -25,15 +27,25 @@ void Movement::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 
 void Movement::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
     CellId.Deserialize(aReader);
     WorldSpaceId.Deserialize(aReader);
     Position.Deserialize(aReader);
     Rotation.Deserialize(aReader);
     Variables = AnimationVariables{};
-    Variables.ApplyDiff(aReader);
+    if (!Variables.ApplyDiff(aReader))
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     uint64_t tmp = 0;
-    aReader.ReadBits(tmp, 32);
-    uint32_t tmp32 = tmp & 0xFFFFFFFF;
-    Direction = *reinterpret_cast<float*>(&tmp32);
+    if (!aReader.ReadBits(tmp, 32))
+    {
+        IsDecodedValid = false;
+        return;
+    }
+    const uint32_t tmp32 = tmp & 0xFFFFFFFF;
+    std::memcpy(&Direction, &tmp32, sizeof(Direction));
+    IsDecodedValid = std::isfinite(Direction);
 }

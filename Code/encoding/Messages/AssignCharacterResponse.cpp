@@ -18,6 +18,7 @@ void AssignCharacterResponse::SerializeRaw(TiltedPhoques::Buffer::Writer& aWrite
 
 void AssignCharacterResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    IsDecodedValid = true;
     Cookie = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     ServerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     PlayerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
@@ -25,8 +26,23 @@ void AssignCharacterResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRea
     CellId.Deserialize(aReader);
     WorldSpaceId.Deserialize(aReader);
     AllActorValues.Deserialize(aReader);
+    if (!AllActorValues.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     CurrentInventory.Deserialize(aReader);
+    if (!CurrentInventory.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     ActionsToReplay.Deserialize(aReader);
+    if (!ActionsToReplay.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     Owner = Serialization::ReadBool(aReader);
     IsDead = Serialization::ReadBool(aReader);
     IsWeaponDrawn = Serialization::ReadBool(aReader);

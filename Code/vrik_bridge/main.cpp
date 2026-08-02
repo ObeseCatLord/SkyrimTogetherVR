@@ -335,6 +335,18 @@ struct ShutdownJoiner
 ShutdownJoiner g_shutdownJoiner;
 }
 
+extern "C" __declspec(dllexport) void __cdecl SkyrimTogetherVR_CaptureVrikSnapshot() noexcept
+{
+    try
+    {
+        CaptureVrikSnapshot();
+    }
+    catch (...)
+    {
+        g_snapshotAvailable.store(false, std::memory_order_release);
+    }
+}
+
 extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSkse, PluginInfo* apInfo)
 {
     if (!apSkse || !apInfo || apSkse->isEditor)

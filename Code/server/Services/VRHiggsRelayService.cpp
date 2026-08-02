@@ -37,9 +37,9 @@ bool IsLeaseReleaseEvent(VRHiggsEventSnapshot::Kind aKind) noexcept
 }
 
 bool HasHiggsObjectAuthority(const VRHiggsState& acState, uint32_t aPlayerId, uint64_t aTick,
-                             bool aProcessLastEvent) noexcept
+                             bool aProcessLastEvent)
 {
-    const auto renewHandLease = [aPlayerId, aTick](const VRHiggsHandState& acHand) noexcept {
+    const auto renewHandLease = [aPlayerId, aTick](const VRHiggsHandState& acHand) {
         return !acHand.HoldingObject || !acHand.GrabbedObject ||
                VRObjectAuthority::AcquireOrRenew(acHand.GrabbedObject, aPlayerId, aTick);
     };
@@ -67,7 +67,7 @@ VRHiggsRelayService::VRHiggsRelayService(World& aWorld, entt::dispatcher& aDispa
 {
 }
 
-void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>& acMessage) noexcept
+void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -101,6 +101,10 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR HIGGS relay rejected an update after an allocation or fanout failure");
+}
 
 void VRHiggsRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -111,7 +115,7 @@ void VRHiggsRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcep
     }
 }
 
-bool VRHiggsRelayService::ShouldRelayHiggsState(uint32_t aPlayerId, const RequestVRHiggsState& acRequest) noexcept
+bool VRHiggsRelayService::ShouldRelayHiggsState(uint32_t aPlayerId, const RequestVRHiggsState& acRequest)
 {
     const auto& statePacket = acRequest.State;
     if (statePacket.Sequence == 0 || !HasHiggsObservation(statePacket))

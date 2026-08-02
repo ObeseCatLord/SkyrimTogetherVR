@@ -77,7 +77,7 @@ DiscoveryService::DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher)
     m_connectedConnection = m_dispatcher.sink<ConnectedEvent>().connect<&DiscoveryService::OnConnected>(this);
 
 #if TP_SKYRIM_VR
-    spdlog::info("SkyrimTogetherVR discovery load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target");
+    spdlog::info("SkyrimTogetherVR discovery lifecycle events are owned by the CommonLib gameplay bridge");
 #else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)

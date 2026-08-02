@@ -80,11 +80,15 @@ VRSaveLoadService::VRSaveLoadService(World& aWorld, entt::dispatcher& aDispatche
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRSaveLoadService::OnDisconnected>(this);
     m_connectionErrorConnection = aDispatcher.sink<ConnectionErrorEvent>().connect<&VRSaveLoadService::OnConnectionError>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRSaveLoadService lifecycle sink is owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetLoadGameEventData().RegisterSink(this);
     else
         spdlog::warn("VRSaveLoadService could not register TESLoadGameEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 BSTEventResult VRSaveLoadService::OnEvent(const TESLoadGameEvent* apEvent, const EventDispatcher<TESLoadGameEvent>* apSender)

@@ -20,8 +20,8 @@
   "commonLibSseNg": {
     "repository": "https://github.com/alandtse/CommonLibVR.git",
     "branch": "ng",
-    "tag": "v4.37.0",
-    "commit": "d36bc08cae5d445804d4c22ccd49fec4e9dfbdc4",
+    "tag": "v5.4.2",
+    "commit": "274b463677936660797b6ada518258fe5e235f3a",
     "submodulePath": "Libraries/CommonLibSSE-NG"
   },
   "vrAddressLibrary": {
@@ -30,7 +30,7 @@
     "sha256": "2c2ad2630d9500dd62683f99bfb75f7f17dcfd39bf21eec60749de908851a558"
   },
   "gameplayBridge": {
-    "abiVersion": 12,
-    "protocolCapabilityRevision": 20
+    "abiVersion": 14,
+    "protocolCapabilityRevision": 22
   }
 }

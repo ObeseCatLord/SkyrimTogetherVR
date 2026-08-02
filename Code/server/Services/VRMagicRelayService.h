@@ -25,7 +25,7 @@ private:
 
     void OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicEffectEvent>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
-    [[nodiscard]] bool ShouldRelayMagicEffect(uint32_t aPlayerId, const RequestVRMagicEffectEvent& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayMagicEffect(uint32_t aPlayerId, const RequestVRMagicEffectEvent& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerMagicRelayState> m_playerMagicRelayState{};

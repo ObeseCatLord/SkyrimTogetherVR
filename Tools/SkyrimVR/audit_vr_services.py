@@ -55,10 +55,11 @@ REQUIRED_SAVELOAD_WORLD_TOKENS = (
 
 REQUIRED_XMAKE_TOKENS = (
     "local observation_services = options.observation_services or false",
+    "local higgs_service = options.higgs_service",
     "local pose_service = options.pose_service or false",
     "local remote_player_proxy = options.remote_player_proxy or false",
     'add_defines("TP_SKYRIM_VR_ENABLE_INVENTORY_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
-    'add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
+    'add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(higgs_service))',
     'add_defines("TP_SKYRIM_VR_ENABLE_POSE_SERVICE=" .. vr_define_value(pose_service))',
     'add_defines("TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE=" .. vr_define_value(pose_service))',
     'add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE=" .. vr_define_value(remote_player_proxy))',

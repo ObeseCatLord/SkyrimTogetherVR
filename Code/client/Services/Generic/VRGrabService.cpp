@@ -72,11 +72,15 @@ VRGrabService::VRGrabService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRGrabService::OnPlayerLeft>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRGrabService::OnDisconnected>(this);
 
+#if TP_SKYRIM_VR
+    spdlog::info("VRGrabService native sink is owned by the CommonLib gameplay bridge");
+#else
     auto* pEventDispatcherManager = EventDispatcherManager::Get();
     if (pEventDispatcherManager)
         pEventDispatcherManager->GetGrabReleaseEventData().RegisterSink(this);
     else
         spdlog::warn("VRGrabService could not register TESGrabReleaseEvent sink; dispatcher manager is unavailable");
+#endif
 }
 
 BSTEventResult VRGrabService::OnEvent(const TESGrabReleaseEvent* apEvent, const EventDispatcher<TESGrabReleaseEvent>* apSender)

@@ -25,7 +25,7 @@ VRMovementRelayService::VRMovementRelayService(World& aWorld, entt::dispatcher& 
 {
 }
 
-void VRMovementRelayService::OnVRMovementUpdate(const PacketEvent<RequestVRMovementUpdate>& acMessage) noexcept
+void VRMovementRelayService::OnVRMovementUpdate(const PacketEvent<RequestVRMovementUpdate>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -59,6 +59,10 @@ void VRMovementRelayService::OnVRMovementUpdate(const PacketEvent<RequestVRMovem
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR movement relay rejected an update after an allocation or fanout failure");
+}
 
 void VRMovementRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -66,7 +70,7 @@ void VRMovementRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noex
         m_playerMovementRelayState.erase(acEvent.pPlayer->GetId());
 }
 
-bool VRMovementRelayService::ShouldRelayMovement(uint32_t aPlayerId, const RequestVRMovementUpdate& acRequest) noexcept
+bool VRMovementRelayService::ShouldRelayMovement(uint32_t aPlayerId, const RequestVRMovementUpdate& acRequest)
 {
     const auto& movement = acRequest.Movement;
     if (movement.Sequence == 0)

@@ -361,7 +361,7 @@ void PopulateGraphChunk(
     return true;
 }
 
-void PublishLocalAction(RE::Actor& a_actor, const RE::TESActionData& a_data) noexcept
+void PublishLocalAction(RE::Actor& a_actor, const RE::TESActionData& a_data)
 {
     auto& endpoint = BridgeEndpoint::Get();
     if (!endpoint.IsOperational() ||
@@ -443,7 +443,7 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
     }
 }
 
-[[nodiscard]] CommandStatus StageGraph(const CommandRecord& a_command) noexcept
+[[nodiscard]] CommandStatus StageGraph(const CommandRecord& a_command)
 {
     const auto& payload = a_command.Payload.StageActorActionGraphChunk;
     if (payload.TargetHandle.Value == 0 || payload.ActorLocalFormId != 0 || payload.Reserved0 != 0 ||
@@ -469,7 +469,7 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
                CommandStatus::Malformed : CommandStatus::Success;
 }
 
-[[nodiscard]] CommandStatus StageText(const CommandRecord& a_command) noexcept
+[[nodiscard]] CommandStatus StageText(const CommandRecord& a_command)
 {
     const auto& payload = a_command.Payload.StageActorActionTextChunk;
     if (payload.TargetHandle.Value == 0 || payload.TargetLocalFormId != 0 ||
@@ -504,8 +504,10 @@ void ReleaseActionData(RE::TESActionData* a_data) noexcept
 {
     if (!a_data)
         return;
-    // CommonLib exposes the engine constructor but not a callable destructor.
-    // Release the two owning field families before returning engine memory.
+    // Original Skyrim Together uses a stack TESActionData and releases these
+    // same two NiPointer and two BSFixedString owner families immediately after
+    // the synchronous engine call. CommonLib's Create uses the game allocator;
+    // no other fields in this 0x60-byte layout own memory.
     a_data->source.reset();
     a_data->target.reset();
     a_data->animEvent = "";
@@ -513,7 +515,7 @@ void ReleaseActionData(RE::TESActionData* a_data) noexcept
     RE::free(a_data);
 }
 
-[[nodiscard]] CommandStatus ApplyAction(const CommandRecord& a_command) noexcept
+[[nodiscard]] CommandStatus ApplyAction(const CommandRecord& a_command)
 {
     const auto payload = a_command.Payload.ApplyActorAction;
     if (payload.TargetHandle.Value == 0 || payload.ActorLocalFormId != 0 || payload.ActionLocalFormId == 0 ||

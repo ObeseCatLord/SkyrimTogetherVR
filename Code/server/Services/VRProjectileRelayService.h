@@ -25,7 +25,7 @@ private:
 
     void OnVRProjectileEvent(const PacketEvent<RequestVRProjectileEvent>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
-    [[nodiscard]] bool ShouldRelayProjectile(uint32_t aPlayerId, const RequestVRProjectileEvent& acRequest) noexcept;
+    [[nodiscard]] bool ShouldRelayProjectile(uint32_t aPlayerId, const RequestVRProjectileEvent& acRequest);
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerProjectileRelayState> m_playerProjectileRelayState{};

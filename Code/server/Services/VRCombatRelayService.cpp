@@ -55,7 +55,7 @@ VRCombatRelayService::VRCombatRelayService(World& aWorld, entt::dispatcher& aDis
 {
 }
 
-void VRCombatRelayService::OnVRCombatHitEvent(const PacketEvent<RequestVRCombatHitEvent>& acMessage) noexcept
+void VRCombatRelayService::OnVRCombatHitEvent(const PacketEvent<RequestVRCombatHitEvent>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -89,6 +89,10 @@ void VRCombatRelayService::OnVRCombatHitEvent(const PacketEvent<RequestVRCombatH
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR combat relay rejected an update after an allocation or fanout failure");
+}
 
 void VRCombatRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -97,7 +101,7 @@ void VRCombatRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexce
 }
 
 bool VRCombatRelayService::ShouldRelayCombatHit(
-    uint32_t aPlayerId, const RequestVRCombatHitEvent& acRequest) noexcept
+    uint32_t aPlayerId, const RequestVRCombatHitEvent& acRequest)
 {
     const auto& hit = acRequest.Hit;
     if (hit.Sequence == 0 || !HasCombatHitContext(hit))

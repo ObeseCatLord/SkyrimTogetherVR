@@ -30,7 +30,7 @@ VRActivationRelayService::VRActivationRelayService(World& aWorld, entt::dispatch
 {
 }
 
-void VRActivationRelayService::OnVRActivationEvent(const PacketEvent<RequestVRActivationEvent>& acMessage) noexcept
+void VRActivationRelayService::OnVRActivationEvent(const PacketEvent<RequestVRActivationEvent>& acMessage) noexcept try
 {
     TP_UNUSED(m_world);
 
@@ -64,6 +64,10 @@ void VRActivationRelayService::OnVRActivationEvent(const PacketEvent<RequestVRAc
             acMessage.pPlayer))
         spdlog::warn("VR relay dropped because sender has no routable character");
 }
+catch (...)
+{
+    spdlog::error("VR activation relay rejected an update after an allocation or fanout failure");
+}
 
 void VRActivationRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
@@ -72,7 +76,7 @@ void VRActivationRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) no
 }
 
 bool VRActivationRelayService::ShouldRelayActivation(
-    uint32_t aPlayerId, const RequestVRActivationEvent& acRequest) noexcept
+    uint32_t aPlayerId, const RequestVRActivationEvent& acRequest)
 {
     const auto& activation = acRequest.Activation;
     if (activation.Sequence == 0 || !HasActivationObject(activation))

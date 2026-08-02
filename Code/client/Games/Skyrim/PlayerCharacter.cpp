@@ -54,6 +54,7 @@ PlayerCharacter* PlayerCharacter::Get() noexcept
 const GameArray<TintMask*>& PlayerCharacter::GetTints() const noexcept
 {
 #if TP_SKYRIM_VR
+    constexpr std::uint32_t kMaximumTintCount = 64;
     static TintMask* emptyTintEntry = nullptr;
     static const GameArray<TintMask*> emptyTints = []
     {
@@ -61,6 +62,19 @@ const GameArray<TintMask*>& PlayerCharacter::GetTints() const noexcept
         result.data = &emptyTintEntry;
         return result;
     }();
+
+    const auto isValid = [](const GameArray<TintMask*>* apTints) noexcept {
+        return apTints && apTints->length <= apTints->capacity && apTints->length <= kMaximumTintCount &&
+               (apTints->length == 0 || apTints->data != nullptr);
+    };
+    const auto* const pBaseTints = Skyrim::RuntimeLayout::Ptr<GameArray<TintMask*>>(
+        this, VrCommonLibOffsets::BaseTints);
+    const auto* const pOverlayTints = Skyrim::RuntimeLayout::Value<GameArray<TintMask*>*>(
+        this, VrCommonLibOffsets::OverlayTints);
+    if (isValid(pOverlayTints))
+        return *pOverlayTints;
+    if (isValid(pBaseTints))
+        return *pBaseTints;
     return emptyTints;
 #else
     if (overlayTints)
@@ -73,7 +87,10 @@ const GameArray<TintMask*>& PlayerCharacter::GetTints() const noexcept
 bool PlayerCharacter::CanReadTintData() const noexcept
 {
 #if TP_SKYRIM_VR
-    return false;
+    const auto* const pBaseTints = Skyrim::RuntimeLayout::Ptr<GameArray<TintMask*>>(
+        this, VrCommonLibOffsets::BaseTints);
+    return pBaseTints && pBaseTints->length <= pBaseTints->capacity && pBaseTints->length <= 64 &&
+           (pBaseTints->length == 0 || pBaseTints->data != nullptr);
 #else
     return true;
 #endif

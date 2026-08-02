@@ -330,6 +330,8 @@ struct PlayerCharacter : Actor
 static_assert(PlayerCharacter::VrCommonLibOffsets::InfoRuntimeData == 0xFD0);
 static_assert(PlayerCharacter::VrCommonLibOffsets::SkillsPointer == 0x10B0);
 static_assert(PlayerCharacter::VrCommonLibOffsets::GameStateData == 0x11F4);
+static_assert(PlayerCharacter::VrCommonLibOffsets::BaseTints == 0x1208);
+static_assert(PlayerCharacter::VrCommonLibOffsets::OverlayTints == 0x1220);
 static_assert(PlayerCharacter::VrCommonLibOffsets::VRNodeData == 0x3F0);
 static_assert(PlayerCharacter::VrInfoRuntimeOffsets::Skills == 0xE0);
 static_assert(PlayerCharacter::VrInfoRuntimeOffsets::Size == 0x150);

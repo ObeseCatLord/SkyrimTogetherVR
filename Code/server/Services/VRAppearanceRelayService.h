@@ -21,6 +21,11 @@ struct VRAppearanceRelayService
 
     TP_NOCOPYMOVE(VRAppearanceRelayService);
 
+    [[nodiscard]] bool SeedAppearance(std::uint32_t aPlayerId,
+                                      const VRAppearance& acAppearance) noexcept;
+    void DiscardSeededAppearance(std::uint32_t aPlayerId,
+                                 std::uint32_t aExpectedSequence) noexcept;
+
 private:
     void OnVRAppearance(const PacketEvent<RequestVRAppearance>& acMessage) noexcept;
     void OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept;

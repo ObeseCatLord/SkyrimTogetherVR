@@ -20,6 +20,9 @@
 #include <Messages/NotifyPlayerCellChanged.h>
 
 #include <Setting.h>
+
+#include <algorithm>
+#include <cmath>
 namespace
 {
 Console::Setting fGoldLossFactor{"Gameplay:fGoldLossFactor", "Factor of the amount of gold lost on death", 0.0f};
@@ -77,9 +80,10 @@ void PlayerService::HandleGridCellShift(const PacketEvent<ShiftGridCellRequest>&
         }
 
         CharacterSpawnRequest spawnMessage;
-        CharacterService::Serialize(m_world, character, &spawnMessage);
-
-        pPlayer->Send(spawnMessage);
+        if (CharacterService::Serialize(m_world, character, &spawnMessage))
+        {
+            pPlayer->Send(spawnMessage);
+        }
     }
 
     m_world.GetDispatcher().trigger(PlayerCellChangedEvent{pPlayer});
@@ -141,9 +145,10 @@ void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellR
             continue;
 
         CharacterSpawnRequest spawnMessage;
-        CharacterService::Serialize(m_world, character, &spawnMessage);
-
-        pPlayer->Send(spawnMessage);
+        if (CharacterService::Serialize(m_world, character, &spawnMessage))
+        {
+            pPlayer->Send(spawnMessage);
+        }
     }
 
     m_world.GetDispatcher().trigger(PlayerCellChangedEvent{pPlayer});
@@ -164,34 +169,46 @@ void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnReques
 
     if (it != view.end())
     {
-        if (goldLossFactor != 0.0)
+        if (goldLossFactor > 0.0F && std::isfinite(goldLossFactor))
         {
             auto& inventoryComponent = view.get<InventoryComponent>(*it);
 
             GameId goldId(0, 0xF);
             int32_t goldCount = inventoryComponent.Content.GetEntryCountById(goldId);
-            int32_t goldToRemove = static_cast<int32_t>(goldCount * goldLossFactor);
+            const auto requestedGoldLoss = static_cast<double>(goldCount) * goldLossFactor;
+            const auto maximumGoldLoss = std::min<std::int64_t>(
+                goldCount, Inventory::Entry::kMaximumMutationCount);
+            if (std::isfinite(requestedGoldLoss) && requestedGoldLoss >= 1.0 && maximumGoldLoss > 0)
+            {
+                const auto goldToRemove = static_cast<std::int32_t>(
+                    std::min(requestedGoldLoss, static_cast<double>(maximumGoldLoss)));
 
-            Inventory::Entry entry{};
-            entry.BaseId = goldId;
-            entry.Count = -goldToRemove;
+                Inventory::Entry entry{};
+                entry.BaseId = goldId;
+                entry.Count = -goldToRemove;
 
-            inventoryComponent.Content.AddOrRemoveEntry(entry);
+                NotifyInventoryChanges notifyInventoryChanges{};
+                notifyInventoryChanges.ServerId = World::ToInteger(*character);
+                notifyInventoryChanges.Item = entry;
+                notifyInventoryChanges.Drop = false;
 
-            NotifyInventoryChanges notifyInventoryChanges{};
-            notifyInventoryChanges.ServerId = World::ToInteger(*character);
-            notifyInventoryChanges.Item = entry;
-            notifyInventoryChanges.Drop = false;
+                if (!inventoryComponent.Content.AddOrRemoveEntry(entry))
+                {
+                    spdlog::warn("{}: gold-loss inventory mutation was rejected", __FUNCTION__);
+                }
+                else
+                {
+                    // Exclude respawned player from inventory changes notification...
+                    if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
+                        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 
-            // Exclude respawned player from inventory changes notification...
-            if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
-                spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+                    // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
+                    NotifyPlayerRespawn notifyPlayerRespawn{};
+                    notifyPlayerRespawn.GoldLost = goldToRemove;
 
-            // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
-            NotifyPlayerRespawn notifyPlayerRespawn{};
-            notifyPlayerRespawn.GoldLost = goldToRemove;
-
-            acMessage.pPlayer->Send(notifyPlayerRespawn);
+                    acMessage.pPlayer->Send(notifyPlayerRespawn);
+                }
+            }
         }
 
         // Let all other players in cell respawn this player, since the body state seems to be bugged otherwise

@@ -34,8 +34,11 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
         action.Type = apAction->unkInput | (apAction->someFlag ? 0x4 : 0);
         action.Tick = World::Get().GetTick();
         action.ActorId = pActor->GetFormIdData();
-        action.ActionId = apAction->action->GetFormIdData();
-        action.TargetId = apAction->target ? apAction->target->GetFormIdData() : 0;
+        auto& modSystem = World::Get().GetModSystem();
+        bool formsTranslated = apAction->action &&
+                               modSystem.GetServerModId(apAction->action->GetFormIdData(), action.ActionId);
+        if (apAction->target)
+            formsTranslated = modSystem.GetServerModId(apAction->target->GetFormIdData(), action.TargetId) && formsTranslated;
 
         pActor->SaveAnimationVariables(action.Variables);
 
@@ -49,7 +52,8 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         action.EventName = apAction->eventName.AsAscii();
         action.TargetEventName = apAction->targetEventName.AsAscii();
-        action.IdleId = apAction->idleForm ? apAction->idleForm->GetFormIdData() : 0;
+        if (apAction->idleForm)
+            formsTranslated = modSystem.GetServerModId(apAction->idleForm->GetFormIdData(), action.IdleId) && formsTranslated;
 
         // Save for later
         if (res)
@@ -57,7 +61,8 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
             pExtension->LatestAnimation = action;
         }
 
-        World::Get().GetRunner().Trigger(action);
+        if (formsTranslated)
+            World::Get().GetRunner().Trigger(action);
 
         return res;
     }

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <unordered_set>
+#include <vector>
 #include <Setting.h>
 #include <Structs/GameplayCapabilities.h>
 namespace
@@ -28,6 +29,107 @@ const GameId kRightHandEquipSlot{0, 0x00013F42};
 const GameId kLeftHandEquipSlot{0, 0x00013F43};
 constexpr auto kVREquipmentCapability =
     SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VREquipmentRelay);
+constexpr std::uint8_t kKnownEquipmentFlags =
+    Inventory::Entry::kEquipmentWeapon | Inventory::Entry::kEquipmentAmmo;
+
+struct LegacyPhysicalEquipmentState
+{
+    GameId Item{};
+    GameId Slot{};
+    std::uint32_t Count{};
+
+    [[nodiscard]] bool operator==(const LegacyPhysicalEquipmentState&) const noexcept = default;
+};
+
+[[nodiscard]] bool LessGameId(const GameId& acLeft, const GameId& acRight) noexcept
+{
+    return acLeft.ModId != acRight.ModId ? acLeft.ModId < acRight.ModId : acLeft.BaseId < acRight.BaseId;
+}
+
+[[nodiscard]] std::vector<LegacyPhysicalEquipmentState> ExpandLegacyPhysicalState(const Inventory& acInventory)
+{
+    std::vector<LegacyPhysicalEquipmentState> result;
+    result.reserve(acInventory.Entries.size() * 2);
+    for (const auto& entry : acInventory.Entries) {
+        if (!entry.IsWorn() || !entry.BaseId || entry.Count <= 0)
+            continue;
+
+        const auto count = static_cast<std::uint32_t>(entry.Count);
+        const bool weapon = (entry.EquipmentFlags & Inventory::Entry::kEquipmentWeapon) != 0;
+        const bool ammo = (entry.EquipmentFlags & Inventory::Entry::kEquipmentAmmo) != 0;
+        if (entry.ExtraWorn)
+            result.push_back({entry.BaseId, weapon && !ammo ? kRightHandEquipSlot : GameId{}, count});
+        if (entry.ExtraWornLeft)
+            result.push_back({entry.BaseId, kLeftHandEquipSlot, count});
+    }
+    std::sort(result.begin(), result.end(), [](const auto& acLeft, const auto& acRight) noexcept {
+        if (acLeft.Item != acRight.Item)
+            return LessGameId(acLeft.Item, acRight.Item);
+        if (acLeft.Slot != acRight.Slot)
+            return LessGameId(acLeft.Slot, acRight.Slot);
+        return acLeft.Count < acRight.Count;
+    });
+    return result;
+}
+
+void AppendLegacyPhysicalChanges(const Inventory& acPrevious, const Inventory& acCurrent,
+                                 const std::uint32_t aServerId,
+                                 std::vector<NotifyEquipmentChanges>& arUnequips,
+                                 std::vector<NotifyEquipmentChanges>& arEquips)
+{
+    const auto previous = ExpandLegacyPhysicalState(acPrevious);
+    const auto current = ExpandLegacyPhysicalState(acCurrent);
+    const auto append = [aServerId](const LegacyPhysicalEquipmentState& acState, const bool aUnequip,
+                                    std::vector<NotifyEquipmentChanges>& arOutput) {
+        NotifyEquipmentChanges notify{};
+        notify.ServerId = aServerId;
+        notify.ItemId = acState.Item;
+        notify.EquipSlotId = acState.Slot;
+        notify.Count = acState.Count;
+        notify.Unequip = aUnequip;
+        arOutput.push_back(std::move(notify));
+    };
+    for (const auto& state : previous) {
+        if (std::find(current.begin(), current.end(), state) == current.end())
+            append(state, true, arUnequips);
+    }
+    for (const auto& state : current) {
+        if (std::find(previous.begin(), previous.end(), state) == previous.end())
+            append(state, false, arEquips);
+    }
+}
+
+void AppendLegacyMagicChanges(const MagicEquipment& acPrevious, const MagicEquipment& acCurrent,
+                              const std::uint32_t aServerId,
+                              std::vector<NotifyEquipmentChanges>& arUnequips,
+                              std::vector<NotifyEquipmentChanges>& arEquips)
+{
+    const auto append = [aServerId](const GameId& acItem, const GameId& acSlot, const bool aShout,
+                                    const bool aUnequip, std::vector<NotifyEquipmentChanges>& arOutput) {
+        if (!acItem)
+            return;
+        NotifyEquipmentChanges notify{};
+        notify.ServerId = aServerId;
+        notify.ItemId = acItem;
+        notify.EquipSlotId = acSlot;
+        notify.Count = 1;
+        notify.Unequip = aUnequip;
+        notify.IsSpell = !aShout;
+        notify.IsShout = aShout;
+        arOutput.push_back(std::move(notify));
+    };
+    const auto diff = [&append](const GameId& acOld, const GameId& acNew, const GameId& acSlot,
+                                const bool aShout, std::vector<NotifyEquipmentChanges>& arOld,
+                                std::vector<NotifyEquipmentChanges>& arNew) {
+        if (acOld == acNew)
+            return;
+        append(acOld, acSlot, aShout, true, arOld);
+        append(acNew, acSlot, aShout, false, arNew);
+    };
+    diff(acPrevious.LeftHandSpell, acCurrent.LeftHandSpell, kLeftHandEquipSlot, false, arUnequips, arEquips);
+    diff(acPrevious.RightHandSpell, acCurrent.RightHandSpell, kRightHandEquipSlot, false, arUnequips, arEquips);
+    diff(acPrevious.Shout, acCurrent.Shout, GameId{}, true, arUnequips, arEquips);
+}
 
 [[nodiscard]] bool IsZeroExtraData(const Inventory::Entry& acEntry) noexcept
 {
@@ -48,7 +150,7 @@ constexpr auto kVREquipmentCapability =
 }
 
 [[nodiscard]] bool IsValidFinalEquipmentRequest(const RequestEquipmentChanges& acMessage,
-                                                 const Inventory& acAuthoritativeInventory) noexcept
+                                                 const Inventory& acAuthoritativeInventory)
 {
     if (acMessage.TransactionId == 0 || acMessage.ItemId || acMessage.EquipSlotId || acMessage.Count != 0 ||
         acMessage.Unequip || acMessage.IsSpell || acMessage.IsShout || acMessage.IsAmmo ||
@@ -58,7 +160,10 @@ constexpr auto kVREquipmentCapability =
     std::unordered_set<GameId> seen;
     for (const auto& entry : acMessage.CurrentInventory.Entries) {
         if (!entry.BaseId || entry.Count <= 0 || entry.Count > kMaximumEquipmentCount || !entry.IsWorn() ||
-            !IsZeroExtraData(entry) || !seen.emplace(entry.BaseId).second ||
+            !IsZeroExtraData(entry) || (entry.EquipmentFlags & ~kKnownEquipmentFlags) != 0 ||
+            (entry.EquipmentFlags & kKnownEquipmentFlags) == kKnownEquipmentFlags ||
+            ((entry.EquipmentFlags & Inventory::Entry::kEquipmentAmmo) != 0 && entry.ExtraWornLeft) ||
+            !seen.emplace(entry.BaseId).second ||
             AuthoritativeCount(acAuthoritativeInventory, entry.BaseId) < entry.Count)
             return false;
     }
@@ -85,7 +190,8 @@ constexpr auto kVREquipmentCapability =
          message.EquipSlotId != kLeftHandEquipSlot && message.EquipSlotId != kRightHandEquipSlot))
         return false;
     for (const auto& entry : message.CurrentInventory.Entries) {
-        if (!entry.BaseId || entry.Count <= 0 || entry.Count > kMaximumEquipmentCount || !entry.IsWorn())
+        if (!entry.BaseId || entry.Count <= 0 || entry.Count > kMaximumEquipmentCount || !entry.IsWorn() ||
+            entry.EquipmentFlags != 0)
             return false;
         if (std::count_if(message.CurrentInventory.Entries.begin(), message.CurrentInventory.Entries.end(),
                 [&entry](const Inventory::Entry& acOther) { return acOther.BaseId == entry.BaseId; }) != 1)
@@ -127,7 +233,7 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher)
     m_characterRemoveConnection = aDispatcher.sink<CharacterRemoveEvent>().connect<&InventoryService::OnCharacterRemove>(this);
 }
 
-void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChanges>& acMessage) noexcept
+void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChanges>& acMessage) noexcept try
 {
     auto& message = acMessage.Packet;
     const auto entity = static_cast<entt::entity>(message.ServerId);
@@ -143,23 +249,30 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
     if (!ownsCharacter && !observesObject)
         return;
 
+    NotifyInventoryChanges notify;
+    notify.ServerId = message.ServerId;
+    notify.Item = message.Item;
+    notify.Drop = bEnableItemDrops ? message.Drop : false;
+
     auto& inventoryComponent = m_world.get<InventoryComponent>(entity);
-    inventoryComponent.Content.AddOrRemoveEntry(message.Item);
+    if (!inventoryComponent.Content.AddOrRemoveEntry(message.Item))
+    {
+        spdlog::warn("{}: rejected invalid or uncommittable inventory mutation", __FUNCTION__);
+        return;
+    }
 
     if (!message.UpdateClients)
         return;
 
-    NotifyInventoryChanges notify;
-    notify.ServerId = message.ServerId;
-    notify.Item = message.Item;
-
-    notify.Drop = bEnableItemDrops ? message.Drop : false;
-
     if (!GameServer::Get()->SendToPlayersInRange(notify, entity, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
+catch (...)
+{
+    spdlog::error("{}: rejected inventory mutation after an allocation or translation failure", __FUNCTION__);
+}
 
-void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChanges>& acMessage) noexcept
+void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChanges>& acMessage) noexcept try
 {
     auto& message = acMessage.Packet;
 
@@ -191,24 +304,44 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
         if (message.TransactionId <= ledger.LastTransactionId)
             return;
 
+        std::vector<NotifyEquipmentChanges> legacyUnequips;
+        std::vector<NotifyEquipmentChanges> legacyEquips;
+        const Inventory emptyEquipment{};
+        const auto& previousEquipment = ledger.HasFinalEquipment ? ledger.LastFinalEquipment : emptyEquipment;
+        AppendLegacyPhysicalChanges(previousEquipment, message.CurrentInventory, message.ServerId,
+                                    legacyUnequips, legacyEquips);
+        AppendLegacyMagicChanges(previousEquipment.CurrentMagicEquipment,
+                                 message.CurrentInventory.CurrentMagicEquipment, message.ServerId,
+                                 legacyUnequips, legacyEquips);
+
         // Every final-state field, including all worn counts, was checked
         // against this authoritative inventory before this single mutation.
         inventoryComponent.Content.UpdateEquipment(message.CurrentInventory);
         ledger.LastTransactionId = message.TransactionId;
+        ledger.LastFinalEquipment = message.CurrentInventory;
+        ledger.HasFinalEquipment = true;
 
         NotifyEquipmentChanges notify{};
         notify.ServerId = message.ServerId;
         notify.TransactionId = message.TransactionId;
         notify.FinalEquipment = message.CurrentInventory;
         const entt::entity origin = static_cast<entt::entity>(message.ServerId);
-        // Final snapshots are understood only by the staged VR receiver. Do
-        // not fan them out to the native legacy receiver, and do not derive a
-        // multi-message desktop delta here: either would expose a partial
-        // final state. Transaction-zero desktop events below retain their
-        // existing all-client legacy fanout.
+        // VR receivers apply the final snapshot atomically. Original clients
+        // understand only incremental notifications, so their complete diff is
+        // prepared before any fanout and all unequips precede all equips.
         if (!GameServer::Get()->SendToPlayersWithCapabilitiesInRange(
                 notify, origin, kVREquipmentCapability, acMessage.GetSender()))
             spdlog::error("{}: SendToPlayersWithCapabilitiesInRange failed", __FUNCTION__);
+        for (const auto& legacy : legacyUnequips) {
+            if (!GameServer::Get()->SendToPlayersWithoutCapabilitiesInRange(
+                    legacy, origin, kVREquipmentCapability, acMessage.GetSender()))
+                spdlog::error("{}: legacy unequip fanout failed", __FUNCTION__);
+        }
+        for (const auto& legacy : legacyEquips) {
+            if (!GameServer::Get()->SendToPlayersWithoutCapabilitiesInRange(
+                    legacy, origin, kVREquipmentCapability, acMessage.GetSender()))
+                spdlog::error("{}: legacy equip fanout failed", __FUNCTION__);
+        }
         return;
     }
 
@@ -237,6 +370,8 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
     const entt::entity cOrigin = static_cast<entt::entity>(message.ServerId);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cOrigin, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+} catch (...) {
+    spdlog::error("{}: rejected equipment transaction after an allocation or translation failure", __FUNCTION__);
 }
 
 void InventoryService::OnWeaponDrawnRequest(const PacketEvent<DrawWeaponRequest>& acMessage) noexcept

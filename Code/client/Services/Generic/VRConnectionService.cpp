@@ -187,6 +187,7 @@ void VRConnectionService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_connectInFlight = false;
     SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+    WriteStatusFile();
 }
 
 void VRConnectionService::OnConnectionError(const ConnectionErrorEvent& acEvent) noexcept
@@ -244,6 +245,17 @@ bool VRConnectionService::RequestDisconnect() noexcept
     QueueDisconnect();
     m_commandQueuedThisUpdate = true;
     return true;
+}
+
+void VRConnectionService::BeginTeardown() noexcept
+{
+    m_hasPendingCommand = false;
+    m_pendingCommand = {};
+    m_retainedEndpoint.clear();
+    m_retainedPassword.clear();
+    m_connectInFlight = false;
+    SetStatus("offline");
+    WriteStatusFile();
 }
 
 void VRConnectionService::HandleLifecycleBoundary() noexcept

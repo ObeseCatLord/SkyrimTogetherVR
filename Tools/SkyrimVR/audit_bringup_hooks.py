@@ -31,7 +31,8 @@ EXPECTED_VR_TARGET_CONFIGS = {
         "connection_only": False,
         "remote_avatar_sync": True,
         "remote_avatar_actor_targets": True,
-        "observation_services": True,
+        "observation_services": False,
+        "higgs_service": True,
         "pose_service": True,
         "remote_player_proxy": True,
     },
@@ -44,6 +45,8 @@ REQUIRED_VR_BUILD_FUNCTION_TOKENS = (
     "local remote_avatar_sync = options.remote_avatar_sync or false",
     "local remote_avatar_actor_targets = options.remote_avatar_actor_targets or false",
     "local observation_services = options.observation_services or false",
+    "local higgs_service = options.higgs_service",
+    "higgs_service = observation_services",
     "local pose_service = options.pose_service or false",
     "local remote_player_proxy = options.remote_player_proxy or false",
     "local unvalidated_hooks = options.unvalidated_hooks or false",
@@ -265,11 +268,13 @@ def parse_vr_target_configs(xmake_text: str) -> dict[str, dict[str, bool]]:
     for match in pattern.finditer(xmake_text):
         name = match.group("name")
         options = match.group("options") or ""
+        observation_services = parse_bool_option(options, "observation_services", False)
         configs[name] = {
             "connection_only": parse_bool_option(options, "connection_only", True),
             "remote_avatar_sync": parse_bool_option(options, "remote_avatar_sync", False),
             "remote_avatar_actor_targets": parse_bool_option(options, "remote_avatar_actor_targets", False),
-            "observation_services": parse_bool_option(options, "observation_services", False),
+            "observation_services": observation_services,
+            "higgs_service": parse_bool_option(options, "higgs_service", observation_services),
             "pose_service": parse_bool_option(options, "pose_service", False),
             "remote_player_proxy": parse_bool_option(options, "remote_player_proxy", False),
         }
@@ -293,6 +298,8 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
             token = f'add_defines("{define}=1")'
         elif define == "TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE":
             token = f'add_defines("{define}=" .. vr_define_value(remote_player_proxy))'
+        elif define == "TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE":
+            token = f'add_defines("{define}=" .. vr_define_value(higgs_service))'
         else:
             token = f'add_defines("{define}=" .. vr_define_value(observation_services))'
         if token not in text:
@@ -326,7 +333,7 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
     default_config = configs.get("SkyrimTogetherVRClient", {})
     if default_config.get("remote_avatar_actor_targets"):
         failures.append("Code/client/xmake.lua: default SkyrimTogetherVRClient must not enable actor target mutation")
-    for option in ("observation_services", "pose_service", "remote_player_proxy"):
+    for option in ("observation_services", "higgs_service", "pose_service", "remote_player_proxy"):
         if default_config.get(option):
             failures.append(f"Code/client/xmake.lua: default SkyrimTogetherVRClient must keep {option}=false")
 

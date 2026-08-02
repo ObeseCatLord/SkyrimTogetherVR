@@ -10,6 +10,7 @@
 #include <Structs/Vector3_NetQuantize.h>
 #include <Structs/Rotator2_NetQuantize.h>
 #include <Structs/ActorValues.h>
+#include <Structs/VRAppearance.h>
 
 using TiltedPhoques::String;
 
@@ -33,7 +34,8 @@ struct CharacterSpawnRequest final : ServerMessage
                InventoryContent == acRhs.InventoryContent && FactionsContent == acRhs.FactionsContent &&
                ActionsToReplay == acRhs.ActionsToReplay && FaceTints == acRhs.FaceTints && PlayerId == acRhs.PlayerId &&
                IsDead == acRhs.IsDead && IsPlayer == acRhs.IsPlayer && IsWeaponDrawn == acRhs.IsWeaponDrawn &&
-               IsPlayerSummon == acRhs.IsPlayerSummon && GetOpcode() == acRhs.GetOpcode();
+               IsPlayerSummon == acRhs.IsPlayerSummon && HasVRAppearance == acRhs.HasVRAppearance &&
+               InitialVRAppearance == acRhs.InitialVRAppearance && GetOpcode() == acRhs.GetOpcode();
     }
 
     uint32_t ServerId{};
@@ -54,4 +56,7 @@ struct CharacterSpawnRequest final : ServerMessage
     bool IsPlayer{};
     bool IsWeaponDrawn{};
     bool IsPlayerSummon{};
+    bool HasVRAppearance{};
+    VRAppearance InitialVRAppearance{};
+    bool IsDecodedValid{true};
 };

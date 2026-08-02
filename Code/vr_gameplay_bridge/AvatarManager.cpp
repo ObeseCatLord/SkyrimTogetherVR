@@ -1,6 +1,8 @@
 #include "AvatarManager.h"
+#include "AnimationAppearanceManager.h"
 #include "EventCapture.h"
 #include "HumanoidAnimationGraph.h"
+#include "LocalGameplayCapture.h"
 
 #include <vr_common/VRCanonicalEntity.h>
 
@@ -16,6 +18,7 @@ namespace
 constexpr float kMinimumScale = 0.1f;
 constexpr float kMaximumScale = 10.0f;
 constexpr std::size_t kMaximumRemoteAvatars = 64;
+constexpr std::size_t kMaximumLocalNativeActorBindings = 64;
 constexpr double kMinimumQuaternionNormSquared = 1.0e-12;
 constexpr double kPiOverTwo = 1.57079632679489661923;
 constexpr std::uint64_t kMoveToVrRva = 0x09E90E0;
@@ -342,10 +345,12 @@ CommandStatus AvatarManager::ResolveGameplayActor(
     const auto& payload = a_command.Payload.ApplyGameplayAction;
     if (payload.TargetHandle.Value == kLocalPlayerHandle.Value) {
         const auto* mapping = BridgeEndpoint::Get().Mapping();
+        SessionIdentitySnapshot session{};
         if (!mapping || identity.Reserved0 != 0 || identity.SequenceId != 0 || identity.ActionId == 0 ||
             !CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration) ||
-            identity.ServerInstanceNonce != mapping->Header.ServerInstanceNonce.load(std::memory_order_acquire) ||
-            identity.ConnectionGeneration != mapping->Header.ConnectionGeneration.load(std::memory_order_acquire) ||
+            !TrySnapshotSessionIdentity(mapping->Header, session) ||
+            identity.ServerInstanceNonce != session.ServerInstanceNonce ||
+            identity.ConnectionGeneration != session.ConnectionGeneration ||
             identity.LifecycleEpoch != mapping->Header.LifecycleEpoch.load(std::memory_order_acquire))
             return CommandStatus::StaleEntity;
 
@@ -371,6 +376,133 @@ CommandStatus AvatarManager::ResolveGameplayActor(
 
     record.LastAction = identity.ActionId;
     return CommandStatus::Success;
+}
+
+CommandStatus AvatarManager::ValidateLocalNativeGameplayActor(const CommandRecord& a_command) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return CommandStatus::WrongThread;
+
+    try {
+        const auto& identity = a_command.Header.Identity;
+        const auto& payload = a_command.Payload.ApplyGameplayAction;
+        if (payload.TargetHandle.Value != 0 || payload.TargetLocalFormId == 0 ||
+            !CanonicalEntity::IsValid(identity.EntityId, identity.EntityGeneration))
+            return CommandStatus::Malformed;
+
+        const auto* mapping = BridgeEndpoint::Get().Mapping();
+        SessionIdentitySnapshot session{};
+        if (!mapping || !TrySnapshotSessionIdentity(mapping->Header, session) ||
+            identity.ServerInstanceNonce != session.ServerInstanceNonce ||
+            identity.ConnectionGeneration != session.ConnectionGeneration ||
+            identity.LifecycleEpoch != mapping->Header.LifecycleEpoch.load(std::memory_order_acquire))
+            return CommandStatus::StaleEntity;
+
+        const auto key = MakeAvatarKey(identity);
+        const auto action = static_cast<GameplayAction>(payload.Action);
+        const bool startNpcObservation =
+            static_cast<GameplayDomain>(payload.Domain) == GameplayDomain::NpcOwnership &&
+            action == GameplayAction::StartNpcObservation;
+        const bool stopNpcObservation =
+            static_cast<GameplayDomain>(payload.Domain) == GameplayDomain::NpcOwnership &&
+            action == GameplayAction::StopNpcObservation;
+        bool retiredMatchingStopBinding = false;
+        for (auto binding = _localNativeActors.begin(); binding != _localNativeActors.end();) {
+            const auto& bindingKey = binding->first;
+            const auto boundActor = binding->second.Actor.get();
+            if (!boundActor || boundActor->GetFormID() != binding->second.LocalReferenceFormId) {
+                retiredMatchingStopBinding = retiredMatchingStopBinding ||
+                    (stopNpcObservation && bindingKey == key &&
+                     binding->second.LocalReferenceFormId == payload.TargetLocalFormId);
+                auto retired = binding++;
+                RetireLocalNativeGameplayActor(retired);
+                continue;
+            }
+
+            const bool sameSessionLifecycle =
+                bindingKey.ServerInstanceNonce == identity.ServerInstanceNonce &&
+                bindingKey.ConnectionGeneration == identity.ConnectionGeneration &&
+                bindingKey.LifecycleEpoch == identity.LifecycleEpoch;
+            if (startNpcObservation && sameSessionLifecycle && bindingKey.EntityId == identity.EntityId) {
+                const auto generationOrder = CanonicalEntity::CompareGenerations(
+                    identity.EntityGeneration, bindingKey.EntityGeneration);
+                if (generationOrder == CanonicalEntity::GenerationOrder::Newer) {
+                    auto retired = binding++;
+                    RetireLocalNativeGameplayActor(retired);
+                    continue;
+                }
+                if (generationOrder == CanonicalEntity::GenerationOrder::Older)
+                    return CommandStatus::StaleEntity;
+            }
+            ++binding;
+        }
+
+        const auto existing = _localNativeActors.find(key);
+        if (existing != _localNativeActors.end()) {
+            if (existing->second.LocalReferenceFormId != payload.TargetLocalFormId)
+                return CommandStatus::StaleEntity;
+            if (stopNpcObservation)
+                return CommandStatus::Success;
+        } else if (stopNpcObservation && retiredMatchingStopBinding) {
+            return CommandStatus::Success;
+        }
+
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(payload.TargetLocalFormId);
+        if (!actor || actor == RE::PlayerCharacter::GetSingleton())
+            return CommandStatus::InvalidHandle;
+
+        if (existing != _localNativeActors.end()) {
+            const auto boundActor = existing->second.Actor.get();
+            if (boundActor.get() != actor)
+                return CommandStatus::StaleEntity;
+            return CommandStatus::Success;
+        }
+
+        if (!startNpcObservation) {
+            return CommandStatus::InvalidHandle;
+        }
+
+        for (const auto& [bindingKey, binding] : _localNativeActors) {
+            if (bindingKey.ServerInstanceNonce != identity.ServerInstanceNonce ||
+                bindingKey.ConnectionGeneration != identity.ConnectionGeneration ||
+                bindingKey.LifecycleEpoch != identity.LifecycleEpoch)
+                continue;
+            const auto boundActor = binding.Actor.get();
+            if ((bindingKey.EntityId != identity.EntityId ||
+                 bindingKey.EntityGeneration != identity.EntityGeneration) &&
+                (binding.LocalReferenceFormId == payload.TargetLocalFormId || boundActor.get() == actor)) {
+                return CommandStatus::StaleEntity;
+            }
+        }
+
+        if (_localNativeActors.size() >= kMaximumLocalNativeActorBindings)
+            return CommandStatus::QueueOverflow;
+
+        RE::ActorHandle handle{actor};
+        const auto resolved = handle.get();
+        if (!resolved || resolved->GetFormID() != payload.TargetLocalFormId || resolved.get() != actor)
+            return CommandStatus::InvalidHandle;
+        const auto [_, inserted] = _localNativeActors.emplace(
+            key, LocalNativeActorBinding{handle, payload.TargetLocalFormId});
+        return inserted ? CommandStatus::Success : CommandStatus::EngineRejected;
+    } catch (...) {
+        return CommandStatus::EngineRejected;
+    }
+}
+
+void AvatarManager::ReleaseLocalNativeGameplayActor(const CommandRecord& a_command) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return;
+
+    try {
+        const auto& payload = a_command.Payload.ApplyGameplayAction;
+        const auto binding = _localNativeActors.find(MakeAvatarKey(a_command.Header.Identity));
+        if (binding != _localNativeActors.end() &&
+            binding->second.LocalReferenceFormId == payload.TargetLocalFormId)
+            RetireLocalNativeGameplayActor(binding);
+    } catch (...) {
+    }
 }
 
 CommandStatus AvatarManager::ResolveActorByHandle(
@@ -496,6 +628,8 @@ void AvatarManager::ProcessPendingAnimationSnapshots() noexcept
     for (auto& [key, record] : _avatars) {
         if (!record.PendingAnimation.IsComplete())
             continue;
+        if (!BridgeEndpoint::Get().CanQueueCommandResultEvents())
+            break;
         const auto snapshotId = record.PendingAnimation.SnapshotId;
         const auto applyResult = TryApplyPendingAnimation(record);
         if (applyResult == PendingAnimationResult::WaitingForGraph)
@@ -544,6 +678,9 @@ AvatarCommandResult AvatarManager::DestroyRemoteAvatar(const CommandRecord& a_co
         result = ResultFor(record, CommandStatus::Success);
         const auto lastRootSequence = record.LastRootSequence;
         const auto lastAnimationSequence = record.LastAnimationSequence;
+        const auto actor = record.Actor.get();
+        AnimationAppearanceManager::ForgetTarget(
+            record.Token, actor ? actor->GetActorBase() : record.VisualBase);
         DestroyRecord(record);
         _avatars.erase(it);
         _entityLedger[MakeEntityKey(identity)] = {
@@ -560,10 +697,25 @@ void AvatarManager::RetireAllOnCommandPumpOwner() noexcept
     if (!IsCommandPumpOwner())
         return;
 
-    for (auto& [_, record] : _avatars)
+    for (auto& [_, record] : _avatars) {
+        const auto actor = record.Actor.get();
+        AnimationAppearanceManager::ForgetTarget(
+            record.Token, actor ? actor->GetActorBase() : record.VisualBase);
         DestroyRecord(record);
+    }
     _avatars.clear();
     _entityLedger.clear();
+    while (!_localNativeActors.empty())
+        RetireLocalNativeGameplayActor(_localNativeActors.begin());
+}
+
+void AvatarManager::RetireLocalNativeGameplayActor(
+    std::unordered_map<AvatarKey, LocalNativeActorBinding, AvatarKeyHash>::iterator a_binding) noexcept
+{
+    if (a_binding == _localNativeActors.end())
+        return;
+    LocalGameplayCapture::StopNpcObservation(a_binding->second.LocalReferenceFormId);
+    _localNativeActors.erase(a_binding);
 }
 
 std::size_t AvatarManager::AvatarKeyHash::operator()(const AvatarKey& a_key) const noexcept

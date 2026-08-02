@@ -4,11 +4,13 @@
 #include "BridgeEndpoint.h"
 
 #include <MinHook.h>
+#include <RE/B/BGSPerk.h>
 
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <utility>
 
 namespace SkyrimTogetherVR::GameplayAdapter::MagicHooks
@@ -23,6 +25,15 @@ using RemoveSpell = bool (*)(RE::Actor*, RE::SpellItem*);
 constexpr std::uint32_t kMagicEffectAreaTarget = 1u << 0;
 constexpr std::uint32_t kMagicEffectDualCasted = 1u << 1;
 constexpr std::uint32_t kMagicEffectHostile = 1u << 2;
+constexpr std::uint32_t kMagicEffectApplyHealPerkBonus = 1u << 3;
+constexpr std::uint32_t kMagicEffectApplyStaminaPerkBonus = 1u << 4;
+constexpr RE::FormID kMagicRestoreHealthKeywordId = 0x0001CEB0;
+constexpr RE::FormID kMagicWardKeywordId = 0x0001EA69;
+constexpr RE::FormID kMagicInvisibilityKeywordId = 0x0001EA6F;
+constexpr RE::FormID kHealingPerkFormId = 0x000581F8;
+constexpr RE::FormID kStaminaPerkFormId = 0x000581F9;
+constexpr RE::FormID kBowOfShadowsSpellLocalFormId = 0x00000805;
+constexpr std::string_view kBowOfShadowsPluginName = "ccbgssse038-bowofshadows.esl";
 constexpr std::uint64_t kAddTargetVrRva = 0x05579C0;
 constexpr std::array<std::uint8_t, 16> kAddTargetVrPrologue{
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x48,
@@ -69,6 +80,92 @@ void* g_removeSpellTarget{};
 [[nodiscard]] bool IsBoundedMagicScalar(const float a_value) noexcept
 {
     return std::isfinite(a_value) && a_value >= 0.0F && a_value <= kMaximumProjectilePower;
+}
+
+[[nodiscard]] bool IsKnownCastingType(const RE::MagicSystem::CastingType a_castingType) noexcept
+{
+    switch (a_castingType) {
+    case RE::MagicSystem::CastingType::kConstantEffect:
+    case RE::MagicSystem::CastingType::kFireAndForget:
+    case RE::MagicSystem::CastingType::kConcentration:
+    case RE::MagicSystem::CastingType::kScroll:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool IsKnownEffectArchetype(const RE::EffectArchetype a_archetype) noexcept
+{
+    const auto value = static_cast<std::int32_t>(a_archetype);
+    return value >= static_cast<std::int32_t>(RE::EffectArchetype::kNone) &&
+           value <= static_cast<std::int32_t>(RE::EffectArchetype::kVampireLord);
+}
+
+[[nodiscard]] bool IsBowOfShadowsInvisibilityException(const RE::MagicItem& a_magicItem) noexcept
+{
+    auto* dataHandler = RE::TESDataHandler::GetSingleton();
+    if (!dataHandler)
+        return false;
+
+    const auto* bowOfShadows = dataHandler->LookupForm<RE::MagicItem>(
+        kBowOfShadowsSpellLocalFormId, kBowOfShadowsPluginName);
+    return bowOfShadows && bowOfShadows->GetFormID() == a_magicItem.GetFormID();
+}
+
+struct AddTargetEffectPolicy
+{
+    bool IsConcentration{};
+    bool IsHealing{};
+    bool IsWard{};
+    bool IsInvisibility{};
+    bool IsBoundWeapon{};
+};
+
+[[nodiscard]] bool ClassifyAddTargetEffectPolicy(
+    const RE::MagicItem& a_magicItem,
+    AddTargetEffectPolicy& a_policy) noexcept
+{
+    const auto castingType = a_magicItem.GetCastingType();
+    if (!IsKnownCastingType(castingType) || a_magicItem.effects.empty())
+        return false;
+
+    const auto* restoreHealthKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(kMagicRestoreHealthKeywordId);
+    const auto* wardKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(kMagicWardKeywordId);
+    const auto* invisibilityKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(kMagicInvisibilityKeywordId);
+    if (!restoreHealthKeyword || !wardKeyword || !invisibilityKeyword)
+        return false;
+
+    a_policy.IsConcentration = castingType == RE::MagicSystem::CastingType::kConcentration;
+    a_policy.IsHealing = a_magicItem.HasKeyword(restoreHealthKeyword);
+    a_policy.IsWard = a_magicItem.HasKeyword(wardKeyword);
+    const bool isBowOfShadows = IsBowOfShadowsInvisibilityException(a_magicItem);
+    a_policy.IsInvisibility = !isBowOfShadows && a_magicItem.HasKeyword(invisibilityKeyword);
+
+    for (const auto* effect : a_magicItem.effects) {
+        const auto* baseEffect = effect ? effect->baseEffect : nullptr;
+        if (!baseEffect || !IsKnownEffectArchetype(baseEffect->GetArchetype()))
+            return false;
+
+        a_policy.IsHealing = a_policy.IsHealing || baseEffect->HasKeyword(restoreHealthKeyword);
+        a_policy.IsWard = a_policy.IsWard || baseEffect->HasKeyword(wardKeyword);
+        a_policy.IsInvisibility = a_policy.IsInvisibility ||
+                                  (!isBowOfShadows && baseEffect->HasKeyword(invisibilityKeyword));
+        a_policy.IsBoundWeapon = a_policy.IsBoundWeapon ||
+                                 baseEffect->HasArchetype(RE::EffectArchetype::kBoundWeapon);
+    }
+
+    return true;
+}
+
+[[nodiscard]] bool ShouldPublishAddTarget(const RE::MagicItem& a_magicItem) noexcept
+{
+    AddTargetEffectPolicy policy{};
+    if (!ClassifyAddTargetEffectPolicy(a_magicItem, policy))
+        return false;
+
+    return (!policy.IsConcentration || policy.IsHealing) && !policy.IsWard && !policy.IsInvisibility &&
+           !policy.IsBoundWeapon;
 }
 
 [[nodiscard]] std::uint64_t NextActionId() noexcept
@@ -166,6 +263,8 @@ void PublishAddTarget(RE::MagicTarget& a_target, const RE::MagicTarget::AddTarge
     if (!targetActor || !magicItem || !effect || !baseEffect || !IsBoundedMagicScalar(a_data.magnitude) ||
         !IsBoundedMagicScalar(a_data.power) || !IsValidCastingSource(a_data.castingSource))
         return;
+    if (!ShouldPublishAddTarget(*magicItem))
+        return;
 
     const auto targetFormId = targetActor->GetFormID();
     const auto magicItemFormId = magicItem->GetFormID();
@@ -184,6 +283,18 @@ void PublishAddTarget(RE::MagicTarget& a_target, const RE::MagicTarget::AddTarge
     if (avatars.IsManagedRemoteActor(targetActor) && casterActor && avatars.IsManagedRemoteActor(casterActor))
         return;
 
+    bool applyHealPerkBonus{};
+    bool applyStaminaPerkBonus{};
+    if (avatars.IsManagedRemoteActor(targetActor) && casterActor == RE::PlayerCharacter::GetSingleton()) {
+        AddTargetEffectPolicy policy{};
+        if (ClassifyAddTargetEffectPolicy(*magicItem, policy) && policy.IsHealing) {
+            if (auto* healingPerk = RE::TESForm::LookupByID<RE::BGSPerk>(kHealingPerkFormId))
+                applyHealPerkBonus = casterActor->HasPerk(healingPerk);
+            if (auto* staminaPerk = RE::TESForm::LookupByID<RE::BGSPerk>(kStaminaPerkFormId))
+                applyStaminaPerkBonus = casterActor->HasPerk(staminaPerk);
+        }
+    }
+
     GameplayActionPayload payload{};
     payload.TargetHandle = kLocalPlayerHandle;
     payload.TargetLocalFormId = targetFormId;
@@ -195,7 +306,9 @@ void PublishAddTarget(RE::MagicTarget& a_target, const RE::MagicTarget::AddTarge
     payload.ScalarB = a_data.power;
     payload.ActionFlags = (a_data.areaTarget ? kMagicEffectAreaTarget : 0u) |
                           (a_data.dualCasted ? kMagicEffectDualCasted : 0u) |
-                          (baseEffect->IsHostile() ? kMagicEffectHostile : 0u);
+                          (baseEffect->IsHostile() ? kMagicEffectHostile : 0u) |
+                          (applyHealPerkBonus ? kMagicEffectApplyHealPerkBonus : 0u) |
+                          (applyStaminaPerkBonus ? kMagicEffectApplyStaminaPerkBonus : 0u);
     PublishMagicAction(GameplayAction::ApplyMagicEffect, payload);
 }
 
@@ -361,6 +474,41 @@ ScopedRemoteMagicApplication::~ScopedRemoteMagicApplication() noexcept
 {
     if (g_remoteMagicApplicationDepth != 0)
         --g_remoteMagicApplicationDepth;
+}
+
+bool HasValidRemoteAddTargetPerkBonusFlags(
+    const RE::MagicItem& a_magicItem,
+    const bool a_applyHealPerkBonus,
+    const bool a_applyStaminaPerkBonus) noexcept
+{
+    if (!a_applyHealPerkBonus && !a_applyStaminaPerkBonus)
+        return true;
+
+    AddTargetEffectPolicy policy{};
+    return ClassifyAddTargetEffectPolicy(a_magicItem, policy) && policy.IsHealing;
+}
+
+RemoteAddTargetResult ApplyRemoteAddTarget(
+    RE::MagicTarget& a_target,
+    RE::MagicTarget::AddTargetData& a_data,
+    const bool a_applyHealPerkBonus,
+    const bool a_applyStaminaPerkBonus) noexcept
+{
+    // Desktop scopes both flags around AddTarget: Regeneration (0x581F8) mutates
+    // ActiveEffect after its original AdjustForPerks call, while Respite
+    // (0x581F9) makes Actor::HasPerk succeed for the remote target. CommonLib's
+    // HasPerk wrapper selects VR ID 36690, but the local VR audit/contract has
+    // no named target, exact RVA/prologue, detour ABI, or AddTarget-time call
+    // proof for it; AdjustForPerks has no such verified target either.
+    if (a_applyHealPerkBonus || a_applyStaminaPerkBonus)
+        return RemoteAddTargetResult::PerkBonusUnsupported;
+
+    try {
+        ScopedRemoteMagicApplication suppressEcho;
+        return a_target.AddTarget(a_data) ? RemoteAddTargetResult::Success : RemoteAddTargetResult::EngineRejected;
+    } catch (...) {
+        return RemoteAddTargetResult::EngineRejected;
+    }
 }
 
 bool Install() noexcept

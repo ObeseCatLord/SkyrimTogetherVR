@@ -70,7 +70,7 @@ VRLifecycleService::VRLifecycleService(World& aWorld) noexcept
     std::filesystem::create_directories(m_statusPath.parent_path(), ec);
 
 #if TP_SKYRIM_VR
-    spdlog::info("SkyrimTogetherVR lifecycle load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target");
+    spdlog::info("SkyrimTogetherVR lifecycle events are owned by the CommonLib gameplay bridge");
 #else
     if (auto* pEvents = EventDispatcherManager::Get())
         pEvents->GetLoadGameEventData().RegisterSink(this);

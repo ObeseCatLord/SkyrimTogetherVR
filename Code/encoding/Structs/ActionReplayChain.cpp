@@ -1,5 +1,7 @@
 #include <Structs/ActionReplayChain.h>
 
+#include <algorithm>
+
 using TiltedPhoques::Serialization;
 
 bool ActionReplayChain::operator==(const ActionReplayChain& acRhs) const noexcept
@@ -15,8 +17,9 @@ bool ActionReplayChain::operator!=(const ActionReplayChain& acRhs) const noexcep
 void ActionReplayChain::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
     Serialization::WriteBool(aWriter, ResetAnimationGraph);
-    aWriter.WriteBits(Actions.size() & 0xFF, 8);
-    for (size_t i = 0; i < Actions.size(); ++i)
+    const auto count = std::min(Actions.size(), kMaximumActions);
+    aWriter.WriteBits(count, 8);
+    for (size_t i = 0; i < count; ++i)
     {
         Actions[i].GenerateDifferential(ActionEvent{}, aWriter);
     }
@@ -24,12 +27,31 @@ void ActionReplayChain::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const 
 
 void ActionReplayChain::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
     ResetAnimationGraph = Serialization::ReadBool(aReader);
     uint64_t actionsCount = 0;
-    aReader.ReadBits(actionsCount, 8);
-    Actions.resize(actionsCount);
-    for (ActionEvent& replayAction : Actions)
+    if (!aReader.ReadBits(actionsCount, 8))
     {
-        replayAction.ApplyDifferential(aReader);
+        IsDecodedValid = false;
+        return;
+    }
+    try
+    {
+        Actions.resize(static_cast<std::size_t>(actionsCount));
+        for (ActionEvent& replayAction : Actions)
+        {
+            replayAction.ApplyDifferential(aReader);
+            if (!replayAction.IsDecodedValid)
+            {
+                Actions.clear();
+                IsDecodedValid = false;
+                return;
+            }
+        }
+    }
+    catch (...)
+    {
+        Actions.clear();
+        IsDecodedValid = false;
     }
 }

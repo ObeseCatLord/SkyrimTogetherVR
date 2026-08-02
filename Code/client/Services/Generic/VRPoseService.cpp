@@ -10,6 +10,7 @@
 #include <VR/VRBodyPoseCapture.h>
 #include <vr_common/VRHandoffPath.h>
 
+#include <array>
 #include <fstream>
 #include <chrono>
 #include <cstdlib>
@@ -18,7 +19,6 @@
 #include <initializer_list>
 #include <sstream>
 #include <string>
-#include <vector>
 
 namespace
 {
@@ -59,7 +59,7 @@ bool EqualsFilenameInsensitive(const std::wstring& acName, const wchar_t* apExpe
     return index == acName.size() && apExpected[index] == L'\0';
 }
 
-bool HasPluginFile(const std::filesystem::path& acPluginPath, std::initializer_list<const wchar_t*> aPluginNames) noexcept
+bool HasPluginFile(const std::filesystem::path& acPluginPath, std::initializer_list<const wchar_t*> aPluginNames)
 {
     std::error_code ec;
     if (!std::filesystem::is_directory(acPluginPath, ec))
@@ -134,7 +134,7 @@ uint32_t ParseUInt32(const TiltedPhoques::Map<std::string, std::string>& acValue
     return pEnd != it->second.c_str() ? static_cast<uint32_t>(value & 0xFFFFFFFFu) : aDefault;
 }
 
-std::string ParseString(const TiltedPhoques::Map<std::string, std::string>& acValues, const char* apKey, const char* apDefault = "") noexcept
+std::string ParseString(const TiltedPhoques::Map<std::string, std::string>& acValues, const char* apKey, const char* apDefault = "")
 {
     const auto it = acValues.find(apKey);
     return it != acValues.end() ? it->second : apDefault;
@@ -220,6 +220,50 @@ VRPoseNodeData ToPoseNodeData(const VRPoseTransform& acTransform) noexcept
     return result;
 }
 
+void SanitizePoseNode(VRPoseNodeData& arNode) noexcept
+{
+    if (!arNode.Valid)
+        return;
+    VRPoseUpdate probe{};
+    probe.Sequence = 1;
+    probe.Hmd = arNode;
+    if (!IsVRPoseUpdateSafe(probe))
+        arNode = {};
+}
+
+void SanitizeVrikData(VRVrikData& arVrik) noexcept
+{
+    const auto isSafe = [&arVrik](const VRFingerCurlData* apFingers, const bool aOffsets) noexcept
+    {
+        VRPoseUpdate probe{};
+        probe.Sequence = 1;
+        probe.Vrik.Detected = arVrik.Detected;
+        probe.Vrik.InterfaceAvailable = arVrik.InterfaceAvailable;
+        if (apFingers)
+            probe.Vrik.LeftFingers = *apFingers;
+        if (aOffsets)
+        {
+            probe.Vrik.CameraOffsetsValid = arVrik.CameraOffsetsValid;
+            probe.Vrik.CameraOffset = arVrik.CameraOffset;
+            probe.Vrik.FinalCameraOffset = arVrik.FinalCameraOffset;
+            probe.Vrik.FinalSmoothingOffset = arVrik.FinalSmoothingOffset;
+        }
+        return IsVRPoseUpdateSafe(probe);
+    };
+
+    if (!isSafe(&arVrik.LeftFingers, false))
+        arVrik.LeftFingers = {};
+    if (!isSafe(&arVrik.RightFingers, false))
+        arVrik.RightFingers = {};
+    if (!isSafe(nullptr, true))
+    {
+        arVrik.CameraOffsetsValid = false;
+        arVrik.CameraOffset = {};
+        arVrik.FinalCameraOffset = {};
+        arVrik.FinalSmoothingOffset = {};
+    }
+}
+
 VRPoseUpdate ToPoseUpdate(
     const VRPlayerPoseSnapshot& acSnapshot,
     const VRBodyPoseData& acBody,
@@ -245,6 +289,17 @@ VRPoseUpdate ToPoseUpdate(
     result.SecondaryMagicAim = ToPoseNodeData(acSnapshot.SecondaryMagicAim);
     result.Body = acBody;
     result.Vrik = acVrik;
+    const std::array<VRPoseNodeData*, 15> nodes{
+        &result.Hmd, &result.LeftHand, &result.RightHand, &result.SpellOrigin,
+        &result.SpellDestination, &result.ArrowOrigin, &result.ArrowDestination,
+        &result.BowAim, &result.BowRotation, &result.LeftWeaponOffset,
+        &result.RightWeaponOffset, &result.PrimaryMagicOffset, &result.PrimaryMagicAim,
+        &result.SecondaryMagicOffset, &result.SecondaryMagicAim};
+    for (auto* const pNode : nodes)
+        SanitizePoseNode(*pNode);
+    if (!IsVRBodyPoseDataSafe(result.Body))
+        result.Body = {};
+    SanitizeVrikData(result.Vrik);
     return result;
 }
 
@@ -326,7 +381,7 @@ bool HasCoherentVrikBridgeData(const TiltedPhoques::Map<std::string, std::string
            HasKey(acValues, "finalSmoothingOffset");
 }
 
-VRVrikData BuildLocalVrikData() noexcept
+VRVrikData BuildLocalVrikData()
 {
     using Clock = std::chrono::steady_clock;
 
@@ -336,7 +391,7 @@ VRVrikData BuildLocalVrikData() noexcept
     static Clock::time_point s_cachedBridgeTime{};
     static bool s_hasCachedBridgeData = false;
 
-    const auto buildBaseResult = []() noexcept
+    const auto buildBaseResult = []()
     {
         VRVrikData result{};
         result.Detected = IsVrikInstalled();
@@ -345,7 +400,7 @@ VRVrikData BuildLocalVrikData() noexcept
 
     const auto values = ReadKeyValueFile(GetVrikBridgePath());
 
-    const auto applyCapabilityState = [&values, &buildBaseResult]() noexcept
+    const auto applyCapabilityState = [&values, &buildBaseResult]()
     {
         auto result = buildBaseResult();
         result.Detected = result.Detected || ParseBool(values, "vrik.detected");
@@ -422,7 +477,7 @@ VRVrikData BuildLocalVrikData() noexcept
 }
 }
 
-VRPoseService::VRPoseService(entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
+VRPoseService::VRPoseService(entt::dispatcher& aDispatcher, TransportService& aTransport)
     : m_transport(aTransport)
     , m_handoffDir(GetHandoffDirectory())
     , m_poseStatusPath(m_handoffDir / kPoseStatusFileName)
@@ -438,7 +493,7 @@ VRPoseService::VRPoseService(entt::dispatcher& aDispatcher, TransportService& aT
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRPoseService::OnDisconnected>(this);
 }
 
-void VRPoseService::OnUpdate(const UpdateEvent& acEvent) noexcept
+void VRPoseService::OnUpdate(const UpdateEvent& acEvent) noexcept try
 {
     m_localBodyPose = SkyrimTogetherVR::BodyPoseCapture::CopyLatestFresh();
 
@@ -480,8 +535,12 @@ void VRPoseService::OnUpdate(const UpdateEvent& acEvent) noexcept
     m_logTimer = 0.0;
     LogSnapshot();
 }
+catch (...)
+{
+    spdlog::error("VR pose update skipped after an allocation or handoff failure");
+}
 
-void VRPoseService::OnVRPoseUpdate(const NotifyVRPoseUpdate& acMessage) noexcept
+void VRPoseService::OnVRPoseUpdate(const NotifyVRPoseUpdate& acMessage) noexcept try
 {
     if (acMessage.PlayerId == m_transport.GetLocalPlayerId())
         return;
@@ -494,6 +553,12 @@ void VRPoseService::OnVRPoseUpdate(const NotifyVRPoseUpdate& acMessage) noexcept
 
     m_remotePoses[acMessage.PlayerId] = acMessage.Pose;
     m_remotePoseAges[acMessage.PlayerId] = 0.0;
+    m_poseStatusDirty = true;
+}
+catch (...)
+{
+    m_remotePoses.erase(acMessage.PlayerId);
+    m_remotePoseAges.erase(acMessage.PlayerId);
     m_poseStatusDirty = true;
 }
 
@@ -517,14 +582,17 @@ void VRPoseService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     }
 }
 
-void VRPoseService::SendPoseUpdate() noexcept
+void VRPoseService::SendPoseUpdate()
 {
     if (!m_transport.IsOnline() || !m_hasSnapshot)
         return;
 
+    if (++m_sequence == 0)
+        ++m_sequence;
     RequestVRPoseUpdate request{};
-    request.Pose = ToPoseUpdate(m_lastSnapshot, m_localBodyPose, m_localVrik, ++m_sequence);
-    m_transport.Send(request);
+    request.Pose = ToPoseUpdate(m_lastSnapshot, m_localBodyPose, m_localVrik, m_sequence);
+    if (HasAnyVRPosePayload(request.Pose) && IsVRPoseUpdateSafe(request.Pose))
+        m_transport.Send(request);
 }
 
 void VRPoseService::PruneRemotePoses(double aDelta) noexcept
@@ -540,26 +608,21 @@ void VRPoseService::PruneRemotePoses(double aDelta) noexcept
         return;
     }
 
-    std::vector<uint32_t> trackedPlayerIds;
-    std::vector<uint32_t> expiredPlayerIds;
-    for (const auto& [playerId, age] : m_remotePoseAges)
+    for (auto it = m_remotePoseAges.begin(); it != m_remotePoseAges.end();)
     {
-        trackedPlayerIds.push_back(playerId);
-        if (age + aDelta >= kRemotePoseStaleSeconds)
-            expiredPlayerIds.push_back(playerId);
-    }
-    for (auto playerId : trackedPlayerIds)
-        m_remotePoseAges[playerId] += aDelta;
-
-    for (auto playerId : expiredPlayerIds)
-    {
-        m_remotePoseAges.erase(playerId);
-        m_remotePoses.erase(playerId);
+        it->second += aDelta;
+        if (it->second < kRemotePoseStaleSeconds)
+        {
+            ++it;
+            continue;
+        }
+        m_remotePoses.erase(it->first);
+        it = m_remotePoseAges.erase(it);
         m_poseStatusDirty = true;
     }
 }
 
-void VRPoseService::WritePoseStatusFile() noexcept
+void VRPoseService::WritePoseStatusFile()
 {
     std::error_code ec;
     std::filesystem::create_directories(m_handoffDir, ec);
@@ -656,7 +719,7 @@ void VRPoseService::WritePoseStatusFile() noexcept
         m_poseStatusDirty = false;
 }
 
-void VRPoseService::LogSnapshot() const noexcept
+void VRPoseService::LogSnapshot() const
 {
     if (!m_hasSnapshot)
     {

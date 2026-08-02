@@ -20,6 +20,7 @@ struct VRConnectionService
 
     bool RequestConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     bool RequestDisconnect() noexcept;
+    void BeginTeardown() noexcept;
     void HandleLifecycleBoundary() noexcept;
     [[nodiscard]] const std::string& GetState() const noexcept { return m_state; }
 

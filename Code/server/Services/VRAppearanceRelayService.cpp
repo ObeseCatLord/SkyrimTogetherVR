@@ -34,6 +34,20 @@ VRAppearanceRelayService::VRAppearanceRelayService(World& aWorld, entt::dispatch
 {
 }
 
+bool VRAppearanceRelayService::SeedAppearance(
+    const std::uint32_t aPlayerId, const VRAppearance& acAppearance) noexcept
+{
+    return aPlayerId != 0 && AcceptAppearance(aPlayerId, acAppearance);
+}
+
+void VRAppearanceRelayService::DiscardSeededAppearance(
+    const std::uint32_t aPlayerId, const std::uint32_t aExpectedSequence) noexcept
+{
+    const auto appearance = m_latestAppearance.find(aPlayerId);
+    if (appearance != m_latestAppearance.end() && appearance->second.Sequence == aExpectedSequence)
+        m_latestAppearance.erase(appearance);
+}
+
 void VRAppearanceRelayService::OnVRAppearance(const PacketEvent<RequestVRAppearance>& acMessage) noexcept
 {
     if (!acMessage.pPlayer)
@@ -174,7 +188,7 @@ void VRAppearanceRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) no
 }
 
 bool VRAppearanceRelayService::AcceptAppearance(
-    const std::uint32_t aPlayerId, const VRAppearance& acAppearance) noexcept
+    const std::uint32_t aPlayerId, const VRAppearance& acAppearance) noexcept try
 {
     if (!acAppearance.IsValid())
         return false;
@@ -185,4 +199,9 @@ bool VRAppearanceRelayService::AcceptAppearance(
 
     m_latestAppearance[aPlayerId] = acAppearance;
     return true;
+}
+catch (...)
+{
+    spdlog::error("VR appearance relay could not retain the latest bounded snapshot");
+    return false;
 }

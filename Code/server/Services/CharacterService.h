@@ -36,12 +36,13 @@ struct PlayerLeaveEvent;
  */
 struct CharacterService
 {
-    CharacterService(World& aWorld, entt::dispatcher& aDispatcher) noexcept;
+    CharacterService(World& aWorld, entt::dispatcher& aDispatcher);
     ~CharacterService() noexcept = default;
 
     TP_NOCOPYMOVE(CharacterService);
 
-    static void Serialize(World& aRegistry, entt::entity aEntity, CharacterSpawnRequest* apSpawnRequest) noexcept;
+    static bool Serialize(World& aRegistry, entt::entity aEntity,
+                          CharacterSpawnRequest* apSpawnRequest) noexcept;
 
 protected:
     void OnUpdate(const UpdateEvent& acEvent) const noexcept;
@@ -65,11 +66,13 @@ protected:
     void OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept;
 
     void CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept;
-    void TransferOwnership(Player* apPlayer, const uint32_t acServerId, const ActorData& acActorData) const noexcept;
+    [[nodiscard]] bool TransferOwnership(Player* apPlayer, uint32_t acServerId,
+                                         const ActorData& acActorData) const noexcept;
     void ExpireOwnershipGrants() const noexcept;
-    ActorData BuildActorData(const entt::entity acEntity) const noexcept;
-    void ApplyActorData(const entt::entity acEntity, const ActorData& acActorData) const noexcept;
-    void BroadcastActorData(Player* apPlayer, const entt::entity acEntity, const ActorData& acActorData) const noexcept;
+    [[nodiscard]] bool BuildActorData(entt::entity acEntity, ActorData* apActorData) const noexcept;
+    [[nodiscard]] bool ApplyActorData(entt::entity acEntity, const ActorData& acActorData) const noexcept;
+    [[nodiscard]] bool BroadcastActorData(Player* apPlayer, entt::entity acEntity,
+                                          const ActorData& acActorData) const noexcept;
 
     void ProcessFactionsChanges() const noexcept;
     void ProcessMovementChanges() const noexcept;

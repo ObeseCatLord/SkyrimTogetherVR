@@ -22,6 +22,7 @@ namespace
 {
 std::atomic<std::uint64_t> g_lastRetireActionId{};
 std::atomic<std::uint64_t> g_lastLocalActionId{};
+std::atomic<std::uint64_t> g_lastLocalNativeActionId{};
 std::atomic<std::uint64_t> g_lastWorldActionId{};
 std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
 
@@ -36,8 +37,10 @@ std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
 
 [[nodiscard]] bool IsCurrentSession(const MappingHeader& a_header, const BridgeIdentity& a_identity) noexcept
 {
-    return a_identity.ServerInstanceNonce == a_header.ServerInstanceNonce.load(std::memory_order_acquire) &&
-           a_identity.ConnectionGeneration == a_header.ConnectionGeneration.load(std::memory_order_acquire);
+    SessionIdentitySnapshot session{};
+    return TrySnapshotSessionIdentity(a_header, session) &&
+           a_identity.ServerInstanceNonce == session.ServerInstanceNonce &&
+           a_identity.ConnectionGeneration == session.ConnectionGeneration;
 }
 
 [[nodiscard]] bool AdvanceMonotonic(std::atomic<std::uint64_t>& a_last, const std::uint64_t a_value) noexcept
@@ -48,6 +51,29 @@ std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
             return true;
     }
     return false;
+}
+
+[[nodiscard]] bool IsCombatMagicSupportedMagicAction(const GameplayAction a_action) noexcept
+{
+    return a_action >= GameplayAction::CastSpell && a_action <= GameplayAction::RemoveSpell;
+}
+
+[[nodiscard]] bool IsNpcObservationAction(
+    const GameplayDomain a_domain, const GameplayAction a_action) noexcept
+{
+    return a_domain == GameplayDomain::NpcOwnership &&
+           (a_action == GameplayAction::StartNpcObservation ||
+            a_action == GameplayAction::StopNpcObservation);
+}
+
+[[nodiscard]] bool IsCanonicalNpcObservationPayload(const GameplayActionPayload& a_payload) noexcept
+{
+    return a_payload.TargetHandle.Value == 0 && a_payload.SecondaryHandle.Value == 0 &&
+           a_payload.TargetLocalFormId != 0 && a_payload.LocalFormIdA == 0 && a_payload.LocalFormIdB == 0 &&
+           a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 && a_payload.ValueA == 0 &&
+           a_payload.ValueB == 0 && a_payload.ScalarA == 0.0F && a_payload.ScalarB == 0.0F &&
+           a_payload.ScalarC == 0.0F && a_payload.ScalarD == 0.0F && a_payload.ActionFlags == 0 &&
+           a_payload.Reserved0 == 0 && IsZero(a_payload.ReservedTail, sizeof(a_payload.ReservedTail));
 }
 
 void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexcept
@@ -233,16 +259,19 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     GameplayDomain domain{};
     GameplayAction action{};
     AdapterHandle targetHandle{};
+    std::uint32_t targetLocalFormId{};
     if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayAction) {
         const auto& payload = a_command.Payload.ApplyGameplayAction;
         domain = static_cast<GameplayDomain>(payload.Domain);
         action = static_cast<GameplayAction>(payload.Action);
         targetHandle = payload.TargetHandle;
+        targetLocalFormId = payload.TargetLocalFormId;
     } else if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayTextChunk) {
         const auto& payload = a_command.Payload.ApplyGameplayTextChunk;
         domain = static_cast<GameplayDomain>(payload.Domain);
         action = static_cast<GameplayAction>(payload.Action);
         targetHandle = payload.TargetHandle;
+        targetLocalFormId = payload.TargetLocalFormId;
     } else {
         return CommandStatus::Malformed;
     }
@@ -265,20 +294,58 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
         !HasCapability(a_header.ActiveCapabilities.load(std::memory_order_acquire), capability))
         return CommandStatus::Unsupported;
     const bool textChunk = static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyGameplayTextChunk;
-    if (targetHandle.Value == kLocalPlayerHandle.Value) {
-        if (!CanonicalEntity::IsValid(a_command.Header.Identity.EntityId,
-                                      a_command.Header.Identity.EntityGeneration))
+    const bool canonicalEntity = CanonicalEntity::IsValid(
+        a_command.Header.Identity.EntityId, a_command.Header.Identity.EntityGeneration);
+    const bool zeroEntity = a_command.Header.Identity.EntityId == 0 &&
+                            a_command.Header.Identity.EntityGeneration == 0;
+    const bool inventoryTransaction = domain == GameplayDomain::Inventory && IsInventoryTransactionAction(action);
+    const bool remoteActor = targetHandle.Value >= kFirstRemoteAvatarHandle && canonicalEntity;
+    const bool npcObservation = IsNpcObservationAction(domain, action);
+    if (npcObservation) {
+        if (textChunk || !canonicalEntity || !IsCanonicalNpcObservationPayload(a_command.Payload.ApplyGameplayAction))
+            return CommandStatus::Malformed;
+        if (a_command.Header.Identity.ActionId <= g_lastLocalNativeActionId.load(std::memory_order_acquire))
             return CommandStatus::StaleEntity;
+        const auto bound = AvatarManager::Get().ValidateLocalNativeGameplayActor(a_command);
+        if (bound != CommandStatus::Success)
+            return bound;
+        return AdvanceMonotonic(g_lastLocalNativeActionId, a_command.Header.Identity.ActionId) ?
+                   CommandStatus::Success :
+                   CommandStatus::StaleEntity;
+    }
+    const bool localPlayer = targetHandle.Value == kLocalPlayerHandle.Value && canonicalEntity && !npcObservation;
+    const bool localNativeOwnedActor = !textChunk && targetHandle.Value == 0 && targetLocalFormId != 0 &&
+                                       canonicalEntity &&
+                                       ((domain == GameplayDomain::Magic && IsCombatMagicSupportedMagicAction(action)) ||
+                                        (domain == GameplayDomain::Inventory && IsInventoryTransactionAction(action)));
+    const bool worldInventoryTransaction = !textChunk && targetHandle.Value == 0 && targetLocalFormId != 0 &&
+                                           zeroEntity && domain == GameplayDomain::Inventory &&
+                                           IsInventoryTransactionAction(action);
+    // Preserve legacy zero-identity world commands while keeping the explicit
+    // inventory transaction form available for containers and world references.
+    const bool zeroIdentityWorld = targetHandle.Value == 0 && zeroEntity && !npcObservation &&
+                                   (!inventoryTransaction || targetLocalFormId != 0);
+    if (!remoteActor && !localPlayer && !localNativeOwnedActor &&
+        !worldInventoryTransaction && !zeroIdentityWorld)
+        return CommandStatus::Malformed;
+
+    if (localNativeOwnedActor) {
+        if (a_command.Header.Identity.ActionId <= g_lastLocalNativeActionId.load(std::memory_order_acquire))
+            return CommandStatus::StaleEntity;
+        const auto bound = AvatarManager::Get().ValidateLocalNativeGameplayActor(a_command);
+        if (bound != CommandStatus::Success)
+            return bound;
+    }
+
+    if (localPlayer) {
         if (!textChunk && !AdvanceMonotonic(g_lastLocalActionId, a_command.Header.Identity.ActionId))
             return CommandStatus::StaleEntity;
+    } else if (localNativeOwnedActor) {
+        if (!AdvanceMonotonic(g_lastLocalNativeActionId, a_command.Header.Identity.ActionId))
+            return CommandStatus::StaleEntity;
     } else if (targetHandle.Value == 0) {
-        if (a_command.Header.Identity.EntityId != 0 || a_command.Header.Identity.EntityGeneration != 0)
-            return CommandStatus::Malformed;
         if (!textChunk && !AdvanceMonotonic(g_lastWorldActionId, a_command.Header.Identity.ActionId))
             return CommandStatus::StaleEntity;
-    } else if (!CanonicalEntity::IsValid(a_command.Header.Identity.EntityId,
-                                         a_command.Header.Identity.EntityGeneration)) {
-        return CommandStatus::StaleEntity;
     }
     return CommandStatus::Success;
 }
@@ -357,6 +424,25 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     return CommandStatus::Success;
 }
 
+[[nodiscard]] CommandStatus ValidateAssignmentBootstrapCommand(
+    const MappingHeader& a_header, const CommandRecord& a_command) noexcept
+{
+    const auto common = ValidateCommon(a_header, a_command);
+    if (common != CommandStatus::Success)
+        return common;
+    const auto& identity = a_command.Header.Identity;
+    const auto& payload = a_command.Payload.CaptureAssignmentBootstrap;
+    if (identity.EntityId != 0 || identity.EntityGeneration != 0 || identity.SequenceId != 0 ||
+        identity.ActionId == 0 || payload.TargetHandle.Value != kLocalPlayerHandle.Value ||
+        payload.RequestId == 0 || payload.CaptureFlags != 0 || payload.Reserved0 != 0 ||
+        !IsZero(payload.Reserved, sizeof(payload.Reserved)))
+        return CommandStatus::Malformed;
+    if (!HasCapability(a_header.ActiveCapabilities.load(std::memory_order_acquire),
+                       Capability::AssignmentBootstrap))
+        return CommandStatus::Unsupported;
+    return CommandStatus::Success;
+}
+
 [[nodiscard]] CommandStatus ExecuteCommand(BridgeEndpoint& a_endpoint, const CommandRecord& a_command) noexcept
 {
     auto& header = a_endpoint.Mapping()->Header;
@@ -405,7 +491,15 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     case CommandKind::ApplyProjectileLaunch:
     {
         const auto validation = ValidateProjectileLaunchCommand(header, a_command);
-        return validation == CommandStatus::Success ? ApplyProjectileLaunch(a_command) : validation;
+        const auto status = validation == CommandStatus::Success ? ApplyProjectileLaunch(a_command) : validation;
+        PublishRemoteGameplayActionState(
+            a_command.Header.Identity,
+            a_command.Payload.ApplyProjectileLaunch.TargetHandle,
+            GameplayDomain::Projectile,
+            GameplayAction::LaunchProjectile,
+            0,
+            status);
+        return status;
     }
     case CommandKind::StageActorActionGraphChunk:
     case CommandKind::StageActorActionTextChunk:
@@ -425,6 +519,12 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
                 status);
         }
         return status;
+    }
+    case CommandKind::CaptureAssignmentBootstrap:
+    {
+        const auto validation = ValidateAssignmentBootstrapCommand(header, a_command);
+        return validation == CommandStatus::Success ?
+            LocalGameplayCapture::CaptureAssignmentBootstrap(a_command) : validation;
     }
     case CommandKind::RetireEpoch:
     {
@@ -450,12 +550,14 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
         VRBodyPoseManager::Reset();
         VRInteractionManager::Reset();
         ActorWorldManager::Reset();
+        a_endpoint.DiscardCommandResultEvents();
         std::uint64_t expected = a_command.Header.Identity.LifecycleEpoch;
         if (!header.LifecycleEpoch.compare_exchange_strong(expected, expected + 1, std::memory_order_acq_rel, std::memory_order_acquire))
             return CommandStatus::StaleEpoch;
         PublishEpochRetired(a_command.Payload.RetireEpoch.Reason);
         g_lastRetireActionId.store(0, std::memory_order_release);
         g_lastLocalActionId.store(0, std::memory_order_release);
+        g_lastLocalNativeActionId.store(0, std::memory_order_release);
         g_lastWorldActionId.store(0, std::memory_order_release);
         g_lastProjectileLaunchActionId.store(0, std::memory_order_release);
         return CommandStatus::Success;
@@ -481,6 +583,7 @@ CommandPumpResult ProcessCommands(
     if (ProcessPendingLifecycleTransitions()) {
         g_lastRetireActionId.store(0, std::memory_order_release);
         g_lastLocalActionId.store(0, std::memory_order_release);
+        g_lastLocalNativeActionId.store(0, std::memory_order_release);
         g_lastWorldActionId.store(0, std::memory_order_release);
         g_lastProjectileLaunchActionId.store(0, std::memory_order_release);
         GameplayTextManager::Reset();
@@ -494,8 +597,13 @@ CommandPumpResult ProcessCommands(
 
     auto* mapping = endpoint.Mapping();
     auto& commands = mapping->Commands;
+    static_cast<void>(endpoint.FlushCommandResultEvents());
     const auto limit = a_maxCommands > kDefaultCommandRingCapacity ? kDefaultCommandRingCapacity : a_maxCommands;
     for (std::uint32_t index = 0; index < limit; ++index) {
+        // A failed spatial transfer can emit both spatial and avatar results.
+        // Reserve enough fixed backlog capacity before any engine mutation.
+        if (!endpoint.CanQueueCommandResultEvents(2))
+            break;
         CommandRecord command{};
         if (!TryPop(commands, command))
             break;

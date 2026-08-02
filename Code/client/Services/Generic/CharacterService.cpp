@@ -859,6 +859,8 @@ void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEve
 
 void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessage) noexcept
 {
+    if (!acMessage.IsDecodedValid)
+        return;
     spdlog::info("Received for cookie {:X}, server id {:X}", acMessage.Cookie, acMessage.ServerId);
 
     auto view = m_world.view<WaitingForAssignmentComponent>();
@@ -947,6 +949,8 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
 
 void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) const noexcept
 {
+    if (!acMessage.IsDecodedValid)
+        return;
     auto remoteView = m_world.view<RemoteComponent>();
     const auto remoteItor =
         std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.ServerId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
@@ -1129,6 +1133,9 @@ void CharacterService::OnRemoteSpawnDataReceived(const NotifySpawnData& acMessag
 
 void CharacterService::OnReferencesMoveRequest(const ServerReferencesMoveRequest& acMessage) const noexcept
 {
+    if (!acMessage.IsDecodedValid)
+        return;
+
     auto view = m_world.view<RemoteComponent, InterpolationComponent, RemoteAnimationComponent>();
 
     for (const auto& [serverId, update] : acMessage.Updates)

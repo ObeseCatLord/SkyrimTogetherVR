@@ -34,9 +34,11 @@
 #include <Messages/RequestSetWaypoint.h>
 #include <Messages/RequestWeatherChange.h>
 #include <Messages/ServerTimeSettings.h>
+#include <Messages/SubtitleRequest.h>
 #include <Messages/TeleportCommandResponse.h>
 #include <Services/TransportService.h>
 #include <Services/VRAvatarService.h>
+#include <Services/VRNpcOwnershipService.h>
 #include <Structs/ServerSettings.h>
 #include <VRGameplayBridge.h>
 #include <World.h>
@@ -45,6 +47,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -57,10 +60,18 @@ constexpr std::size_t kMaximumRetainedLockStates = 128;
 constexpr std::uint8_t kMaximumReconcileAttempts = 3;
 constexpr double kReconcileIntervalSeconds = 0.25;
 constexpr std::size_t kMaximumPendingTextTransactions = 64;
+constexpr std::size_t kMaximumPendingOutboundTransactions = 128;
+constexpr std::uint8_t kMaximumRemoteCommandAttempts = 3;
+constexpr double kRemoteCommandInitialRetryDelaySeconds = 0.125;
+constexpr double kRemoteCommandMaximumRetryDelaySeconds = 0.5;
+constexpr double kRemoteCommandLifetimeSeconds = 5.0;
+constexpr double kRemoteCommandResultExpirySeconds = 2.0;
 constexpr double kWaypointEchoSuppressionSeconds = 3.0;
+constexpr double kSubtitleAssemblyExpirySeconds = 2.0;
 constexpr float kWaypointPositionTolerance = 1.0F;
 constexpr float kMaximumWorldPosition = 10'000'000.0F;
 constexpr std::uint32_t kPlayerReferenceFormId = 0x00000014;
+constexpr std::size_t kMaximumSubtitleTextBytes = 512;
 
 [[nodiscard]] bool IsZeroBytes(const void* apData, const std::size_t aSize) noexcept
 {
@@ -104,6 +115,49 @@ constexpr std::uint32_t kPlayerReferenceFormId = 0x00000014;
     return hasExtension(".fuz") || hasExtension(".xwm") || hasExtension(".wav");
 }
 
+[[nodiscard]] bool IsValidUtf8(const std::string_view acText) noexcept
+{
+    const auto isContinuation = [&acText](const std::size_t aIndex) noexcept {
+        return aIndex < acText.size() &&
+               (static_cast<std::uint8_t>(acText[aIndex]) & 0xC0u) == 0x80u;
+    };
+    for (std::size_t index = 0; index < acText.size();) {
+        const auto byte = static_cast<std::uint8_t>(acText[index]);
+        if (byte <= 0x7Fu) {
+            ++index;
+        } else if (byte >= 0xC2u && byte <= 0xDFu && isContinuation(index + 1)) {
+            index += 2;
+        } else if (byte == 0xE0u && index + 2 < acText.size() &&
+                   static_cast<std::uint8_t>(acText[index + 1]) >= 0xA0u &&
+                   static_cast<std::uint8_t>(acText[index + 1]) <= 0xBFu && isContinuation(index + 2)) {
+            index += 3;
+        } else if ((byte >= 0xE1u && byte <= 0xECu || byte >= 0xEEu && byte <= 0xEFu) &&
+                   isContinuation(index + 1) && isContinuation(index + 2)) {
+            index += 3;
+        } else if (byte == 0xEDu && index + 2 < acText.size() &&
+                   static_cast<std::uint8_t>(acText[index + 1]) >= 0x80u &&
+                   static_cast<std::uint8_t>(acText[index + 1]) <= 0x9Fu && isContinuation(index + 2)) {
+            index += 3;
+        } else if (byte == 0xF0u && index + 3 < acText.size() &&
+                   static_cast<std::uint8_t>(acText[index + 1]) >= 0x90u &&
+                   static_cast<std::uint8_t>(acText[index + 1]) <= 0xBFu &&
+                   isContinuation(index + 2) && isContinuation(index + 3)) {
+            index += 4;
+        } else if (byte >= 0xF1u && byte <= 0xF3u && isContinuation(index + 1) &&
+                   isContinuation(index + 2) && isContinuation(index + 3)) {
+            index += 4;
+        } else if (byte == 0xF4u && index + 3 < acText.size() &&
+                   static_cast<std::uint8_t>(acText[index + 1]) >= 0x80u &&
+                   static_cast<std::uint8_t>(acText[index + 1]) <= 0x8Fu &&
+                   isContinuation(index + 2) && isContinuation(index + 3)) {
+            index += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool BuildWorldCommand(
     const TransportService& aTransport,
     const GameplayBridge::GameplayDomain aDomain,
@@ -132,17 +186,25 @@ constexpr std::uint32_t kPlayerReferenceFormId = 0x00000014;
     return acId ? aWorld.GetModSystem().GetGameId(acId) : 0;
 }
 
-void Submit(GameplayBridge::CommandRecord& arCommand) noexcept
+[[nodiscard]] bool IsRetryableRemoteCommandStatus(const GameplayBridge::CommandStatus aStatus) noexcept
 {
-    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(arCommand))
-        spdlog::warn("VR world replication rejected domain {} action {}", arCommand.Payload.ApplyGameplayAction.Domain,
-                     arCommand.Payload.ApplyGameplayAction.Action);
+    return aStatus == GameplayBridge::CommandStatus::Inactive ||
+           aStatus == GameplayBridge::CommandStatus::MissingForm ||
+           aStatus == GameplayBridge::CommandStatus::MissingCell ||
+           aStatus == GameplayBridge::CommandStatus::QueueOverflow;
+}
+
+[[nodiscard]] double RemoteCommandRetryDelay(const std::uint8_t aAttempts) noexcept
+{
+    const auto exponent = std::min<std::uint8_t>(aAttempts > 0 ? aAttempts - 1 : 0, 2);
+    return std::min(kRemoteCommandMaximumRetryDelaySeconds,
+                    kRemoteCommandInitialRetryDelaySeconds * static_cast<double>(1u << exponent));
 }
 
 [[nodiscard]] bool SubmitTextTransaction(
     GameplayBridge::CommandRecord aBase,
     const std::uint64_t aTextId,
-    const std::string_view acText) noexcept
+    const std::string_view acText) noexcept try
 {
     const auto maxBytes = static_cast<std::size_t>(GameplayBridge::kGameplayTextBytesPerChunk) *
                           GameplayBridge::kMaximumGameplayTextChunks;
@@ -175,7 +237,75 @@ void Submit(GameplayBridge::CommandRecord& arCommand) noexcept
     }
     return SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommandBatch(commands.data(), commands.size());
 }
+catch (...)
+{
+    return false;
+}
 } // namespace
+
+template <class T>
+bool VRWorldReplicationService::SendOutbound(T&& aRequest, const std::size_t aDomainIndex,
+                                             const std::uint64_t aActionId) noexcept try
+{
+    using Request = std::decay_t<T>;
+    Request request{std::forward<T>(aRequest)};
+    if (m_pendingOutbound.empty() && m_transport.Send(request))
+    {
+        if (aActionId != 0 && aDomainIndex < m_lastLocalActionIdByDomain.size())
+            m_lastLocalActionIdByDomain[aDomainIndex] = aActionId;
+        return true;
+    }
+
+    if (m_pendingOutbound.size() >= kMaximumPendingOutboundTransactions)
+    {
+        TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+        return false;
+    }
+    if (m_pendingOutbound.empty())
+    {
+        m_pendingOutboundServerInstanceNonce = m_transport.GetServerInstanceNonce();
+        m_pendingOutboundConnectionGeneration = m_transport.GetConnectionGeneration();
+        m_pendingOutboundLifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    }
+    m_pendingOutbound.push_back({[this, request = std::move(request)]() mutable {
+        return m_transport.Send(request);
+    }});
+    if (aActionId != 0 && aDomainIndex < m_lastLocalActionIdByDomain.size())
+        m_lastLocalActionIdByDomain[aDomainIndex] = aActionId;
+    return true;
+}
+catch (...)
+{
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    return false;
+}
+
+void VRWorldReplicationService::TrySendPendingOutbound() noexcept
+{
+    if (m_pendingOutbound.empty())
+        return;
+    if (!m_transport.IsOnline() ||
+        m_pendingOutboundServerInstanceNonce != m_transport.GetServerInstanceNonce() ||
+        m_pendingOutboundConnectionGeneration != m_transport.GetConnectionGeneration() ||
+        m_pendingOutboundLifecycleEpoch != SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch())
+    {
+        m_pendingOutbound.clear();
+        m_pendingOutboundServerInstanceNonce = 0;
+        m_pendingOutboundConnectionGeneration = 0;
+        m_pendingOutboundLifecycleEpoch = 0;
+        return;
+    }
+
+    while (!m_pendingOutbound.empty())
+    {
+        if (!m_pendingOutbound.front().TrySend())
+            return;
+        m_pendingOutbound.pop_front();
+    }
+    m_pendingOutboundServerInstanceNonce = 0;
+    m_pendingOutboundConnectionGeneration = 0;
+    m_pendingOutboundLifecycleEpoch = 0;
+}
 
 VRWorldReplicationService::VRWorldReplicationService(
     World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport,
@@ -215,8 +345,599 @@ VRWorldReplicationService::VRWorldReplicationService(
         .connect<&VRWorldReplicationService::OnGameplayResult>(this);
 }
 
+void VRWorldReplicationService::SubmitRemoteCommand(GameplayBridge::CommandRecord aCommand) noexcept
+{
+    ObserveSession();
+    const auto domain = static_cast<GameplayBridge::GameplayDomain>(aCommand.Payload.ApplyGameplayAction.Domain);
+    const auto action = static_cast<GameplayBridge::GameplayAction>(aCommand.Payload.ApplyGameplayAction.Action);
+    if (aCommand.Header.Kind != static_cast<std::uint16_t>(GameplayBridge::CommandKind::ApplyGameplayAction) ||
+        !GameplayBridge::IsActionInDomain(domain, action))
+    {
+        spdlog::warn("VR world replication refused untrackable gameplay command");
+        return;
+    }
+
+    const auto slot = std::find_if(m_pendingRemoteCommands.begin(), m_pendingRemoteCommands.end(),
+                                   [](const PendingRemoteCommand& acPending) { return !acPending.Occupied; });
+    if (slot == m_pendingRemoteCommands.end())
+    {
+        spdlog::warn("VR world replication remote command ledger reached {} entries", m_pendingRemoteCommands.size());
+        return;
+    }
+
+    *slot = {};
+    slot->Command = std::move(aCommand);
+    // ActionId is claimed only by the bridge for each admission attempt.
+    slot->Command.Header.Identity.ActionId = 0;
+    slot->LifetimeRemaining = kRemoteCommandLifetimeSeconds;
+    slot->Occupied = true;
+    TrySubmitPendingRemoteCommand(*slot);
+}
+
+bool VRWorldReplicationService::IsPendingRemoteCommandCurrent(const PendingRemoteCommand& acPending) const noexcept
+{
+    const auto& identity = acPending.Command.Header.Identity;
+    return acPending.Occupied && m_transport.IsOnline() &&
+           m_observedServerInstanceNonce != 0 && m_observedConnectionGeneration != 0 &&
+           m_observedLifecycleEpoch != 0 &&
+           m_transport.GetServerInstanceNonce() == m_observedServerInstanceNonce &&
+           m_transport.GetConnectionGeneration() == m_observedConnectionGeneration &&
+           SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == m_observedLifecycleEpoch &&
+           identity.ServerInstanceNonce == m_observedServerInstanceNonce &&
+           identity.ConnectionGeneration == m_observedConnectionGeneration &&
+           identity.LifecycleEpoch == m_observedLifecycleEpoch;
+}
+
+void VRWorldReplicationService::QueueWorldInventoryTransaction(
+    const GameId& acTargetId, const Inventory& acInventory, const bool aReset) noexcept try
+{
+    ObserveSession();
+    if (!acInventory.IsDecodedValid ||
+        m_pendingWorldInventoryTransactionCount >= kMaximumPendingWorldInventoryTransactions)
+    {
+        if (m_pendingWorldInventoryTransactionCount >= kMaximumPendingWorldInventoryTransactions)
+            spdlog::warn("VR world inventory transaction ledger reached {} entries",
+                         kMaximumPendingWorldInventoryTransactions);
+        return;
+    }
+
+    PendingWorldInventoryTransaction pending{};
+    pending.TargetId = acTargetId;
+    pending.Entries.assign(acInventory.Entries.begin(), acInventory.Entries.end());
+    pending.Reset = aReset;
+
+    // Build before queueing so an unmapped form or invalid stack cannot block a
+    // target's FIFO behind a transaction that can never be admitted.
+    std::vector<GameplayBridge::CommandRecord> commands;
+    if (!BuildWorldInventoryTransactionCommands(pending, commands))
+        return;
+
+    const auto& identity = commands.front().Header.Identity;
+    pending.ServerInstanceNonce = identity.ServerInstanceNonce;
+    pending.ConnectionGeneration = identity.ConnectionGeneration;
+    pending.LifecycleEpoch = identity.LifecycleEpoch;
+    pending.TargetLocalFormId = commands.front().Payload.ApplyGameplayAction.TargetLocalFormId;
+
+    auto [queue, inserted] = m_pendingWorldInventoryTransactions.try_emplace(acTargetId);
+    TP_UNUSED(inserted);
+    queue->second.emplace_back(std::move(pending));
+    ++m_pendingWorldInventoryTransactionCount;
+    if (queue->second.size() != 1)
+        return;
+
+    TrySubmitPendingWorldInventoryTransaction(queue->second.front());
+    if (!queue->second.front().Terminal)
+        return;
+
+    queue->second.pop_front();
+    --m_pendingWorldInventoryTransactionCount;
+    if (queue->second.empty())
+        m_pendingWorldInventoryTransactions.erase(queue);
+}
+catch (...)
+{
+    spdlog::debug("VR world inventory transaction construction failed");
+}
+
+bool VRWorldReplicationService::BuildWorldInventoryTransactionCommands(
+    const PendingWorldInventoryTransaction& acPending,
+    std::vector<GameplayBridge::CommandRecord>& arCommands) const noexcept try
+{
+    arCommands.clear();
+    if (!acPending.TargetId || acPending.Entries.size() > GameplayBridge::kMaximumInventoryTransactionItems ||
+        (acPending.Entries.empty() && !acPending.Reset))
+        return false;
+
+    const auto targetLocalFormId = ToLocalForm(m_world, acPending.TargetId);
+    if (targetLocalFormId == 0)
+        return false;
+
+    std::size_t totalEffects{};
+    for (const auto& item : acPending.Entries)
+    {
+        if (!item.IsValidMutation() || (acPending.Reset && item.Count < 0) ||
+            item.EnchantData.Effects.size() > GameplayBridge::kMaximumInventoryTransactionEffects - totalEffects)
+            return false;
+        totalEffects += item.EnchantData.Effects.size();
+
+        const auto knownClassification = Inventory::Entry::kEquipmentWeapon | Inventory::Entry::kEquipmentAmmo;
+        if ((item.EquipmentFlags & ~knownClassification) != 0 ||
+            (item.EquipmentFlags & knownClassification) == knownClassification)
+            return false;
+
+        const bool hasEnchantment = static_cast<bool>(item.ExtraEnchantId);
+        const bool dynamicEnchantment =
+            item.ExtraEnchantId.ModId == (std::numeric_limits<std::uint32_t>::max)();
+        if ((dynamicEnchantment && (!hasEnchantment || item.EnchantData.Effects.empty())) ||
+            (!dynamicEnchantment && !item.EnchantData.Effects.empty()))
+            return false;
+
+        const bool weapon = (item.EquipmentFlags & Inventory::Entry::kEquipmentWeapon) != 0;
+        if (hasEnchantment && item.EnchantData.IsWeapon != weapon)
+            return false;
+    }
+
+    const auto recordCount = 2 + acPending.Entries.size() * 2 + totalEffects;
+    if (recordCount > GameplayBridge::kMaximumInventoryTransactionRecords)
+        return false;
+    arCommands.reserve(recordCount);
+
+    const auto append = [this, targetLocalFormId, &arCommands](const GameplayBridge::GameplayAction aAction,
+                                                                GameplayBridge::GameplayActionPayload aPayload) {
+        GameplayBridge::CommandRecord command{};
+        if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Inventory, aAction, command))
+            return false;
+
+        command.Header.Identity.EntityId = 0;
+        command.Header.Identity.EntityGeneration = 0;
+        command.Header.Identity.Reserved0 = 0;
+        command.Header.Identity.SequenceId = 0;
+        command.Header.Identity.ActionId = 0;
+        aPayload.TargetHandle = {};
+        aPayload.SecondaryHandle = {};
+        aPayload.TargetLocalFormId = targetLocalFormId;
+        aPayload.Domain = static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::Inventory);
+        aPayload.Action = static_cast<std::uint16_t>(aAction);
+        command.Payload.ApplyGameplayAction = aPayload;
+        arCommands.push_back(std::move(command));
+        return true;
+    };
+
+    GameplayBridge::GameplayActionPayload begin{};
+    begin.ValueA = static_cast<std::int32_t>(acPending.Entries.size());
+    begin.ActionFlags = acPending.Reset ? GameplayBridge::kInventoryTransactionReset : 0u;
+    if (!append(GameplayBridge::GameplayAction::InventoryTransactionBegin, begin))
+        return false;
+
+    for (std::size_t itemIndex = 0; itemIndex < acPending.Entries.size(); ++itemIndex)
+    {
+        const auto& item = acPending.Entries[itemIndex];
+        const auto baseFormId = ToLocalForm(m_world, item.BaseId);
+        if (baseFormId == 0)
+            return false;
+
+        GameplayBridge::GameplayActionPayload itemPayload{};
+        itemPayload.LocalFormIdA = baseFormId;
+        itemPayload.LocalFormIdB = static_cast<std::uint32_t>(acPending.Entries.size());
+        itemPayload.ValueA = item.Count;
+        itemPayload.ValueB = static_cast<std::int32_t>(itemIndex);
+        itemPayload.ActionFlags =
+            (item.IsQuestItem ? GameplayBridge::kInventoryTransactionQuestItem : 0u) |
+            (item.ExtraWorn ? GameplayBridge::kInventoryTransactionWorn : 0u) |
+            (item.ExtraWornLeft ? GameplayBridge::kInventoryTransactionWornLeft : 0u) |
+            ((item.EquipmentFlags & Inventory::Entry::kEquipmentWeapon) != 0 ?
+                 GameplayBridge::kInventoryTransactionWeapon : 0u) |
+            ((item.EquipmentFlags & Inventory::Entry::kEquipmentAmmo) != 0 ?
+                 GameplayBridge::kInventoryTransactionAmmo : 0u);
+        if (!append(GameplayBridge::GameplayAction::InventoryTransactionItem, itemPayload))
+            return false;
+
+        const bool hasEnchantment = static_cast<bool>(item.ExtraEnchantId);
+        const bool dynamicEnchantment =
+            item.ExtraEnchantId.ModId == (std::numeric_limits<std::uint32_t>::max)();
+        std::uint32_t enchantmentFormId{};
+        if (hasEnchantment) {
+            enchantmentFormId = dynamicEnchantment ? GameplayBridge::kInventoryTransactionDynamicEnchantmentFormId :
+                                                    ToLocalForm(m_world, item.ExtraEnchantId);
+            if (enchantmentFormId == 0)
+                return false;
+        }
+
+        const auto poisonFormId = item.ExtraPoisonId ? ToLocalForm(m_world, item.ExtraPoisonId) : 0;
+        if (item.ExtraPoisonId && poisonFormId == 0)
+            return false;
+
+        GameplayBridge::GameplayActionPayload extraPayload{};
+        extraPayload.LocalFormIdA = enchantmentFormId;
+        extraPayload.LocalFormIdB = poisonFormId;
+        extraPayload.LocalFormIdC = static_cast<std::uint32_t>(item.ExtraSoulLevel);
+        extraPayload.LocalFormIdD = static_cast<std::uint32_t>(item.EnchantData.Effects.size());
+        extraPayload.ValueA = item.ExtraEnchantCharge;
+        extraPayload.ValueB = static_cast<std::int32_t>(item.ExtraPoisonCount);
+        extraPayload.ScalarA = item.ExtraCharge;
+        extraPayload.ScalarB = item.ExtraHealth;
+        extraPayload.ActionFlags =
+            (item.ExtraEnchantRemoveUnequip ? GameplayBridge::kInventoryTransactionEnchantRemoveUnequip : 0u) |
+            (item.EnchantData.IsWeapon ? GameplayBridge::kInventoryTransactionEnchantIsWeapon : 0u);
+        if (!append(GameplayBridge::GameplayAction::InventoryTransactionItemExtra, extraPayload))
+            return false;
+
+        for (std::size_t effectIndex = 0; effectIndex < item.EnchantData.Effects.size(); ++effectIndex)
+        {
+            const auto& effect = item.EnchantData.Effects[effectIndex];
+            const auto effectFormId = ToLocalForm(m_world, effect.EffectId);
+            if (effectFormId == 0)
+                return false;
+
+            GameplayBridge::GameplayActionPayload effectPayload{};
+            effectPayload.LocalFormIdA = effectFormId;
+            effectPayload.LocalFormIdB = static_cast<std::uint32_t>(itemIndex);
+            effectPayload.LocalFormIdC = static_cast<std::uint32_t>(effectIndex);
+            effectPayload.LocalFormIdD = static_cast<std::uint32_t>(item.EnchantData.Effects.size());
+            effectPayload.ValueA = effect.Area;
+            effectPayload.ValueB = effect.Duration;
+            effectPayload.ScalarA = effect.Magnitude;
+            effectPayload.ScalarB = effect.RawCost;
+            if (!append(GameplayBridge::GameplayAction::InventoryTransactionItemEffect, effectPayload))
+                return false;
+        }
+    }
+
+    if (!append(GameplayBridge::GameplayAction::InventoryTransactionEnd, {}))
+        return false;
+    return arCommands.size() == recordCount;
+}
+catch (...)
+{
+    arCommands.clear();
+    return false;
+}
+
+bool VRWorldReplicationService::IsPendingWorldInventoryTransactionCurrent(
+    const PendingWorldInventoryTransaction& acPending) const noexcept
+{
+    return !acPending.Terminal && m_transport.IsOnline() && m_observedServerInstanceNonce != 0 &&
+           m_observedConnectionGeneration != 0 && m_observedLifecycleEpoch != 0 &&
+           acPending.ServerInstanceNonce == m_observedServerInstanceNonce &&
+           acPending.ConnectionGeneration == m_observedConnectionGeneration &&
+           acPending.LifecycleEpoch == m_observedLifecycleEpoch &&
+           m_transport.GetServerInstanceNonce() == m_observedServerInstanceNonce &&
+           m_transport.GetConnectionGeneration() == m_observedConnectionGeneration &&
+           SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == m_observedLifecycleEpoch;
+}
+
+void VRWorldReplicationService::TrySubmitPendingWorldInventoryTransaction(
+    PendingWorldInventoryTransaction& arPending) noexcept
+{
+    if (!IsPendingWorldInventoryTransactionCurrent(arPending))
+    {
+        arPending.Terminal = true;
+        return;
+    }
+    if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
+    {
+        arPending.Terminal = true;
+        return;
+    }
+
+    std::vector<GameplayBridge::CommandRecord> commands;
+    if (!BuildWorldInventoryTransactionCommands(arPending, commands))
+    {
+        arPending.Terminal = true;
+        return;
+    }
+
+    ++arPending.Attempts;
+    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommandBatch(commands.data(), commands.size()))
+    {
+        if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
+            arPending.Terminal = true;
+        else
+            arPending.RetryDelay = RemoteCommandRetryDelay(arPending.Attempts);
+        return;
+    }
+
+    const auto& first = commands.front().Header.Identity;
+    const auto& last = commands.back().Header.Identity;
+    if (first.ActionId == 0 || last.ActionId != first.ActionId + commands.size() - 1 ||
+        first.ServerInstanceNonce != arPending.ServerInstanceNonce ||
+        first.ConnectionGeneration != arPending.ConnectionGeneration ||
+        first.LifecycleEpoch != arPending.LifecycleEpoch ||
+        first.EntityId != 0 || first.EntityGeneration != 0 || first.Reserved0 != 0 || first.SequenceId != 0)
+    {
+        // A successful admission with an unexpected result identity is ambiguous.
+        arPending.Terminal = true;
+        return;
+    }
+    for (std::size_t index = 0; index < commands.size(); ++index)
+    {
+        const auto& command = commands[index];
+        const auto& identity = command.Header.Identity;
+        const auto& payload = command.Payload.ApplyGameplayAction;
+        if (identity.ActionId != first.ActionId + index ||
+            identity.ServerInstanceNonce != first.ServerInstanceNonce ||
+            identity.ConnectionGeneration != first.ConnectionGeneration ||
+            identity.LifecycleEpoch != first.LifecycleEpoch || identity.EntityId != 0 ||
+            identity.EntityGeneration != 0 || identity.Reserved0 != 0 || identity.SequenceId != 0 ||
+            payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 ||
+            payload.TargetLocalFormId == 0 ||
+            payload.Domain != static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::Inventory))
+        {
+            arPending.Terminal = true;
+            return;
+        }
+    }
+
+    arPending.TargetLocalFormId = commands.front().Payload.ApplyGameplayAction.TargetLocalFormId;
+    arPending.FirstActionId = first.ActionId;
+    arPending.EndActionId = last.ActionId;
+    arPending.NextResultActionId = first.ActionId;
+    arPending.RetryDelay = 0.0;
+    arPending.ResultRemaining = kRemoteCommandResultExpirySeconds;
+    arPending.AwaitingResult = true;
+}
+
+void VRWorldReplicationService::RetryPendingWorldInventoryTransactions(const double aDelta) noexcept
+{
+    if (!std::isfinite(aDelta) || aDelta < 0.0)
+        return;
+
+    const auto delta = std::min(aDelta, kRemoteCommandLifetimeSeconds);
+    for (auto queue = m_pendingWorldInventoryTransactions.begin();
+         queue != m_pendingWorldInventoryTransactions.end();)
+    {
+        auto& transactions = queue->second;
+        if (transactions.empty())
+        {
+            queue = m_pendingWorldInventoryTransactions.erase(queue);
+            continue;
+        }
+
+        auto& pending = transactions.front();
+        if (!IsPendingWorldInventoryTransactionCurrent(pending))
+        {
+            pending.Terminal = true;
+        }
+        else if (pending.AwaitingResult)
+        {
+            pending.ResultRemaining -= delta;
+            if (pending.ResultRemaining <= 0.0)
+            {
+                // An unreported End may already have changed the container.
+                pending.Terminal = true;
+            }
+        }
+        else
+        {
+            pending.RetryDelay -= delta;
+            if (pending.RetryDelay <= 0.0)
+                TrySubmitPendingWorldInventoryTransaction(pending);
+        }
+
+        if (pending.Terminal)
+        {
+            transactions.pop_front();
+            --m_pendingWorldInventoryTransactionCount;
+        }
+        if (transactions.empty())
+            queue = m_pendingWorldInventoryTransactions.erase(queue);
+        else
+            ++queue;
+    }
+}
+
+void VRWorldReplicationService::HandlePendingWorldInventoryTransactionResult(
+    const GameplayBridge::EventRecord& acRecord) noexcept
+{
+    const auto& identity = acRecord.Header.Identity;
+    const auto& result = acRecord.Payload.RemoteGameplayActionState;
+    for (auto& [targetId, transactions] : m_pendingWorldInventoryTransactions)
+    {
+        TP_UNUSED(targetId);
+        if (transactions.empty())
+            continue;
+
+        auto& pending = transactions.front();
+        if (!pending.AwaitingResult || !IsPendingWorldInventoryTransactionCurrent(pending) ||
+            identity.ActionId < pending.FirstActionId || identity.ActionId > pending.EndActionId)
+            continue;
+
+        const auto expectedAction = [&pending, actionId = identity.ActionId]() {
+            if (actionId == pending.FirstActionId)
+                return GameplayBridge::GameplayAction::InventoryTransactionBegin;
+
+            std::size_t recordIndex = static_cast<std::size_t>(actionId - pending.FirstActionId - 1);
+            for (const auto& item : pending.Entries) {
+                if (recordIndex == 0)
+                    return GameplayBridge::GameplayAction::InventoryTransactionItem;
+                if (recordIndex == 1)
+                    return GameplayBridge::GameplayAction::InventoryTransactionItemExtra;
+                recordIndex -= 2;
+                if (recordIndex < item.EnchantData.Effects.size())
+                    return GameplayBridge::GameplayAction::InventoryTransactionItemEffect;
+                recordIndex -= item.EnchantData.Effects.size();
+            }
+            return GameplayBridge::GameplayAction::InventoryTransactionEnd;
+        };
+
+        if (identity.ServerInstanceNonce != pending.ServerInstanceNonce ||
+            identity.ConnectionGeneration != pending.ConnectionGeneration ||
+            identity.LifecycleEpoch != pending.LifecycleEpoch || identity.EntityId != 0 ||
+            identity.EntityGeneration != 0 || identity.Reserved0 != 0 || identity.SequenceId != 0 ||
+            identity.ActionId != pending.NextResultActionId || result.TargetHandle.Value != 0 ||
+            result.TargetLocalFormId != pending.TargetLocalFormId ||
+            result.Domain != static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::Inventory) ||
+            result.Action != static_cast<std::uint16_t>(expectedAction()))
+        {
+            pending.Terminal = true;
+            return;
+        }
+
+        const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
+        if (identity.ActionId == pending.EndActionId)
+        {
+            // End owns engine application. A failure here is never replayable.
+            pending.Terminal = true;
+            return;
+        }
+        if (status == GameplayBridge::CommandStatus::Success)
+        {
+            ++pending.NextResultActionId;
+            return;
+        }
+
+        // End was admitted atomically with this record. The bridge exposes no
+        // cancellation or proof that End has not run, so no result failure can
+        // satisfy the safe-replay condition for this batch.
+        pending.Terminal = true;
+        return;
+    }
+}
+
+void VRWorldReplicationService::ClearPendingWorldInventoryTransactions() noexcept
+{
+    m_pendingWorldInventoryTransactions.clear();
+    m_pendingWorldInventoryTransactionCount = 0;
+}
+
+void VRWorldReplicationService::TrySubmitPendingRemoteCommand(PendingRemoteCommand& arPending) noexcept
+{
+    if (!IsPendingRemoteCommandCurrent(arPending))
+    {
+        arPending = {};
+        return;
+    }
+    if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
+    {
+        spdlog::warn("Dropping VR world remote command after {} admission attempts", arPending.Attempts);
+        arPending = {};
+        return;
+    }
+
+    auto command = arPending.Command;
+    command.Header.Identity.ActionId = 0;
+    ++arPending.Attempts;
+    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
+    {
+        arPending.Command.Header.Identity.ActionId = 0;
+        arPending.AwaitingResult = false;
+        arPending.ResultRemaining = 0.0;
+        if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
+        {
+            spdlog::warn("Dropping VR world remote command after {} admission attempts", arPending.Attempts);
+            arPending = {};
+            return;
+        }
+        arPending.RetryDelay = RemoteCommandRetryDelay(arPending.Attempts);
+        return;
+    }
+
+    const auto& expected = arPending.Command.Header.Identity;
+    const auto& submitted = command.Header.Identity;
+    if (submitted.ServerInstanceNonce != expected.ServerInstanceNonce ||
+        submitted.ConnectionGeneration != expected.ConnectionGeneration ||
+        submitted.LifecycleEpoch != expected.LifecycleEpoch)
+    {
+        // A session change after admission cannot be replayed safely.
+        arPending = {};
+        return;
+    }
+
+    arPending.Command = command;
+    arPending.AwaitingResult = true;
+    arPending.RetryDelay = 0.0;
+    arPending.ResultRemaining = kRemoteCommandResultExpirySeconds;
+}
+
+void VRWorldReplicationService::RetryPendingRemoteCommands(const double aDelta) noexcept
+{
+    if (!std::isfinite(aDelta) || aDelta < 0.0)
+        return;
+
+    const auto delta = std::min(aDelta, kRemoteCommandLifetimeSeconds);
+    for (auto& pending : m_pendingRemoteCommands)
+    {
+        if (!pending.Occupied)
+            continue;
+        if (!IsPendingRemoteCommandCurrent(pending))
+        {
+            pending = {};
+            continue;
+        }
+
+        pending.LifetimeRemaining -= delta;
+        if (pending.LifetimeRemaining <= 0.0)
+        {
+            spdlog::debug("Expiring VR world remote command before a terminal result");
+            pending = {};
+            continue;
+        }
+        if (pending.AwaitingResult)
+        {
+            pending.ResultRemaining -= delta;
+            if (pending.ResultRemaining <= 0.0)
+            {
+                // The command may have mutated the engine; do not replay it.
+                spdlog::debug("Expiring VR world remote command after result timeout");
+                pending = {};
+            }
+            continue;
+        }
+
+        pending.RetryDelay -= delta;
+        if (pending.RetryDelay <= 0.0)
+            TrySubmitPendingRemoteCommand(pending);
+    }
+}
+
+void VRWorldReplicationService::HandlePendingRemoteCommandResult(
+    const GameplayBridge::EventRecord& acRecord) noexcept
+{
+    const auto& result = acRecord.Payload.RemoteGameplayActionState;
+    const auto& identity = acRecord.Header.Identity;
+    for (auto& pending : m_pendingRemoteCommands)
+    {
+        if (!pending.Occupied || !pending.AwaitingResult || !IsPendingRemoteCommandCurrent(pending))
+            continue;
+
+        const auto& expectedIdentity = pending.Command.Header.Identity;
+        const auto& expectedPayload = pending.Command.Payload.ApplyGameplayAction;
+        if (identity.ServerInstanceNonce != expectedIdentity.ServerInstanceNonce ||
+            identity.ConnectionGeneration != expectedIdentity.ConnectionGeneration ||
+            identity.LifecycleEpoch != expectedIdentity.LifecycleEpoch ||
+            identity.EntityId != expectedIdentity.EntityId ||
+            identity.EntityGeneration != expectedIdentity.EntityGeneration ||
+            identity.Reserved0 != expectedIdentity.Reserved0 ||
+            identity.SequenceId != expectedIdentity.SequenceId || identity.ActionId != expectedIdentity.ActionId ||
+            result.TargetHandle.Value != expectedPayload.TargetHandle.Value ||
+            result.TargetLocalFormId != expectedPayload.TargetLocalFormId ||
+            result.Domain != expectedPayload.Domain || result.Action != expectedPayload.Action)
+            continue;
+
+        const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
+        if (status == GameplayBridge::CommandStatus::Success)
+        {
+            pending = {};
+            return;
+        }
+        if (IsRetryableRemoteCommandStatus(status) && pending.Attempts < kMaximumRemoteCommandAttempts &&
+            pending.LifetimeRemaining > 0.0)
+        {
+            pending.Command.Header.Identity.ActionId = 0;
+            pending.AwaitingResult = false;
+            pending.ResultRemaining = 0.0;
+            pending.RetryDelay = RemoteCommandRetryDelay(pending.Attempts);
+            return;
+        }
+
+        // All other bridge statuses may follow partial or ambiguous engine work.
+        pending = {};
+        return;
+    }
+}
+
 void VRWorldReplicationService::SubmitText(
-    GameplayBridge::CommandRecord aBase, const std::uint64_t aTextId, const std::string_view acText) noexcept
+    GameplayBridge::CommandRecord aBase, const std::uint64_t aTextId, const std::string_view acText) noexcept try
 {
     if (SubmitTextTransaction(aBase, aTextId, acText))
         return;
@@ -229,6 +950,9 @@ void VRWorldReplicationService::SubmitText(
     }
     m_pendingText.push_back({aBase, aTextId, std::string(acText), 1});
     m_textRetryTimer = kReconcileIntervalSeconds;
+}
+catch (...)
+{
 }
 
 void VRWorldReplicationService::RetryPendingText() noexcept
@@ -258,12 +982,12 @@ void VRWorldReplicationService::RetryPendingText() noexcept
     }
 }
 
-void VRWorldReplicationService::OnAssignObjects(const AssignObjectsResponse& acMessage) noexcept
+void VRWorldReplicationService::OnAssignObjects(const AssignObjectsResponse& acMessage) noexcept try
 {
     for (const auto& object : acMessage.Objects)
     {
         const auto objectFormId = ToLocalForm(m_world, object.Id);
-        if (objectFormId == 0 || object.IsSenderFirst)
+        if (objectFormId == 0 || object.IsSenderFirst || !object.IsDecodedValid)
             continue;
 
         if (object.CurrentLockData != LockData{})
@@ -282,32 +1006,14 @@ void VRWorldReplicationService::OnAssignObjects(const AssignObjectsResponse& acM
             }
         }
 
-        GameplayBridge::CommandRecord reset{};
-        if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Inventory,
-                               GameplayBridge::GameplayAction::InventoryReset, reset))
-            return;
-        reset.Payload.ApplyGameplayAction.TargetLocalFormId = objectFormId;
-        Submit(reset);
-
-        for (const auto& item : object.CurrentInventory.Entries)
-        {
-            if (item.Count <= 0 || item.Count > 10'000)
-                continue;
-            GameplayBridge::CommandRecord command{};
-            if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Inventory,
-                                   GameplayBridge::GameplayAction::InventoryDelta, command))
-                return;
-            auto& payload = command.Payload.ApplyGameplayAction;
-            payload.TargetLocalFormId = objectFormId;
-            payload.LocalFormIdA = ToLocalForm(m_world, item.BaseId);
-            payload.ValueA = item.Count;
-            payload.ActionFlags = GameplayBridge::kInventorySnapshotEntry |
-                                  (item.IsQuestItem ? GameplayBridge::kInventoryQuestItem : 0u);
-            if (payload.LocalFormIdA != 0)
-                Submit(command);
-        }
+        // Reset transactions intentionally include Begin+End for an empty
+        // inventory so the native adapter can authoritatively clear a container.
+        QueueWorldInventoryTransaction(object.Id, object.CurrentInventory, true);
     }
     Reconcile();
+}
+catch (...)
+{
 }
 
 void VRWorldReplicationService::OnActivate(const NotifyActivate& acMessage) noexcept
@@ -321,7 +1027,7 @@ void VRWorldReplicationService::OnActivate(const NotifyActivate& acMessage) noex
     payload.TargetLocalFormId = ToLocalForm(m_world, acMessage.Id);
     payload.ValueA = acMessage.PreActivationOpenState;
     if (payload.TargetLocalFormId != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnActorTeleport(const NotifyActorTeleport& acMessage) noexcept
@@ -338,10 +1044,10 @@ void VRWorldReplicationService::OnActorTeleport(const NotifyActorTeleport& acMes
     payload.ScalarB = acMessage.Position.y;
     payload.ScalarC = acMessage.Position.z;
     if (payload.TargetLocalFormId != 0 && payload.LocalFormIdA != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
-void VRWorldReplicationService::OnChatMessage(const NotifyChatMessageBroadcast& acMessage) noexcept
+void VRWorldReplicationService::OnChatMessage(const NotifyChatMessageBroadcast& acMessage) noexcept try
 {
     GameplayBridge::CommandRecord command{};
     if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Dialogue,
@@ -357,6 +1063,9 @@ void VRWorldReplicationService::OnChatMessage(const NotifyChatMessageBroadcast& 
     if (!text.empty())
         SubmitText(command, m_nextTextId++, text);
 }
+catch (...)
+{
+}
 
 void VRWorldReplicationService::OnDialogue(const NotifyDialogue& acMessage) noexcept
 {
@@ -370,7 +1079,7 @@ void VRWorldReplicationService::OnDialogue(const NotifyDialogue& acMessage) noex
     SubmitText(command, m_nextTextId++, acMessage.SoundFilename.c_str());
 }
 
-void VRWorldReplicationService::OnLockChange(const NotifyLockChange& acMessage) noexcept
+void VRWorldReplicationService::OnLockChange(const NotifyLockChange& acMessage) noexcept try
 {
     const auto formId = ToLocalForm(m_world, acMessage.Id);
     if (formId == 0 || !m_transport.IsOnline() || m_transport.GetServerInstanceNonce() == 0 ||
@@ -392,6 +1101,9 @@ void VRWorldReplicationService::OnLockChange(const NotifyLockChange& acMessage) 
                 0.0F, 0.0F, 0.0F);
     Reconcile();
 }
+catch (...)
+{
+}
 
 void VRWorldReplicationService::OnNewPackage(const NotifyNewPackage& acMessage) noexcept
 {
@@ -401,34 +1113,18 @@ void VRWorldReplicationService::OnNewPackage(const NotifyNewPackage& acMessage) 
         return;
     command.Payload.ApplyGameplayAction.LocalFormIdA = ToLocalForm(m_world, acMessage.PackageId);
     if (command.Payload.ApplyGameplayAction.LocalFormIdA != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnObjectInventory(const NotifyObjectInventoryChanges& acMessage) noexcept
 {
     for (const auto& [objectId, inventory] : acMessage.Changes)
     {
-        const auto objectFormId = ToLocalForm(m_world, objectId);
-        if (objectFormId == 0)
-            continue;
-        for (const auto& item : inventory.Entries)
-        {
-            GameplayBridge::CommandRecord command{};
-            if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Inventory,
-                                   GameplayBridge::GameplayAction::InventoryDelta, command))
-                return;
-            auto& payload = command.Payload.ApplyGameplayAction;
-            payload.TargetLocalFormId = objectFormId;
-            payload.LocalFormIdA = ToLocalForm(m_world, item.BaseId);
-            payload.ValueA = item.Count;
-            payload.ActionFlags = item.IsQuestItem ? GameplayBridge::kInventoryQuestItem : 0u;
-            if (payload.LocalFormIdA != 0 && payload.ValueA != 0)
-                Submit(command);
-        }
+        QueueWorldInventoryTransaction(objectId, inventory, false);
     }
 }
 
-void VRWorldReplicationService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noexcept
+void VRWorldReplicationService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noexcept try
 {
     GameplayBridge::CommandRecord command{};
     if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Dialogue,
@@ -438,6 +1134,9 @@ void VRWorldReplicationService::OnPlayerDialogue(const NotifyPlayerDialogue& acM
     text += ": ";
     text += acMessage.Text.c_str();
     SubmitText(command, m_nextTextId++, text);
+}
+catch (...)
+{
 }
 
 void VRWorldReplicationService::OnQuestUpdate(const NotifyQuestUpdate& acMessage) noexcept
@@ -453,7 +1152,7 @@ void VRWorldReplicationService::OnQuestUpdate(const NotifyQuestUpdate& acMessage
     payload.ValueB = acMessage.Status;
     payload.ActionFlags = acMessage.ClientQuestType;
     if (payload.TargetLocalFormId != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnRemoveWaypoint(const NotifyRemoveWaypoint&) noexcept
@@ -465,10 +1164,10 @@ void VRWorldReplicationService::OnRemoveWaypoint(const NotifyRemoveWaypoint&) no
     GameplayBridge::CommandRecord command{};
     if (BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Party,
                           GameplayBridge::GameplayAction::RemoveWaypoint, command))
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
-void VRWorldReplicationService::OnScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept
+void VRWorldReplicationService::OnScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept try
 {
     GameplayBridge::CommandRecord command{};
     if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Object,
@@ -482,6 +1181,9 @@ void VRWorldReplicationService::OnScriptAnimation(const NotifyScriptAnimation& a
     }
     text += acMessage.EventName.c_str();
     SubmitText(command, m_nextTextId++, text);
+}
+catch (...)
+{
 }
 
 void VRWorldReplicationService::OnSetWaypoint(const NotifySetWaypoint& acMessage) noexcept
@@ -504,7 +1206,7 @@ void VRWorldReplicationService::OnSetWaypoint(const NotifySetWaypoint& acMessage
         m_waypointEcho.Remaining = kWaypointEchoSuppressionSeconds;
         m_waypointEcho.Remove = false;
         m_waypointEcho.Valid = true;
-        Submit(command);
+        SubmitRemoteCommand(command);
     }
 }
 
@@ -531,7 +1233,7 @@ void VRWorldReplicationService::OnTeleport(const NotifyTeleport& acMessage) noex
     payload.ScalarB = acMessage.Position.y;
     payload.ScalarC = acMessage.Position.z;
     if (payload.LocalFormIdA != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnTeleportCommand(const TeleportCommandResponse& acMessage) noexcept
@@ -547,7 +1249,7 @@ void VRWorldReplicationService::OnTeleportCommand(const TeleportCommandResponse&
     payload.ScalarB = acMessage.Position.y;
     payload.ScalarC = acMessage.Position.z;
     if (payload.LocalFormIdA != 0)
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnTimeSettings(const ServerTimeSettings& acMessage) noexcept
@@ -593,7 +1295,7 @@ void VRWorldReplicationService::OnPartyJoined(const PartyJoinedEvent& acEvent) n
     if (acEvent.IsLeader)
         SubmitReleaseWeather();
     else
-        m_transport.Send(RequestCurrentWeather{});
+        TP_UNUSED(SendOutbound(RequestCurrentWeather{}, 0, 0));
 }
 
 void VRWorldReplicationService::OnPartyLeft(const PartyLeftEvent&) noexcept
@@ -615,7 +1317,7 @@ void VRWorldReplicationService::OnPartyInfo(const NotifyPartyInfo& acMessage) no
     if (m_partyLeader)
         SubmitReleaseWeather();
     else
-        m_transport.Send(RequestCurrentWeather{});
+        TP_UNUSED(SendOutbound(RequestCurrentWeather{}, 0, 0));
 }
 
 void VRWorldReplicationService::OnPlayerDialogueEvent(const PlayerDialogueEvent& acEvent) noexcept
@@ -625,11 +1327,11 @@ void VRWorldReplicationService::OnPlayerDialogueEvent(const PlayerDialogueEvent&
         return;
     PlayerDialogueRequest request{};
     request.Text = acEvent.Text;
-    m_transport.Send(request);
+    TP_UNUSED(SendOutbound(std::move(request), 0, 0));
 }
 
 void VRWorldReplicationService::OnLocalGameplay(
-    const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept
+    const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept try
 {
     const auto& record = acEvent.Record;
     if (record.Header.Kind == static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayTextChunk))
@@ -666,12 +1368,14 @@ void VRWorldReplicationService::OnLocalGameplay(
             payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
             payload.ScalarD != 0.0F || payload.ActionFlags != 0)
             return;
-        m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
         if (!m_world.GetPartyService().IsInParty() || !m_world.GetPartyService().IsLeader())
+        {
+            m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
             return;
+        }
         RequestWeatherChange request{};
         if (m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, request.Id) && request.Id)
-            m_transport.Send(request);
+            TP_UNUSED(SendOutbound(std::move(request), domainIndex, record.Header.Identity.ActionId));
         return;
     }
 
@@ -688,12 +1392,12 @@ void VRWorldReplicationService::OnLocalGameplay(
             payload.ScalarA != 0.0F || payload.ScalarB != 0.0F || payload.ScalarC != 0.0F ||
             payload.ScalarD != 0.0F || payload.ActionFlags != 0)
             return;
-        m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
         if (m_waypointEcho.Valid && m_waypointEcho.Remove) {
             m_waypointEcho = {};
+            m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
             return;
         }
-        m_transport.Send(RequestRemoveWaypoint{});
+        TP_UNUSED(SendOutbound(RequestRemoveWaypoint{}, domainIndex, record.Header.Identity.ActionId));
         return;
     }
 
@@ -704,26 +1408,34 @@ void VRWorldReplicationService::OnLocalGameplay(
         std::abs(payload.ScalarC) > kMaximumWorldPosition || payload.ScalarD != 0.0F ||
         payload.ActionFlags != 0)
         return;
-    m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
     if (m_waypointEcho.Valid && !m_waypointEcho.Remove &&
         m_waypointEcho.LocalWorldspaceFormId == payload.LocalFormIdA &&
         std::abs(m_waypointEcho.PositionX - payload.ScalarA) <= kWaypointPositionTolerance &&
         std::abs(m_waypointEcho.PositionY - payload.ScalarB) <= kWaypointPositionTolerance &&
         std::abs(m_waypointEcho.PositionZ - payload.ScalarC) <= kWaypointPositionTolerance) {
         m_waypointEcho = {};
+        m_lastLocalActionIdByDomain[domainIndex] = record.Header.Identity.ActionId;
         return;
     }
     RequestSetWaypoint request{};
     request.Position = {payload.ScalarA, payload.ScalarB, payload.ScalarC};
     if (m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, request.WorldSpaceFormID) &&
         request.WorldSpaceFormID)
-        m_transport.Send(request);
+        TP_UNUSED(SendOutbound(std::move(request), domainIndex, record.Header.Identity.ActionId));
+}
+catch (...)
+{
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
-void VRWorldReplicationService::OnLocalGameplayText(const GameplayBridge::EventRecord& acRecord) noexcept
+void VRWorldReplicationService::OnLocalGameplayText(const GameplayBridge::EventRecord& acRecord) noexcept try
 {
     const auto& header = acRecord.Header;
     const auto& payload = acRecord.Payload.LocalGameplayTextChunk;
+    if (payload.Action == static_cast<std::uint16_t>(GameplayBridge::GameplayAction::Subtitle)) {
+        OnLocalSubtitleText(acRecord);
+        return;
+    }
     constexpr auto domain = GameplayBridge::GameplayDomain::Dialogue;
     const auto domainIndex = static_cast<std::size_t>(domain);
     if (!m_transport.IsOnline() || !m_world.GetPartyService().IsInParty() ||
@@ -791,30 +1503,156 @@ void VRWorldReplicationService::OnLocalGameplayText(const GameplayBridge::EventR
 
     const auto targetLocalFormId = m_dialogueText.TargetLocalFormId;
     std::string text(m_dialogueText.Bytes.data(), textLength);
-    m_lastLocalActionIdByDomain[domainIndex] = header.Identity.ActionId;
     m_dialogueText = {};
 
     if (targetLocalFormId == kPlayerReferenceFormId)
     {
         PlayerDialogueRequest request{};
         request.Text.assign(text.data(), text.size());
-        m_transport.Send(request);
+        TP_UNUSED(SendOutbound(std::move(request), domainIndex, header.Identity.ActionId));
         return;
     }
 
-    if (!IsSafeVoiceResourcePath(text))
+    if (!IsSafeVoiceResourcePath(text)) {
+        m_lastLocalActionIdByDomain[domainIndex] = header.Identity.ActionId;
         return;
+    }
     auto localActors = m_world.view<FormIdComponent, LocalComponent>(entt::exclude<ObjectComponent>);
     const auto actorIt = std::find_if(localActors.begin(), localActors.end(), [localActors, targetLocalFormId](const auto aEntity) {
         return localActors.get<FormIdComponent>(aEntity).Id == targetLocalFormId;
     });
-    if (actorIt == localActors.end())
+    if (actorIt == localActors.end()) {
+        m_lastLocalActionIdByDomain[domainIndex] = header.Identity.ActionId;
         return;
+    }
 
     DialogueRequest request{};
     request.ServerId = localActors.get<LocalComponent>(*actorIt).Id;
     request.SoundFilename.assign(text.data(), text.size());
-    m_transport.Send(request);
+    TP_UNUSED(SendOutbound(std::move(request), domainIndex, header.Identity.ActionId));
+}
+catch (...)
+{
+    m_dialogueText = {};
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
+
+void VRWorldReplicationService::OnLocalSubtitleText(
+    const GameplayBridge::EventRecord& acRecord) noexcept try
+{
+    const auto& header = acRecord.Header;
+    const auto& payload = acRecord.Payload.LocalGameplayTextChunk;
+    constexpr auto domain = GameplayBridge::GameplayDomain::Dialogue;
+    constexpr auto action = GameplayBridge::GameplayAction::Subtitle;
+    const auto malformed = !m_transport.IsOnline() ||
+        header.Kind != static_cast<std::uint16_t>(GameplayBridge::EventKind::LocalGameplayTextChunk) ||
+        header.PayloadSize != GameplayBridge::kFixedPayloadBytes || header.Flags != 0 ||
+        header.Identity.ServerInstanceNonce != m_transport.GetServerInstanceNonce() ||
+        header.Identity.ConnectionGeneration != m_transport.GetConnectionGeneration() ||
+        header.Identity.LifecycleEpoch != SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() ||
+        header.Identity.EntityId != 0 || header.Identity.EntityGeneration != 0 ||
+        header.Identity.SequenceId != 0 || header.Identity.ActionId == 0 ||
+        header.Identity.ActionId <= m_lastSubtitleActionId ||
+        payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value ||
+        payload.TargetLocalFormId == 0 || payload.Domain != static_cast<std::uint16_t>(domain) ||
+        payload.Action != static_cast<std::uint16_t>(action) || payload.TextId == 0 ||
+        payload.ChunkCount == 0 || payload.ChunkCount > GameplayBridge::kMaximumGameplayTextChunks ||
+        payload.ChunkIndex >= payload.ChunkCount ||
+        payload.ByteCount > GameplayBridge::kGameplayTextBytesPerChunk || payload.Reserved0 != 0 ||
+        std::memchr(payload.Utf8Bytes, '\0', payload.ByteCount) != nullptr ||
+        !IsZeroBytes(payload.Utf8Bytes + payload.ByteCount,
+                     GameplayBridge::kGameplayTextBytesPerChunk - payload.ByteCount);
+    if (malformed) {
+        m_subtitleText = {};
+        return;
+    }
+
+    const auto matchesAssembly = [&header, &payload, this] {
+        return m_subtitleText.Valid &&
+               m_subtitleText.ServerInstanceNonce == header.Identity.ServerInstanceNonce &&
+               m_subtitleText.ConnectionGeneration == header.Identity.ConnectionGeneration &&
+               m_subtitleText.LifecycleEpoch == header.Identity.LifecycleEpoch &&
+               m_subtitleText.ActionId == header.Identity.ActionId &&
+               m_subtitleText.TextId == payload.TextId &&
+               m_subtitleText.SpeakerLocalFormId == payload.TargetLocalFormId &&
+               m_subtitleText.TopicLocalFormId == payload.AuxiliaryLocalFormId &&
+               m_subtitleText.ChunkCount == payload.ChunkCount;
+    };
+    if (!matchesAssembly()) {
+        m_subtitleText = {};
+        if (payload.ChunkIndex != 0)
+            return;
+        m_subtitleText.ServerInstanceNonce = header.Identity.ServerInstanceNonce;
+        m_subtitleText.ConnectionGeneration = header.Identity.ConnectionGeneration;
+        m_subtitleText.LifecycleEpoch = header.Identity.LifecycleEpoch;
+        m_subtitleText.ActionId = header.Identity.ActionId;
+        m_subtitleText.TextId = payload.TextId;
+        m_subtitleText.SpeakerLocalFormId = payload.TargetLocalFormId;
+        m_subtitleText.TopicLocalFormId = payload.AuxiliaryLocalFormId;
+        m_subtitleText.ChunkCount = payload.ChunkCount;
+        m_subtitleText.Remaining = kSubtitleAssemblyExpirySeconds;
+        m_subtitleText.Valid = true;
+    }
+
+    const auto chunkBit = static_cast<std::uint32_t>(1u << payload.ChunkIndex);
+    if (payload.ChunkIndex != m_subtitleText.ReceivedCount ||
+        (m_subtitleText.ReceivedMask & chunkBit) != 0) {
+        m_subtitleText = {};
+        return;
+    }
+
+    const auto offset = static_cast<std::size_t>(payload.ChunkIndex) * GameplayBridge::kGameplayTextBytesPerChunk;
+    std::memcpy(m_subtitleText.Bytes.data() + offset, payload.Utf8Bytes, payload.ByteCount);
+    m_subtitleText.Lengths[payload.ChunkIndex] = payload.ByteCount;
+    m_subtitleText.ReceivedMask |= chunkBit;
+    ++m_subtitleText.ReceivedCount;
+    if (m_subtitleText.ReceivedCount != m_subtitleText.ChunkCount)
+        return;
+
+    std::size_t textLength{};
+    for (std::uint16_t index = 0; index < m_subtitleText.ChunkCount; ++index) {
+        if ((index + 1 != m_subtitleText.ChunkCount &&
+             m_subtitleText.Lengths[index] != GameplayBridge::kGameplayTextBytesPerChunk) ||
+            textLength > kMaximumSubtitleTextBytes - m_subtitleText.Lengths[index]) {
+            m_subtitleText = {};
+            return;
+        }
+        textLength += m_subtitleText.Lengths[index];
+    }
+    if (textLength == 0) {
+        m_subtitleText = {};
+        return;
+    }
+
+    const auto actionId = m_subtitleText.ActionId;
+    const auto speakerLocalFormId = m_subtitleText.SpeakerLocalFormId;
+    const auto topicLocalFormId = m_subtitleText.TopicLocalFormId;
+    std::string text(m_subtitleText.Bytes.data(), textLength);
+    m_subtitleText = {};
+    if (text.find('\0') != std::string::npos || !IsValidUtf8(text))
+        return;
+
+    const auto serverId = speakerLocalFormId == kPlayerReferenceFormId ?
+                              m_avatars.GetLocalServerId() :
+                              [&]() noexcept {
+                                  const auto* ownership = m_world.ctx().find<VRNpcOwnershipService>();
+                                  return ownership ?
+                                             ownership->GetServerIdForLocalReference(speakerLocalFormId) : 0u;
+                              }();
+    if (serverId == 0)
+        return;
+
+    SubtitleRequest request{};
+    request.ServerId = serverId;
+    request.Text.assign(text.data(), text.size());
+    request.TopicFormId = topicLocalFormId;
+    if (SendOutbound(std::move(request), m_lastLocalActionIdByDomain.size(), 0))
+        m_lastSubtitleActionId = actionId;
+}
+catch (...)
+{
+    ResetSubtitleTextState();
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
 void VRWorldReplicationService::SubmitReleaseWeather() noexcept
@@ -822,7 +1660,7 @@ void VRWorldReplicationService::SubmitReleaseWeather() noexcept
     GameplayBridge::CommandRecord command{};
     if (BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::WorldState,
                           GameplayBridge::GameplayAction::ReleaseWeather, command))
-        Submit(command);
+        SubmitRemoteCommand(command);
 }
 
 void VRWorldReplicationService::OnConnected(const ConnectedEvent&) noexcept
@@ -840,8 +1678,13 @@ void VRWorldReplicationService::OnDisconnected(const DisconnectedEvent&) noexcep
     m_reconcileTimer = 0.0;
     m_textRetryTimer = 0.0;
     m_pendingText.clear();
+    m_pendingOutbound.clear();
+    m_pendingOutboundServerInstanceNonce = 0;
+    m_pendingOutboundConnectionGeneration = 0;
+    m_pendingOutboundLifecycleEpoch = 0;
     m_waypointEcho = {};
     m_dialogueText = {};
+    ResetSubtitleTextState();
     m_lastLocalActionIdByDomain.fill(0);
     m_partyRoleKnown = false;
     m_partyLeader = false;
@@ -851,6 +1694,14 @@ void VRWorldReplicationService::OnDisconnected(const DisconnectedEvent&) noexcep
 void VRWorldReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
     ObserveSession();
+    TrySendPendingOutbound();
+    RetryPendingWorldInventoryTransactions(acEvent.Delta);
+    RetryPendingRemoteCommands(acEvent.Delta);
+    if (m_subtitleText.Valid) {
+        m_subtitleText.Remaining -= acEvent.Delta;
+        if (!std::isfinite(m_subtitleText.Remaining) || m_subtitleText.Remaining <= 0.0)
+            m_subtitleText = {};
+    }
     if (m_waypointEcho.Valid)
     {
         m_waypointEcho.Remaining -= acEvent.Delta;
@@ -929,7 +1780,14 @@ void VRWorldReplicationService::ObserveSession() noexcept
     if ((m_observedServerInstanceNonce != 0 && m_observedServerInstanceNonce != nonce) ||
         (m_observedConnectionGeneration != 0 && m_observedConnectionGeneration != generation))
     {
+        ResetSubtitleTextState();
+        m_pendingRemoteCommands = {};
+        ClearPendingWorldInventoryTransactions();
         m_pendingText.clear();
+        m_pendingOutbound.clear();
+        m_pendingOutboundServerInstanceNonce = 0;
+        m_pendingOutboundConnectionGeneration = 0;
+        m_pendingOutboundLifecycleEpoch = 0;
         m_textRetryTimer = 0.0;
         DiscardRetainedStateForSession(nonce, generation);
     }
@@ -940,7 +1798,14 @@ void VRWorldReplicationService::ObserveSession() noexcept
     const auto epoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
     if (epoch != 0 && epoch != m_observedLifecycleEpoch)
     {
+        ResetSubtitleTextState();
+        m_pendingRemoteCommands = {};
+        ClearPendingWorldInventoryTransactions();
         m_pendingText.clear();
+        m_pendingOutbound.clear();
+        m_pendingOutboundServerInstanceNonce = 0;
+        m_pendingOutboundConnectionGeneration = 0;
+        m_pendingOutboundLifecycleEpoch = 0;
         m_textRetryTimer = 0.0;
         m_observedLifecycleEpoch = epoch;
         ResetInFlightState();
@@ -949,6 +1814,9 @@ void VRWorldReplicationService::ObserveSession() noexcept
 
 void VRWorldReplicationService::RetainServerSettings(const ServerSettings& acSettings) noexcept
 {
+    if (CaptureSession(m_deathSystemState))
+        RetainState(m_deathSystemState, 0, 0, acSettings.DeathSystemEnabled ? 1 : 0, 0, 0.0F, 0.0F, 0.0F);
+
     if (acSettings.Difficulty > 5 || !CaptureSession(m_settingsState))
         return;
 
@@ -976,6 +1844,8 @@ void VRWorldReplicationService::Reconcile() noexcept
                    static_cast<std::uint16_t>(GameplayBridge::GameplayAction::SetWeather));
     ReconcileState(m_settingsState, static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::WorldState),
                    static_cast<std::uint16_t>(GameplayBridge::GameplayAction::ApplyServerSettings));
+    ReconcileState(m_deathSystemState, static_cast<std::uint16_t>(GameplayBridge::GameplayDomain::ActorState),
+                   static_cast<std::uint16_t>(GameplayBridge::GameplayAction::ConfigureDeathSystem));
     for (auto& [formId, state] : m_lockStates)
     {
         TP_UNUSED(formId);
@@ -992,9 +1862,13 @@ void VRWorldReplicationService::ReconcileState(
         arState.ConnectionGeneration != m_observedConnectionGeneration)
         return;
 
+    const auto domain = static_cast<GameplayBridge::GameplayDomain>(aDomain);
+    const auto action = static_cast<GameplayBridge::GameplayAction>(aAction);
     GameplayBridge::CommandRecord command{};
-    if (!BuildWorldCommand(m_transport, static_cast<GameplayBridge::GameplayDomain>(aDomain),
-                           static_cast<GameplayBridge::GameplayAction>(aAction), command))
+    const bool isDeathSystemPolicy = domain == GameplayBridge::GameplayDomain::ActorState &&
+                                     action == GameplayBridge::GameplayAction::ConfigureDeathSystem;
+    if ((isDeathSystemPolicy && !m_avatars.BuildLocalGameplayCommand(domain, action, command)) ||
+        (!isDeathSystemPolicy && !BuildWorldCommand(m_transport, domain, action, command)))
         return;
 
     auto& payload = command.Payload.ApplyGameplayAction;
@@ -1024,14 +1898,28 @@ void VRWorldReplicationService::ResetRetainedState() noexcept
     m_calendarState = {};
     m_weatherState = {};
     m_settingsState = {};
+    m_deathSystemState = {};
     m_waypointEcho = {};
     m_dialogueText = {};
+    ResetSubtitleTextState();
+    m_pendingRemoteCommands = {};
+    ClearPendingWorldInventoryTransactions();
     m_pendingText.clear();
+    m_pendingOutbound.clear();
+    m_pendingOutboundServerInstanceNonce = 0;
+    m_pendingOutboundConnectionGeneration = 0;
+    m_pendingOutboundLifecycleEpoch = 0;
     m_textRetryTimer = 0.0;
     m_partyRoleKnown = false;
     m_partyLeader = false;
     m_lastLocalActionIdByDomain.fill(0);
     m_lockStates.clear();
+}
+
+void VRWorldReplicationService::ResetSubtitleTextState() noexcept
+{
+    m_subtitleText = {};
+    m_lastSubtitleActionId = 0;
 }
 
 void VRWorldReplicationService::DiscardRetainedStateForSession(
@@ -1047,6 +1935,8 @@ void VRWorldReplicationService::DiscardRetainedStateForSession(
         m_weatherState = {};
     if (!belongsTo(m_settingsState))
         m_settingsState = {};
+    if (!belongsTo(m_deathSystemState))
+        m_deathSystemState = {};
     for (auto it = m_lockStates.begin(); it != m_lockStates.end();)
     {
         if (!belongsTo(it->second))
@@ -1069,6 +1959,7 @@ void VRWorldReplicationService::ResetInFlightState() noexcept
     reset(m_calendarState);
     reset(m_weatherState);
     reset(m_settingsState);
+    reset(m_deathSystemState);
     for (auto& [formId, state] : m_lockStates)
     {
         TP_UNUSED(formId);
@@ -1098,6 +1989,10 @@ void VRWorldReplicationService::OnGameplayResult(
     else if (domain == GameplayBridge::GameplayDomain::WorldState &&
              action == GameplayBridge::GameplayAction::ApplyServerSettings && result.TargetLocalFormId == 0)
         state = &m_settingsState;
+    else if (domain == GameplayBridge::GameplayDomain::ActorState &&
+             action == GameplayBridge::GameplayAction::ConfigureDeathSystem &&
+             result.TargetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value && result.TargetLocalFormId == 0)
+        state = &m_deathSystemState;
     else if (domain == GameplayBridge::GameplayDomain::Object && action == GameplayBridge::GameplayAction::SetLockState)
     {
         const auto it = m_lockStates.find(result.TargetLocalFormId);
@@ -1105,23 +2000,30 @@ void VRWorldReplicationService::OnGameplayResult(
             state = &it->second;
     }
 
-    if (!state || !state->InFlight || state->InFlightActionId != record.Header.Identity.ActionId)
-        return;
-
-    state->InFlight = false;
-    state->InFlightActionId = 0;
-    const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
-    if (status == GameplayBridge::CommandStatus::Success)
+    if (state)
     {
-        state->Attempts = 0;
-        state->Dirty = state->SubmittedVersion != state->Version;
+        if (!state->InFlight || state->InFlightActionId != record.Header.Identity.ActionId)
+            return;
+
+        state->InFlight = false;
+        state->InFlightActionId = 0;
+        const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
+        if (status == GameplayBridge::CommandStatus::Success)
+        {
+            state->Attempts = 0;
+            state->Dirty = state->SubmittedVersion != state->Version;
+            return;
+        }
+
+        const bool retryable = status == GameplayBridge::CommandStatus::Inactive ||
+                               status == GameplayBridge::CommandStatus::MissingForm ||
+                               status == GameplayBridge::CommandStatus::MissingCell ||
+                               status == GameplayBridge::CommandStatus::EngineRejected ||
+                               status == GameplayBridge::CommandStatus::QueueOverflow;
+        state->Dirty = retryable && state->Attempts < kMaximumReconcileAttempts;
         return;
     }
 
-    const bool retryable = status == GameplayBridge::CommandStatus::Inactive ||
-                           status == GameplayBridge::CommandStatus::MissingForm ||
-                           status == GameplayBridge::CommandStatus::MissingCell ||
-                           status == GameplayBridge::CommandStatus::EngineRejected ||
-                           status == GameplayBridge::CommandStatus::QueueOverflow;
-    state->Dirty = retryable && state->Attempts < kMaximumReconcileAttempts;
+    HandlePendingWorldInventoryTransactionResult(record);
+    HandlePendingRemoteCommandResult(record);
 }

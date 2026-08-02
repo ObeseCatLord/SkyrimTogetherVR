@@ -10,6 +10,7 @@ struct PartyInviteRequest;
 struct PartyAcceptInviteRequest;
 struct PartyLeaveRequest;
 struct NotifyPartyInfo;
+struct NotifyPartyJoined;
 struct PartyCreateRequest;
 struct PartyChangeLeaderRequest;
 struct PartyKickRequest;
@@ -21,12 +22,12 @@ struct PartyService
 {
     struct Party
     {
-        uint32_t LeaderPlayerId;
+        uint32_t LeaderPlayerId{};
         Vector<Player*> Members;
         GameId CachedWeather{};
     };
 
-    PartyService(World& aWorld, entt::dispatcher& aDispatcher) noexcept;
+    PartyService(World& aWorld, entt::dispatcher& aDispatcher);
     ~PartyService() noexcept = default;
 
     TP_NOCOPYMOVE(PartyService);
@@ -46,10 +47,12 @@ protected:
     void OnPartyCreate(const PacketEvent<PartyCreateRequest>& acPacket) noexcept;
     void OnPartyChangeLeader(const PacketEvent<PartyChangeLeaderRequest>& acPacket) noexcept;
     void OnPartyKick(const PacketEvent<PartyKickRequest>& acPacket) noexcept;
-    void RemovePlayerFromParty(Player* apPlayer) noexcept;
+    bool AddPlayerToParty(Party& aParty, uint32_t aPartyId, Player* apPlayer) noexcept;
+    bool RemovePlayerFromParty(Player* apPlayer) noexcept;
 
     void BroadcastPlayerList(Player* apPlayer = nullptr) const noexcept;
     void BroadcastPartyInfo(uint32_t aPartyId) const noexcept;
+    void BroadcastPartyInfo(const Party& acParty, NotifyPartyInfo& aMessage) const noexcept;
 
 private:
     World& m_world;
@@ -68,5 +71,5 @@ private:
     entt::scoped_connection m_partyChangeLeaderConnection;
     entt::scoped_connection m_partyKickConnection;
 
-    void SendPartyJoinedEvent(Party& aParty, Player* aPlayer) noexcept;
+    void SendPartyJoinedEvent(Player* apPlayer, const NotifyPartyJoined& acMessage) const noexcept;
 };

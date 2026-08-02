@@ -550,8 +550,29 @@ void CaptureHiggsSnapshot()
     g_snapshotAvailable.store(true, std::memory_order_release);
 }
 
+void CaptureVrikSnapshotFromGameThread() noexcept
+{
+    using CaptureCallback = void(__cdecl*)();
+    static std::atomic<CaptureCallback> s_callback{nullptr};
+
+    auto callback = s_callback.load(std::memory_order_acquire);
+    if (!callback)
+    {
+        if (const auto module = GetModuleHandleW(L"SkyrimTogetherVRVrikBridge.dll"))
+        {
+            callback = reinterpret_cast<CaptureCallback>(
+                GetProcAddress(module, "SkyrimTogetherVR_CaptureVrikSnapshot"));
+            if (callback)
+                s_callback.store(callback, std::memory_order_release);
+        }
+    }
+    if (callback)
+        callback();
+}
+
 void OnPostVrikPostHiggs()
 {
+    CaptureVrikSnapshotFromGameThread();
     CaptureHiggsSnapshot();
     PublishPostHiggsBodyPose();
 }

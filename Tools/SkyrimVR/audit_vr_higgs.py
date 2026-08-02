@@ -9,7 +9,8 @@ import pathlib
 
 REQUIRED_TOKENS = {
     "Code/client/xmake.lua": (
-        'add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))',
+        'add_defines("TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=" .. vr_define_value(higgs_service))',
+        "higgs_service = true",
         "observation_services = true",
     ),
     "Code/client/World.cpp": (
