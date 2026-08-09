@@ -2610,28 +2610,30 @@ void CaptureAppearance(RE::PlayerCharacter& a_player, Snapshot& a_current)
     if (!runtime)
         return;
     const auto* tintMasks = runtime->overlayTintMasks ? runtime->overlayTintMasks : std::addressof(runtime->tintMasks);
-    if (!tintMasks || tintMasks->size() > kMaximumAppearanceTints)
+    if (!tintMasks)
         return;
-    tints.reserve(tintMasks->size());
+    tints.reserve(std::min<std::vector<CapturedTint>::size_type>(tintMasks->size(), kMaximumAppearanceTints));
     for (const auto* tint : *tintMasks) {
         if (!tint || static_cast<std::uint32_t>(tint->type.get()) >= kTintTypeCount ||
             !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F)
-            return;
+            continue;
         std::string texturePath;
         if (tint->texture && tint->texture->textureName.c_str()) {
             const auto* path = tint->texture->textureName.c_str();
             const auto length = std::char_traits<char>::length(path);
             if (length > kMaximumAppearanceTexturePathBytes)
-                return;
+                continue;
             texturePath.assign(path, length);
         }
         if (!IsSafeTintTexturePath(texturePath))
-            return;
+            continue;
         const auto color = (static_cast<std::uint32_t>(tint->color.red) << 16) |
                            (static_cast<std::uint32_t>(tint->color.green) << 8) |
                            static_cast<std::uint32_t>(tint->color.blue);
         tints.push_back({color, std::bit_cast<std::uint32_t>(tint->alpha),
                          static_cast<std::uint8_t>(tint->type.get()), std::move(texturePath)});
+        if (tints.size() >= kMaximumAppearanceTints)
+            break;
     }
     if (tints != g_snapshot.Tints) {
         if (PublishTintSnapshot(a_player, tints))
@@ -3738,16 +3740,15 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
             if (!tint || static_cast<std::uint32_t>(tint->type.get()) >= kTintTypeCount ||
                 !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F)
                 continue;
-            if (emittedTintIndex >= kMaximumAppearanceTints) {
-                static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
-                                                 AssignmentBootstrapFailureReason::Tint));
-                return CommandStatus::QueueOverflow;
-            }
             std::string_view texturePath{};
             if (tint->texture && tint->texture->textureName.c_str())
                 texturePath = tint->texture->textureName.c_str();
             if (!IsSafeTintTexturePath(texturePath))
-                texturePath = {};
+                continue;
+            // The wire format caps tints at 32. Preserve the runtime order so
+            // heavily modded saves always produce the same bounded subset.
+            if (emittedTintIndex >= kMaximumAppearanceTints)
+                break;
             auto& tintRecord = append(AssignmentBootstrapRecordKind::Tint);
             tintRecord.LocalFormIdB = static_cast<std::uint32_t>(emittedTintIndex++);
             tintRecord.LocalFormIdA = (static_cast<std::uint32_t>(tint->color.red) << 16) |

@@ -386,6 +386,21 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
            apPlayer->GetConnectionGeneration() == aConnectionGeneration &&
            apPlayer->GetClientSessionNonce() == aSessionNonce;
 }
+
+void SendAssignmentRejection(const PacketEvent<AssignCharacterRequest>& acMessage)
+{
+    if (!acMessage.pPlayer || !acMessage.Packet.IsDecodedValid() || !SkyrimTogether::Protocol::CanReceiveAssignmentRejection(acMessage.pPlayer->GetGameplayCapabilities()))
+        return;
+
+    AssignCharacterResponse response{};
+    response.Cookie = acMessage.Packet.Cookie;
+    response.ServerId = 0;
+    response.Owner = false;
+    if (acMessage.Packet.ReferenceId.ModId == 0 && acMessage.Packet.ReferenceId.BaseId == 0x14)
+        response.PlayerId = acMessage.pPlayer->GetId();
+
+    acMessage.pPlayer->Send(response);
+}
 }
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
@@ -558,11 +573,14 @@ catch (...)
 
 void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept try
 {
-    if (!acMessage.pPlayer || !IsValidAssignmentRequest(acMessage.Packet, *acMessage.pPlayer))
+    if (!acMessage.pPlayer)
+        return;
+
+    if (!IsValidAssignmentRequest(acMessage.Packet, *acMessage.pPlayer))
     {
-        if (acMessage.pPlayer)
-            spdlog::warn("Client {:X} sent an invalid character assignment payload",
-                         acMessage.pPlayer->GetConnectionId());
+        SendAssignmentRejection(acMessage);
+        spdlog::warn("Client {:X} sent an invalid character assignment payload",
+                     acMessage.pPlayer->GetConnectionId());
         return;
     }
 
@@ -573,6 +591,7 @@ void CharacterService::OnAssignCharacterRequest(const PacketEvent<AssignCharacte
     const auto isCustom = isPlayer || refId.ModId == std::numeric_limits<uint32_t>::max();
     if (!isPlayer && !SkyrimTogether::Protocol::CanOwnNpc(acMessage.pPlayer->GetGameplayCapabilities()))
     {
+        SendAssignmentRejection(acMessage);
         spdlog::warn("VR client {:X} attempted NPC assignment without negotiated NPC ownership capability",
                      acMessage.pPlayer->GetConnectionId());
         return;

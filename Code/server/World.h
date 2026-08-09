@@ -47,6 +47,8 @@ struct World : entt::registry
     [[nodiscard]] static uint32_t ToInteger(entt::entity aEntity) { return to_integral(aEntity); }
 
 private:
+    // Keep EnTT's first packed entity value unavailable to networked objects for this World lifetime.
+    [[maybe_unused]] const entt::entity m_networkIdZeroReservation;
     entt::dispatcher m_dispatcher;
 
     TiltedPhoques::SharedPtr<AdminService> m_spAdminService;

@@ -9,6 +9,7 @@
 
 #include <entt/entt.hpp>
 
+#include <Services/AssignmentCookie.h>
 #include <vr_common/VRGameplayBridge.h>
 #include <Messages/AssignCharacterRequest.h>
 #include <Messages/CharacterSpawnRequest.h>
@@ -132,6 +133,7 @@ private:
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
     void ResetAssignmentBootstrap() noexcept;
+    void ScheduleAssignmentBootstrapRetry() noexcept;
     void TryRequestAssignmentBootstrap() noexcept;
     void TryRequestLocalAssignment() noexcept;
     void SendLocalMovement() noexcept;
@@ -168,7 +170,7 @@ private:
     std::uint32_t m_localPlayerId{0};
     std::optional<std::uint32_t> m_localServerId{};
     std::uint32_t m_assignmentCookie{0};
-    std::uint32_t m_nextAssignmentCookie{1};
+    std::uint32_t m_nextAssignmentCookie{SkyrimTogetherVR::AssignmentCookie::kFirstLocalPlayer};
     AssignCharacterRequest m_assignmentBaseline{};
     struct AssignmentTintTextAssembly
     {
@@ -216,7 +218,9 @@ private:
     bool m_connected{false};
     bool m_hasLocalSnapshot{false};
     bool m_assignmentPending{false};
+    bool m_assignmentRejected{false};
     bool m_assignmentBootstrapPending{false};
+    bool m_assignmentBootstrapRetryScheduled{false};
     bool m_assignmentBootstrapActive{false};
     bool m_assignmentBootstrapReady{false};
     bool m_assignmentBootstrapPermanentFailure{false};

@@ -202,6 +202,10 @@ if [[ $commonlib_gitlink_changed == true ]]; then
         echo "Refusing CommonLib gitlink delta with a missing commit object." >&2
         exit 2
     fi
+    if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_base_commit" "$commonlib_target_commit"; then
+        echo "Refusing CommonLib gitlink delta whose target is not a descendant of the parent gitlink base." >&2
+        exit 2
+    fi
 fi
 
 submodule_state=$(git submodule status --recursive)
@@ -250,7 +254,8 @@ commonlib_head_before="NOT_REQUESTED"
 if [[ $commonlib_gitlink_changed == true ]]; then
     commonlib_head_before=$(git -C "$commonlib_path" rev-parse --verify HEAD^{commit})
     commonlib_bundle_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-commonlib-${short_commit}-XXXXXX.bundle")
-    git -C "$commonlib_path" bundle create "$commonlib_bundle_file" HEAD
+    git -C "$commonlib_path" bundle create "$commonlib_bundle_file" \
+        HEAD "^$commonlib_base_commit"
     git -C "$commonlib_path" bundle verify "$commonlib_bundle_file" >/dev/null
     bundle_head_count=$(git -C "$commonlib_path" bundle list-heads "$commonlib_bundle_file" | awk 'END { print NR }')
     bundle_head_commit=$(git -C "$commonlib_path" bundle list-heads "$commonlib_bundle_file" | awk 'NR == 1 { print $1 }')

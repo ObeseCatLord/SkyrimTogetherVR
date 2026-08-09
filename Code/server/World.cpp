@@ -30,6 +30,7 @@
 #include <es_loader/ESLoader.h>
 
 World::World()
+    : m_networkIdZeroReservation(create())
 {
     m_spAdminService = std::make_shared<AdminService>(*this, m_dispatcher);
     spdlog::default_logger()->sinks().push_back(std::static_pointer_cast<spdlog::sinks::sink>(m_spAdminService));

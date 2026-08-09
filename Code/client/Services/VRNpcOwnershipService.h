@@ -13,6 +13,7 @@
 #include <Structs/Factions.h>
 #include <Structs/GameId.h>
 #include <Structs/VRAppearance.h>
+#include <Services/AssignmentCookie.h>
 #include <vr_common/VRGameplayBridge.h>
 
 struct AssignCharacterResponse;
@@ -199,7 +200,7 @@ private:
     std::unordered_map<std::uint32_t, OwnedNpc> m_ownedByReference{};
     std::unordered_set<std::uint32_t> m_observedReferences{};
     std::array<PendingObservation, 128> m_pendingObservations{};
-    std::uint32_t m_nextAssignmentCookie{1};
+    std::uint32_t m_nextAssignmentCookie{SkyrimTogetherVR::AssignmentCookie::kFirstNpc};
     std::uint64_t m_nextStateOrder{1};
     std::uint64_t m_lastCompletedSnapshotActionId{};
     std::uint64_t m_lastLocalProjectileSequence{};

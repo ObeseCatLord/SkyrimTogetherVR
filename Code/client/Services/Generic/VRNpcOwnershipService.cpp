@@ -1179,8 +1179,8 @@ void VRNpcOwnershipService::RequestAssignment(const Snapshot& acSnapshot) noexce
     }
     AssignCharacterRequest request{};
     do {
-        request.Cookie = m_nextAssignmentCookie++;
-    } while (request.Cookie == 0 || m_pendingAssignments.contains(request.Cookie));
+        request.Cookie = SkyrimTogetherVR::AssignmentCookie::TakeNpc(m_nextAssignmentCookie);
+    } while (m_pendingAssignments.contains(request.Cookie));
     request.ReferenceId = acSnapshot.ReferenceId;
     request.FormId = acSnapshot.BaseId;
     request.CellId = acSnapshot.CellId;
@@ -1216,7 +1216,7 @@ void VRNpcOwnershipService::RequestAssignment(const Snapshot& acSnapshot) noexce
 
 void VRNpcOwnershipService::OnAssignCharacter(const AssignCharacterResponse& acMessage) noexcept
 {
-    if (!acMessage.IsDecodedValid)
+    if (!acMessage.IsDecodedValid || acMessage.PlayerId != 0)
         return;
     const auto pending = m_pendingAssignments.find(acMessage.Cookie);
     if (pending == m_pendingAssignments.end())

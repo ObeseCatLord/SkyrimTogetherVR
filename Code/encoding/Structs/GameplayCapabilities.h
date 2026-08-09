@@ -105,6 +105,13 @@ inline constexpr GameplayCapabilityMask kClientCapabilities =
     return (aMask & kVRRelayCapabilities) != 0;
 }
 
+// Assignment rejection uses ServerId 0 as an explicit wire sentinel. Only VR
+// gameplay clients negotiate support for that sparse assignment semantics.
+[[nodiscard]] constexpr bool CanReceiveAssignmentRejection(const GameplayCapabilityMask aMask) noexcept
+{
+    return IsVrGameplayClient(aMask);
+}
+
 [[nodiscard]] constexpr bool CanOwnNpc(const GameplayCapabilityMask aMask) noexcept
 {
     return !IsVrGameplayClient(aMask) ||

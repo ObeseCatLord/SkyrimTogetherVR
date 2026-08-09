@@ -256,16 +256,17 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept try
     {
         if (!m_assignmentBootstrapReady && !m_assignmentBootstrapPermanentFailure) {
             m_assignmentBootstrapElapsed += delta;
-            if (!m_assignmentBootstrapPending ||
+            if ((!m_assignmentBootstrapPending && !m_assignmentBootstrapRetryScheduled) ||
                 m_assignmentBootstrapElapsed >= kAssignmentBootstrapRetrySeconds) {
                 m_assignmentBootstrapPending = false;
+                m_assignmentBootstrapRetryScheduled = false;
                 m_assignmentBootstrapActive = false;
                 TryRequestAssignmentBootstrap();
             }
         } else {
             m_assignmentElapsed += delta;
         }
-        if (m_assignmentBootstrapReady &&
+        if (m_assignmentBootstrapReady && !m_assignmentRejected &&
             (!m_assignmentPending || m_assignmentElapsed >= kAssignmentRetrySeconds))
         {
             m_assignmentPending = false;
@@ -310,6 +311,7 @@ void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
     m_assignmentElapsed = 0.0;
     m_localMovementElapsed = 0.0;
     m_assignmentPending = false;
+    m_assignmentRejected = false;
     ResetAssignmentBootstrap();
     m_connected = true;
     m_localPlayerId = acEvent.PlayerId;
@@ -329,12 +331,18 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
 {
     if (!acMessage.IsDecodedValid)
         return;
-    if (!m_connected || !m_assignmentPending || acMessage.Cookie != m_assignmentCookie)
+    if (!m_connected || !m_assignmentPending || acMessage.Cookie != m_assignmentCookie ||
+        acMessage.PlayerId != m_localPlayerId)
         return;
 
-    if (!acMessage.Owner)
-    {
-        spdlog::warn("VR avatar assignment response rejected because the response does not grant ownership");
+    if (!acMessage.Owner || acMessage.ServerId == 0) {
+        m_assignmentCookie = 0;
+        m_assignmentElapsed = 0.0;
+        m_assignmentPending = false;
+        m_assignmentRejected = true;
+        spdlog::warn("VR avatar assignment rejected for local player {}: owner={}, server id={}",
+                     m_localPlayerId, acMessage.Owner, acMessage.ServerId);
+        m_statusDirty = true;
         return;
     }
 
@@ -353,6 +361,7 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
     m_assignmentPending = false;
     m_assignmentElapsed = 0.0;
     m_localMovementElapsed = 0.0;
+    m_assignmentRejected = false;
     m_statusDirty = true;
 }
 
@@ -892,12 +901,16 @@ void VRAvatarService::ResetSessionState() noexcept
     m_connected = false;
     m_hasLocalSnapshot = false;
     m_assignmentPending = false;
+    m_assignmentRejected = false;
     m_statusDirty = true;
 }
 
 void VRAvatarService::ResetLifecycleState() noexcept
 {
+    const bool retryScheduled = m_assignmentBootstrapRetryScheduled;
     ResetAssignmentBootstrap();
+    if (retryScheduled)
+        m_assignmentBootstrapRetryScheduled = true;
     m_remoteAvatars.clear();
     m_pendingSpawns.clear();
     ResetStatusCounters();
@@ -908,11 +921,10 @@ void VRAvatarService::ResetLifecycleState() noexcept
     m_localMovementElapsed = 0.0;
     m_hasLocalSnapshot = false;
     m_statusDirty = true;
-    if (!m_localServerId)
-    {
-        m_assignmentElapsed = 0.0;
-        m_assignmentPending = false;
-    }
+    m_assignmentCookie = 0;
+    m_assignmentElapsed = 0.0;
+    m_assignmentPending = false;
+    m_assignmentRejected = false;
 }
 
 void VRAvatarService::HandleBridgeAssignmentBootstrapText(
@@ -941,7 +953,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
         !std::all_of(payload.Utf8Bytes + payload.ByteCount,
                      payload.Utf8Bytes + GameplayBridge::kGameplayTextBytesPerChunk,
                      [](const char aValue) noexcept { return aValue == '\0'; })) {
-        ResetAssignmentBootstrap();
+        ScheduleAssignmentBootstrapRetry();
         return;
     }
 
@@ -949,7 +961,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
     AssignmentTintTextAssembly* assemblyPointer{};
     if (isName) {
         if (!m_assignmentBootstrapHasAppearanceCore) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         assemblyPointer = std::addressof(m_assignmentBootstrapNameText);
@@ -957,7 +969,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
         tintIndex = static_cast<std::size_t>(payload.AuxiliaryLocalFormId - 1);
         if (!m_assignmentBootstrapTints[tintIndex] ||
             !m_assignmentBootstrapTintPathsRequired[tintIndex]) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         assemblyPointer = std::addressof(m_assignmentBootstrapTintText[tintIndex]);
@@ -966,7 +978,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
     if (assembly.Complete ||
         (assembly.TextId != 0 &&
          (assembly.TextId != payload.TextId || assembly.ChunkCount != payload.ChunkCount))) {
-        ResetAssignmentBootstrap();
+        ScheduleAssignmentBootstrapRetry();
         return;
     }
     if (assembly.TextId == 0) {
@@ -975,7 +987,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
     }
     const auto chunkBit = static_cast<std::uint16_t>(1u << payload.ChunkIndex);
     if ((assembly.ReceivedMask & chunkBit) != 0) {
-        ResetAssignmentBootstrap();
+        ScheduleAssignmentBootstrapRetry();
         return;
     }
     const auto offset = static_cast<std::size_t>(payload.ChunkIndex) *
@@ -993,7 +1005,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
     for (std::uint16_t chunk = 0; chunk < payload.ChunkCount; ++chunk) {
         if (chunk + 1 != payload.ChunkCount &&
             assembly.Lengths[chunk] != GameplayBridge::kGameplayTextBytesPerChunk) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         pathLength += assembly.Lengths[chunk];
@@ -1001,7 +1013,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
     const std::string_view text{assembly.Bytes.data(), pathLength};
     if (isName) {
         if (text.empty() || text.size() > VRAppearance::kMaximumNameBytes) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         auto& appearance = m_assignmentBaseline.InitialVRAppearance;
@@ -1009,13 +1021,13 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
         appearance.NameLength = static_cast<std::uint8_t>(text.size());
     } else {
         if (!IsSafeAssignmentTintPath(text)) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         auto& tints = m_assignmentBaseline.FaceTints.Entries;
         auto& appearance = m_assignmentBaseline.InitialVRAppearance;
         if (tintIndex >= tints.size() || tintIndex >= appearance.TintCount) {
-            ResetAssignmentBootstrap();
+            ScheduleAssignmentBootstrapRetry();
             return;
         }
         tints[tintIndex].Name.assign(text.data(), text.size());
@@ -1029,7 +1041,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapText(
 catch (...)
 {
     spdlog::error("VR assignment appearance text assembly failed; rebasing the gameplay epoch");
-    ResetAssignmentBootstrap();
+    ScheduleAssignmentBootstrapRetry();
     TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
@@ -1048,6 +1060,7 @@ void VRAvatarService::ResetAssignmentBootstrap() noexcept
     m_assignmentBootstrapInventoryEffectsRemaining = 0;
     m_assignmentBootstrapElapsed = 0.0;
     m_assignmentBootstrapPending = false;
+    m_assignmentBootstrapRetryScheduled = false;
     m_assignmentBootstrapActive = false;
     m_assignmentBootstrapReady = false;
     m_assignmentBootstrapPermanentFailure = false;
@@ -1065,6 +1078,15 @@ void VRAvatarService::ResetAssignmentBootstrap() noexcept
     m_assignmentBootstrapFaceParts.fill(false);
     m_assignmentBootstrapHeadParts.fill(false);
     m_assignmentBootstrapHasAppearanceCore = false;
+}
+
+void VRAvatarService::ScheduleAssignmentBootstrapRetry() noexcept
+{
+    const bool permanentFailure = m_assignmentBootstrapPermanentFailure;
+    ResetAssignmentBootstrap();
+    m_assignmentBootstrapPermanentFailure = permanentFailure;
+    if (!permanentFailure)
+        m_assignmentBootstrapRetryScheduled = true;
 }
 
 void VRAvatarService::TryRequestAssignmentBootstrap() noexcept
@@ -1089,8 +1111,12 @@ void VRAvatarService::TryRequestAssignmentBootstrap() noexcept
     payload.RequestId = m_nextAssignmentBootstrapRequestId++;
     if (m_nextAssignmentBootstrapRequestId == 0)
         m_nextAssignmentBootstrapRequestId = 1;
-    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
+    if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command)) {
+        spdlog::warn("VR assignment bootstrap command was not queued; retry is bounded to {} seconds",
+                     kAssignmentBootstrapRetrySeconds);
+        ScheduleAssignmentBootstrapRetry();
         return;
+    }
 
     m_assignmentBaseline = {};
     m_assignmentBootstrapRequestId = payload.RequestId;
@@ -1105,6 +1131,7 @@ void VRAvatarService::TryRequestAssignmentBootstrap() noexcept
     m_assignmentBootstrapInventoryEffectsRemaining = 0;
     m_assignmentBootstrapElapsed = 0.0;
     m_assignmentBootstrapPending = true;
+    m_assignmentBootstrapRetryScheduled = false;
     m_assignmentBootstrapActive = false;
     m_assignmentBootstrapHasActorState = false;
     m_assignmentBootstrapHasMagicEquipment = false;
@@ -1133,35 +1160,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
         return;
 
     const auto kind = static_cast<GameplayBridge::AssignmentBootstrapRecordKind>(payload.RecordKind);
-    const auto fail = [&]() noexcept {
-        m_assignmentBaseline = {};
-        m_assignmentBootstrapActionId = 0;
-        m_assignmentBootstrapExpectedRecords = 0;
-        m_assignmentBootstrapNextOrdinal = 0;
-        m_assignmentBootstrapInventoryRecords = 0;
-        m_assignmentBootstrapQuestRecords = 0;
-        m_assignmentBootstrapNpcFactionRecords = 0;
-        m_assignmentBootstrapExtraFactionRecords = 0;
-        m_assignmentBootstrapOpenInventoryIndex = 0;
-        m_assignmentBootstrapInventoryEffectsRemaining = 0;
-        m_assignmentBootstrapElapsed = kAssignmentBootstrapRetrySeconds;
-        m_assignmentBootstrapPending = false;
-        m_assignmentBootstrapActive = false;
-        m_assignmentBootstrapHasActorState = false;
-        m_assignmentBootstrapHasMagicEquipment = false;
-        m_assignmentBootstrapHasOpenInventory = false;
-        m_assignmentBootstrapHasInventoryExtra = false;
-        m_assignmentBootstrapSkipOpenInventory = false;
-        m_assignmentBootstrapActorValues.fill(false);
-        m_assignmentBootstrapTints.fill(false);
-        m_assignmentBootstrapTintPathsRequired.fill(false);
-        m_assignmentBootstrapTintText = {};
-        m_assignmentBootstrapNameText = {};
-        m_assignmentBootstrapFaceMorphs.fill(false);
-        m_assignmentBootstrapFaceParts.fill(false);
-        m_assignmentBootstrapHeadParts.fill(false);
-        m_assignmentBootstrapHasAppearanceCore = false;
-    };
+    const auto fail = [this]() noexcept { ScheduleAssignmentBootstrapRetry(); };
     if (kind == GameplayBridge::AssignmentBootstrapRecordKind::Failure) {
         if (payload.Ordinal != 0 || payload.TotalRecords != 1 || payload.RecordFlags != 0 ||
             payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
@@ -1603,6 +1602,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
         m_assignmentBaseline.HasVRAppearance = true;
         m_assignmentBootstrapActive = false;
         m_assignmentBootstrapPending = false;
+        m_assignmentBootstrapRetryScheduled = false;
         m_assignmentBootstrapReady = true;
         m_assignmentBootstrapActionId = 0;
         m_assignmentBootstrapElapsed = 0.0;
@@ -1619,13 +1619,13 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
 catch (...)
 {
     spdlog::error("VR assignment bootstrap assembly failed; rebasing the gameplay epoch");
-    ResetAssignmentBootstrap();
+    ScheduleAssignmentBootstrapRetry();
     TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
 }
 
 void VRAvatarService::TryRequestLocalAssignment() noexcept
 {
-    if (!m_connected || !m_transport.IsOnline() || m_localServerId || m_assignmentPending ||
+    if (!m_connected || !m_transport.IsOnline() || m_localServerId || m_assignmentPending || m_assignmentRejected ||
         !m_assignmentBootstrapReady || !HasValidLocalSnapshot())
         return;
 
@@ -1639,9 +1639,7 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
         return;
 
     AssignCharacterRequest request{};
-    request.Cookie = m_nextAssignmentCookie++;
-    if (m_nextAssignmentCookie == 0)
-        m_nextAssignmentCookie = 1;
+    request.Cookie = SkyrimTogetherVR::AssignmentCookie::TakeLocalPlayer(m_nextAssignmentCookie);
     request.ReferenceId = GameId{0, 0x14};
     request.CellId = cellId;
     request.WorldSpaceId = worldspaceId;
@@ -2185,6 +2183,7 @@ void VRAvatarService::WriteStatus() noexcept
         file << "localSnapshotReady=" << (HasValidLocalSnapshot() ? 1 : 0) << "\n";
         file << "localServerAssigned=" << (m_localServerId ? 1 : 0) << "\n";
         file << "localServerId=" << m_localServerId.value_or(0) << "\n";
+        file << "localAssignmentRejected=" << (m_assignmentRejected ? 1 : 0) << "\n";
         file << "trackedAvatarCount=" << m_remoteAvatars.size() << "\n";
         file << "pendingSpawnCount=" << m_pendingSpawns.size() << "\n";
         file << "activeAvatarCount=" << activeAvatarCount << "\n";
