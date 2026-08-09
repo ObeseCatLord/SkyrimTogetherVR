@@ -1,7 +1,7 @@
 #include "AvatarManager.h"
 #include "AnimationAppearanceManager.h"
 #include "EventCapture.h"
-#include "HumanoidAnimationGraph.h"
+#include "AnimationGraphDescriptors.h"
 #include "LocalGameplayCapture.h"
 
 #include <vr_common/VRCanonicalEntity.h>
@@ -555,8 +555,6 @@ CommandStatus AvatarManager::ApplyAnimationSnapshotToActor(
         return CommandStatus::WrongThread;
     if (!a_snapshot.IsComplete())
         return CommandStatus::Malformed;
-    if (!ValidateAnimationGraph(a_actor))
-        return CommandStatus::EngineRejected;
     return ApplyAnimationSnapshot(a_actor, a_snapshot) ? CommandStatus::Success : CommandStatus::EngineRejected;
 }
 
@@ -814,61 +812,49 @@ bool AvatarManager::ApplyAnimationSnapshot(
     RE::Actor& a_actor,
     const AvatarRecord::PendingAnimationSnapshot& a_snapshot) noexcept
 {
-    RE::BSTSmartPointer<RE::BSAnimationGraphManager> initialManager;
-    if (!a_actor.GetAnimationGraphManager(initialManager) || !initialManager)
-        return false;
-
+    AnimationGraphs::ResolvedDescriptor descriptor;
+    if (!a_snapshot.IsComplete() || !AnimationGraphs::Resolve(a_actor, descriptor) ||
+        !AnimationGraphs::MatchesCounts(descriptor, a_snapshot)) return false;
     AvatarRecord::PendingAnimationSnapshot previous{};
-    for (std::size_t index = 0; index < HumanoidAnimationGraph::kBooleanNames.size(); ++index) {
-        if (!a_actor.GetGraphVariableBool(RE::BSFixedString(HumanoidAnimationGraph::kBooleanNames[index].data()), previous.Booleans[index]))
-            return false;
-    }
-    for (std::size_t index = 0; index < HumanoidAnimationGraph::kFloatNames.size(); ++index) {
-        if (!a_actor.GetGraphVariableFloat(RE::BSFixedString(HumanoidAnimationGraph::kFloatNames[index].data()), previous.Floats[index]))
-            return false;
-    }
-    for (std::size_t index = 0; index < HumanoidAnimationGraph::kIntegerNames.size(); ++index) {
-        if (!a_actor.GetGraphVariableInt(RE::BSFixedString(HumanoidAnimationGraph::kIntegerNames[index].data()), previous.Integers[index]))
-            return false;
-    }
-
-    const auto managerUnchanged = [&]() noexcept {
-        RE::BSTSmartPointer<RE::BSAnimationGraphManager> currentManager;
-        return a_actor.GetAnimationGraphManager(currentManager) && currentManager && currentManager.get() == initialManager.get();
-    };
+    previous.BooleanCount = a_snapshot.BooleanCount; previous.FloatCount = a_snapshot.FloatCount;
+    previous.IntegerCount = a_snapshot.IntegerCount;
+    for (std::size_t i = 0; i < previous.BooleanCount; ++i)
+        if (!a_actor.GetGraphVariableBool(RE::BSFixedString(descriptor.Descriptor->Booleans[i].data()), previous.Booleans[i])) return false;
+    for (std::size_t i = 0; i < previous.FloatCount; ++i)
+        if (!a_actor.GetGraphVariableFloat(RE::BSFixedString(descriptor.Descriptor->Floats[i].data()), previous.Floats[i])) return false;
+    for (std::size_t i = 0; i < previous.IntegerCount; ++i)
+        if (!a_actor.GetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[i].data()), previous.Integers[i])) return false;
+    const auto managerUnchanged = [&]() noexcept { return AnimationGraphs::ManagerMatches(a_actor, descriptor); };
     std::size_t booleansWritten{};
     std::size_t floatsWritten{};
     std::size_t integersWritten{};
     const auto rollback = [&]() noexcept {
         if (!managerUnchanged())
             return;
-        for (std::size_t index = 0; index < booleansWritten; ++index)
-            a_actor.SetGraphVariableBool(RE::BSFixedString(HumanoidAnimationGraph::kBooleanNames[index].data()), previous.Booleans[index]);
-        for (std::size_t index = 0; index < floatsWritten; ++index)
-            a_actor.SetGraphVariableFloat(RE::BSFixedString(HumanoidAnimationGraph::kFloatNames[index].data()), previous.Floats[index]);
-        for (std::size_t index = 0; index < integersWritten; ++index)
-            a_actor.SetGraphVariableInt(RE::BSFixedString(HumanoidAnimationGraph::kIntegerNames[index].data()), previous.Integers[index]);
+        for (std::size_t i = 0; i < booleansWritten; ++i) a_actor.SetGraphVariableBool(RE::BSFixedString(descriptor.Descriptor->Booleans[i].data()), previous.Booleans[i]);
+        for (std::size_t i = 0; i < floatsWritten; ++i) a_actor.SetGraphVariableFloat(RE::BSFixedString(descriptor.Descriptor->Floats[i].data()), previous.Floats[i]);
+        for (std::size_t i = 0; i < integersWritten; ++i) a_actor.SetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[i].data()), previous.Integers[i]);
     };
 
-    for (; booleansWritten < HumanoidAnimationGraph::kBooleanNames.size(); ++booleansWritten) {
+    for (; booleansWritten < a_snapshot.BooleanCount; ++booleansWritten) {
         if (!managerUnchanged() || !a_actor.SetGraphVariableBool(
-                RE::BSFixedString(HumanoidAnimationGraph::kBooleanNames[booleansWritten].data()),
+                RE::BSFixedString(descriptor.Descriptor->Booleans[booleansWritten].data()),
                 a_snapshot.Booleans[booleansWritten])) {
             rollback();
             return false;
         }
     }
-    for (; floatsWritten < HumanoidAnimationGraph::kFloatNames.size(); ++floatsWritten) {
+    for (; floatsWritten < a_snapshot.FloatCount; ++floatsWritten) {
         if (!managerUnchanged() || !a_actor.SetGraphVariableFloat(
-                RE::BSFixedString(HumanoidAnimationGraph::kFloatNames[floatsWritten].data()),
+                RE::BSFixedString(descriptor.Descriptor->Floats[floatsWritten].data()),
                 a_snapshot.Floats[floatsWritten])) {
             rollback();
             return false;
         }
     }
-    for (; integersWritten < HumanoidAnimationGraph::kIntegerNames.size(); ++integersWritten) {
+    for (; integersWritten < a_snapshot.IntegerCount; ++integersWritten) {
         if (!managerUnchanged() || !a_actor.SetGraphVariableInt(
-                RE::BSFixedString(HumanoidAnimationGraph::kIntegerNames[integersWritten].data()),
+                RE::BSFixedString(descriptor.Descriptor->Integers[integersWritten].data()),
                 a_snapshot.Integers[integersWritten])) {
             rollback();
             return false;
@@ -882,25 +868,6 @@ bool AvatarManager::ApplyAnimationSnapshot(
     return true;
 }
 
-bool AvatarManager::ValidateAnimationGraph(RE::Actor& a_actor) noexcept
-{
-    RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
-    if (!a_actor.GetAnimationGraphManager(manager) || !manager)
-        return false;
-
-    bool valid = true;
-    bool booleanValue{};
-    float floatValue{};
-    std::int32_t integerValue{};
-    for (const auto name : HumanoidAnimationGraph::kBooleanNames)
-        valid = a_actor.GetGraphVariableBool(RE::BSFixedString(name.data()), booleanValue) && valid;
-    for (const auto name : HumanoidAnimationGraph::kFloatNames)
-        valid = a_actor.GetGraphVariableFloat(RE::BSFixedString(name.data()), floatValue) && valid;
-    for (const auto name : HumanoidAnimationGraph::kIntegerNames)
-        valid = a_actor.GetGraphVariableInt(RE::BSFixedString(name.data()), integerValue) && valid;
-    return valid;
-}
-
 AvatarManager::PendingAnimationResult AvatarManager::TryApplyPendingAnimation(AvatarRecord& a_record) noexcept
 {
     if (!a_record.PendingAnimation.IsComplete())
@@ -912,13 +879,7 @@ AvatarManager::PendingAnimationResult AvatarManager::TryApplyPendingAnimation(Av
     RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
     if (!actor->GetAnimationGraphManager(manager) || !manager)
         return PendingAnimationResult::WaitingForGraph;
-    if (!a_record.AnimationGraphValidated) {
-        if (!ValidateAnimationGraph(*actor))
-            return PendingAnimationResult::Rejected;
-        a_record.AnimationGraphValidated = true;
-    }
     if (!ApplyAnimationSnapshot(*actor, a_record.PendingAnimation)) {
-        a_record.AnimationGraphValidated = false;
         return PendingAnimationResult::Rejected;
     }
 

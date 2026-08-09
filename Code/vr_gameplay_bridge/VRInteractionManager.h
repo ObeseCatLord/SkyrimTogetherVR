@@ -17,6 +17,7 @@ class VRInteractionManager final
 {
 public:
     [[nodiscard]] static CommandStatus Execute(const CommandRecord& a_command) noexcept;
+    [[nodiscard]] static bool IsPvpEnabled() noexcept;
     static void ProcessPeriodic() noexcept;
     static void Reset() noexcept;
 };

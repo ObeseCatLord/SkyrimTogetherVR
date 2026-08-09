@@ -64,7 +64,9 @@ constexpr std::uint32_t kFlagBool2 = 1u << 2;
 constexpr std::uint32_t kFlagBool3 = 1u << 3;
 constexpr std::uint32_t kFlagLeftHand = 1u << 4;
 constexpr std::uint32_t kFlagNodeShift = 8;
-constexpr std::int32_t kCastingSourceOther = 2;
+// Original MagicService replays AddTarget using CASTING_SOURCE_COUNT so the
+// engine does not treat the remote effect as a local hand/other cast.
+constexpr std::int32_t kCastingSourceNone = 4;
 constexpr std::uint32_t kActorValueCount = 164;
 constexpr std::uint32_t kHealthActorValue = 24;
 constexpr std::uint32_t kDragonSoulsActorValue = 133;
@@ -1318,7 +1320,7 @@ bool VRActorReplicationService::IsCurrentActorActionRecord(
                payload.ChunkFlags == SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot && IsFinite(payload.Direction) &&
                SkyrimTogetherVR::AnimationGraphProtocol::IsValidChunk(type, payload.StartIndex, payload.ValueCount,
                                                                         payload.TotalCount) &&
-               SkyrimTogetherVR::AnimationGraphProtocol::AreChunkValuesValid(type, payload.ValueCount, payload.Values) &&
+               SkyrimTogetherVR::AnimationGraphProtocol::AreChunkValuesValid(type, payload.ValueCount, payload.TotalCount, payload.Values) &&
                std::all_of(std::begin(payload.ReservedTail), std::end(payload.ReservedTail),
                            [](const std::uint8_t aValue) noexcept { return aValue == 0; });
     }
@@ -1408,14 +1410,14 @@ bool VRActorReplicationService::BuildLocalActorAction(
     action.EventName = TiltedPhoques::String{text.data(), separator};
     action.TargetEventName = TiltedPhoques::String{
         text.data() + separator + 1, text.size() - separator - 1};
-    action.Variables.Booleans.resize(acTransaction.Snapshot.Booleans.size());
-    action.Variables.Floats.resize(acTransaction.Snapshot.Floats.size());
-    action.Variables.Integers.resize(acTransaction.Snapshot.Integers.size());
-    for (std::size_t index = 0; index < acTransaction.Snapshot.Booleans.size(); ++index)
+    action.Variables.Booleans.resize(acTransaction.Snapshot.BooleanCount);
+    action.Variables.Floats.resize(acTransaction.Snapshot.FloatCount);
+    action.Variables.Integers.resize(acTransaction.Snapshot.IntegerCount);
+    for (std::size_t index = 0; index < acTransaction.Snapshot.BooleanCount; ++index)
         action.Variables.Booleans[index] = acTransaction.Snapshot.Booleans[index];
-    for (std::size_t index = 0; index < acTransaction.Snapshot.Floats.size(); ++index)
+    for (std::size_t index = 0; index < acTransaction.Snapshot.FloatCount; ++index)
         action.Variables.Floats[index] = acTransaction.Snapshot.Floats[index];
-    for (std::size_t index = 0; index < acTransaction.Snapshot.Integers.size(); ++index)
+    for (std::size_t index = 0; index < acTransaction.Snapshot.IntegerCount; ++index)
         action.Variables.Integers[index] =
             std::bit_cast<std::uint32_t>(acTransaction.Snapshot.Integers[index]);
     arAction = std::move(action);
@@ -1509,13 +1511,17 @@ bool VRActorReplicationService::HasHumanoidActorActionVariables(const ActionEven
 {
     const std::string_view eventName{acAction.EventName.c_str(), acAction.EventName.size()};
     const std::string_view targetEventName{acAction.TargetEventName.c_str(), acAction.TargetEventName.size()};
+    const auto* shape = SkyrimTogetherVR::AnimationGraphProtocol::FindKnownShape(
+        acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
+        acAction.Variables.Integers.size());
     return acAction.ActionId && (acAction.Type & ~0x7u) == 0 &&
            eventName.size() <= kMaximumActorActionStringBytes &&
            targetEventName.size() <= kMaximumActorActionStringBytes &&
            eventName.find('\0') == std::string_view::npos && targetEventName.find('\0') == std::string_view::npos &&
-           acAction.Variables.Booleans.size() == SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount &&
-           acAction.Variables.Floats.size() == SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount &&
-           acAction.Variables.Integers.size() == SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount &&
+           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::BooleanBits, acAction.Variables.Booleans.size()) &&
+           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::Float, acAction.Variables.Floats.size()) &&
+           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::Integer, acAction.Variables.Integers.size()) &&
+           shape && shape->DirectionFloatIndex < acAction.Variables.Floats.size() &&
            std::all_of(acAction.Variables.Floats.begin(), acAction.Variables.Floats.end(),
                        [](const float aValue) noexcept { return IsFinite(aValue); });
 }
@@ -1536,6 +1542,13 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
         return false;
     if (IsKnownRemoteActorAction(aServerId, acAction))
         return true;
+
+    const auto* shape = SkyrimTogetherVR::AnimationGraphProtocol::FindKnownShape(
+        acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
+        acAction.Variables.Integers.size());
+    if (!shape || shape->DirectionFloatIndex >= acAction.Variables.Floats.size())
+        return false;
+    const auto direction = acAction.Variables.Floats[shape->DirectionFloatIndex];
 
     const auto actionForm = ToLocal(m_world, acAction.ActionId);
     const auto targetForm = ToLocal(m_world, acAction.TargetId);
@@ -1568,9 +1581,9 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
         payload.ValueType = static_cast<std::uint16_t>(aType);
         payload.StartIndex = aStart;
         payload.ValueCount = aCount;
-        payload.TotalCount = SkyrimTogetherVR::AnimationGraphProtocol::ExpectedCount(aType);
+        payload.TotalCount = static_cast<std::uint16_t>(acValues.size());
         payload.ChunkFlags = SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot;
-        payload.Direction = acAction.Variables.Floats[1];
+        payload.Direction = direction;
         for (std::uint16_t index = 0; index < aCount; ++index)
             payload.Values[index] = std::bit_cast<std::uint32_t>(acValues[aStart + index]);
         return true;
@@ -1585,10 +1598,10 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
     booleanPayload.SnapshotId = transactionId;
     booleanPayload.DescriptorVersion = SkyrimTogetherVR::AnimationGraphProtocol::kDescriptorVersion;
     booleanPayload.ValueType = static_cast<std::uint16_t>(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::BooleanBits);
-    booleanPayload.ValueCount = SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount;
-    booleanPayload.TotalCount = SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount;
+    booleanPayload.ValueCount = static_cast<std::uint16_t>(acAction.Variables.Booleans.size());
+    booleanPayload.TotalCount = booleanPayload.ValueCount;
     booleanPayload.ChunkFlags = SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot;
-    booleanPayload.Direction = acAction.Variables.Floats[1];
+    booleanPayload.Direction = direction;
     for (std::size_t index = 0; index < acAction.Variables.Booleans.size(); ++index) {
         if (acAction.Variables.Booleans[index])
             booleanPayload.Values[index / 32] |= 1u << (index % 32);
@@ -3096,7 +3109,7 @@ VRActorReplicationService::MagicEffectSubmitResult VRActorReplicationService::Su
     auto payload = Payload();
     payload.LocalFormIdA = spell;
     payload.LocalFormIdB = effect;
-    payload.ValueA = kCastingSourceOther;
+    payload.ValueA = kCastingSourceNone;
     payload.ScalarA = acMessage.Magnitude;
     payload.ScalarB = 1.0F;
     payload.ActionFlags = (acMessage.IsDualCasting ? kFlagBool1 : 0) |

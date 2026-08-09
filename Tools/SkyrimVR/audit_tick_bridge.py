@@ -202,7 +202,7 @@ def main() -> int:
     hook_start = client_main.find("static int __stdcall HookVrWinMain")
     hook_end = client_main.find("static bool InstallVrWinMainLifecycleHook", hook_start)
     hook_body = client_main[hook_start:hook_end] if hook_start >= 0 and hook_end >= 0 else ""
-    end_start = client_main.find("void RunTiltedEnd() noexcept")
+    end_start = client_main.find("void RunTiltedEnd() noexcept\n{")
     end_body = client_main[end_start:] if end_start >= 0 else ""
     if "~ShutdownGuard() { RunTiltedEnd(); }" not in hook_body or "g_appInstance->EndMain();" not in end_body:
         failures.append("Code/client/main.cpp: mapped VR WinMain must reach idempotent client teardown")

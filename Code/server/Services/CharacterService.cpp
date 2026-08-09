@@ -47,6 +47,7 @@
 #include <Services/VRAppearanceRelayService.h>
 #include <vr_common/VRAnimationGraphProtocol.h>
 #include <vr_common/VRAssignmentLimits.h>
+#include <vr_common/VRGameplayBridge.h>
 
 #include <Setting.h>
 
@@ -158,9 +159,7 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
 [[nodiscard]] bool IsValidActorValues(const ActorValues& acValues, const bool aRequireComplete) noexcept
 {
     if (!acValues.IsDecodedValid || acValues.ActorValuesList.size() > kActorValueCount ||
-        acValues.ActorMaxValuesList.size() > kActorValueCount ||
-        (aRequireComplete && (acValues.ActorValuesList.size() != kActorValueCount ||
-                              acValues.ActorMaxValuesList.size() != kActorValueCount)))
+        acValues.ActorMaxValuesList.size() > kActorValueCount)
         return false;
 
     const auto validMap = [aRequireComplete](const auto& acMap) noexcept {
@@ -171,7 +170,7 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
                 return false;
         }
         if (aRequireComplete)
-            for (std::uint32_t id = 0; id < kActorValueCount; ++id)
+            for (const auto id : SkyrimTogetherVR::GameplayBridge::kEssentialAssignmentActorValues)
                 if (acMap.find(id) == acMap.end())
                     return false;
         return true;
@@ -372,9 +371,9 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
                acAction.TargetEventName.end() &&
            ((acAction.Variables.Booleans.empty() && acAction.Variables.Floats.empty() &&
              acAction.Variables.Integers.empty()) ||
-            (acAction.Variables.Booleans.size() == SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount &&
-             acAction.Variables.Floats.size() == SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount &&
-             acAction.Variables.Integers.size() == SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount)) &&
+            (SkyrimTogetherVR::AnimationGraphProtocol::IsKnownShape(
+                 acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
+                 acAction.Variables.Integers.size()))) &&
            std::all_of(acAction.Variables.Floats.begin(), acAction.Variables.Floats.end(),
                        [](const float aValue) noexcept { return std::isfinite(aValue); });
 }
@@ -1068,9 +1067,9 @@ void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionR
         action.EventName.size() > 127 || action.TargetEventName.size() > 127 ||
         std::find(action.EventName.begin(), action.EventName.end(), '\0') != action.EventName.end() ||
         std::find(action.TargetEventName.begin(), action.TargetEventName.end(), '\0') != action.TargetEventName.end() ||
-        action.Variables.Booleans.size() != SkyrimTogetherVR::AnimationGraphProtocol::kBooleanCount ||
-        action.Variables.Floats.size() != SkyrimTogetherVR::AnimationGraphProtocol::kFloatCount ||
-        action.Variables.Integers.size() != SkyrimTogetherVR::AnimationGraphProtocol::kIntegerCount ||
+        !SkyrimTogetherVR::AnimationGraphProtocol::IsKnownShape(
+            action.Variables.Booleans.size(), action.Variables.Floats.size(),
+            action.Variables.Integers.size()) ||
         !std::all_of(action.Variables.Floats.begin(), action.Variables.Floats.end(),
                      [](const float a_value) { return std::isfinite(a_value); }))
         return;

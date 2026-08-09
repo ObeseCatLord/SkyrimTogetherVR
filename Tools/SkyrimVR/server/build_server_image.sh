@@ -4,14 +4,32 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 image=${1:-skyrim-together-vr-server:local}
 
+validate_provenance() {
+    local name=$1
+    local value=$2
+
+    if [[ -z $value || $value == "none" || $value == unknown-* || ! $value =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+        printf 'Refusing to build: invalid %s provenance: %q\n' "$name" "$value" >&2
+        exit 2
+    fi
+}
+
 if [[ -n $(git -C "$repo_root" status --porcelain=v1 --untracked-files=all) ]]; then
     echo "Refusing to build a server image from a dirty source tree." >&2
     exit 2
 fi
 
+branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
+version=$(git -C "$repo_root" describe --tags)
+validate_provenance "branch" "$branch"
+validate_provenance "network version" "$version"
+printf 'Server image provenance: branch=%s version=%s\n' "$branch" "$version"
+
 build_args=(
     build
     --build-arg GITHUB_ACTIONS=true
+    --build-arg "STVR_BUILD_BRANCH=$branch"
+    --build-arg "STVR_BUILD_COMMIT=$version"
     -t "$image"
 )
 

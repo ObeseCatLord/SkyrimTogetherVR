@@ -51,13 +51,23 @@ CommandRecord MakeGameplayCommand(
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 20);
-    REQUIRE(kCapabilityRevision == 29);
+    REQUIRE(kMappingAbiVersion == 22);
+    REQUIRE(kCapabilityRevision == 30);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
     REQUIRE(kMinimumSkseVrVersion == 0x020000C0);
     REQUIRE(kMinimumSkseVrReleaseIndex == 60);
+    const std::array<std::uint32_t, 3> expectedEssentialActorValues{24, 25, 26};
+    REQUIRE(kEssentialAssignmentActorValues == expectedEssentialActorValues);
+    REQUIRE(kMinimumAssignmentBootstrapRecords == 8);
+    REQUIRE(IsEssentialAssignmentActorValue(24));
+    REQUIRE_FALSE(IsEssentialAssignmentActorValue(23));
+    REQUIRE(static_cast<std::int32_t>(AssignmentBootstrapFailureReason::EssentialActorValues) == 2);
+    REQUIRE(static_cast<std::int32_t>(AssignmentBootstrapFailureReason::Exception) == 9);
+    REQUIRE(IsKnownAssignmentBootstrapFailureReason(
+        static_cast<std::int32_t>(AssignmentBootstrapFailureReason::Tint)));
+    REQUIRE_FALSE(IsKnownAssignmentBootstrapFailureReason(0));
     REQUIRE(static_cast<std::uint32_t>(CommandStatus::Degraded) == 13);
     REQUIRE(kFixedPayloadBytes == 80);
     REQUIRE(kDefaultEventRingCapacity == 2048);
@@ -92,7 +102,9 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteSpatialTransfer));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteAnimationGraphSnapshot));
-    REQUIRE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
+    // Exact action events stay protocol-defined but are not activated by the
+    // VR bridge until ForceAction-equivalent replay is validated.
+    REQUIRE_FALSE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::InventoryStackTransactions));
     REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ArmLocalCapture));
     REQUIRE_FALSE(IsActionInDomain(GameplayDomain::Animation, GameplayAction::ArmLocalCapture));
@@ -102,10 +114,20 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE_FALSE(IsActionInDomain(GameplayDomain::WorldState, GameplayAction::ConfigureDeathSystem));
     REQUIRE(kPoseCommitNodeMask == 0x3FFu);
     REQUIRE(kNpcSnapshotActionIdMarker == (1ull << 63));
-    REQUIRE(kNpcSnapshotGraphChunkCount == 5);
+    REQUIRE(kNpcSnapshotGraphChunkCount ==
+            1 + (SkyrimTogetherVR::AnimationGraphProtocol::kMaximumFloatCount +
+                    SkyrimTogetherVR::AnimationGraphProtocol::kValuesPerChunk - 1) /
+                    SkyrimTogetherVR::AnimationGraphProtocol::kValuesPerChunk +
+                (SkyrimTogetherVR::AnimationGraphProtocol::kMaximumIntegerCount +
+                    SkyrimTogetherVR::AnimationGraphProtocol::kValuesPerChunk - 1) /
+                    SkyrimTogetherVR::AnimationGraphProtocol::kValuesPerChunk);
     REQUIRE(kMaximumInventoryTransactionRecords == 1538);
     REQUIRE(kMaximumInventoryTransactionRecords <= kDefaultCommandRingCapacity);
-    REQUIRE(kMaximumNpcSnapshotRecords == 912);
+    REQUIRE(kMaximumNpcSnapshotRecords == 928);
+    REQUIRE(kMaximumNpcSnapshotRecords ==
+            2 + kSkyrimActorValueCount + kNpcSnapshotGraphChunkCount + kMaximumNpcSnapshotItems * 2 +
+                kMaximumInventoryTransactionEffects + kMaximumNpcSnapshotFactions +
+                kMaximumNpcSnapshotAppearanceRecords);
     REQUIRE(kMaximumAppearanceHeadParts == 7);
     REQUIRE(kNpcSnapshotNameChunkBytes == 24);
     REQUIRE(IsActionInDomain(GameplayDomain::NpcOwnership, GameplayAction::NpcSnapshotAppearance));
@@ -252,13 +274,19 @@ TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values
     REQUIRE(sizeof(AnimationGraphChunkPayload) == kFixedPayloadBytes);
     REQUIRE(sizeof(RemoteAnimationGraphStatePayload) == kFixedPayloadBytes);
     REQUIRE(sizeof(RemoteSpatialTransferStatePayload) == kFixedPayloadBytes);
-    REQUIRE(Animation::kBooleanCount == 60);
-    REQUIRE(Animation::kFloatCount == 13);
-    REQUIRE(Animation::kIntegerCount == 14);
+    REQUIRE(Animation::kMaximumBooleanCount == 64);
+    REQUIRE(Animation::kMaximumFloatCount == 64);
+    REQUIRE(Animation::kMaximumIntegerCount == 64);
     REQUIRE(Animation::kValuesPerChunk == 7);
-    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::BooleanBits) == 1);
-    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Float) == 3);
-    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Integer) == 3);
+    REQUIRE(Animation::kKnownDescriptorShapeCount == 25);
+    const auto* humanoid = Animation::FindKnownShape(60, 13, 14);
+    REQUIRE(humanoid != nullptr);
+    REQUIRE(humanoid->DirectionFloatIndex == 1);
+    REQUIRE(humanoid->DirectionFloatIndex < humanoid->FloatCount);
+    REQUIRE_FALSE(Animation::IsKnownShape(60, 13, 13));
+    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::BooleanBits, 60) == 1);
+    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Float, 13) == 3);
+    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Integer, 14) == 3);
     REQUIRE(Animation::IsValidChunk(Animation::ValueType::BooleanBits, 0, 60, 60));
     REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 0, 7, 13));
     REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 7, 6, 13));
@@ -274,12 +302,32 @@ TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values
     command.Payload.ApplyRemoteAnimationGraphChunk.ValueType = static_cast<std::uint16_t>(Animation::ValueType::Float);
     command.Payload.ApplyRemoteAnimationGraphChunk.StartIndex = 7;
     command.Payload.ApplyRemoteAnimationGraphChunk.ValueCount = 6;
-    command.Payload.ApplyRemoteAnimationGraphChunk.TotalCount = Animation::kFloatCount;
+    command.Payload.ApplyRemoteAnimationGraphChunk.TotalCount = 13;
     command.Payload.ApplyRemoteAnimationGraphChunk.ChunkFlags = Animation::FullSnapshot;
     command.Payload.ApplyRemoteAnimationGraphChunk.Values[0] = 0x3F800000;
     const auto roundTrip = command;
     REQUIRE(roundTrip.Payload.ApplyRemoteAnimationGraphChunk.SnapshotId == 12);
     REQUIRE(roundTrip.Payload.ApplyRemoteAnimationGraphChunk.Values[0] == 0x3F800000);
+}
+
+TEST_CASE("VR animation graph protocol rejects unknown complete shapes", "[skyrim-vr][gameplay-bridge]")
+{
+    namespace Animation = SkyrimTogetherVR::AnimationGraphProtocol;
+    Animation::SnapshotBuffer snapshot{};
+    std::uint32_t booleanValues[Animation::kValuesPerChunk]{};
+    std::uint32_t floatValues0[Animation::kValuesPerChunk]{};
+    std::uint32_t floatValues1[Animation::kValuesPerChunk]{};
+    std::uint32_t integerValues[Animation::kValuesPerChunk]{};
+
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::BooleanBits, 0, 60, 60, 0.0F,
+                                   booleanValues) == Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Float, 0, 7, 13, 0.0F,
+                                   floatValues0) == Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Float, 7, 6, 13, 0.0F,
+                                   floatValues1) == Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Integer, 0, 7, 13, 0.0F,
+                                   integerValues) == Animation::ChunkAcceptResult::Malformed);
+    REQUIRE_FALSE(snapshot.IsComplete());
 }
 
 TEST_CASE("movement tick ordering accepts an initial zero and rejects stale updates", "[skyrim-vr][movement]")
@@ -312,7 +360,7 @@ TEST_CASE("animation graph assembly commits only complete current snapshots", "[
         integerValues0[index] = static_cast<std::uint32_t>(index + 10);
         integerValues1[index] = static_cast<std::uint32_t>(index + 20);
     }
-    for (std::size_t index = 0; index < Animation::kFloatCount - Animation::kValuesPerChunk; ++index)
+    for (std::size_t index = 0; index < 13 - Animation::kValuesPerChunk; ++index)
         floatValues1[index] = std::bit_cast<std::uint32_t>(static_cast<float>(index + 7));
 
     REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::Float, 7, 6, 13, 1.0f, floatValues1) ==
@@ -335,8 +383,8 @@ TEST_CASE("animation graph assembly commits only complete current snapshots", "[
     floatValues0[0] = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
     REQUIRE(Animation::AcceptChunk(snapshot, 5, Animation::ValueType::Float, 0, 7, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Malformed);
-    REQUIRE_FALSE(snapshot.IsComplete());
-    REQUIRE(snapshot.SnapshotId == 0);
+    REQUIRE(snapshot.IsComplete());
+    REQUIRE(snapshot.SnapshotId == 4);
 }
 
 TEST_CASE("VR gameplay bridge ring rejects full pushes and wraps", "[skyrim-vr][gameplay-bridge]")

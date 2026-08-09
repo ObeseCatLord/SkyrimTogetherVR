@@ -138,7 +138,7 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
             payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !std::isfinite(payload.Direction) ||
             !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) ||
             !AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||
-            !AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values))
+            !AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.TotalCount, payload.Values))
             return CommandStatus::Malformed;
         break;
     }

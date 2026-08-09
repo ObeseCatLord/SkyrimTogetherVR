@@ -60,6 +60,7 @@ id,offset,source,status,name
 33261,05402d0,addrlib,addrlib,
 33285,05410a0,addrlib,addrlib,
 33363,0546260,addrlib,addrlib,
+33741,0557830,database,exact_vr_disassembly,MagicTarget::AddTargetData::CheckAddEffect
 33742,05579c0,database,exact_vr_disassembly,MagicTarget::AddTarget
 34053,050a4a0,addrlib,addrlib,
 34140,05681b0,addrlib,addrlib,
@@ -89,6 +90,7 @@ id,offset,source,status,name
 36544,05f2410,addrlib,addrlib,
 36548,05f2a60,addrlib,addrlib,
 36564,05f4770,addrlib,addrlib,
+36690,06025a0,database,exact_vr_disassembly,Actor::HasPerk
 36950,0612420,addrlib,addrlib,
 37147,061e640,addrlib,addrlib,
 37175,061f300,addrlib,addrlib,

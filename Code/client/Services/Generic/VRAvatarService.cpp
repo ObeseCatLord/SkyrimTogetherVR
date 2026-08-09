@@ -30,6 +30,7 @@
 #include <fstream>
 #include <limits>
 #include <string_view>
+#include <vector>
 
 namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
 namespace AnimationGraphProtocol = SkyrimTogetherVR::AnimationGraphProtocol;
@@ -67,6 +68,7 @@ constexpr std::size_t kMaxRemoteAvatars = 64;
 constexpr std::uint8_t kMaximumCreateAttempts = 3;
 constexpr std::uint32_t kMaximumAssignmentInventoryEntries = 512;
 constexpr std::uint32_t kMaximumAssignmentFactionEntries = 511;
+constexpr float kMaximumAssignmentActorValueMagnitude = 1'000'000.0F;
 constexpr std::uint64_t kSnapshotHasPlayer = 1ull << 0;
 constexpr std::uint64_t kSnapshotHasCell = 1ull << 1;
 
@@ -1053,6 +1055,7 @@ void VRAvatarService::ResetAssignmentBootstrap() noexcept
     m_assignmentBootstrapHasMagicEquipment = false;
     m_assignmentBootstrapHasOpenInventory = false;
     m_assignmentBootstrapHasInventoryExtra = false;
+    m_assignmentBootstrapSkipOpenInventory = false;
     m_assignmentBootstrapActorValues.fill(false);
     m_assignmentBootstrapTints.fill(false);
     m_assignmentBootstrapTintPathsRequired.fill(false);
@@ -1107,6 +1110,7 @@ void VRAvatarService::TryRequestAssignmentBootstrap() noexcept
     m_assignmentBootstrapHasMagicEquipment = false;
     m_assignmentBootstrapHasOpenInventory = false;
     m_assignmentBootstrapHasInventoryExtra = false;
+    m_assignmentBootstrapSkipOpenInventory = false;
     m_assignmentBootstrapActorValues.fill(false);
     m_assignmentBootstrapTints.fill(false);
     m_assignmentBootstrapTintPathsRequired.fill(false);
@@ -1147,6 +1151,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
         m_assignmentBootstrapHasMagicEquipment = false;
         m_assignmentBootstrapHasOpenInventory = false;
         m_assignmentBootstrapHasInventoryExtra = false;
+        m_assignmentBootstrapSkipOpenInventory = false;
         m_assignmentBootstrapActorValues.fill(false);
         m_assignmentBootstrapTints.fill(false);
         m_assignmentBootstrapTintPathsRequired.fill(false);
@@ -1161,14 +1166,17 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
         if (payload.Ordinal != 0 || payload.TotalRecords != 1 || payload.RecordFlags != 0 ||
             payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 ||
             payload.LocalFormIdD != 0 || payload.ValueA <= static_cast<std::int32_t>(GameplayBridge::CommandStatus::Success) ||
-            payload.ValueA > static_cast<std::int32_t>(GameplayBridge::CommandStatus::QueueOverflow) ||
-            payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ValueA > static_cast<std::int32_t>(GameplayBridge::CommandStatus::Degraded) ||
+            !GameplayBridge::IsKnownAssignmentBootstrapFailureReason(payload.ValueB) ||
+            payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
             payload.Digest != 0) {
             fail();
             return;
         }
-        spdlog::warn("VR assignment bootstrap failed with bridge status {}", payload.ValueA);
-        if (payload.ValueA == static_cast<std::int32_t>(GameplayBridge::CommandStatus::QueueOverflow))
+        spdlog::warn("VR assignment bootstrap failed with bridge status {} reason {}", payload.ValueA, payload.ValueB);
+        if (payload.ValueA == static_cast<std::int32_t>(GameplayBridge::CommandStatus::EngineRejected) &&
+            (payload.ValueB == static_cast<std::int32_t>(GameplayBridge::AssignmentBootstrapFailureReason::AppearanceCore) ||
+             payload.ValueB == static_cast<std::int32_t>(GameplayBridge::AssignmentBootstrapFailureReason::Name)))
             m_assignmentBootstrapPermanentFailure = true;
         fail();
         return;
@@ -1176,7 +1184,7 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
 
     if (kind == GameplayBridge::AssignmentBootstrapRecordKind::Begin) {
         if (m_assignmentBootstrapActive || payload.Ordinal != 0 ||
-            payload.TotalRecords < GameplayBridge::kSkyrimActorValueCount + 4 ||
+            payload.TotalRecords < GameplayBridge::kMinimumAssignmentBootstrapRecords ||
             payload.TotalRecords > SkyrimTogetherVR::VRAssignmentLimits::kMaximumLogicalBootstrapRecords ||
             payload.LocalFormIdA != 0x14 || payload.LocalFormIdB == 0 || payload.RecordFlags != 0 ||
             payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || payload.ValueA != 0 ||
@@ -1204,7 +1212,12 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
                static_cast<bool>(arServerFormId);
     };
     auto mapOptional = [&mapRequired](const std::uint32_t aLocalFormId, GameId& arServerFormId) {
-        return aLocalFormId == 0 || mapRequired(aLocalFormId, arServerFormId);
+        if (aLocalFormId == 0)
+            return true;
+        if (mapRequired(aLocalFormId, arServerFormId))
+            return true;
+        arServerFormId = {};
+        return true;
     };
 
     switch (kind)
@@ -1234,7 +1247,9 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
         if (payload.LocalFormIdA >= GameplayBridge::kSkyrimActorValueCount || payload.RecordFlags != 0 ||
             payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
             payload.ValueA != 0 || payload.ValueB != 0 || !std::isfinite(payload.ScalarA) ||
-            !std::isfinite(payload.ScalarB) || payload.Digest != 0) {
+            !std::isfinite(payload.ScalarB) ||
+            std::abs(payload.ScalarA) > kMaximumAssignmentActorValueMagnitude ||
+            std::abs(payload.ScalarB) > kMaximumAssignmentActorValueMagnitude || payload.Digest != 0) {
             fail();
             return;
         }
@@ -1270,22 +1285,21 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
             return;
         }
         Inventory::Entry entry{};
-        if (!mapRequired(payload.LocalFormIdA, entry.BaseId)) {
-            fail();
-            return;
+        m_assignmentBootstrapSkipOpenInventory = !mapRequired(payload.LocalFormIdA, entry.BaseId);
+        if (!m_assignmentBootstrapSkipOpenInventory) {
+            entry.Count = payload.ValueA;
+            entry.IsQuestItem = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryQuestItem) != 0;
+            entry.ExtraWorn = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWorn) != 0;
+            entry.ExtraWornLeft = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWornLeft) != 0;
+            entry.EquipmentFlags =
+                ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 ?
+                     Inventory::Entry::kEquipmentWeapon : 0u) |
+                ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0 ?
+                     Inventory::Entry::kEquipmentAmmo : 0u);
+            m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.push_back(std::move(entry));
+            m_assignmentBootstrapOpenInventoryIndex =
+                m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.size() - 1;
         }
-        entry.Count = payload.ValueA;
-        entry.IsQuestItem = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryQuestItem) != 0;
-        entry.ExtraWorn = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWorn) != 0;
-        entry.ExtraWornLeft = (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWornLeft) != 0;
-        entry.EquipmentFlags =
-            ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryWeapon) != 0 ?
-                 Inventory::Entry::kEquipmentWeapon : 0u) |
-            ((payload.RecordFlags & GameplayBridge::kAssignmentBootstrapInventoryAmmo) != 0 ?
-                 Inventory::Entry::kEquipmentAmmo : 0u);
-        m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.push_back(std::move(entry));
-        m_assignmentBootstrapOpenInventoryIndex =
-            m_assignmentBaseline.CurrentActorData.InitialInventory.Entries.size() - 1;
         m_assignmentBootstrapHasOpenInventory = true;
         m_assignmentBootstrapHasInventoryExtra = false;
         m_assignmentBootstrapInventoryEffectsRemaining = 0;
@@ -1308,22 +1322,35 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
             fail();
             return;
         }
-        auto& entry = m_assignmentBaseline.CurrentActorData.InitialInventory
-                          .Entries[m_assignmentBootstrapOpenInventoryIndex];
-        if (!mapOptional(payload.LocalFormIdA, entry.ExtraEnchantId) ||
-            !mapOptional(payload.LocalFormIdB, entry.ExtraPoisonId)) {
-            fail();
-            return;
+        if (!m_assignmentBootstrapSkipOpenInventory) {
+            auto& entry = m_assignmentBaseline.CurrentActorData.InitialInventory
+                              .Entries[m_assignmentBootstrapOpenInventoryIndex];
+            const bool hasMappedEnchantment = payload.LocalFormIdA == 0 ||
+                mapRequired(payload.LocalFormIdA, entry.ExtraEnchantId);
+            const bool hasMappedPoison = payload.LocalFormIdB == 0 ||
+                mapRequired(payload.LocalFormIdB, entry.ExtraPoisonId);
+            if (!hasMappedEnchantment) {
+                entry.ExtraEnchantId = {};
+                entry.ExtraEnchantCharge = 0;
+                entry.ExtraEnchantRemoveUnequip = false;
+                entry.EnchantData = {};
+            } else {
+                entry.ExtraEnchantCharge = static_cast<std::uint16_t>(payload.ValueA);
+                entry.ExtraEnchantRemoveUnequip =
+                    (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip) != 0;
+                entry.EnchantData.IsWeapon =
+                    (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantIsWeapon) != 0;
+            }
+            if (!hasMappedPoison) {
+                entry.ExtraPoisonId = {};
+                entry.ExtraPoisonCount = 0;
+            } else {
+                entry.ExtraPoisonCount = static_cast<std::uint32_t>(payload.ValueB);
+            }
+            entry.ExtraSoulLevel = static_cast<std::int32_t>(payload.LocalFormIdC);
+            entry.ExtraCharge = payload.ScalarA;
+            entry.ExtraHealth = payload.ScalarB;
         }
-        entry.ExtraEnchantCharge = static_cast<std::uint16_t>(payload.ValueA);
-        entry.ExtraPoisonCount = static_cast<std::uint32_t>(payload.ValueB);
-        entry.ExtraSoulLevel = static_cast<std::int32_t>(payload.LocalFormIdC);
-        entry.ExtraCharge = payload.ScalarA;
-        entry.ExtraHealth = payload.ScalarB;
-        entry.ExtraEnchantRemoveUnequip =
-            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantRemoveUnequip) != 0;
-        entry.EnchantData.IsWeapon =
-            (payload.RecordFlags & GameplayBridge::kAssignmentBootstrapEnchantIsWeapon) != 0;
         m_assignmentBootstrapInventoryEffectsRemaining = payload.LocalFormIdD;
         m_assignmentBootstrapHasInventoryExtra = true;
         break;
@@ -1339,17 +1366,18 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
             return;
         }
         Inventory::EffectItem effect{};
-        if (!mapRequired(payload.LocalFormIdA, effect.EffectId)) {
-            fail();
-            return;
+        if (!m_assignmentBootstrapSkipOpenInventory &&
+            m_assignmentBaseline.CurrentActorData.InitialInventory
+                .Entries[m_assignmentBootstrapOpenInventoryIndex].ExtraEnchantId &&
+            mapRequired(payload.LocalFormIdA, effect.EffectId)) {
+            effect.Area = payload.ValueA;
+            effect.Duration = payload.ValueB;
+            effect.Magnitude = payload.ScalarA;
+            effect.RawCost = payload.ScalarB;
+            m_assignmentBaseline.CurrentActorData.InitialInventory
+                .Entries[m_assignmentBootstrapOpenInventoryIndex]
+                .EnchantData.Effects.push_back(effect);
         }
-        effect.Area = payload.ValueA;
-        effect.Duration = payload.ValueB;
-        effect.Magnitude = payload.ScalarA;
-        effect.RawCost = payload.ScalarB;
-        m_assignmentBaseline.CurrentActorData.InitialInventory
-            .Entries[m_assignmentBootstrapOpenInventoryIndex]
-            .EnchantData.Effects.push_back(effect);
         --m_assignmentBootstrapInventoryEffectsRemaining;
         break;
     }
@@ -1508,11 +1536,8 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
             return;
         }
         GameId headPartId{};
-        if (!mapRequired(payload.LocalFormIdA, headPartId)) {
-            fail();
-            return;
-        }
-        appearance.HeadParts[appearance.HeadPartCount++] = {slot, headPartId};
+        if (mapRequired(payload.LocalFormIdA, headPartId))
+            appearance.HeadParts[appearance.HeadPartCount++] = {slot, headPartId};
         m_assignmentBootstrapHeadParts[slot] = true;
         break;
     }
@@ -1565,8 +1590,10 @@ void VRAvatarService::HandleBridgeAssignmentBootstrapRecord(
                         [](const bool aRequired, const AssignmentTintTextAssembly& acText) {
                             return !aRequired || acText.Complete;
                         }) ||
-            !std::all_of(m_assignmentBootstrapActorValues.begin(), m_assignmentBootstrapActorValues.end(),
-                         [](const bool aCaptured) { return aCaptured; }) ||
+            !std::all_of(GameplayBridge::kEssentialAssignmentActorValues.begin(),
+                         GameplayBridge::kEssentialAssignmentActorValues.end(), [this](const std::uint32_t aValue) {
+                             return m_assignmentBootstrapActorValues[aValue];
+                         }) ||
             !m_assignmentBaseline.InitialVRAppearance.IsValid()) {
             fail();
             return;
@@ -1634,14 +1661,14 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
         if (m_localAnimationSnapshot.IsComplete())
         {
             auto& variables = request.LatestAction.Variables;
-            variables.Booleans.resize(AnimationGraphProtocol::kBooleanCount);
-            variables.Floats.resize(AnimationGraphProtocol::kFloatCount);
-            variables.Integers.resize(AnimationGraphProtocol::kIntegerCount);
-            for (std::size_t index = 0; index < m_localAnimationSnapshot.Booleans.size(); ++index)
+            variables.Booleans.resize(m_localAnimationSnapshot.BooleanCount);
+            variables.Floats.resize(m_localAnimationSnapshot.FloatCount);
+            variables.Integers.resize(m_localAnimationSnapshot.IntegerCount);
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.BooleanCount; ++index)
                 variables.Booleans[index] = m_localAnimationSnapshot.Booleans[index];
-            for (std::size_t index = 0; index < m_localAnimationSnapshot.Floats.size(); ++index)
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.FloatCount; ++index)
                 variables.Floats[index] = m_localAnimationSnapshot.Floats[index];
-            for (std::size_t index = 0; index < m_localAnimationSnapshot.Integers.size(); ++index)
+            for (std::size_t index = 0; index < m_localAnimationSnapshot.IntegerCount; ++index)
                 variables.Integers[index] = std::bit_cast<std::uint32_t>(m_localAnimationSnapshot.Integers[index]);
         }
     }
@@ -1703,14 +1730,14 @@ void VRAvatarService::SendLocalMovement() noexcept try
     movement.Rotation = rotation;
     if (HasAnimationCapabilities() && m_localAnimationSnapshot.IsComplete())
     {
-        movement.Variables.Booleans.resize(AnimationGraphProtocol::kBooleanCount);
-        movement.Variables.Floats.resize(AnimationGraphProtocol::kFloatCount);
-        movement.Variables.Integers.resize(AnimationGraphProtocol::kIntegerCount);
-        for (std::size_t index = 0; index < m_localAnimationSnapshot.Booleans.size(); ++index)
+        movement.Variables.Booleans.resize(m_localAnimationSnapshot.BooleanCount);
+        movement.Variables.Floats.resize(m_localAnimationSnapshot.FloatCount);
+        movement.Variables.Integers.resize(m_localAnimationSnapshot.IntegerCount);
+        for (std::size_t index = 0; index < m_localAnimationSnapshot.BooleanCount; ++index)
             movement.Variables.Booleans[index] = m_localAnimationSnapshot.Booleans[index];
-        for (std::size_t index = 0; index < m_localAnimationSnapshot.Floats.size(); ++index)
+        for (std::size_t index = 0; index < m_localAnimationSnapshot.FloatCount; ++index)
             movement.Variables.Floats[index] = m_localAnimationSnapshot.Floats[index];
-        for (std::size_t index = 0; index < m_localAnimationSnapshot.Integers.size(); ++index)
+        for (std::size_t index = 0; index < m_localAnimationSnapshot.IntegerCount; ++index)
             movement.Variables.Integers[index] = std::bit_cast<std::uint32_t>(m_localAnimationSnapshot.Integers[index]);
         movement.Direction = m_localAnimationSnapshot.Direction;
     }
@@ -1969,9 +1996,8 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
     const AnimationVariables& acVariables,
     const float aDirection) noexcept try
 {
-    if (!IsFinite(aDirection) || acVariables.Booleans.size() != AnimationGraphProtocol::kBooleanCount ||
-        acVariables.Floats.size() != AnimationGraphProtocol::kFloatCount ||
-        acVariables.Integers.size() != AnimationGraphProtocol::kIntegerCount)
+    if (!IsFinite(aDirection) || !AnimationGraphProtocol::IsKnownShape(
+            acVariables.Booleans.size(), acVariables.Floats.size(), acVariables.Integers.size()))
         return false;
 
     AnimationSnapshot snapshot{};
@@ -1979,19 +2005,22 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
     if (snapshot.SnapshotId == 0)
         snapshot.SnapshotId = ++arAvatar.NextAnimationSnapshotId;
     snapshot.Direction = aDirection;
-    for (std::size_t index = 0; index < snapshot.Booleans.size(); ++index)
+    snapshot.BooleanCount = static_cast<std::uint16_t>(acVariables.Booleans.size());
+    snapshot.FloatCount = static_cast<std::uint16_t>(acVariables.Floats.size());
+    snapshot.IntegerCount = static_cast<std::uint16_t>(acVariables.Integers.size());
+    for (std::size_t index = 0; index < snapshot.BooleanCount; ++index)
         snapshot.Booleans[index] = acVariables.Booleans[index];
-    for (std::size_t index = 0; index < snapshot.Floats.size(); ++index)
+    for (std::size_t index = 0; index < snapshot.FloatCount; ++index)
     {
         if (!IsFinite(acVariables.Floats[index]))
             return false;
         snapshot.Floats[index] = acVariables.Floats[index];
     }
-    for (std::size_t index = 0; index < snapshot.Integers.size(); ++index)
+    for (std::size_t index = 0; index < snapshot.IntegerCount; ++index)
         snapshot.Integers[index] = std::bit_cast<std::int32_t>(acVariables.Integers[index]);
-    snapshot.BooleanChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::BooleanBits);
-    snapshot.FloatChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::Float);
-    snapshot.IntegerChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::Integer);
+    snapshot.BooleanChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::BooleanBits, snapshot.BooleanCount);
+    snapshot.FloatChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::Float, snapshot.FloatCount);
+    snapshot.IntegerChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::Integer, snapshot.IntegerCount);
     arAvatar.PendingAnimation = snapshot;
     arAvatar.HasPendingAnimation = true;
     return true;
@@ -2007,12 +2036,23 @@ void VRAvatarService::SubmitRemoteAnimationSnapshot(const std::uint32_t aServerI
         !HasAnimationCapabilities())
         return;
 
-    const auto submitChunk = [&](const AnimationGraphProtocol::ValueType aType, const std::uint16_t aStart,
-                                 const std::uint16_t aCount) noexcept
+    const auto commandCount = 1 +
+        (arAvatar.PendingAnimation.FloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk +
+        (arAvatar.PendingAnimation.IntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+            AnimationGraphProtocol::kValuesPerChunk;
+    std::vector<GameplayBridge::CommandRecord> commands;
+    commands.reserve(commandCount);
+    const auto stageChunk = [&](const AnimationGraphProtocol::ValueType aType, const std::uint16_t aStart,
+                                const std::uint16_t aCount) noexcept
     {
-        GameplayBridge::CommandRecord command{};
+        commands.emplace_back();
+        auto& command = commands.back();
         if (!BuildCommand(GameplayBridge::CommandKind::ApplyRemoteAnimationGraphChunk, aServerId, command))
+        {
+            commands.pop_back();
             return false;
+        }
         auto& payload = command.Payload.ApplyRemoteAnimationGraphChunk;
         payload.AvatarHandle = arAvatar.Handle;
         payload.SnapshotId = arAvatar.PendingAnimation.SnapshotId;
@@ -2020,12 +2060,12 @@ void VRAvatarService::SubmitRemoteAnimationSnapshot(const std::uint32_t aServerI
         payload.ValueType = static_cast<std::uint16_t>(aType);
         payload.StartIndex = aStart;
         payload.ValueCount = aCount;
-        payload.TotalCount = AnimationGraphProtocol::ExpectedCount(aType);
+        payload.TotalCount = arAvatar.PendingAnimation.Count(aType);
         payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
         payload.Direction = arAvatar.PendingAnimation.Direction;
         if (aType == AnimationGraphProtocol::ValueType::BooleanBits)
         {
-            for (std::size_t index = 0; index < arAvatar.PendingAnimation.Booleans.size(); ++index)
+            for (std::size_t index = 0; index < arAvatar.PendingAnimation.BooleanCount; ++index)
             {
                 if (arAvatar.PendingAnimation.Booleans[index])
                     payload.Values[index / 32] |= 1u << (index % 32);
@@ -2041,30 +2081,28 @@ void VRAvatarService::SubmitRemoteAnimationSnapshot(const std::uint32_t aServerI
             for (std::uint16_t index = 0; index < aCount; ++index)
                 payload.Values[index] = std::bit_cast<std::uint32_t>(arAvatar.PendingAnimation.Integers[aStart + index]);
         }
-        if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
-            return false;
-        arAvatar.LastSubmittedAnimationSequenceId = command.Header.Identity.SequenceId;
         return true;
     };
 
-    bool submitted = submitChunk(AnimationGraphProtocol::ValueType::BooleanBits, 0, AnimationGraphProtocol::kBooleanCount);
-    for (std::uint16_t start = 0; submitted && start < AnimationGraphProtocol::kFloatCount;
+    bool staged = stageChunk(AnimationGraphProtocol::ValueType::BooleanBits, 0, arAvatar.PendingAnimation.BooleanCount);
+    for (std::uint16_t start = 0; staged && start < arAvatar.PendingAnimation.FloatCount;
          start += AnimationGraphProtocol::kValuesPerChunk)
     {
         const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(
-            AnimationGraphProtocol::kValuesPerChunk, AnimationGraphProtocol::kFloatCount - start));
-        submitted = submitChunk(AnimationGraphProtocol::ValueType::Float, start, count);
+            AnimationGraphProtocol::kValuesPerChunk, arAvatar.PendingAnimation.FloatCount - start));
+        staged = stageChunk(AnimationGraphProtocol::ValueType::Float, start, count);
     }
-    for (std::uint16_t start = 0; submitted && start < AnimationGraphProtocol::kIntegerCount;
+    for (std::uint16_t start = 0; staged && start < arAvatar.PendingAnimation.IntegerCount;
          start += AnimationGraphProtocol::kValuesPerChunk)
     {
         const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(
-            AnimationGraphProtocol::kValuesPerChunk, AnimationGraphProtocol::kIntegerCount - start));
-        submitted = submitChunk(AnimationGraphProtocol::ValueType::Integer, start, count);
+            AnimationGraphProtocol::kValuesPerChunk, arAvatar.PendingAnimation.IntegerCount - start));
+        staged = stageChunk(AnimationGraphProtocol::ValueType::Integer, start, count);
     }
 
-    if (submitted)
+    if (staged && SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommandBatch(commands.data(), commands.size()))
     {
+        arAvatar.LastSubmittedAnimationSequenceId = commands.back().Header.Identity.SequenceId;
         arAvatar.HasPendingAnimation = false;
         ++m_animationSnapshotSubmittedCount;
         m_statusDirty = true;

@@ -29,6 +29,10 @@ public:
     static AvatarManager& Get() noexcept;
 
     void BindCommandPumpOwner(std::uint32_t a_threadId) noexcept;
+    // Narrow public query for command handlers that must avoid touching game
+    // state from a non-game thread. The owning-thread implementation remains
+    // private so binding remains AvatarManager-owned.
+    [[nodiscard]] bool IsOnCommandPumpThread() const noexcept { return IsCommandPumpOwner(); }
     [[nodiscard]] AvatarCommandResult CreateRemoteAvatar(const CommandRecord& a_command) noexcept;
     [[nodiscard]] AvatarCommandResult UpdateRemoteRootTransform(const CommandRecord& a_command) noexcept;
     [[nodiscard]] AvatarCommandResult ApplyRemoteAnimationGraphChunk(const CommandRecord& a_command) noexcept;
@@ -104,7 +108,6 @@ private:
         std::uint32_t LocalActorReferenceFormId{};
         RootTransform Root{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
         PendingAnimationSnapshot PendingAnimation{};
-        bool AnimationGraphValidated{};
         bool OwnsActor{};
         bool IsPlayer{};
     };
@@ -132,7 +135,6 @@ private:
     [[nodiscard]] static bool MoveActorToLocation(RE::Actor& a_actor, RE::TESObjectCELL& a_cell,
                                                   RE::TESWorldSpace* a_worldspace, const RE::NiPoint3& a_position,
                                                   const RE::NiPoint3& a_angles) noexcept;
-    [[nodiscard]] static bool ValidateAnimationGraph(RE::Actor& a_actor) noexcept;
     [[nodiscard]] static bool ApplyAnimationSnapshot(RE::Actor& a_actor, const AvatarRecord::PendingAnimationSnapshot& a_snapshot) noexcept;
     [[nodiscard]] static PendingAnimationResult TryApplyPendingAnimation(AvatarRecord& a_record) noexcept;
     void RetireLocalNativeGameplayActor(

@@ -8,7 +8,6 @@ enum class RemoteAddTargetResult : std::uint8_t
 {
     Success,
     EngineRejected,
-    PerkBonusUnsupported,
 };
 
 class ScopedRemoteMagicApplication final
@@ -21,10 +20,6 @@ public:
     ScopedRemoteMagicApplication& operator=(const ScopedRemoteMagicApplication&) = delete;
 };
 
-[[nodiscard]] bool HasValidRemoteAddTargetPerkBonusFlags(
-    const RE::MagicItem& a_magicItem,
-    bool a_applyHealPerkBonus,
-    bool a_applyStaminaPerkBonus) noexcept;
 [[nodiscard]] RemoteAddTargetResult ApplyRemoteAddTarget(
     RE::MagicTarget& a_target,
     RE::MagicTarget::AddTargetData& a_data,

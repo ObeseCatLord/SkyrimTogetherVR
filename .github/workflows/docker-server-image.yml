@@ -46,8 +46,16 @@ jobs:
         id: version
         run: |
           VERSION=$(git describe --tags)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "semver=${VERSION#v}" >> $GITHUB_OUTPUT
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          for value in "$VERSION" "$BRANCH"; do
+            if [[ -z "$value" || "$value" == "none" || "$value" == unknown-* || ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+              echo "Invalid build provenance: $value" >&2
+              exit 2
+            fi
+          done
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'branch=%s\n' "$BRANCH" >> "$GITHUB_OUTPUT"
+          printf 'semver=%s\n' "${VERSION#v}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -66,6 +74,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             GITHUB_ACTIONS=true
+            STVR_BUILD_BRANCH=${{ steps.version.outputs.branch }}
+            STVR_BUILD_COMMIT=${{ steps.version.outputs.version }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}

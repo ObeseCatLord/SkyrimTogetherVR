@@ -204,8 +204,10 @@ def main() -> int:
             failures.append(f"Code/client/SkyrimVM64.cpp: VR block contains retired hook `{forbidden}`")
 
     client_main = (root / "Code" / "client" / "main.cpp").read_text(encoding="utf-8")
-    retire_index = client_main.find("SkyrimTogetherVR::TickBridge::Retire();", client_main.find("void RunTiltedEnd()"))
-    end_main_index = client_main.find("g_appInstance->EndMain();", client_main.find("void RunTiltedEnd()"))
+    end_start = client_main.find("void RunTiltedEnd() noexcept\n{")
+    end_body = client_main[end_start:] if end_start >= 0 else ""
+    retire_index = end_body.find("SkyrimTogetherVR::TickBridge::Retire();")
+    end_main_index = end_body.find("g_appInstance->EndMain();")
     if retire_index < 0 or end_main_index < 0 or retire_index <= end_main_index:
         failures.append("Code/client/main.cpp: endpoint retirement must follow client teardown and transport disconnect")
     for token in (

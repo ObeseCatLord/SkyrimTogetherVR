@@ -32,6 +32,8 @@
 #include <Structs/VRPoseUpdate.h>
 #include <Structs/VRProjectileEvent.h>
 
+#include "../vr_common/VRGameplayBridge.h"
+
 #include <TiltedCore/Math.hpp>
 #include <TiltedCore/Platform.hpp>
 
@@ -1598,6 +1600,30 @@ TEST_CASE("Packets", "[encoding.packets]")
         recvMessage.DeserializeRaw(reader);
 
         REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("AssignCharacterRequest preserves essential-only VR actor values")
+    {
+        Buffer buff(1000);
+        AssignCharacterRequest sendMessage, recvMessage;
+        sendMessage.Cookie = 1;
+        sendMessage.ReferenceId = BuildGameId(0, 0x14);
+        sendMessage.CellId = BuildGameId(1, 0x1234);
+        for (const auto actorValue : SkyrimTogetherVR::GameplayBridge::kEssentialAssignmentActorValues) {
+            sendMessage.CurrentActorData.InitialActorValues.ActorValuesList.emplace(actorValue, 100.0F + actorValue);
+            sendMessage.CurrentActorData.InitialActorValues.ActorMaxValuesList.emplace(actorValue, 200.0F + actorValue);
+        }
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        std::uint64_t opcode{};
+        reader.ReadBits(opcode, 8);
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(recvMessage == sendMessage);
+        REQUIRE(recvMessage.CurrentActorData.InitialActorValues.ActorValuesList.size() == 3);
+        REQUIRE(recvMessage.CurrentActorData.InitialActorValues.ActorMaxValuesList.size() == 3);
     }
 
     SECTION("AssignObjectsRequest and response preserve bounded object state")

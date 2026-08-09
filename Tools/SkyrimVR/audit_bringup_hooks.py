@@ -170,7 +170,7 @@ REQUIRED_TOKENS = {
         'Suspend("load_event", true)',
         "m_stableTickCount >= kRequiredStableTicks",
         "stableFor >= kRequiredStableDuration",
-        "load-event sink is disabled until BSTEventSource::AddEventSink has an exact VR target",
+        "lifecycle events are owned by the CommonLib gameplay bridge",
     ),
     "Code/client/World.cpp": (
         "ctx().emplace<VRLifecycleService>(*this)",

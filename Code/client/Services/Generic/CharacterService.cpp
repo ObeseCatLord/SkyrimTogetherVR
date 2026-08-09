@@ -990,7 +990,9 @@ void CharacterService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) 
         {
             // Players and npcs with temporary ref ids and base ids (usually random events)
             pNpc = TESNPC::Create(acMessage.AppearanceBuffer, acMessage.ChangeFlags);
+#if !TP_SKYRIM_VR
             FaceGenSystem::Setup(m_world, *entity, acMessage.FaceTints);
+#endif
         }
 
         pActor = Actor::Create(pNpc);
@@ -2042,7 +2044,9 @@ Actor* CharacterService::CreateCharacterForEntity(entt::entity aEntity) const no
         else
         {
             pNpc = TESNPC::Create(acMessage.AppearanceBuffer, acMessage.ChangeFlags);
+#if !TP_SKYRIM_VR
             FaceGenSystem::Setup(m_world, aEntity, acMessage.FaceTints);
+#endif
         }
 
         pActor = Actor::Create(pNpc);
@@ -2159,6 +2163,7 @@ void CharacterService::RunRemoteUpdates(const UpdateEvent& acUpdateEvent) noexce
         AnimationSystem::Update(m_world, pActor, animationComponent, tick);
     }
 
+#if !TP_SKYRIM_VR
     auto facegenView = m_world.view<FormIdComponent, FaceGenComponent>();
 
     for (auto entity : facegenView)
@@ -2173,6 +2178,7 @@ void CharacterService::RunRemoteUpdates(const UpdateEvent& acUpdateEvent) noexce
 
         FaceGenSystem::Update(m_world, pActor, faceGenComponent);
     }
+#endif
 
     auto waitingView = m_world.view<FormIdComponent, WaitingFor3D>();
 

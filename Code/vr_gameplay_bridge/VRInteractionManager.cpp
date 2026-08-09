@@ -24,6 +24,7 @@ struct ServerSettingsState
     std::int32_t ServerDifficulty{};
     bool GreetingsEnabled{};
     bool WorldEncountersEnabled{};
+    bool PvpEnabled{};
     bool Active{};
 };
 
@@ -174,7 +175,7 @@ template <class T>
         a_payload.ValueA > 5 || (a_payload.ValueB != 0 && a_payload.ValueB != 1) ||
         a_payload.ScalarA != 0.0F || a_payload.ScalarB != 0.0F || a_payload.ScalarC != 0.0F ||
         a_payload.ScalarD != 0.0F ||
-        (a_payload.ActionFlags & ~kWorldEncountersEnabled) != 0)
+        (a_payload.ActionFlags & ~(kWorldEncountersEnabled | kPvpEnabled)) != 0)
         return CommandStatus::Malformed;
 
     auto* player = RE::PlayerCharacter::GetSingleton();
@@ -193,6 +194,7 @@ template <class T>
     g_serverSettings.GreetingsEnabled = a_payload.ValueB != 0;
     g_serverSettings.WorldEncountersEnabled =
         (a_payload.ActionFlags & kWorldEncountersEnabled) != 0;
+    g_serverSettings.PvpEnabled = (a_payload.ActionFlags & kPvpEnabled) != 0;
     g_serverSettings.Active = true;
     player->GetGameStatsData().difficulty = g_serverSettings.ServerDifficulty;
     greetDistance->SetFloat(g_serverSettings.GreetingsEnabled ? g_serverSettings.PreviousGreetDistance : 0.0F);
@@ -406,6 +408,11 @@ CommandStatus VRInteractionManager::Execute(const CommandRecord& a_command) noex
     } catch (...) {
         return CommandStatus::EngineRejected;
     }
+}
+
+bool VRInteractionManager::IsPvpEnabled() noexcept
+{
+    return g_serverSettings.Active && g_serverSettings.PvpEnabled;
 }
 
 void VRInteractionManager::ProcessPeriodic() noexcept

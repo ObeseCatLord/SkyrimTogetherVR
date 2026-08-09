@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -17,8 +18,8 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 20;
-inline constexpr std::uint32_t kCapabilityRevision = 29;
+inline constexpr std::uint16_t kMappingAbiVersion = 22;
+inline constexpr std::uint32_t kCapabilityRevision = 30;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -49,6 +50,23 @@ inline constexpr float kMaximumProjectileScale = 1000.0F;
 inline constexpr std::uint32_t kDefaultEventRingCapacity = 2048;
 inline constexpr std::uint32_t kDefaultCommandRingCapacity = 2048;
 inline constexpr std::size_t kSkyrimActorValueCount = 164;
+// These are the only actor values required by the original Skyrim Together
+// assignment path. Full maps remain accepted for compatibility, but a fresh
+// VR bootstrap must not depend on every runtime actor value being readable.
+inline constexpr std::array<std::uint32_t, 3> kEssentialAssignmentActorValues{
+    24, // health
+    25, // magicka
+    26, // stamina
+};
+inline constexpr std::uint32_t kMinimumAssignmentBootstrapRecords = 8;
+
+[[nodiscard]] constexpr bool IsEssentialAssignmentActorValue(const std::uint32_t a_value) noexcept
+{
+    for (const auto essential : kEssentialAssignmentActorValues)
+        if (a_value == essential)
+            return true;
+    return false;
+}
 inline constexpr std::size_t kMaximumNpcSnapshotItems = 64;
 inline constexpr std::size_t kMaximumNpcSnapshotFactions = 64;
 // An inventory transaction uses Begin, Item, ItemExtra, zero or more
@@ -59,9 +77,9 @@ inline constexpr std::size_t kMaximumInventoryTransactionEffects = 512;
 inline constexpr std::size_t kMaximumInventoryTransactionRecords =
     2 + kMaximumInventoryTransactionItems * 2 + kMaximumInventoryTransactionEffects;
 inline constexpr std::size_t kNpcSnapshotGraphChunkCount =
-    1 + (AnimationGraphProtocol::kFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+    1 + (AnimationGraphProtocol::kMaximumFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
             AnimationGraphProtocol::kValuesPerChunk +
-    (AnimationGraphProtocol::kIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
+    (AnimationGraphProtocol::kMaximumIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
             AnimationGraphProtocol::kValuesPerChunk;
 inline constexpr std::size_t kMaximumNpcSnapshotRecords =
     2 + kSkyrimActorValueCount + kNpcSnapshotGraphChunkCount + kMaximumNpcSnapshotItems * 2 +
@@ -139,7 +157,6 @@ inline constexpr CapabilityMask kInitialCapabilities =
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |
     static_cast<CapabilityMask>(Capability::PlanckInteraction) |
     static_cast<CapabilityMask>(Capability::NpcOwnership) |
-    static_cast<CapabilityMask>(Capability::ExactAnimationActions) |
     static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
     static_cast<CapabilityMask>(Capability::InventoryStackTransactions);
 
@@ -429,9 +446,10 @@ inline constexpr std::uint32_t kNpcSnapshotWeaponDrawn = 1u << 1;
 inline constexpr std::uint32_t kNpcSnapshotIsDragon = 1u << 2;
 inline constexpr std::uint32_t kNpcSnapshotIsMount = 1u << 3;
 inline constexpr std::uint32_t kNpcSnapshotIsPlayerSummon = 1u << 4;
+inline constexpr std::uint32_t kNpcSnapshotHasAnimationGraph = 1u << 5;
 inline constexpr std::uint32_t kNpcSnapshotKnownFlags =
     kNpcSnapshotDead | kNpcSnapshotWeaponDrawn | kNpcSnapshotIsDragon |
-    kNpcSnapshotIsMount | kNpcSnapshotIsPlayerSummon;
+    kNpcSnapshotIsMount | kNpcSnapshotIsPlayerSummon | kNpcSnapshotHasAnimationGraph;
 inline constexpr std::uint32_t kNpcSnapshotAppearanceHasFaceData = 1u << 0;
 inline constexpr std::uint32_t kNpcSnapshotAppearanceEssential = 1u << 1;
 inline constexpr std::uint32_t kNpcSnapshotAppearanceHeadPartCountShift = 8;
@@ -466,6 +484,9 @@ inline constexpr std::uint32_t kPreserveCalendarDate = 1u << 0;
 // ApplyServerSettings keeps the original Skyrim Together encounter policy:
 // encounters are disabled while connected unless this client leads its party.
 inline constexpr std::uint32_t kWorldEncountersEnabled = 1u << 0;
+// MagicTarget ownership policy uses this server-authoritative PVP setting to
+// decide whether a managed remote actor may apply an effect to the local player.
+inline constexpr std::uint32_t kPvpEnabled = 1u << 1;
 
 // VrPoseChunk uses one position/scale record followed by three basis records.
 // ValueA is the source pose sequence and bits 8..15 identify the node.
@@ -859,6 +880,28 @@ enum class AssignmentBootstrapRecordKind : std::uint16_t
     FacePart = 16,
     HeadPart = 17,
 };
+
+// Stored in AssignmentBootstrapRecordPayload::ValueB for Failure records.
+// ABI 21 makes this deliberate semantic change fail closed with an older
+// client or bridge instead of being interpreted as the former required zero.
+enum class AssignmentBootstrapFailureReason : std::int32_t
+{
+    Unavailable = 1,
+    EssentialActorValues = 2,
+    Inventory = 3,
+    Capacity = 4,
+    AppearanceCore = 5,
+    FaceData = 6,
+    Name = 7,
+    Tint = 8,
+    Exception = 9,
+};
+
+[[nodiscard]] constexpr bool IsKnownAssignmentBootstrapFailureReason(const std::int32_t a_value) noexcept
+{
+    return a_value >= static_cast<std::int32_t>(AssignmentBootstrapFailureReason::Unavailable) &&
+           a_value <= static_cast<std::int32_t>(AssignmentBootstrapFailureReason::Exception);
+}
 
 inline constexpr std::uint16_t kAssignmentBootstrapDead = 1u << 0;
 inline constexpr std::uint16_t kAssignmentBootstrapWeaponDrawn = 1u << 1;

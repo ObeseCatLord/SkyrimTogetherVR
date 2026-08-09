@@ -23,9 +23,34 @@ VALIDATED_COMMONLIB_VR_ALIASES = {
     411348: {"vr_id": 524729, "offset": 0x317E798, "name": "RendererData::D3D11Device"},
 }
 
+# Curated virtual-slot targets whose Skyrim VR ABI and executable RVA have
+# been independently established. These do not have Address Library IDs.
+VALIDATED_VR_VTABLE_SLOT_TARGETS = {
+    "ActiveEffect::AdjustForPerks": {
+        "vtable_rva": 0x16AE840,
+        "slot": 0,
+        "target_rva": 0x540CC0,
+        "prologue": "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48",
+        "source": "exact_vr_disassembly",
+        "signature": "void(RE::ActiveEffect*, RE::Actor*, RE::MagicTarget*)",
+        "ownership": "all arguments are borrowed for the virtual call; the ActiveEffect is owned by the engine",
+        "evidence": "VTABLE_ActiveEffect RVA 0x16AE840 slot 0, target RVA 0x0540CC0, exact entry bytes, and AddTarget virtual dispatch at RVA 0x0558B7D",
+    },
+}
+
 # Curated function targets whose Skyrim VR ABI and executable RVA have been
 # independently established. These rows override generated translations.
 VALIDATED_VR_ADDRESS_OVERRIDES = {
+    33741: {
+        "offset": 0x557830,
+        "prologue": "48 89 5c 24 20 57 48 83 ec 40 48 89 6c 24 50 48",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "MagicTarget::AddTargetData::CheckAddEffect",
+        "signature": "bool(RE::MagicTarget::AddTargetData*, RE::ActiveEffectFactory::CheckTargetArgs&, float)",
+        "ownership": "AddTargetData and CheckTargetArgs are borrowed and remain valid only for the synchronous AddTarget call",
+        "evidence": "VR Address Library ID/RVA, exact entry bytes, CommonLib typed declaration, and the verified AddTarget callsite at RVA 0x0558817",
+    },
     33742: {
         "offset": 0x5579C0,
         "prologue": "40 55 53 56 57 41 56 48 8b ec 48 81 ec 80 00 00",
@@ -45,6 +70,16 @@ VALIDATED_VR_ADDRESS_OVERRIDES = {
         "signature": "float(RE::Actor*, const char*, uint32_t*, uint32_t, uint32_t, uint32_t, uint64_t, uint64_t, uint64_t, bool, uint64_t, bool, bool, bool)",
         "ownership": "resource path and handle buffer are borrowed for the synchronous call",
         "evidence": "VR Address Library ID/RVA, exact entry bytes, four direct callsites with fourteen arguments, and float return consumed from XMM0",
+    },
+    36690: {
+        "offset": 0x6025A0,
+        "prologue": "48 83 ec 28 48 8b 81 f0 00 00 00 48 85 c0 74 16",
+        "source": "database",
+        "status": "exact_vr_disassembly",
+        "name": "Actor::HasPerk",
+        "signature": "bool(const RE::Actor*, RE::BGSPerk*)",
+        "ownership": "actor and perk are borrowed for the synchronous query",
+        "evidence": "CommonLib ID 36690, VR Address Library RVA, exact entry bytes, and the typed CommonLib declaration",
     },
     37772: {
         "offset": 0x6385F0,

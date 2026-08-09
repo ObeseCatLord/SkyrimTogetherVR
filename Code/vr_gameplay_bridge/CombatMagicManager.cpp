@@ -318,8 +318,6 @@ template <class T>
         return CommandStatus::MissingForm;
     const bool applyHealPerkBonus = (a_payload.ActionFlags & kMagicEffectApplyHealPerkBonus) != 0;
     const bool applyStaminaPerkBonus = (a_payload.ActionFlags & kMagicEffectApplyStaminaPerkBonus) != 0;
-    if (applyHealPerkBonus || applyStaminaPerkBonus)
-        return CommandStatus::Unsupported;
     RE::Effect* effect{};
     for (auto* candidate : spell->effects) {
         if (candidate && candidate->baseEffect && candidate->baseEffect->GetFormID() == a_payload.LocalFormIdB) {
@@ -359,8 +357,6 @@ template <class T>
         *target, data, applyHealPerkBonus, applyStaminaPerkBonus)) {
     case MagicHooks::RemoteAddTargetResult::Success:
         return CommandStatus::Success;
-    case MagicHooks::RemoteAddTargetResult::PerkBonusUnsupported:
-        return CommandStatus::Unsupported;
     case MagicHooks::RemoteAddTargetResult::EngineRejected:
         return CommandStatus::EngineRejected;
     }

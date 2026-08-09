@@ -99,46 +99,24 @@ constexpr double kPendingObservationLifetime = 5.0;
            acLeft.SequenceId == acRight.SequenceId && acLeft.ActionId == acRight.ActionId;
 }
 
-[[nodiscard]] bool IsExpectedNpcGraphChunk(const std::uint8_t aIndex,
-                                           const AnimationGraphProtocol::ValueType aType,
-                                           const std::uint16_t aStart,
-                                           const std::uint16_t aCount) noexcept
-{
-    if (aIndex == 0)
-        return aType == AnimationGraphProtocol::ValueType::BooleanBits && aStart == 0 &&
-               aCount == AnimationGraphProtocol::kBooleanCount;
-
-    const auto floatChunks = static_cast<std::uint8_t>(
-        (AnimationGraphProtocol::kFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
-        AnimationGraphProtocol::kValuesPerChunk);
-    if (aIndex <= floatChunks) {
-        const auto start = static_cast<std::uint16_t>((aIndex - 1) * AnimationGraphProtocol::kValuesPerChunk);
-        const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(
-            AnimationGraphProtocol::kValuesPerChunk, AnimationGraphProtocol::kFloatCount - start));
-        return aType == AnimationGraphProtocol::ValueType::Float && aStart == start && aCount == count;
-    }
-
-    const auto integerIndex = static_cast<std::uint8_t>(aIndex - 1 - floatChunks);
-    const auto integerChunks = static_cast<std::uint8_t>(
-        (AnimationGraphProtocol::kIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
-        AnimationGraphProtocol::kValuesPerChunk);
-    if (integerIndex >= integerChunks)
-        return false;
-    const auto start = static_cast<std::uint16_t>(integerIndex * AnimationGraphProtocol::kValuesPerChunk);
-    const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(
-        AnimationGraphProtocol::kValuesPerChunk, AnimationGraphProtocol::kIntegerCount - start));
-    return aType == AnimationGraphProtocol::ValueType::Integer && aStart == start && aCount == count;
-}
-
 [[nodiscard]] bool SameAnimationSnapshot(const AnimationGraphProtocol::SnapshotBuffer& acLeft,
                                          const AnimationGraphProtocol::SnapshotBuffer& acRight) noexcept
 {
     if (std::bit_cast<std::uint32_t>(acLeft.Direction) != std::bit_cast<std::uint32_t>(acRight.Direction) ||
-        acLeft.Booleans != acRight.Booleans || acLeft.Integers != acRight.Integers)
+        acLeft.BooleanCount != acRight.BooleanCount || acLeft.FloatCount != acRight.FloatCount ||
+        acLeft.IntegerCount != acRight.IntegerCount)
         return false;
-    for (std::size_t index = 0; index < acLeft.Floats.size(); ++index) {
+    for (std::size_t index = 0; index < acLeft.BooleanCount; ++index) {
+        if (acLeft.Booleans[index] != acRight.Booleans[index])
+            return false;
+    }
+    for (std::size_t index = 0; index < acLeft.FloatCount; ++index) {
         if (std::bit_cast<std::uint32_t>(acLeft.Floats[index]) !=
             std::bit_cast<std::uint32_t>(acRight.Floats[index]))
+            return false;
+    }
+    for (std::size_t index = 0; index < acLeft.IntegerCount; ++index) {
+        if (acLeft.Integers[index] != acRight.Integers[index])
             return false;
     }
     return true;
@@ -612,9 +590,8 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
                 !SameIdentity(partial.Identity, record.Header.Identity) ||
                 !partial.ExpectsAnimationGraph ||
                 partial.NextActorValueIndex != kActorValues.size() ||
-                !IsExpectedNpcGraphChunk(partial.NextGraphChunk, type, payload.StartIndex, payload.ValueCount) ||
                 !AnimationGraphProtocol::IsValidChunk(type, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||
-                !AnimationGraphProtocol::AreChunkValuesValid(type, payload.ValueCount, payload.Values)) {
+                !AnimationGraphProtocol::AreChunkValuesValid(type, payload.ValueCount, payload.TotalCount, payload.Values)) {
                 discard();
                 return;
             }
@@ -690,9 +667,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
         newPartial.Begun = true;
         newPartial.ActionId = record.Header.Identity.ActionId;
         newPartial.Identity = record.Header.Identity;
-        newPartial.ExpectsAnimationGraph = GameplayBridge::HasCapability(
-            SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities(),
-            GameplayBridge::Capability::ExactAnimationActions);
+        newPartial.ExpectsAnimationGraph = (payload.ActionFlags & GameplayBridge::kNpcSnapshotHasAnimationGraph) != 0;
         newPartial.Data.HasAnimationGraph = newPartial.ExpectsAnimationGraph;
         newPartial.ExpectedInventoryCount = static_cast<std::uint16_t>(payload.ValueA);
         newPartial.ExpectedFactionCount = static_cast<std::uint16_t>(payload.ValueB);
@@ -863,9 +838,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
     }
     case GameplayBridge::GameplayAction::NpcSnapshotItem:
         if (partial->NextActorValueIndex != kActorValues.size() ||
-            (partial->ExpectsAnimationGraph &&
-             (partial->NextGraphChunk != GameplayBridge::kNpcSnapshotGraphChunkCount ||
-              !partial->Data.Animation.IsComplete())) ||
+            (partial->ExpectsAnimationGraph && !partial->Data.Animation.IsComplete()) ||
             partial->Data.Inventory.size() >= partial->ExpectedInventoryCount ||
             (partial->Data.Inventory.size() != 0 &&
              (!partial->HasInventoryExtra || partial->InventoryEffectsRemaining != 0)) ||
@@ -952,9 +925,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
         return;
     case GameplayBridge::GameplayAction::NpcSnapshotFaction:
         if (partial->NextActorValueIndex != kActorValues.size() ||
-            (partial->ExpectsAnimationGraph &&
-             (partial->NextGraphChunk != GameplayBridge::kNpcSnapshotGraphChunkCount ||
-              !partial->Data.Animation.IsComplete())) ||
+            (partial->ExpectsAnimationGraph && !partial->Data.Animation.IsComplete()) ||
             partial->Data.Inventory.size() != partial->ExpectedInventoryCount ||
             !partial->Data.Inventory.empty() &&
                 (!partial->HasInventoryExtra || partial->InventoryEffectsRemaining != 0) ||
@@ -986,9 +957,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
              (partial->NextFaceMorphIndex != VRAppearance::kFaceMorphCount ||
               partial->NextFacePartIndex != VRAppearance::kFacePartCount)) ||
             partial->NextActorValueIndex != kActorValues.size() ||
-            (partial->ExpectsAnimationGraph &&
-             (partial->NextGraphChunk != GameplayBridge::kNpcSnapshotGraphChunkCount ||
-              !partial->Data.Animation.IsComplete())) ||
+            (partial->ExpectsAnimationGraph && !partial->Data.Animation.IsComplete()) ||
             partial->Data.Inventory.size() != partial->ExpectedInventoryCount ||
             !partial->Data.Inventory.empty() &&
                 (!partial->HasInventoryExtra || partial->InventoryEffectsRemaining != 0) ||
@@ -1687,14 +1656,14 @@ void VRNpcOwnershipService::ReplicateOwnedSnapshot(OwnedNpc& arOwned, const Snap
         if (acSnapshot.HasAnimationGraph) {
             movement.Direction = acSnapshot.Animation.Direction;
             auto& variables = movement.Variables;
-            variables.Booleans.resize(acSnapshot.Animation.Booleans.size());
-            variables.Floats.resize(acSnapshot.Animation.Floats.size());
-            variables.Integers.resize(acSnapshot.Animation.Integers.size());
-            for (std::size_t index = 0; index < acSnapshot.Animation.Booleans.size(); ++index)
+            variables.Booleans.resize(acSnapshot.Animation.BooleanCount);
+            variables.Floats.resize(acSnapshot.Animation.FloatCount);
+            variables.Integers.resize(acSnapshot.Animation.IntegerCount);
+            for (std::size_t index = 0; index < acSnapshot.Animation.BooleanCount; ++index)
                 variables.Booleans[index] = acSnapshot.Animation.Booleans[index];
-            for (std::size_t index = 0; index < acSnapshot.Animation.Floats.size(); ++index)
+            for (std::size_t index = 0; index < acSnapshot.Animation.FloatCount; ++index)
                 variables.Floats[index] = acSnapshot.Animation.Floats[index];
-            for (std::size_t index = 0; index < acSnapshot.Animation.Integers.size(); ++index)
+            for (std::size_t index = 0; index < acSnapshot.Animation.IntegerCount; ++index)
                 variables.Integers[index] = std::bit_cast<std::uint32_t>(acSnapshot.Animation.Integers[index]);
         }
         if (m_transport.Send(request)) {

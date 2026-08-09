@@ -1,7 +1,7 @@
 #include "LocalGameplayCapture.h"
 
 #include "BridgeEndpoint.h"
-#include "HumanoidAnimationGraph.h"
+#include "AnimationGraphDescriptors.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <numeric>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -75,6 +76,12 @@ constexpr std::array<std::uint32_t, 4> kNonSyncableQuestIds{
 };
 
 static_assert(static_cast<std::size_t>(RE::ActorValue::kTotal) == kActorValueCount);
+static_assert(static_cast<std::uint32_t>(RE::ActorValue::kHealth) ==
+              GameplayBridge::kEssentialAssignmentActorValues[0]);
+static_assert(static_cast<std::uint32_t>(RE::ActorValue::kMagicka) ==
+              GameplayBridge::kEssentialAssignmentActorValues[1]);
+static_assert(static_cast<std::uint32_t>(RE::ActorValue::kStamina) ==
+              GameplayBridge::kEssentialAssignmentActorValues[2]);
 static_assert(kHeadPartCount <= GameplayBridge::kMaximumAppearanceHeadParts);
 static_assert(kMaximumAssignmentBootstrapEvents <= VRAssignmentLimits::kMaximumLogicalBootstrapRecords);
 static_assert(VRAssignmentLimits::kBootstrapPageRecords <= GameplayBridge::kDefaultEventRingCapacity);
@@ -84,6 +91,12 @@ constexpr auto kCapturedActorValues = [] {
         values[index] = static_cast<RE::ActorValue>(index);
     return values;
 }();
+constexpr std::array<RE::ActorValue, GameplayBridge::kEssentialAssignmentActorValues.size()>
+    kAssignmentActorValues{
+        RE::ActorValue::kHealth,
+        RE::ActorValue::kMagicka,
+        RE::ActorValue::kStamina,
+    };
 
 struct WornEquipmentEntry
 {
@@ -441,36 +454,106 @@ std::array<std::chrono::steady_clock::time_point, kSkillCount> g_experienceSuppr
     for (const auto& [object, data] : a_owner.GetInventory()) {
         if (!object || !IsValidFormId(object->GetFormID()) || data.first <= 0 ||
             data.first > kMaximumCapturedInventoryCount)
-            return false;
+            continue;
+
+        std::vector<CapturedInventoryStack> objectStacks;
         auto remaining = data.first;
+        bool discardObject{};
         const auto append = [&](const std::int32_t a_count, RE::ExtraDataList* ap_extraList) {
-            if (ar_stacks.size() >= a_maximumStacks)
-                return false;
             CapturedInventoryStack stack{};
-            if (!CaptureInventoryStack(*object, a_count, ap_extraList, stack) ||
-                stack.Effects.size() > a_maximumEffects - effectCount)
-                return false;
-            effectCount += stack.Effects.size();
-            ar_stacks.push_back(std::move(stack));
+            if (!CaptureInventoryStack(*object, a_count, ap_extraList, stack))
+                return true;
+            std::sort(stack.Effects.begin(), stack.Effects.end(), [](const auto& a_left, const auto& a_right) {
+                if (a_left.EffectFormId != a_right.EffectFormId)
+                    return a_left.EffectFormId < a_right.EffectFormId;
+                if (a_left.Area != a_right.Area)
+                    return a_left.Area < a_right.Area;
+                if (a_left.Duration != a_right.Duration)
+                    return a_left.Duration < a_right.Duration;
+                if (a_left.Magnitude != a_right.Magnitude)
+                    return a_left.Magnitude < a_right.Magnitude;
+                return a_left.RawCost < a_right.RawCost;
+            });
+            objectStacks.push_back(std::move(stack));
             return true;
         };
         const auto& entry = data.second;
         if (entry && entry->extraLists) {
             for (auto* extraList : *entry->extraLists) {
-                if (!extraList)
-                    return false;
+                if (!extraList) {
+                    discardObject = true;
+                    break;
+                }
                 const auto* extraCount = extraList->GetByType<RE::ExtraCount>();
-                if (extraCount && extraCount->count > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()))
-                    return false;
+                if (extraCount && extraCount->count > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
+                    discardObject = true;
+                    break;
+                }
                 const auto count = extraCount ? static_cast<std::int32_t>(extraCount->count) : 1;
-                if (count <= 0 || count > remaining || !append(count, extraList))
-                    return false;
+                if (count <= 0 || count > remaining || !append(count, extraList)) {
+                    discardObject = true;
+                    break;
+                }
                 remaining -= count;
             }
         }
+        if (discardObject)
+            continue;
         if (remaining > 0 && !append(remaining, nullptr))
+            continue;
+        if (objectStacks.size() > a_maximumStacks - ar_stacks.size())
             return false;
+        const auto objectEffects = std::accumulate(
+            objectStacks.begin(), objectStacks.end(), std::size_t{},
+            [](const std::size_t a_total, const CapturedInventoryStack& a_stack) {
+                return a_total + a_stack.Effects.size();
+            });
+        if (objectEffects > a_maximumEffects - effectCount)
+            return false;
+        effectCount += objectEffects;
+        ar_stacks.insert(ar_stacks.end(), std::make_move_iterator(objectStacks.begin()),
+                         std::make_move_iterator(objectStacks.end()));
     }
+    std::sort(ar_stacks.begin(), ar_stacks.end(), [](const auto& a_left, const auto& a_right) {
+        if (a_left.FormId != a_right.FormId)
+            return a_left.FormId < a_right.FormId;
+        if (a_left.ItemFlags != a_right.ItemFlags)
+            return a_left.ItemFlags < a_right.ItemFlags;
+        if (a_left.ExtraFlags != a_right.ExtraFlags)
+            return a_left.ExtraFlags < a_right.ExtraFlags;
+        if (a_left.EnchantmentFormId != a_right.EnchantmentFormId)
+            return a_left.EnchantmentFormId < a_right.EnchantmentFormId;
+        if (a_left.PoisonFormId != a_right.PoisonFormId)
+            return a_left.PoisonFormId < a_right.PoisonFormId;
+        if (a_left.SoulLevel != a_right.SoulLevel)
+            return a_left.SoulLevel < a_right.SoulLevel;
+        if (a_left.EnchantmentCharge != a_right.EnchantmentCharge)
+            return a_left.EnchantmentCharge < a_right.EnchantmentCharge;
+        if (a_left.PoisonCount != a_right.PoisonCount)
+            return a_left.PoisonCount < a_right.PoisonCount;
+        if (a_left.Charge != a_right.Charge)
+            return a_left.Charge < a_right.Charge;
+        if (a_left.Health != a_right.Health)
+            return a_left.Health < a_right.Health;
+        if (a_left.Effects != a_right.Effects) {
+            return std::lexicographical_compare(
+                a_left.Effects.begin(), a_left.Effects.end(), a_right.Effects.begin(), a_right.Effects.end(),
+                [](const auto& a_leftEffect, const auto& a_rightEffect) {
+                    if (a_leftEffect.EffectFormId != a_rightEffect.EffectFormId)
+                        return a_leftEffect.EffectFormId < a_rightEffect.EffectFormId;
+                    if (a_leftEffect.Area != a_rightEffect.Area)
+                        return a_leftEffect.Area < a_rightEffect.Area;
+                    if (a_leftEffect.Duration != a_rightEffect.Duration)
+                        return a_leftEffect.Duration < a_rightEffect.Duration;
+                    if (a_leftEffect.Magnitude != a_rightEffect.Magnitude)
+                        return a_leftEffect.Magnitude < a_rightEffect.Magnitude;
+                    return a_leftEffect.RawCost < a_rightEffect.RawCost;
+                });
+        }
+        if (a_left.SourceUniqueId != a_right.SourceUniqueId)
+            return a_left.SourceUniqueId < a_right.SourceUniqueId;
+        return a_left.Count < a_right.Count;
+    });
     return true;
 }
 
@@ -857,36 +940,10 @@ struct NpcSnapshot
     return GameplayBridge::kNpcSnapshotActionIdMarker | ordinal;
 }
 
-[[nodiscard]] bool CaptureNpcHumanoidAnimation(
+[[nodiscard]] bool CaptureNpcAnimation(
     RE::Actor& a_actor, AnimationGraphProtocol::SnapshotBuffer& ar_snapshot) noexcept
 {
-    RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
-    if (!a_actor.GetAnimationGraphManager(manager) || !manager)
-        return false;
-
-    AnimationGraphProtocol::SnapshotBuffer snapshot{};
-    for (std::size_t index = 0; index < snapshot.Booleans.size(); ++index) {
-        if (!a_actor.GetGraphVariableBool(
-                RE::BSFixedString(HumanoidAnimationGraph::kBooleanNames[index].data()), snapshot.Booleans[index]))
-            return false;
-    }
-    for (std::size_t index = 0; index < snapshot.Floats.size(); ++index) {
-        if (!a_actor.GetGraphVariableFloat(
-                RE::BSFixedString(HumanoidAnimationGraph::kFloatNames[index].data()), snapshot.Floats[index]) ||
-            !std::isfinite(snapshot.Floats[index]))
-            return false;
-    }
-    for (std::size_t index = 0; index < snapshot.Integers.size(); ++index) {
-        if (!a_actor.GetGraphVariableInt(
-                RE::BSFixedString(HumanoidAnimationGraph::kIntegerNames[index].data()), snapshot.Integers[index]))
-            return false;
-    }
-
-    snapshot.Direction = snapshot.Floats[1];
-    if (!std::isfinite(snapshot.Direction))
-        return false;
-    ar_snapshot = snapshot;
-    return true;
+    return AnimationGraphs::Capture(a_actor, ar_snapshot);
 }
 
 [[nodiscard]] bool CaptureNpcSnapshot(RE::Actor& a_actor, NpcSnapshot& ar_snapshot) noexcept try
@@ -929,9 +986,9 @@ struct NpcSnapshot
         ar_snapshot.IsPlayerSummon = commandingActor->GetFormID() == 0x14;
     const auto* mapping = BridgeEndpoint::Get().Mapping();
     const auto captureAnimationGraph = mapping && HasCapability(
-        mapping->Header.ActiveCapabilities.load(std::memory_order_acquire), Capability::ExactAnimationActions);
-    if (captureAnimationGraph && !CaptureNpcHumanoidAnimation(a_actor, ar_snapshot.Animation))
-        return false;
+        mapping->Header.ActiveCapabilities.load(std::memory_order_acquire), Capability::LocalAnimationGraphSnapshot);
+    if (captureAnimationGraph)
+        static_cast<void>(CaptureNpcAnimation(a_actor, ar_snapshot.Animation));
     if (!CaptureNpcAppearance(a_actor, ar_snapshot.Appearance))
         return false;
 
@@ -989,9 +1046,11 @@ catch (...)
     if (!HasCapability(activeCapabilities, Capability::NpcOwnership) ||
         !HasCapability(activeCapabilities, Capability::InventoryStackTransactions))
         return false;
-    const auto includeAnimationGraph = HasCapability(activeCapabilities, Capability::ExactAnimationActions);
-    if (includeAnimationGraph && !std::isfinite(a_snapshot.Animation.Direction))
-        return false;
+    const auto includeAnimationGraph = HasCapability(activeCapabilities, Capability::LocalAnimationGraphSnapshot) &&
+                                       AnimationGraphProtocol::IsValidCount(AnimationGraphProtocol::ValueType::BooleanBits, a_snapshot.Animation.BooleanCount) &&
+                                       AnimationGraphProtocol::IsValidCount(AnimationGraphProtocol::ValueType::Float, a_snapshot.Animation.FloatCount) &&
+                                       AnimationGraphProtocol::IsValidCount(AnimationGraphProtocol::ValueType::Integer, a_snapshot.Animation.IntegerCount) &&
+                                       std::isfinite(a_snapshot.Animation.Direction);
     const auto actionId = NextNpcSnapshotActionId();
     const auto& appearance = a_snapshot.Appearance;
     const auto nameChunkCount = static_cast<std::size_t>(
@@ -1006,7 +1065,7 @@ catch (...)
         inventoryEffectCount += entry.Effects.size();
     }
     const auto expectedRecordCount = 2 + appearanceRecordCount + kCapturedActorValues.size() +
-                                     (includeAnimationGraph ? GameplayBridge::kNpcSnapshotGraphChunkCount : 0) +
+                                     (includeAnimationGraph ? 1 + (a_snapshot.Animation.FloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) / AnimationGraphProtocol::kValuesPerChunk + (a_snapshot.Animation.IntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) / AnimationGraphProtocol::kValuesPerChunk : 0) +
                                      a_snapshot.Inventory.size() * 2 +
                                      inventoryEffectCount + a_snapshot.Factions.size();
     if (expectedRecordCount > GameplayBridge::kMaximumNpcSnapshotRecords)
@@ -1043,7 +1102,8 @@ catch (...)
         payload.ValueType = static_cast<std::uint16_t>(a_type);
         payload.StartIndex = a_start;
         payload.ValueCount = a_count;
-        payload.TotalCount = AnimationGraphProtocol::ExpectedCount(a_type);
+        payload.TotalCount = a_type == AnimationGraphProtocol::ValueType::BooleanBits ? a_snapshot.Animation.BooleanCount :
+                             a_type == AnimationGraphProtocol::ValueType::Float ? a_snapshot.Animation.FloatCount : a_snapshot.Animation.IntegerCount;
         payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
         payload.Direction = a_snapshot.Animation.Direction;
         return &payload;
@@ -1065,7 +1125,8 @@ catch (...)
                         (a_snapshot.WeaponDrawn ? kNpcSnapshotWeaponDrawn : 0u) |
                         (a_snapshot.IsDragon ? kNpcSnapshotIsDragon : 0u) |
                         (a_snapshot.IsMount ? kNpcSnapshotIsMount : 0u) |
-                        (a_snapshot.IsPlayerSummon ? kNpcSnapshotIsPlayerSummon : 0u);
+                        (a_snapshot.IsPlayerSummon ? kNpcSnapshotIsPlayerSummon : 0u) |
+                        (includeAnimationGraph ? kNpcSnapshotHasAnimationGraph : 0u);
     if (!append(GameplayAction::NpcSnapshotBegin, begin))
         return false;
 
@@ -1153,27 +1214,27 @@ catch (...)
 
     if (includeAnimationGraph) {
         auto* booleanChunk = appendGraph(AnimationGraphProtocol::ValueType::BooleanBits, 0,
-                                         AnimationGraphProtocol::kBooleanCount);
+                                         a_snapshot.Animation.BooleanCount);
         if (!booleanChunk)
             return false;
-        for (std::size_t index = 0; index < a_snapshot.Animation.Booleans.size(); ++index) {
+        for (std::size_t index = 0; index < a_snapshot.Animation.BooleanCount; ++index) {
             if (a_snapshot.Animation.Booleans[index])
                 booleanChunk->Values[index / 32] |= 1u << (index % 32);
         }
-        for (std::uint16_t start = 0; start < a_snapshot.Animation.Floats.size();
+        for (std::uint16_t start = 0; start < a_snapshot.Animation.FloatCount;
              start += AnimationGraphProtocol::kValuesPerChunk) {
             const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(
-                AnimationGraphProtocol::kValuesPerChunk, a_snapshot.Animation.Floats.size() - start));
+                AnimationGraphProtocol::kValuesPerChunk, a_snapshot.Animation.FloatCount - start));
             auto* chunk = appendGraph(AnimationGraphProtocol::ValueType::Float, start, count);
             if (!chunk)
                 return false;
             for (std::uint16_t index = 0; index < count; ++index)
                 chunk->Values[index] = std::bit_cast<std::uint32_t>(a_snapshot.Animation.Floats[start + index]);
         }
-        for (std::uint16_t start = 0; start < a_snapshot.Animation.Integers.size();
+        for (std::uint16_t start = 0; start < a_snapshot.Animation.IntegerCount;
              start += AnimationGraphProtocol::kValuesPerChunk) {
             const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(
-                AnimationGraphProtocol::kValuesPerChunk, a_snapshot.Animation.Integers.size() - start));
+                AnimationGraphProtocol::kValuesPerChunk, a_snapshot.Animation.IntegerCount - start));
             auto* chunk = appendGraph(AnimationGraphProtocol::ValueType::Integer, start, count);
             if (!chunk)
                 return false;
@@ -2545,8 +2606,10 @@ void CaptureAppearance(RE::PlayerCharacter& a_player, Snapshot& a_current)
     }
 
     std::vector<CapturedTint> tints;
-    const auto& runtime = a_player.GetVRPlayerRuntimeData();
-    const auto* tintMasks = runtime.overlayTintMasks ? runtime.overlayTintMasks : std::addressof(runtime.tintMasks);
+    const auto* runtime = a_player.GetVRPlayerRuntimeData();
+    if (!runtime)
+        return;
+    const auto* tintMasks = runtime->overlayTintMasks ? runtime->overlayTintMasks : std::addressof(runtime->tintMasks);
     if (!tintMasks || tintMasks->size() > kMaximumAppearanceTints)
         return;
     tints.reserve(tintMasks->size());
@@ -3368,7 +3431,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     const GameplayBridge::CommandRecord& acCommand) noexcept
 {
     const auto requestId = acCommand.Payload.CaptureAssignmentBootstrap.RequestId;
-    const auto publishFailure = [&](const CommandStatus aStatus) noexcept {
+    const auto publishFailure = [&](const CommandStatus aStatus,
+                                    const AssignmentBootstrapFailureReason aReason) noexcept {
         EventRecord record{};
         record.Header.Kind = static_cast<std::uint16_t>(EventKind::AssignmentBootstrapRecord);
         record.Header.PayloadSize = kFixedPayloadBytes;
@@ -3378,6 +3442,7 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         payload.RequestId = requestId;
         payload.RecordKind = static_cast<std::uint16_t>(AssignmentBootstrapRecordKind::Failure);
         payload.ValueA = static_cast<std::int32_t>(aStatus);
+        payload.ValueB = static_cast<std::int32_t>(aReason);
         payload.TotalRecords = 1;
         return BridgeEndpoint::Get().TryPushEvent(record);
     };
@@ -3387,12 +3452,15 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         if (!g_initialized)
             InitializeUnlocked();
 
-        if (g_assignmentBootstrapPublication.Active)
+        if (g_assignmentBootstrapPublication.Active) {
+            static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                             AssignmentBootstrapFailureReason::Capacity));
             return CommandStatus::QueueOverflow;
+        }
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !player->GetActorBase()) {
-            static_cast<void>(publishFailure(CommandStatus::Inactive));
+            static_cast<void>(publishFailure(CommandStatus::Inactive, AssignmentBootstrapFailureReason::Unavailable));
             return CommandStatus::Inactive;
         }
 
@@ -3439,11 +3507,12 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         ((player->AsActorState() && player->AsActorState()->IsWeaponDrawn()) ?
              kAssignmentBootstrapWeaponDrawn : 0u);
 
-    for (const auto actorValue : kCapturedActorValues) {
+    for (const auto actorValue : kAssignmentActorValues) {
         const auto value = player->GetActorValue(actorValue);
         const auto maximum = player->GetActorValueMax(actorValue);
         if (!IsFinite(value) || !IsFinite(maximum)) {
-            static_cast<void>(publishFailure(CommandStatus::EngineRejected));
+            static_cast<void>(publishFailure(CommandStatus::EngineRejected,
+                                             AssignmentBootstrapFailureReason::EssentialActorValues));
             return CommandStatus::EngineRejected;
         }
         auto& actorValueRecord = append(AssignmentBootstrapRecordKind::ActorValue);
@@ -3454,8 +3523,9 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
 
     std::vector<CapturedInventoryStack> inventory;
     if (!CaptureInventoryStacks(*player, inventory)) {
-        static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-        return CommandStatus::EngineRejected;
+        static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                         AssignmentBootstrapFailureReason::Capacity));
+        return CommandStatus::QueueOverflow;
     }
     for (const auto& entry : inventory) {
         auto& item = append(AssignmentBootstrapRecordKind::InventoryEntry);
@@ -3489,9 +3559,18 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     magicRecord.LocalFormIdB = magic.RightSpellFormId;
     magicRecord.LocalFormIdC = magic.PowerOrShoutFormId;
 
+    const auto* runtime = player->GetVRPlayerRuntimeData();
+    if (!runtime) {
+        static_cast<void>(publishFailure(CommandStatus::EngineRejected,
+                                         AssignmentBootstrapFailureReason::Unavailable));
+        return CommandStatus::EngineRejected;
+    }
+
     std::vector<std::pair<std::uint32_t, std::uint16_t>> quests;
     quests.reserve(VRAssignmentLimits::kMaximumQuestEntries);
-    for (const auto& objective : player->GetVRPlayerRuntimeData().objectives) {
+    const auto objectiveCount = runtime->objectives.size();
+    for (std::uint32_t index = 0; index < objectiveCount; ++index) {
+        const auto& objective = runtime->objectives[index];
         const auto* quest = objective.Objective ? objective.Objective->ownerQuest : nullptr;
         if (!quest || !IsSyncableQuest(*quest) || !IsValidFormId(quest->GetFormID()))
             continue;
@@ -3500,7 +3579,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
             }))
             continue;
         if (quests.size() >= VRAssignmentLimits::kMaximumQuestEntries) {
-            static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+            static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                             AssignmentBootstrapFailureReason::Capacity));
             return CommandStatus::QueueOverflow;
         }
         quests.emplace_back(quest->GetFormID(), quest->GetCurrentStageID());
@@ -3524,14 +3604,16 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         faction.ValueA = acFaction.rank;
     };
     if (player->GetActorBase()->factions.size() > kMaximumAssignmentFactionEntries) {
-        static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+        static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                         AssignmentBootstrapFailureReason::Capacity));
         return CommandStatus::QueueOverflow;
     }
     for (const auto& faction : player->GetActorBase()->factions)
         appendFaction(AssignmentBootstrapRecordKind::NpcFaction, faction);
     if (const auto* changes = player->extraList.GetByType<RE::ExtraFactionChanges>()) {
         if (changes->factionChanges.size() > kMaximumAssignmentFactionEntries) {
-            static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+            static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                             AssignmentBootstrapFailureReason::Capacity));
             return CommandStatus::QueueOverflow;
         }
         for (const auto& faction : changes->factionChanges)
@@ -3542,17 +3624,42 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     const auto* race = player->GetRace();
     const auto sex = static_cast<std::int32_t>(actorBase->GetSex());
     const auto level = player->GetLevel();
-    const auto hairColorFormId = actorBase->headRelatedData && actorBase->headRelatedData->hairColor ?
+    auto hairColorFormId = actorBase->headRelatedData && actorBase->headRelatedData->hairColor ?
         actorBase->headRelatedData->hairColor->GetFormID() : 0;
-    const auto faceTextureFormId = actorBase->headRelatedData && actorBase->headRelatedData->faceDetails ?
+    auto faceTextureFormId = actorBase->headRelatedData && actorBase->headRelatedData->faceDetails ?
         actorBase->headRelatedData->faceDetails->GetFormID() : 0;
     if (!race || !IsValidFormId(race->GetFormID()) || sex < 0 || sex > 1 ||
         !IsFinite(actorBase->weight) || actorBase->weight < 0.0F || actorBase->weight > 100.0F ||
-        level <= 0 || level > std::numeric_limits<std::uint16_t>::max() ||
-        (hairColorFormId != 0 && !IsValidFormId(hairColorFormId)) ||
-        (faceTextureFormId != 0 && !IsValidFormId(faceTextureFormId))) {
-        static_cast<void>(publishFailure(CommandStatus::EngineRejected));
+        level <= 0 || level > std::numeric_limits<std::uint16_t>::max()) {
+        static_cast<void>(publishFailure(CommandStatus::EngineRejected,
+                                         AssignmentBootstrapFailureReason::AppearanceCore));
         return CommandStatus::EngineRejected;
+    }
+    if (hairColorFormId != 0 && !IsValidFormId(hairColorFormId))
+        hairColorFormId = 0;
+    if (faceTextureFormId != 0 && !IsValidFormId(faceTextureFormId))
+        faceTextureFormId = 0;
+
+    std::array<float, kFaceMorphCount> faceMorphs{};
+    std::array<std::int32_t, kFacePartCount> faceParts{};
+    bool hasFaceData = actorBase->faceData != nullptr;
+    if (hasFaceData) {
+        for (std::size_t index = 0; index < kFaceMorphCount; ++index) {
+            faceMorphs[index] = actorBase->faceData->morphs[index];
+            if (!IsFinite(faceMorphs[index]) || std::abs(faceMorphs[index]) > kMaximumFaceMorphMagnitude) {
+                hasFaceData = false;
+                break;
+            }
+        }
+        if (hasFaceData)
+            for (std::size_t index = 0; index < kFacePartCount; ++index) {
+                faceParts[index] = actorBase->faceData->parts[index];
+                if (faceParts[index] != kFacePartDefault &&
+                    (faceParts[index] < 0 || faceParts[index] > kMaximumFacePartPreset)) {
+                    hasFaceData = false;
+                    break;
+                }
+            }
     }
 
     auto& appearance = append(AssignmentBootstrapRecordKind::AppearanceCore);
@@ -3562,29 +3669,19 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     appearance.ValueA = sex;
     appearance.ValueB = level;
     appearance.ScalarA = actorBase->weight;
-    appearance.RecordFlags = (actorBase->faceData ? kAssignmentBootstrapHasFaceData : 0u) |
+    appearance.RecordFlags = (hasFaceData ? kAssignmentBootstrapHasFaceData : 0u) |
         (player->IsEssential() ? kAssignmentBootstrapEssential : 0u);
 
-    if (actorBase->faceData) {
+    if (hasFaceData) {
         for (std::size_t index = 0; index < kFaceMorphCount; ++index) {
-            const auto morph = actorBase->faceData->morphs[index];
-            if (!IsFinite(morph) || std::abs(morph) > kMaximumFaceMorphMagnitude) {
-                static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-                return CommandStatus::EngineRejected;
-            }
             auto& record = append(AssignmentBootstrapRecordKind::FaceMorph);
             record.ValueA = static_cast<std::int32_t>(index);
-            record.ScalarA = morph;
+            record.ScalarA = faceMorphs[index];
         }
         for (std::size_t index = 0; index < kFacePartCount; ++index) {
-            const auto part = actorBase->faceData->parts[index];
-            if (part != kFacePartDefault && (part < 0 || part > kMaximumFacePartPreset)) {
-                static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-                return CommandStatus::EngineRejected;
-            }
             auto& record = append(AssignmentBootstrapRecordKind::FacePart);
             record.ValueA = static_cast<std::int32_t>(index);
-            record.ValueB = part;
+            record.ValueB = faceParts[index];
         }
     }
 
@@ -3593,10 +3690,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         const auto* headPart = actorBase->GetCurrentHeadPartByType(type);
         if (!headPart)
             continue;
-        if (!IsValidFormId(headPart->GetFormID())) {
-            static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-            return CommandStatus::EngineRejected;
-        }
+        if (!IsValidFormId(headPart->GetFormID()))
+            continue;
         auto& record = append(AssignmentBootstrapRecordKind::HeadPart);
         record.LocalFormIdA = headPart->GetFormID();
         record.ValueA = static_cast<std::int32_t>(slot);
@@ -3609,7 +3704,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
             ++nameLength;
     }
     if (nameLength == 0 || nameLength > kMaximumAppearanceNameBytes) {
-        static_cast<void>(publishFailure(CommandStatus::EngineRejected));
+        static_cast<void>(publishFailure(CommandStatus::EngineRejected,
+                                         AssignmentBootstrapFailureReason::Name));
         return CommandStatus::EngineRejected;
     }
     const auto nameChunkCount = static_cast<std::uint16_t>(
@@ -3634,29 +3730,26 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         std::memcpy(text.Utf8Bytes, displayName + offset, text.ByteCount);
     }
 
-    const auto& runtime = player->GetVRPlayerRuntimeData();
-    const auto* tintMasks = runtime.overlayTintMasks ? runtime.overlayTintMasks : std::addressof(runtime.tintMasks);
+    const auto* tintMasks = runtime->overlayTintMasks ? runtime->overlayTintMasks : std::addressof(runtime->tintMasks);
     if (tintMasks) {
-        if (tintMasks->size() > kMaximumAppearanceTints) {
-            static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
-            return CommandStatus::QueueOverflow;
-        }
+        std::size_t emittedTintIndex{};
         for (std::size_t index = 0; index < tintMasks->size(); ++index) {
             const auto* tint = (*tintMasks)[index];
             if (!tint || static_cast<std::uint32_t>(tint->type.get()) >= kTintTypeCount ||
-                !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F) {
-                static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-                return CommandStatus::EngineRejected;
+                !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F)
+                continue;
+            if (emittedTintIndex >= kMaximumAppearanceTints) {
+                static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                                 AssignmentBootstrapFailureReason::Tint));
+                return CommandStatus::QueueOverflow;
             }
             std::string_view texturePath{};
             if (tint->texture && tint->texture->textureName.c_str())
                 texturePath = tint->texture->textureName.c_str();
-            if (!IsSafeTintTexturePath(texturePath)) {
-                static_cast<void>(publishFailure(CommandStatus::EngineRejected));
-                return CommandStatus::EngineRejected;
-            }
+            if (!IsSafeTintTexturePath(texturePath))
+                texturePath = {};
             auto& tintRecord = append(AssignmentBootstrapRecordKind::Tint);
-            tintRecord.LocalFormIdB = static_cast<std::uint32_t>(index);
+            tintRecord.LocalFormIdB = static_cast<std::uint32_t>(emittedTintIndex++);
             tintRecord.LocalFormIdA = (static_cast<std::uint32_t>(tint->color.red) << 16) |
                                       (static_cast<std::uint32_t>(tint->color.green) << 8) |
                                       static_cast<std::uint32_t>(tint->color.blue);
@@ -3681,7 +3774,7 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
                 text.ChunkIndex = chunk;
                 text.ChunkCount = chunkCount;
                 text.Reserved0 = kGameplayTextAppearanceDeferred;
-                text.AuxiliaryLocalFormId = static_cast<std::uint32_t>(index + 1);
+                text.AuxiliaryLocalFormId = static_cast<std::uint32_t>(emittedTintIndex);
                 const auto offset = static_cast<std::size_t>(chunk) * kGameplayTextBytesPerChunk;
                 text.ByteCount = static_cast<std::uint16_t>(std::min<std::size_t>(
                     kGameplayTextBytesPerChunk, texturePath.size() - offset));
@@ -3693,7 +3786,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     append(AssignmentBootstrapRecordKind::End);
     if (overflow || publication.Count > VRAssignmentLimits::kMaximumLogicalBootstrapRecords) {
         publication.Reset();
-        static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+        static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                         AssignmentBootstrapFailureReason::Capacity));
         return CommandStatus::QueueOverflow;
     }
 
@@ -3704,7 +3798,8 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     if (assignmentRecordCount == 0 ||
         assignmentRecordCount > VRAssignmentLimits::kMaximumLogicalBootstrapRecords) {
         publication.Reset();
-        static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+        static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                         AssignmentBootstrapFailureReason::Capacity));
         return CommandStatus::QueueOverflow;
     }
     std::uint32_t ordinal{};
@@ -3725,11 +3820,13 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     return CommandStatus::Success;
     } catch (const std::bad_alloc&) {
         g_assignmentBootstrapPublication.Reset();
-        static_cast<void>(publishFailure(CommandStatus::QueueOverflow));
+        static_cast<void>(publishFailure(CommandStatus::QueueOverflow,
+                                         AssignmentBootstrapFailureReason::Capacity));
         return CommandStatus::QueueOverflow;
     } catch (...) {
         g_assignmentBootstrapPublication.Reset();
-        static_cast<void>(publishFailure(CommandStatus::EngineRejected));
+        static_cast<void>(publishFailure(CommandStatus::EngineRejected,
+                                         AssignmentBootstrapFailureReason::Exception));
         return GameplayBridge::CommandStatus::EngineRejected;
     }
 }

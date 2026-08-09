@@ -1,7 +1,7 @@
 #include "EventCapture.h"
 
 #include "AvatarManager.h"
-#include "HumanoidAnimationGraph.h"
+#include "AnimationGraphDescriptors.h"
 
 #include <algorithm>
 #include <array>
@@ -125,6 +125,7 @@ void PopulateAnimationChunk(
     const AnimationGraphProtocol::ValueType a_type,
     const std::uint16_t a_startIndex,
     const std::uint16_t a_valueCount,
+    const std::uint16_t a_totalCount,
     const float a_direction) noexcept
 {
     PopulateHeader(a_record, EventKind::LocalAnimationGraphChunk);
@@ -135,7 +136,7 @@ void PopulateAnimationChunk(
     payload.ValueType = static_cast<std::uint16_t>(a_type);
     payload.StartIndex = a_startIndex;
     payload.ValueCount = a_valueCount;
-    payload.TotalCount = AnimationGraphProtocol::ExpectedCount(a_type);
+    payload.TotalCount = a_totalCount;
     payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
     payload.Direction = a_direction;
 }
@@ -154,51 +155,37 @@ void PublishCurrentLocalAnimationStateImpl() noexcept
     g_lastAnimationSnapshotTime = now;
 
     auto* player = RE::PlayerCharacter::GetSingleton();
-    RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
-    if (!player || !player->GetAnimationGraphManager(manager) || !manager)
+    if (!player)
         return;
-
-    std::array<bool, AnimationGraphProtocol::kBooleanCount> booleans{};
-    std::array<float, AnimationGraphProtocol::kFloatCount> floats{};
-    std::array<std::int32_t, AnimationGraphProtocol::kIntegerCount> integers{};
-    bool captured = true;
-    for (std::size_t index = 0; index < booleans.size(); ++index)
-        captured = player->GetGraphVariableBool(RE::BSFixedString(HumanoidAnimationGraph::kBooleanNames[index].data()), booleans[index]) && captured;
-    for (std::size_t index = 0; index < floats.size(); ++index)
-        captured = player->GetGraphVariableFloat(RE::BSFixedString(HumanoidAnimationGraph::kFloatNames[index].data()), floats[index]) && captured;
-    for (std::size_t index = 0; index < integers.size(); ++index)
-        captured = player->GetGraphVariableInt(RE::BSFixedString(HumanoidAnimationGraph::kIntegerNames[index].data()), integers[index]) && captured;
-    if (!captured)
-        return;
+    AnimationGraphProtocol::SnapshotBuffer snapshot{};
+    if (!AnimationGraphs::Capture(*player, snapshot)) return;
 
     const auto snapshotId = ++g_animationSnapshotId;
-    constexpr auto graphRecordCount = 1u +
-        (AnimationGraphProtocol::kFloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
-            AnimationGraphProtocol::kValuesPerChunk +
-        (AnimationGraphProtocol::kIntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) /
-            AnimationGraphProtocol::kValuesPerChunk;
+    const auto graphRecordCount = 1u +
+        (snapshot.FloatCount + AnimationGraphProtocol::kValuesPerChunk - 1) / AnimationGraphProtocol::kValuesPerChunk +
+        (snapshot.IntegerCount + AnimationGraphProtocol::kValuesPerChunk - 1) / AnimationGraphProtocol::kValuesPerChunk;
     std::vector<EventRecord> records;
     records.reserve(graphRecordCount);
     auto& booleanChunk = records.emplace_back();
     PopulateAnimationChunk(booleanChunk, snapshotId, AnimationGraphProtocol::ValueType::BooleanBits, 0,
-                           AnimationGraphProtocol::kBooleanCount, floats[1]);
-    for (std::size_t index = 0; index < booleans.size(); ++index) {
-        if (booleans[index])
+                           snapshot.BooleanCount, snapshot.BooleanCount, snapshot.Direction);
+    for (std::size_t index = 0; index < snapshot.BooleanCount; ++index) {
+        if (snapshot.Booleans[index])
             booleanChunk.Payload.LocalAnimationGraphChunk.Values[index / 32] |= 1u << (index % 32);
     }
-    for (std::uint16_t start = 0; start < floats.size(); start += AnimationGraphProtocol::kValuesPerChunk) {
-        const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(AnimationGraphProtocol::kValuesPerChunk, floats.size() - start));
+    for (std::uint16_t start = 0; start < snapshot.FloatCount; start += AnimationGraphProtocol::kValuesPerChunk) {
+        const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, snapshot.FloatCount - start));
         auto& chunk = records.emplace_back();
-        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Float, start, count, floats[1]);
+        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Float, start, count, snapshot.FloatCount, snapshot.Direction);
         for (std::uint16_t index = 0; index < count; ++index)
-            chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(floats[start + index]);
+            chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(snapshot.Floats[start + index]);
     }
-    for (std::uint16_t start = 0; start < integers.size(); start += AnimationGraphProtocol::kValuesPerChunk) {
-        const auto count = static_cast<std::uint16_t>(std::min<std::size_t>(AnimationGraphProtocol::kValuesPerChunk, integers.size() - start));
+    for (std::uint16_t start = 0; start < snapshot.IntegerCount; start += AnimationGraphProtocol::kValuesPerChunk) {
+        const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, snapshot.IntegerCount - start));
         auto& chunk = records.emplace_back();
-        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Integer, start, count, floats[1]);
+        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Integer, start, count, snapshot.IntegerCount, snapshot.Direction);
         for (std::uint16_t index = 0; index < count; ++index)
-            chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(integers[start + index]);
+            chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(snapshot.Integers[start + index]);
     }
     static_cast<void>(endpoint.TryPushEvents(records.data(), records.size()));
 }
@@ -280,6 +267,7 @@ bool ProcessPendingLifecycleTransitions() noexcept
         return false;
 
     AvatarManager::Get().RetireAllOnCommandPumpOwner();
+    AnimationGraphs::ResetCache();
     endpoint.DiscardCommandResultEvents();
     g_lastLocalCellFormId = 0;
     g_lastLocalWorldspaceFormId = 0;

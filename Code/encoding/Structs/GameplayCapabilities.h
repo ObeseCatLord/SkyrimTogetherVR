@@ -4,12 +4,12 @@
 
 namespace SkyrimTogether::Protocol
 {
-// Revision 10 seeds the negotiated semantic VR appearance in the character
-// assignment transaction so remote actors spawn with a complete baseline.
-// Exact matching prevents older endpoint layouts from being decoded as the
-// current protocol. Additive negotiated capability bits do not change this
-// revision because endpoints already intersect the advertised masks.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 10;
+// Revision 11 makes animation graph payloads descriptor-shaped and permits
+// sparse VR character assignments. Exact matching prevents older endpoints
+// from decoding those changed wire semantics as revision 10 transactions.
+// Additive negotiated capability bits do not change this revision because
+// endpoints already intersect the advertised masks.
+inline constexpr std::uint32_t kGameplayProtocolRevision = 11;
 
 enum class GameplayCapability : std::uint64_t
 {

@@ -97,8 +97,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         }
         if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
             SKSE::log::warn(
-                "SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction capture hook is disabled because "
-                "exact ForceAction replay is unavailable; continuing without exact actor actions");
+                "SkyrimTogetherVRGameplayBridge: verified ActorMediator action capture/replay is unavailable; "
+                "continuing without exact actor actions");
         }
 
         SkyrimTogetherVR::GameplayAdapter::PublishPluginLoaded();

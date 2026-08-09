@@ -1829,7 +1829,8 @@ void VRWorldReplicationService::RetainServerSettings(const ServerSettings& acSet
         0.0F,
         0.0F,
         0.0F,
-        m_partyRoleKnown && m_partyLeader ? GameplayBridge::kWorldEncountersEnabled : 0u);
+        (m_partyRoleKnown && m_partyLeader ? GameplayBridge::kWorldEncountersEnabled : 0u) |
+            (acSettings.PvpEnabled ? GameplayBridge::kPvpEnabled : 0u));
 }
 
 void VRWorldReplicationService::Reconcile() noexcept

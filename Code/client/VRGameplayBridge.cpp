@@ -233,7 +233,7 @@ constexpr CapabilityMask kRequestedCapabilities =
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
                IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
-               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.TotalCount, payload.Values) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot));
     }
     case EventKind::RemoteAnimationGraphState:
@@ -342,7 +342,7 @@ constexpr CapabilityMask kRequestedCapabilities =
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
                IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
-               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values) &&
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.TotalCount, payload.Values) &&
                HasActiveCapabilities(static_cast<CapabilityMask>(Capability::ExactAnimationActions));
     }
     case EventKind::LocalActorActionTextChunk:
@@ -369,6 +369,8 @@ constexpr CapabilityMask kRequestedCapabilities =
                header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
                payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.RequestId != 0 &&
                IsKnownAssignmentBootstrapRecordKind(payload.RecordKind) &&
+               (payload.RecordKind != static_cast<std::uint16_t>(AssignmentBootstrapRecordKind::Failure) ||
+                IsKnownAssignmentBootstrapFailureReason(payload.ValueB)) &&
                payload.TotalRecords >= 1 &&
                payload.TotalRecords <= VRAssignmentLimits::kMaximumLogicalBootstrapRecords &&
                payload.Ordinal < payload.TotalRecords && payload.Digest == 0 &&
@@ -453,7 +455,7 @@ constexpr CapabilityMask kRequestedCapabilities =
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
                IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
-               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values);
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.TotalCount, payload.Values);
     }
     case CommandKind::ApplyGameplayAction:
     {
@@ -543,7 +545,7 @@ constexpr CapabilityMask kRequestedCapabilities =
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
                IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
-               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.Values);
+               AnimationGraphProtocol::AreChunkValuesValid(valueType, payload.ValueCount, payload.TotalCount, payload.Values);
     }
     case CommandKind::StageActorActionTextChunk:
     {
@@ -625,6 +627,7 @@ void RejectSubmission() noexcept
 {
     return aKind == CommandKind::ApplyGameplayAction ||
            aKind == CommandKind::ApplyGameplayTextChunk ||
+           aKind == CommandKind::ApplyRemoteAnimationGraphChunk ||
            aKind == CommandKind::StageActorActionGraphChunk ||
            aKind == CommandKind::StageActorActionTextChunk ||
            aKind == CommandKind::ApplyActorAction;
@@ -975,13 +978,21 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
     std::uint32_t transactionTargetLocalFormId{};
     GameplayDomain transactionDomain{};
     bool gameplayActionBatch{};
+    bool remoteAnimationGraphBatch{};
+    AnimationGraphProtocol::SnapshotBuffer graphSnapshot{};
+    AdapterHandle graphAvatarHandle{};
+    std::uint64_t graphSnapshotId{};
+    std::uint16_t graphDescriptorVersion{};
 
     for (std::size_t index = 0; index < aCommandCount; ++index)
     {
         auto command = apCommands[index];
         const auto kind = static_cast<CommandKind>(command.Header.Kind);
+        const bool remoteAnimationGraph = kind == CommandKind::ApplyRemoteAnimationGraphChunk;
         if (!IsBatchCommand(kind) || command.Header.PayloadSize != kFixedPayloadBytes || command.Header.Flags != 0 ||
-            command.Header.Identity.ActionId != 0 || !IdentityIsCurrentOrUnspecified(command.Header.Identity))
+            command.Header.Identity.ActionId != 0 ||
+            (remoteAnimationGraph && command.Header.Identity.SequenceId != 0) ||
+            !IdentityIsCurrentOrUnspecified(command.Header.Identity))
         {
             RejectSubmission();
             return false;
@@ -989,8 +1000,12 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
 
         const bool gameplayAction = kind == CommandKind::ApplyGameplayAction;
         if (index == 0)
+        {
             gameplayActionBatch = gameplayAction;
-        else if (gameplayAction != gameplayActionBatch)
+            remoteAnimationGraphBatch = remoteAnimationGraph;
+        }
+        else if (remoteAnimationGraph != remoteAnimationGraphBatch ||
+                 (!remoteAnimationGraphBatch && gameplayAction != gameplayActionBatch))
         {
             RejectSubmission();
             return false;
@@ -1027,6 +1042,34 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
             return false;
         }
 
+        if (remoteAnimationGraphBatch)
+        {
+            const auto& payload = command.Payload.ApplyRemoteAnimationGraphChunk;
+            if (index == 0)
+            {
+                graphAvatarHandle = payload.AvatarHandle;
+                graphSnapshotId = payload.SnapshotId;
+                graphDescriptorVersion = payload.DescriptorVersion;
+            }
+            else if (payload.AvatarHandle.Value != graphAvatarHandle.Value ||
+                     payload.SnapshotId != graphSnapshotId ||
+                     payload.DescriptorVersion != graphDescriptorVersion)
+            {
+                RejectSubmission();
+                return false;
+            }
+            const auto result = AnimationGraphProtocol::AcceptChunk(
+                graphSnapshot, payload.SnapshotId,
+                static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType),
+                payload.StartIndex, payload.ValueCount, payload.TotalCount, payload.Direction, payload.Values);
+            if (result == AnimationGraphProtocol::ChunkAcceptResult::Malformed ||
+                result == AnimationGraphProtocol::ChunkAcceptResult::Stale)
+            {
+                RejectSubmission();
+                return false;
+            }
+        }
+
         auto& identity = command.Header.Identity;
         identity.ServerInstanceNonce = nonce;
         identity.ConnectionGeneration = generation;
@@ -1046,7 +1089,27 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
         commands.push_back(command);
     }
 
-    if (gameplayActionBatch)
+    if (remoteAnimationGraphBatch)
+    {
+        // A remote graph update is valid only when this batch contains the
+        // complete, single descriptor snapshot. AcceptChunk also rejects
+        // duplicate type/start coordinates and mismatched directions.
+        if (!graphSnapshot.IsComplete())
+        {
+            RejectSubmission();
+            return false;
+        }
+
+        std::uint64_t firstSequenceId{};
+        if (!ClaimCounterRange(s_lastBridgeSequence, commands.size(), firstSequenceId))
+        {
+            RejectSubmission();
+            return false;
+        }
+        for (std::size_t index = 0; index < commands.size(); ++index)
+            commands[index].Header.Identity.SequenceId = firstSequenceId + index;
+    }
+    else if (gameplayActionBatch)
     {
         std::uint64_t firstActionId{};
         if (!ClaimCounterRange(s_lastBridgeAction, commands.size(), firstActionId))

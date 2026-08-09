@@ -518,8 +518,10 @@ void TransportService::OnConnected()
         SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions))
         m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRNpcOwnershipCapabilities;
-    // Preserve the protocol identifier for future compatibility, but do not
-    // advertise exact actor actions: VR ForceAction replay lacks a proven ABI.
+    if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
+        SkyrimTogetherVR::GameplayBridge::HasCapability(
+            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions))
+        m_requestedGameplayCapabilities |= ToMask(GameplayCapability::ExactAnimationActions);
 #endif
     request.GameplayCapabilities = m_requestedGameplayCapabilities;
     request.ClientSessionNonce = m_sessionId;

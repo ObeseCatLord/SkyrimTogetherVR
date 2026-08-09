@@ -224,6 +224,7 @@ private:
     bool m_assignmentBootstrapHasMagicEquipment{false};
     bool m_assignmentBootstrapHasOpenInventory{false};
     bool m_assignmentBootstrapHasInventoryExtra{false};
+    bool m_assignmentBootstrapSkipOpenInventory{false};
     std::array<bool, SkyrimTogetherVR::GameplayBridge::kSkyrimActorValueCount>
         m_assignmentBootstrapActorValues{};
     std::array<bool, SkyrimTogetherVR::GameplayBridge::kMaximumAppearanceTints>
