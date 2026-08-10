@@ -71,6 +71,86 @@ struct VRAvatarService
 private:
     using AnimationSnapshot = SkyrimTogetherVR::AnimationGraphProtocol::SnapshotBuffer;
 
+    enum class AssignmentBootstrapGate : std::uint8_t
+    {
+        Idle,
+        NotConnected,
+        TransportOffline,
+        LocalServerAssigned,
+        BootstrapReady,
+        PermanentFailure,
+        BootstrapPending,
+        SnapshotInvalid,
+        BridgeNotReady,
+        ServerNonceMissing,
+        ConnectionGenerationMissing,
+        LifecycleEpochMissing,
+        CapabilityUnavailable,
+        CommandQueueRejected,
+        RetryScheduled,
+        Submitted,
+    };
+
+    enum class AssignmentGate : std::uint8_t
+    {
+        Idle,
+        NotConnected,
+        TransportOffline,
+        LocalServerAssigned,
+        AssignmentPending,
+        AssignmentRejected,
+        BootstrapNotReady,
+        SnapshotInvalid,
+        LocationInvalid,
+        RotationInvalid,
+        ConstructionFailed,
+        PacketPermanentFailure,
+        SendRejected,
+        Queued,
+        Assigned,
+    };
+
+    enum class AssignmentBootstrapFailure : std::uint8_t
+    {
+        None,
+        CommandQueueRejected,
+        InactivityTimeout,
+        BridgeFailure,
+        RecordValidation,
+        EndValidation,
+        TextValidation,
+        Exception,
+    };
+
+    enum class AssignmentBootstrapEndFailure : std::uint32_t
+    {
+        EndOrdinal = 0x00000001u,
+        EndPayload = 0x00000002u,
+        ActorStateMissing = 0x00000004u,
+        MagicEquipmentMissing = 0x00000008u,
+        AppearanceCoreMissing = 0x00000010u,
+        NameIncomplete = 0x00000020u,
+        InventoryIncomplete = 0x00000040u,
+        FaceMorphsIncomplete = 0x00000080u,
+        FacePartsIncomplete = 0x00000100u,
+        TintPathsIncomplete = 0x00000200u,
+        EssentialActorValuesIncomplete = 0x00000400u,
+        AppearanceInvalid = 0x00000800u,
+    };
+
+    struct AssignmentBootstrapEndFailureTelemetry
+    {
+        std::uint32_t FailureMask{0};
+        std::uint32_t AppearanceValidationFailureMask{0};
+        std::uint32_t NameLength{0};
+        std::uint32_t HeadPartCount{0};
+        std::uint32_t TintCount{0};
+        std::uint32_t CompletedRequiredTintPaths{0};
+        std::uint32_t CompletedFaceMorphs{0};
+        std::uint32_t CompletedFaceParts{0};
+        std::uint32_t CompletedEssentialActorValues{0};
+    };
+
     struct RemoteAvatar
     {
         std::uint32_t PlayerId{0};
@@ -133,9 +213,22 @@ private:
     void ResetSessionState() noexcept;
     void ResetLifecycleState() noexcept;
     void ResetAssignmentBootstrap() noexcept;
+    void ResetAssignmentBootstrapFailureTelemetry() noexcept;
+    void RecordAssignmentBootstrapFailure(AssignmentBootstrapFailure aFailure, std::uint64_t aRequestId,
+                                          std::uint64_t aActionId, std::uint16_t aRecordKind = 0,
+                                          std::uint32_t aOrdinal = 0, std::int32_t aBridgeStatus = 0,
+                                          std::int32_t aBridgeReason = 0, std::uint16_t aTextAction = 0,
+                                          std::uint16_t aTextChunkIndex = 0,
+                                          std::uint16_t aTextChunkCount = 0,
+                                          const AssignmentBootstrapEndFailureTelemetry* apEndFailureTelemetry = nullptr) noexcept;
     void ScheduleAssignmentBootstrapRetry() noexcept;
     void TryRequestAssignmentBootstrap() noexcept;
     void TryRequestLocalAssignment() noexcept;
+    void SetAssignmentBootstrapGate(AssignmentBootstrapGate aGate) noexcept;
+    void SetAssignmentGate(AssignmentGate aGate) noexcept;
+    [[nodiscard]] static const char* AssignmentBootstrapGateName(AssignmentBootstrapGate aGate) noexcept;
+    [[nodiscard]] static const char* AssignmentGateName(AssignmentGate aGate) noexcept;
+    [[nodiscard]] static const char* AssignmentBootstrapFailureName(AssignmentBootstrapFailure aFailure) noexcept;
     void SendLocalMovement() noexcept;
     void UpdateRemoteAvatars(double aDelta) noexcept;
     void SubmitCreateRemoteAvatar(std::uint32_t aServerId, RemoteAvatar& arAvatar) noexcept;
@@ -184,7 +277,13 @@ private:
     };
     std::uint64_t m_assignmentBootstrapRequestId{0};
     std::uint64_t m_assignmentBootstrapActionId{0};
+    std::uint64_t m_assignmentBootstrapLastRequestId{0};
+    std::uint64_t m_assignmentBootstrapLastActionId{0};
+    std::uint64_t m_assignmentBootstrapFailureCount{0};
+    std::uint64_t m_assignmentBootstrapFailureRequestId{0};
+    std::uint64_t m_assignmentBootstrapFailureActionId{0};
     std::uint64_t m_nextAssignmentBootstrapRequestId{1};
+    std::uint32_t m_assignmentBootstrapFailureOrdinal{0};
     std::uint32_t m_assignmentBootstrapExpectedRecords{0};
     std::uint32_t m_assignmentBootstrapNextOrdinal{0};
     std::uint32_t m_assignmentBootstrapInventoryRecords{0};
@@ -215,6 +314,16 @@ private:
     std::uint64_t m_rejectedCommandBaseline{0};
     std::uint64_t m_eventRingDropBaseline{0};
     std::uint64_t m_commandRingDropBaseline{0};
+    AssignmentBootstrapGate m_assignmentBootstrapGate{AssignmentBootstrapGate::Idle};
+    AssignmentGate m_assignmentGate{AssignmentGate::Idle};
+    AssignmentBootstrapFailure m_assignmentBootstrapFailure{AssignmentBootstrapFailure::None};
+    AssignmentBootstrapEndFailureTelemetry m_assignmentBootstrapEndFailureTelemetry{};
+    std::uint16_t m_assignmentBootstrapFailureRecordKind{0};
+    std::int32_t m_assignmentBootstrapFailureBridgeStatus{0};
+    std::int32_t m_assignmentBootstrapFailureBridgeReason{0};
+    std::uint16_t m_assignmentBootstrapFailureTextAction{0};
+    std::uint16_t m_assignmentBootstrapFailureTextChunkIndex{0};
+    std::uint16_t m_assignmentBootstrapFailureTextChunkCount{0};
     bool m_connected{false};
     bool m_hasLocalSnapshot{false};
     bool m_assignmentPending{false};

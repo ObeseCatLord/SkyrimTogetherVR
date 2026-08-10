@@ -4307,6 +4307,82 @@ def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
     return errors
 
 
+def audit_vr_actor_base_flag_safety(root: pathlib.Path) -> list[str]:
+    errors: list[str] = []
+    bridge_root = root / "Code/vr_gameplay_bridge"
+    if not bridge_root.exists():
+        return ["VR gameplay bridge directory is missing"]
+
+    for path in sorted(bridge_root.rglob("*")):
+        if path.suffix not in {".cpp", ".h"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        count = text.count("SetActorBaseFlag(")
+        if count:
+            errors.append(
+                f"{path.relative_to(root)} contains {count} desktop SetActorBaseFlag call(s)"
+            )
+
+    helper_path = bridge_root / "DynamicActorBaseFlags.h"
+    helper_text = helper_path.read_text(encoding="utf-8", errors="replace") if helper_path.exists() else ""
+    helper_tokens = (
+        "SetReplicatedDynamicActorBaseFlag",
+        "if (!a_actorBase || !a_actorBase->IsDynamicForm())",
+        "case RE::ACTOR_BASE_DATA::Flag::kPCLevelMult:",
+        "case RE::ACTOR_BASE_DATA::Flag::kEssential:",
+        "a_actorBase->actorData.actorBaseFlags.set(a_enabled, a_flag);",
+        "return false;",
+    )
+    for token in missing_tokens(helper_text, helper_tokens):
+        errors.append(f"Dynamic actor-base flag helper is missing `{token}`")
+    if "AddChange(" in helper_text:
+        errors.append("Dynamic actor-base flag helper must not call AddChange")
+
+    helper_uses = {
+        "Code/vr_gameplay_bridge/AnimationAppearanceManager.cpp": 2,
+        "Code/vr_gameplay_bridge/ActorWorldManager.cpp": 2,
+    }
+    for rel_path, expected_count in helper_uses.items():
+        path = root / rel_path
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        count = text.count("SetReplicatedDynamicActorBaseFlag(")
+        if '#include "DynamicActorBaseFlags.h"' not in text:
+            errors.append(f"{rel_path} must include the dynamic actor-base flag helper")
+        if count != expected_count:
+            errors.append(
+                f"{rel_path} must contain exactly {expected_count} dynamic actor-base flag helper call(s), found {count}"
+            )
+
+    world_path = bridge_root / "ActorWorldManager.cpp"
+    world_text = world_path.read_text(encoding="utf-8", errors="replace") if world_path.exists() else ""
+    policy = extract_cpp_function(
+        world_text,
+        "[[nodiscard]] CommandStatus ConfigureDeathSystemPolicy(RE::Actor& a_actor, const bool a_enabled) noexcept",
+    )
+    if not policy:
+        errors.append("Could not inspect VR death-system policy gate")
+    else:
+        for token in (
+            "if (!player || &a_actor != player)",
+            "static_cast<void>(a_enabled);",
+            "return CommandStatus::Unsupported;",
+        ):
+            if token not in policy:
+                errors.append(f"VR death-system policy gate is missing `{token}`")
+        for token in (
+            "SetActorBoolFlag(",
+            "GetActorBase(",
+            "actorBaseFlags",
+            "TESGlobal",
+            "g_deathSystemPolicy",
+            ".value =",
+        ):
+            if token in policy:
+                errors.append(f"VR death-system policy must return Unsupported before `{token}`")
+
+    return errors
+
+
 def fmt_token_map(tokens_by_file: dict[str, list[str]]) -> str:
     if not tokens_by_file:
         return "None.\n"
@@ -4393,6 +4469,7 @@ def main() -> int:
         missing_layout.setdefault("Code/client/Games/Skyrim/Interface/UI.cpp", []).extend(vr_menu_predicate_errors)
     missing_vr_papyrus_bypass = audit_vr_papyrus_native_bypass(root)
     vr_connection_only_safety_errors = audit_vr_connection_only_game_call_safety(root)
+    vr_actor_base_flag_safety_errors = audit_vr_actor_base_flag_safety(root)
     missing_vr_commonlib_accessors = audit_required_token_map(root, REQUIRED_VR_COMMONLIB_ACCESSOR_TOKENS)
     forbidden_vr_raw_members = audit_forbidden_token_map(root, FORBIDDEN_VR_RAW_MEMBER_TOKENS)
     missing_movement_relay = audit_required_token_map(root, REQUIRED_MOVEMENT_RELAY_TOKENS)
@@ -4481,6 +4558,7 @@ def main() -> int:
         handle.write(f"- Forbidden stale layout tokens present: {forbidden_layout_count}\n")
         handle.write(f"- VR Papyrus native bypass requirements missing: {len(missing_vr_papyrus_bypass)}\n")
         handle.write(f"- VR connection-only unsafe game-call findings: {len(vr_connection_only_safety_errors)}\n")
+        handle.write(f"- VR actor-base flag safety findings: {len(vr_actor_base_flag_safety_errors)}\n")
         handle.write(f"- VR CommonLib accessor use tokens missing: {missing_vr_commonlib_accessor_count}\n")
         handle.write(f"- Forbidden raw VR game-object member reads present: {forbidden_vr_raw_member_count}\n")
         handle.write(f"- `VRMovementService.h` exists: {'yes' if movement_header_path.exists() else 'no'}\n")
@@ -4596,6 +4674,8 @@ def main() -> int:
         handle.write(fmt_tokens(missing_vr_papyrus_bypass))
         handle.write("\n## VR Connection-Only Unsafe Game Calls\n\n")
         handle.write(fmt_tokens(vr_connection_only_safety_errors))
+        handle.write("\n## VR Actor-Base Flag Safety\n\n")
+        handle.write(fmt_tokens(vr_actor_base_flag_safety_errors))
         handle.write("\n## Missing VR CommonLib Accessor Use Tokens\n\n")
         handle.write(fmt_token_map(missing_vr_commonlib_accessors))
         handle.write("\n## Forbidden Raw VR Game-Object Member Reads\n\n")
@@ -4649,6 +4729,7 @@ def main() -> int:
     print(f"Forbidden stale layout tokens: {forbidden_layout_count}")
     print(f"Missing VR Papyrus native bypass requirements: {len(missing_vr_papyrus_bypass)}")
     print(f"VR connection-only unsafe game-call findings: {len(vr_connection_only_safety_errors)}")
+    print(f"VR actor-base flag safety findings: {len(vr_actor_base_flag_safety_errors)}")
     print(f"Missing VR CommonLib accessor use tokens: {missing_vr_commonlib_accessor_count}")
     print(f"Forbidden raw VR game-object member reads: {forbidden_vr_raw_member_count}")
     print(f"VRMovementService.h exists: {movement_header_path.exists()}")
@@ -4717,6 +4798,7 @@ def main() -> int:
         or forbidden_layout
         or missing_vr_papyrus_bypass
         or vr_connection_only_safety_errors
+        or vr_actor_base_flag_safety_errors
         or missing_vr_commonlib_accessors
         or forbidden_vr_raw_members
         or not movement_header_path.exists()

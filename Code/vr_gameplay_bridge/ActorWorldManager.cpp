@@ -1,5 +1,6 @@
 #include "ActorWorldManager.h"
 
+#include "DynamicActorBaseFlags.h"
 #include "LocalGameplayCapture.h"
 
 #include <algorithm>
@@ -19,7 +20,6 @@ constexpr std::array<RE::FormID, 9> kCrimeFactionFormIds{
 };
 constexpr RE::FormID kRightHandEquipSlotFormId = 0x13F42;
 constexpr RE::FormID kLeftHandEquipSlotFormId = 0x13F43;
-constexpr RE::FormID kKillMoveGlobalFormId = 0x100F19;
 constexpr auto kPostRespawnKnockdownDelay = std::chrono::milliseconds(1500);
 constexpr auto kPostRespawnProtectionDuration = std::chrono::seconds(10);
 
@@ -33,17 +33,6 @@ enum class PostRespawnPhase : std::uint8_t
 PostRespawnPhase g_postRespawnPhase{PostRespawnPhase::None};
 std::chrono::steady_clock::time_point g_postRespawnDeadline{};
 bool g_postRespawnEnabledGodMode{};
-
-struct DeathSystemPolicyState
-{
-    float PreviousKillMoveValue{};
-    bool PreviousActorEssential{};
-    bool PreviousNoBleedoutRecovery{};
-    bool PreviousBaseEssential{};
-    bool Active{};
-};
-
-DeathSystemPolicyState g_deathSystemPolicy{};
 
 [[nodiscard]] CommandStatus FadeScreen(
     const bool a_fadingOut,
@@ -166,91 +155,16 @@ DeathSystemPolicyState g_deathSystemPolicy{};
     return CommandStatus::Success;
 }
 
-void SetActorBoolFlag(RE::Actor& ar_actor, const RE::Actor::BOOL_FLAGS a_flag, const bool a_enabled) noexcept
-{
-    auto& flags = ar_actor.GetActorRuntimeData().boolFlags;
-    if (a_enabled)
-        flags.set(a_flag);
-    else
-        flags.reset(a_flag);
-}
-
-[[nodiscard]] CommandStatus RestoreDeathSystemPolicy() noexcept
-{
-    if (!g_deathSystemPolicy.Active)
-        return CommandStatus::Success;
-
-    auto* player = RE::PlayerCharacter::GetSingleton();
-    auto* base = player ? player->GetActorBase() : nullptr;
-    auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
-    if (!player || !base || !killMove || !std::isfinite(killMove->value))
-        return CommandStatus::Inactive;
-
-    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential, g_deathSystemPolicy.PreviousActorEssential);
-    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery,
-                     g_deathSystemPolicy.PreviousNoBleedoutRecovery);
-    base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, g_deathSystemPolicy.PreviousBaseEssential, true);
-    killMove->value = g_deathSystemPolicy.PreviousKillMoveValue;
-    g_deathSystemPolicy = {};
-    return CommandStatus::Success;
-}
-
-void RestoreDeathSystemPolicyForRetirement() noexcept
-{
-    if (!g_deathSystemPolicy.Active)
-        return;
-
-    try {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* base = player ? player->GetActorBase() : nullptr;
-        auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
-        if (player)
-        {
-            SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential,
-                             g_deathSystemPolicy.PreviousActorEssential);
-            SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery,
-                             g_deathSystemPolicy.PreviousNoBleedoutRecovery);
-        }
-        if (base)
-            base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential,
-                                   g_deathSystemPolicy.PreviousBaseEssential, true);
-        if (killMove)
-            killMove->value = g_deathSystemPolicy.PreviousKillMoveValue;
-    } catch (...) {
-    }
-    g_deathSystemPolicy = {};
-}
-
 [[nodiscard]] CommandStatus ConfigureDeathSystemPolicy(RE::Actor& a_actor, const bool a_enabled) noexcept
 {
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player || &a_actor != player)
         return CommandStatus::Malformed;
-    if (!a_enabled)
-        return RestoreDeathSystemPolicy();
+    static_cast<void>(a_enabled);
 
-    auto* base = player->GetActorBase();
-    auto* killMove = RE::TESForm::LookupByID<RE::TESGlobal>(kKillMoveGlobalFormId);
-    if (!base || !killMove || !std::isfinite(killMove->value))
-        return CommandStatus::Inactive;
-
-    if (!g_deathSystemPolicy.Active)
-    {
-        const auto& flags = player->GetActorRuntimeData().boolFlags;
-        g_deathSystemPolicy = {
-            .PreviousKillMoveValue = killMove->value,
-            .PreviousActorEssential = flags.all(RE::Actor::BOOL_FLAGS::kEssential),
-            .PreviousNoBleedoutRecovery = flags.all(RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery),
-            .PreviousBaseEssential = base->IsEssential(),
-            .Active = true,
-        };
-    }
-
-    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kEssential, true);
-    SetActorBoolFlag(*player, RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery, true);
-    base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, true, true);
-    killMove->value = 0.0F;
-    return CommandStatus::Success;
+    // Skyrim VR has no verified equivalent for the desktop notification
+    // semantics.  Do not partially mutate local death-policy state.
+    return CommandStatus::Unsupported;
 }
 
 void ResetPostRespawnState() noexcept
@@ -430,7 +344,8 @@ void ResetPostRespawnState() noexcept
         auto* base = actor->GetActorBase();
         if (!base || !base->IsDynamicForm())
             return CommandStatus::EngineRejected;
-        base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kPCLevelMult, false, true);
+        static_cast<void>(SetReplicatedDynamicActorBaseFlag(
+            base, RE::ACTOR_BASE_DATA::Flag::kPCLevelMult, false));
         base->actorData.level = static_cast<std::uint16_t>(payload.ValueA);
         return CommandStatus::Success;
     }
@@ -439,7 +354,8 @@ void ResetPostRespawnState() noexcept
         auto* base = actor->GetActorBase();
         if (!base || !base->IsDynamicForm())
             return CommandStatus::EngineRejected;
-        base->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, payload.ValueA != 0, true);
+        static_cast<void>(SetReplicatedDynamicActorBaseFlag(
+            base, RE::ACTOR_BASE_DATA::Flag::kEssential, payload.ValueA != 0));
         return CommandStatus::Success;
     }
     case GameplayAction::SetFactionRank:
@@ -695,7 +611,6 @@ void ActorWorldManager::ProcessPeriodic() noexcept
 
 void ActorWorldManager::Reset() noexcept
 {
-    RestoreDeathSystemPolicyForRetirement();
     ResetPostRespawnState();
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

@@ -162,6 +162,29 @@ TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-
     REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongAction));
 }
 
+TEST_CASE("VR gameplay bridge admits only deferred appearance text shapes", "[skyrim-vr][gameplay-bridge]")
+{
+    REQUIRE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetName, 0, kGameplayTextAppearanceDeferred));
+    REQUIRE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetTint, 1, kGameplayTextAppearanceDeferred));
+    REQUIRE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetTint, kMaximumAppearanceTints,
+        kGameplayTextAppearanceDeferred));
+
+    REQUIRE_FALSE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetName, 1, kGameplayTextAppearanceDeferred));
+    REQUIRE_FALSE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetTint, 0, kGameplayTextAppearanceDeferred));
+    REQUIRE_FALSE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetTint, kMaximumAppearanceTints + 1,
+        kGameplayTextAppearanceDeferred));
+    REQUIRE_FALSE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetRace, 0, kGameplayTextAppearanceDeferred));
+    REQUIRE_FALSE(IsDeferredAppearanceGameplayText(
+        GameplayDomain::Appearance, GameplayAction::SetName, 0, 0));
+}
+
 TEST_CASE("VR gameplay bridge records preserve identity and payloads", "[skyrim-vr][gameplay-bridge]")
 {
     const auto event = MakeEvent(55);

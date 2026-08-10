@@ -67,12 +67,10 @@ bool IsValidUtf8(const std::array<char, Size>& acBytes, const std::size_t aLengt
     return true;
 }
 
-bool IsValidRelativeResourcePath(
+bool IsStructurallySafeRelativeResourcePath(
     const std::array<char, VRAppearanceTint::kMaximumTexturePathBytes>& acBytes,
     const std::uint8_t aLength) noexcept
 {
-    if (!IsValidUtf8(acBytes, aLength))
-        return false;
     if (aLength == 0)
         return true;
     if (acBytes[0] == '/' || acBytes[0] == '\\')
@@ -135,55 +133,110 @@ bool VRAppearance::operator!=(const VRAppearance& acRhs) const noexcept
     return !(*this == acRhs);
 }
 
-bool VRAppearance::IsValid() const noexcept
+VRAppearance::ValidationMask VRAppearance::GetValidationFailureMask() const noexcept
 {
+    ValidationMask failures = kValidationFailureNone;
+
     if (SchemaVersion != kSchemaVersion || Sequence == 0 || !RaceId || Sex > 1 || !std::isfinite(Weight) ||
-        Weight < 0.0F || Weight > 100.0F || Level == 0 ||
-        NameLength == 0 || NameLength > kMaximumNameBytes || HeadPartCount > kMaximumHeadParts || TintCount > kMaximumTints ||
-        !IsValidUtf8(Name, NameLength))
-        return false;
+        Weight < 0.0F || Weight > 100.0F || Level == 0)
+        failures |= kValidationFailureCoreSchema;
+
+    const bool validNameLength = NameLength != 0 && NameLength <= kMaximumNameBytes;
+    if (!validNameLength)
+        failures |= kValidationFailureNameLength;
+    else
+    {
+        if (!IsValidUtf8(Name, NameLength))
+            failures |= kValidationFailureNameUtf8;
+        for (std::size_t index = NameLength; index < Name.size(); ++index)
+            if (Name[index] != '\0')
+            {
+                failures |= kValidationFailureNameZeroTail;
+                break;
+            }
+    }
 
     for (const auto morph : FaceMorphs) {
         if (!std::isfinite(morph) || std::abs(morph) > kMaximumFaceMorphMagnitude || (!HasFaceData && morph != 0.0F))
-            return false;
+        {
+            failures |= kValidationFailureFaceMorphs;
+            break;
+        }
     }
     for (const auto part : FaceParts) {
         if ((!HasFaceData && part != 0) ||
             (HasFaceData && part != kFacePartDefault && (part < 0 || part > kMaximumFacePartPreset)))
-            return false;
+        {
+            failures |= kValidationFailureFaceParts;
+            break;
+        }
     }
 
-    for (std::uint8_t index = NameLength; index < kMaximumNameBytes; ++index)
-        if (Name[index] != '\0')
-            return false;
-    for (std::uint8_t index = 0; index < HeadPartCount; ++index)
+    if (HeadPartCount > kMaximumHeadParts)
+        failures |= kValidationFailureHeadPartCount;
+    else
     {
-        if (HeadParts[index].Slot >= kMaximumHeadParts || !HeadParts[index].FormId)
-            return false;
-        for (std::uint8_t prior = 0; prior < index; ++prior)
-            if (HeadParts[prior].Slot == HeadParts[index].Slot)
-                return false;
+        std::array<bool, kMaximumHeadParts> occupiedSlots{};
+        for (std::size_t index = 0; index < HeadPartCount; ++index)
+        {
+            const auto& headPart = HeadParts[index];
+            if (headPart.Slot >= kMaximumHeadParts || !headPart.FormId)
+            {
+                failures |= kValidationFailureHeadPartEntry;
+                continue;
+            }
+            if (occupiedSlots[headPart.Slot])
+                failures |= kValidationFailureDuplicateHeadPartSlot;
+            occupiedSlots[headPart.Slot] = true;
+        }
+        for (std::size_t index = HeadPartCount; index < HeadParts.size(); ++index)
+            if (HeadParts[index].Slot != 0 || HeadParts[index].FormId)
+            {
+                failures |= kValidationFailureUnusedHeadPartTail;
+                break;
+            }
     }
-    for (std::uint8_t index = HeadPartCount; index < kMaximumHeadParts; ++index)
-        if (HeadParts[index].Slot != 0 || HeadParts[index].FormId)
-            return false;
-    for (std::uint8_t index = 0; index < TintCount; ++index)
+
+    if (TintCount > kMaximumTints)
+        failures |= kValidationFailureTintCount;
+    else
     {
-        const auto& tint = Tints[index];
-        if (tint.Type >= kTintMaskTypeCount || !std::isfinite(tint.Alpha) || tint.Alpha < 0.0F ||
-            tint.Alpha > 1.0F || !IsValidRelativeResourcePath(tint.TexturePath, tint.TexturePathLength))
-            return false;
-        for (std::size_t pathIndex = tint.TexturePathLength; pathIndex < tint.TexturePath.size(); ++pathIndex)
-            if (tint.TexturePath[pathIndex] != '\0')
-                return false;
+        for (std::size_t index = 0; index < TintCount; ++index)
+        {
+            const auto& tint = Tints[index];
+            if (tint.Type >= kTintMaskTypeCount || !std::isfinite(tint.Alpha) || tint.Alpha < 0.0F ||
+                tint.Alpha > 1.0F)
+                failures |= kValidationFailureTintEntry;
+
+            if (!IsValidUtf8(tint.TexturePath, tint.TexturePathLength))
+                failures |= kValidationFailureTintPathUtf8;
+            else if (!IsStructurallySafeRelativeResourcePath(tint.TexturePath, tint.TexturePathLength))
+                failures |= kValidationFailureTintPathStructuralSafety;
+
+            for (std::size_t pathIndex = tint.TexturePathLength; pathIndex < tint.TexturePath.size(); ++pathIndex)
+                if (tint.TexturePath[pathIndex] != '\0')
+                {
+                    failures |= kValidationFailureTintPathZeroTail;
+                    break;
+                }
+        }
+        for (std::size_t index = TintCount; index < Tints.size(); ++index)
+            if (Tints[index].Type != 0 || Tints[index].Color != 0 || Tints[index].Alpha != 0.0F ||
+                Tints[index].TexturePathLength != 0 ||
+                std::any_of(Tints[index].TexturePath.begin(), Tints[index].TexturePath.end(),
+                            [](const char value) { return value != '\0'; }))
+            {
+                failures |= kValidationFailureUnusedTintTail;
+                break;
+            }
     }
-    for (std::uint8_t index = TintCount; index < kMaximumTints; ++index)
-        if (Tints[index].Type != 0 || Tints[index].Color != 0 || Tints[index].Alpha != 0.0F ||
-            Tints[index].TexturePathLength != 0 ||
-            std::any_of(Tints[index].TexturePath.begin(), Tints[index].TexturePath.end(),
-                        [](const char value) { return value != '\0'; }))
-            return false;
-    return true;
+
+    return failures;
+}
+
+bool VRAppearance::IsValid() const noexcept
+{
+    return GetValidationFailureMask() == kValidationFailureNone;
 }
 
 void VRAppearance::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept

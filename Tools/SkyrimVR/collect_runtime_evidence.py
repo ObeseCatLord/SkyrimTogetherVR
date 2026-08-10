@@ -31,6 +31,11 @@ SKSE_LOG_NAMES = (
     "sksevr_loader.log",
     "sksevr_steam_loader.log",
 )
+GAMEPLAY_BRIDGE_LOG_NAME = "SkyrimTogetherVRGameplayBridge.log"
+GAMEPLAY_BRIDGE_LOG_RELATIVE = (
+    pathlib.Path("drive_c/users/steamuser/Documents/My Games/Skyrim VR/SKSE")
+    / GAMEPLAY_BRIDGE_LOG_NAME
+)
 CHECK_PASS = "pass"
 CHECK_FAIL = "fail"
 CHECK_NOT_REQUIRED = "not_required"
@@ -267,6 +272,29 @@ def log_breadcrumb_detail(log_path: pathlib.Path, skip_log: bool) -> tuple[bool,
     return True, "all deferred startup/update-owner breadcrumbs present"
 
 
+def gameplay_bridge_log_detail(log_path: pathlib.Path) -> tuple[bool, str]:
+    """Reject bridge logs containing loader or relocation failures."""
+    if not log_path.exists():
+        return False, f"missing: {log_path}"
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return False, f"could not read: {exc}"
+
+    fatal_lines: list[str] = []
+    for line in text.splitlines():
+        folded = line.casefold()
+        if "[critical]" in folded or (
+            "failed to find the id within the address library" in folded
+            and ("rel/id" in folded or "address library" in folded)
+        ):
+            fatal_lines.append(line.strip())
+    if fatal_lines:
+        detail = " | ".join(fatal_lines[-3:])
+        return False, f"fatal gameplay-bridge indicator(s): {detail}"
+    return True, "no gameplay-bridge critical or relocation failures present"
+
+
 def load_json_file(path: pathlib.Path) -> tuple[dict[str, object], str]:
     if not path.exists():
         return {}, f"missing: {path}"
@@ -372,6 +400,7 @@ def validate_build_manifest_file(
 def build_runtime_checklist(
     readouts: dict[str, dict[str, str]],
     log_path: pathlib.Path,
+    gameplay_bridge_log_path: pathlib.Path,
     *,
     skip_log: bool,
     avatar_sync: bool,
@@ -429,6 +458,15 @@ def build_runtime_checklist(
         "deferred startup/update-owner logging",
         log_ok,
         log_detail,
+    )
+    gameplay_bridge_ok, gameplay_bridge_detail = gameplay_bridge_log_detail(gameplay_bridge_log_path)
+    add_check(
+        checks,
+        "gameplay_bridge_log",
+        "1,8,9",
+        "gameplay-bridge loader and relocation log",
+        gameplay_bridge_ok,
+        gameplay_bridge_detail,
     )
     lifecycle_ok, lifecycle_detail = audit_runtime_handoff.lifecycle_schema_detail(lifecycle)
     add_check(
@@ -1129,6 +1167,48 @@ def skse_log_candidates(args: argparse.Namespace) -> list[pathlib.Path]:
     return candidates
 
 
+def gameplay_bridge_log_candidates(args: argparse.Namespace) -> list[pathlib.Path]:
+    if args.gameplay_bridge_log:
+        return [args.gameplay_bridge_log.expanduser().resolve()]
+
+    game_path = args.game_path.expanduser().resolve()
+    roots: list[pathlib.Path] = []
+    if args.skse_log_root:
+        roots.append(args.skse_log_root.expanduser().resolve())
+    roots.extend(
+        (
+            game_path / "Data" / "SKSE" / "Plugins",
+            game_path / GAMEPLAY_BRIDGE_LOG_RELATIVE.parent,
+            game_path.parent.parent.parent
+            / "compatdata"
+            / "611670"
+            / "pfx"
+            / GAMEPLAY_BRIDGE_LOG_RELATIVE.parent,
+            pathlib.Path.home() / WINDOWS_MY_GAMES_RELATIVE,
+        )
+    )
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        roots.append(pathlib.Path(user_profile) / WINDOWS_MY_GAMES_RELATIVE)
+
+    candidates: list[pathlib.Path] = []
+    seen: set[pathlib.Path] = set()
+    for root in roots:
+        candidate = (root / GAMEPLAY_BRIDGE_LOG_NAME).resolve()
+        if candidate not in seen:
+            seen.add(candidate)
+            candidates.append(candidate)
+    return candidates
+
+
+def resolve_gameplay_bridge_log(args: argparse.Namespace) -> pathlib.Path:
+    candidates = gameplay_bridge_log_candidates(args)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
 def write_runtime_audit(
     zf: zipfile.ZipFile,
     args: argparse.Namespace,
@@ -1173,6 +1253,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     args.game_path = game_path
     handoff_dir = resolve_handoff_dir(args)
     log_path = args.log.expanduser().resolve() if args.log else game_path / DEFAULT_LOG_RELATIVE
+    gameplay_bridge_log_path = resolve_gameplay_bridge_log(args)
     build_manifest_path = game_path / BUILD_MANIFEST_NAME
     build_manifest_ok, build_manifest_detail, build_manifest = validate_build_manifest_file(
         build_manifest_path,
@@ -1188,6 +1269,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         "gamePath": str(game_path),
         "handoffDir": str(handoff_dir),
         "clientLog": str(log_path),
+        "gameplayBridgeLog": str(gameplay_bridge_log_path),
         "packageBuildManifestPath": str(build_manifest_path),
         "packageBuildManifest": build_manifest,
         "avatarSyncAudit": avatar_runtime_checks,
@@ -1213,6 +1295,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     runtime_checklist = build_runtime_checklist(
         readouts,
         log_path,
+        gameplay_bridge_log_path,
         skip_log=args.skip_log,
         avatar_sync=avatar_runtime_checks,
         build_manifest_ok=build_manifest_ok,
@@ -1250,6 +1333,15 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
             collected_files,
             category="client-log",
             required=not args.skip_log,
+        )
+
+        add_file(
+            zf,
+            gameplay_bridge_log_path,
+            f"logs/{GAMEPLAY_BRIDGE_LOG_NAME}",
+            collected_files,
+            category="gameplay-bridge-log",
+            required=True,
         )
 
         for name, file_name in sorted(vr_handoff.READOUT_FILES.items()):
@@ -1316,6 +1408,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         game = root / "SkyrimVR"
         handoff = game / "Data" / "SkyrimTogetherReborn"
         log = game / DEFAULT_LOG_RELATIVE
+        gameplay_bridge_log = root / "gameplay-bridge" / GAMEPLAY_BRIDGE_LOG_NAME
         out_dir = root / "out"
         handoff.mkdir(parents=True)
         log.parent.mkdir(parents=True)
@@ -1325,6 +1418,26 @@ def command_self_test(_: argparse.Namespace) -> int:
             + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
             encoding="utf-8",
         )
+        gameplay_bridge_log.parent.mkdir(parents=True)
+        gameplay_bridge_log.write_text(
+            "[info] validated loader runtime=skyrimvr\n",
+            encoding="utf-8",
+        )
+        failing_bridge_log = root / "gameplay-bridge-failure.log"
+        failing_bridge_log.write_text(
+            "REL/ID.h(195): Failed to find the id within the address library: 14261\n",
+            encoding="utf-8",
+        )
+        failure_ok, failure_detail = gameplay_bridge_log_detail(failing_bridge_log)
+        if failure_ok or "14261" not in failure_detail:
+            print("Evidence collector self-test did not reject the bridge relocation failure.")
+            return 1
+        critical_only_log = root / "gameplay-bridge-critical.log"
+        critical_only_log.write_text("[critical] bridge initialization failed\n", encoding="utf-8")
+        critical_ok, _ = gameplay_bridge_log_detail(critical_only_log)
+        if critical_ok:
+            print("Evidence collector self-test did not reject a gameplay-bridge [critical] entry.")
+            return 1
 
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
@@ -1578,6 +1691,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             game_path=game,
             handoff_dir=None,
             log=None,
+            gameplay_bridge_log=gameplay_bridge_log,
             out=out_dir,
             skse_log_root=None,
             extra_file=[],
@@ -1612,6 +1726,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "runtime_checklist.txt",
                 f"package/{BUILD_MANIFEST_NAME}",
                 "logs/tp_client.log",
+                f"logs/{GAMEPLAY_BRIDGE_LOG_NAME}",
                 "handoff/SkyrimTogetherVR.status",
                 "handoff/SkyrimTogetherVR.lifecycle",
                 "handoff/SkyrimTogetherVR.pose",
@@ -1797,6 +1912,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         baseline_checklist = build_runtime_checklist(
             baseline_readouts,
             log,
+            gameplay_bridge_log,
             skip_log=False,
             avatar_sync=False,
             build_manifest_ok=True,
@@ -1835,6 +1951,11 @@ def main() -> int:
     parser.add_argument("--game-path", type=pathlib.Path, default=default_game_path())
     parser.add_argument("--handoff-dir", type=pathlib.Path, help="override Data/SkyrimTogetherReborn handoff directory")
     parser.add_argument("--log", type=pathlib.Path, help="override client log path")
+    parser.add_argument(
+        "--gameplay-bridge-log",
+        type=pathlib.Path,
+        help="override SkyrimTogetherVRGameplayBridge.log path",
+    )
     parser.add_argument("--out", type=pathlib.Path, help="output zip path or output directory")
     parser.add_argument("--skse-log-root", type=pathlib.Path, help="directory containing sksevr.log files")
     parser.add_argument("--extra-file", type=pathlib.Path, action="append", default=[], help="extra file to include in the evidence zip")

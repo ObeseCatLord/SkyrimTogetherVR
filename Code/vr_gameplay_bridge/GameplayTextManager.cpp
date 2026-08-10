@@ -298,12 +298,8 @@ CommandStatus GameplayTextManager::Execute(const CommandRecord& a_command) noexc
 
         const auto& payload = a_command.Payload.ApplyGameplayTextChunk;
         const auto action = static_cast<GameplayAction>(payload.Action);
-        const bool deferredAppearanceText =
-            static_cast<GameplayDomain>(payload.Domain) == GameplayDomain::Appearance &&
-            payload.Reserved0 == kGameplayTextAppearanceDeferred &&
-            ((action == GameplayAction::SetName && payload.AuxiliaryLocalFormId == 0) ||
-             (action == GameplayAction::SetTint && payload.AuxiliaryLocalFormId >= 1 &&
-              payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints));
+        const bool deferredAppearanceText = IsDeferredAppearanceGameplayText(
+            static_cast<GameplayDomain>(payload.Domain), action, payload.AuxiliaryLocalFormId, payload.Reserved0);
         if (payload.TextId == 0 || payload.ChunkCount == 0 || payload.ChunkCount > kMaximumGameplayTextChunks ||
             payload.ChunkIndex >= payload.ChunkCount || payload.ByteCount > kGameplayTextBytesPerChunk ||
             (!deferredAppearanceText && payload.Reserved0 != 0) ||

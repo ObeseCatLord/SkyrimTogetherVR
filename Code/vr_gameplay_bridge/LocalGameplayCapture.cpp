@@ -576,13 +576,79 @@ std::array<std::chrono::steady_clock::time_point, kSkillCount> g_experienceSuppr
                 kAssignmentBootstrapEnchantIsWeapon : 0u);
 }
 
+[[nodiscard]] bool IsValidUtf8(const std::string_view a_text) noexcept
+{
+    for (std::size_t index = 0; index < a_text.size();)
+    {
+        const auto byte = static_cast<std::uint8_t>(a_text[index]);
+        if (byte == 0)
+            return false;
+        if (byte < 0x80)
+        {
+            ++index;
+            continue;
+        }
+        std::size_t continuationCount{};
+        std::uint32_t codePoint{};
+        if (byte >= 0xC2 && byte <= 0xDF)
+        {
+            continuationCount = 1;
+            codePoint = byte & 0x1Fu;
+        }
+        else if (byte >= 0xE0 && byte <= 0xEF)
+        {
+            continuationCount = 2;
+            codePoint = byte & 0x0Fu;
+        }
+        else if (byte >= 0xF0 && byte <= 0xF4)
+        {
+            continuationCount = 3;
+            codePoint = byte & 0x07u;
+        }
+        else
+            return false;
+        if (index + continuationCount >= a_text.size())
+            return false;
+        for (std::size_t continuation = 1; continuation <= continuationCount; ++continuation)
+        {
+            const auto continuationByte = static_cast<std::uint8_t>(a_text[index + continuation]);
+            if ((continuationByte & 0xC0u) != 0x80u)
+                return false;
+            codePoint = (codePoint << 6) | (continuationByte & 0x3Fu);
+        }
+        if ((continuationCount == 2 && codePoint < 0x800) || (continuationCount == 3 && codePoint < 0x10000) || codePoint > 0x10FFFF ||
+            (codePoint >= 0xD800 && codePoint <= 0xDFFF))
+            return false;
+        index += continuationCount + 1;
+    }
+    return true;
+}
+
+template <std::size_t MaximumBytes> [[nodiscard]] bool ReadBoundedUtf8(const char* ap_text, std::string_view& ar_text, const bool a_allowEmpty = false) noexcept
+{
+    static_assert(MaximumBytes > 0);
+    if (!ap_text)
+        return false;
+
+    std::size_t length{};
+    while (length <= MaximumBytes && ap_text[length] != '\0')
+        ++length;
+    if (length > MaximumBytes || (!a_allowEmpty && length == 0))
+        return false;
+
+    const std::string_view text{ap_text, length};
+    if (!IsValidUtf8(text))
+        return false;
+    ar_text = text;
+    return true;
+}
+
 [[nodiscard]] bool IsSafeTintTexturePath(const std::string_view a_path) noexcept
 {
     if (a_path.empty())
         return true;
-    if (a_path.size() > kMaximumAppearanceTexturePathBytes || a_path.front() == '/' ||
-        a_path.front() == '\\' || a_path.find(':') != std::string_view::npos ||
-        a_path.find('\0') != std::string_view::npos)
+    if (a_path.size() > kMaximumAppearanceTexturePathBytes || !IsValidUtf8(a_path) || a_path.front() == '/' || a_path.front() == '\\' ||
+        a_path.find(':') != std::string_view::npos || a_path.find('\0') != std::string_view::npos)
         return false;
     std::size_t segmentStart{};
     while (segmentStart <= a_path.size()) {
@@ -825,48 +891,16 @@ struct NpcSnapshot
     bool IsPlayerSummon{};
 };
 
-[[nodiscard]] bool CopyBoundedUtf8(
-    const char* ap_text, std::array<char, kMaximumAppearanceNameBytes>& ar_output,
-    std::uint8_t& ar_length) noexcept
+template <std::size_t Size> [[nodiscard]] bool CopyBoundedUtf8(const char* ap_text, std::array<char, Size>& ar_output, std::uint8_t& ar_length) noexcept
 {
-    if (!ap_text)
+    static_assert(Size <= std::numeric_limits<std::uint8_t>::max());
+
+    std::string_view text;
+    if (!ReadBoundedUtf8<Size>(ap_text, text))
         return false;
 
-    std::size_t length{};
-    while (length <= ar_output.size() && ap_text[length] != '\0')
-        ++length;
-    if (length == 0 || length > ar_output.size())
-        return false;
-
-    for (std::size_t index = 0; index < length;) {
-        const auto byte = static_cast<std::uint8_t>(ap_text[index]);
-        if (byte < 0x80) {
-            ++index;
-            continue;
-        }
-        std::size_t continuationCount{};
-        std::uint32_t codePoint{};
-        if (byte >= 0xC2 && byte <= 0xDF) { continuationCount = 1; codePoint = byte & 0x1Fu; }
-        else if (byte >= 0xE0 && byte <= 0xEF) { continuationCount = 2; codePoint = byte & 0x0Fu; }
-        else if (byte >= 0xF0 && byte <= 0xF4) { continuationCount = 3; codePoint = byte & 0x07u; }
-        else return false;
-        if (index + continuationCount >= length)
-            return false;
-        for (std::size_t continuation = 1; continuation <= continuationCount; ++continuation) {
-            const auto continuationByte = static_cast<std::uint8_t>(ap_text[index + continuation]);
-            if ((continuationByte & 0xC0u) != 0x80u)
-                return false;
-            codePoint = (codePoint << 6) | (continuationByte & 0x3Fu);
-        }
-        if ((continuationCount == 2 && codePoint < 0x800) ||
-            (continuationCount == 3 && codePoint < 0x10000) || codePoint > 0x10FFFF ||
-            (codePoint >= 0xD800 && codePoint <= 0xDFFF))
-            return false;
-        index += continuationCount + 1;
-    }
-
-    std::memcpy(ar_output.data(), ap_text, length);
-    ar_length = static_cast<std::uint8_t>(length);
+    std::memcpy(ar_output.data(), text.data(), text.size());
+    ar_length = static_cast<std::uint8_t>(text.size());
     return true;
 }
 
@@ -3699,17 +3733,14 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         record.ValueA = static_cast<std::int32_t>(slot);
     }
 
-    const auto* displayName = player->GetDisplayFullName();
-    std::size_t nameLength{};
-    if (displayName) {
-        while (nameLength <= kMaximumAppearanceNameBytes && displayName[nameLength] != '\0')
-            ++nameLength;
-    }
-    if (nameLength == 0 || nameLength > kMaximumAppearanceNameBytes) {
+    std::string_view displayName;
+    if (!ReadBoundedUtf8<kMaximumAppearanceNameBytes>(player->GetDisplayFullName(), displayName))
+    {
         static_cast<void>(publishFailure(CommandStatus::EngineRejected,
                                          AssignmentBootstrapFailureReason::Name));
         return CommandStatus::EngineRejected;
     }
+    const auto nameLength = displayName.size();
     const auto nameChunkCount = static_cast<std::uint16_t>(
         (nameLength + kGameplayTextBytesPerChunk - 1) / kGameplayTextBytesPerChunk);
     for (std::uint16_t chunk = 0; chunk < nameChunkCount; ++chunk) {
@@ -3729,7 +3760,7 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
         const auto offset = static_cast<std::size_t>(chunk) * kGameplayTextBytesPerChunk;
         text.ByteCount = static_cast<std::uint16_t>(std::min<std::size_t>(
             kGameplayTextBytesPerChunk, nameLength - offset));
-        std::memcpy(text.Utf8Bytes, displayName + offset, text.ByteCount);
+        std::memcpy(text.Utf8Bytes, displayName.data() + offset, text.ByteCount);
     }
 
     const auto* tintMasks = runtime->overlayTintMasks ? runtime->overlayTintMasks : std::addressof(runtime->tintMasks);
@@ -3740,9 +3771,10 @@ GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
             if (!tint || static_cast<std::uint32_t>(tint->type.get()) >= kTintTypeCount ||
                 !IsFinite(tint->alpha) || tint->alpha < 0.0F || tint->alpha > 1.0F)
                 continue;
-            std::string_view texturePath{};
-            if (tint->texture && tint->texture->textureName.c_str())
-                texturePath = tint->texture->textureName.c_str();
+            std::string_view texturePath;
+            const auto* textureName = tint->texture ? tint->texture->textureName.c_str() : nullptr;
+            if (textureName && !ReadBoundedUtf8<kMaximumAppearanceTexturePathBytes>(textureName, texturePath, true))
+                continue;
             if (!IsSafeTintTexturePath(texturePath))
                 continue;
             // The wire format caps tints at 32. Preserve the runtime order so

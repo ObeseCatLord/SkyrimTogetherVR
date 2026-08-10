@@ -1420,50 +1420,119 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         REQUIRE(recvAppearance.IsValid());
         REQUIRE(sendAppearance == recvAppearance);
+    }
 
-        auto invalidAppearance = sendAppearance;
+    SECTION("VRAppearance validation failure masks")
+    {
+        const auto expectFailure = [](const VRAppearance& acAppearance,
+                                      const VRAppearance::ValidationMask aExpectedFailure) {
+            REQUIRE_FALSE(acAppearance.IsValid());
+            REQUIRE(acAppearance.GetValidationFailureMask() == aExpectedFailure);
+        };
+
+        auto invalidAppearance = BuildMinimalVRAppearance();
+        REQUIRE(invalidAppearance.IsValid());
+        REQUIRE(invalidAppearance.GetValidationFailureMask() == VRAppearance::kValidationFailureNone);
+
         invalidAppearance.SchemaVersion = 1;
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureCoreSchema);
 
-        invalidAppearance = sendAppearance;
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.NameLength = 0;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureNameLength);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.Name[0] = static_cast<char>(0xC3);
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureNameUtf8);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.Name[invalidAppearance.NameLength] = 'x';
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureNameZeroTail);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.FaceMorphs[0] = 1.0F;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureFaceMorphs);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.FaceParts[0] = 1;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureFaceParts);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.HeadPartCount = VRAppearance::kMaximumHeadParts + 1;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureHeadPartCount);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.HeadPartCount = 1;
+        invalidAppearance.HeadParts[0] = {VRAppearance::kMaximumHeadParts, BuildGameId(1, 1)};
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureHeadPartEntry);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.HeadPartCount = 2;
+        invalidAppearance.HeadParts[0] = {0, BuildGameId(1, 1)};
+        invalidAppearance.HeadParts[1] = {0, BuildGameId(1, 2)};
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureDuplicateHeadPartSlot);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.HeadParts[0] = {0, BuildGameId(1, 1)};
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureUnusedHeadPartTail);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = VRAppearance::kMaximumTints + 1;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintCount);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
         invalidAppearance.Tints[0].Type = 15;
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintEntry);
 
-        invalidAppearance = sendAppearance;
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
         invalidAppearance.Tints[0].Alpha = 1.1F;
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintEntry);
 
-        invalidAppearance = sendAppearance;
-        SetTintTexturePath(invalidAppearance.Tints[0], "/textures/warpaint.dds");
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        invalidAppearance.Tints[0].TexturePathLength = 1;
+        invalidAppearance.Tints[0].TexturePath[0] = static_cast<char>(0xC3);
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathUtf8);
 
-        invalidAppearance = sendAppearance;
-        SetTintTexturePath(invalidAppearance.Tints[0], "textures/../warpaint.dds");
-        REQUIRE_FALSE(invalidAppearance.IsValid());
-
-        invalidAppearance = sendAppearance;
-        SetTintTexturePath(invalidAppearance.Tints[0], "textures//warpaint.dds");
-        REQUIRE_FALSE(invalidAppearance.IsValid());
-
-        invalidAppearance = sendAppearance;
-        SetTintTexturePath(invalidAppearance.Tints[0], "textures:warpaint.dds");
-        REQUIRE_FALSE(invalidAppearance.IsValid());
-
-        invalidAppearance = sendAppearance;
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
         invalidAppearance.Tints[0].TexturePathLength = 3;
         invalidAppearance.Tints[0].TexturePath[0] = 'a';
         invalidAppearance.Tints[0].TexturePath[1] = '\0';
         invalidAppearance.Tints[0].TexturePath[2] = 'b';
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathUtf8);
 
-        invalidAppearance = sendAppearance;
-        invalidAppearance.Tints[0].TexturePathLength = 1;
-        invalidAppearance.Tints[0].TexturePath[0] = static_cast<char>(0xC3);
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        SetTintTexturePath(invalidAppearance.Tints[0], "/textures/warpaint.dds");
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathStructuralSafety);
 
-        invalidAppearance = sendAppearance;
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures/../warpaint.dds");
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathStructuralSafety);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures//warpaint.dds");
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathStructuralSafety);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures:warpaint.dds");
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathStructuralSafety);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.TintCount = 1;
+        SetTintTexturePath(invalidAppearance.Tints[0], "textures/warpaint.dds");
         invalidAppearance.Tints[0].TexturePath[invalidAppearance.Tints[0].TexturePathLength] = 'x';
-        REQUIRE_FALSE(invalidAppearance.IsValid());
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureTintPathZeroTail);
+
+        invalidAppearance = BuildMinimalVRAppearance();
+        invalidAppearance.Tints[0].Color = 1;
+        expectFailure(invalidAppearance, VRAppearance::kValidationFailureUnusedTintTail);
     }
 
     SECTION("CharacterSpawnRequest preserves a semantic NPC appearance")

@@ -290,10 +290,8 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
         const auto capability = CapabilityForDomain(domain);
-        const bool deferredAppearanceText =
-            domain == GameplayDomain::Appearance && action == GameplayAction::SetTint &&
-            payload.Reserved0 == kGameplayTextAppearanceDeferred && payload.AuxiliaryLocalFormId >= 1 &&
-            payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints;
+        const bool deferredAppearanceText = IsDeferredAppearanceGameplayText(
+            domain, action, payload.AuxiliaryLocalFormId, payload.Reserved0);
         return header.Identity.EntityId == 0 && header.Identity.EntityGeneration == 0 &&
                header.Identity.SequenceId == 0 && header.Identity.ActionId != 0 &&
                payload.TargetHandle.Value == kLocalPlayerHandle.Value && payload.TextId != 0 &&
@@ -507,12 +505,8 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto domain = static_cast<GameplayDomain>(payload.Domain);
         const auto action = static_cast<GameplayAction>(payload.Action);
         const bool actorTarget = payload.TargetHandle.Value != 0;
-        const bool deferredAppearanceText =
-            domain == GameplayDomain::Appearance &&
-            payload.Reserved0 == kGameplayTextAppearanceDeferred &&
-            ((action == GameplayAction::SetName && payload.AuxiliaryLocalFormId == 0) ||
-             (action == GameplayAction::SetTint && payload.AuxiliaryLocalFormId >= 1 &&
-              payload.AuxiliaryLocalFormId <= kMaximumAppearanceTints));
+        const bool deferredAppearanceText = IsDeferredAppearanceGameplayText(
+            domain, action, payload.AuxiliaryLocalFormId, payload.Reserved0);
         const bool ordinaryText = payload.Reserved0 == 0 &&
             (action == GameplayAction::AnimationEvent || action == GameplayAction::SetName ||
              action == GameplayAction::ScriptAnimation || action == GameplayAction::Dialogue ||

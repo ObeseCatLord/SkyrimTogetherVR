@@ -477,6 +477,20 @@ inline constexpr std::int32_t kMaximumFacePartPreset = 255;
 inline constexpr std::uint32_t kAppearanceDeferredRefresh = 1u << 0;
 inline constexpr std::uint32_t kAppearanceTintHasTexturePath = 1u << 1;
 inline constexpr std::uint16_t kGameplayTextAppearanceDeferred = 1u << 0;
+
+[[nodiscard]] constexpr bool IsDeferredAppearanceGameplayText(
+    const GameplayDomain a_domain,
+    const GameplayAction a_action,
+    const std::uint32_t a_auxiliaryLocalFormId,
+    const std::uint16_t a_reserved0) noexcept
+{
+    return a_domain == GameplayDomain::Appearance &&
+           a_reserved0 == kGameplayTextAppearanceDeferred &&
+           ((a_action == GameplayAction::SetName && a_auxiliaryLocalFormId == 0) ||
+            (a_action == GameplayAction::SetTint && a_auxiliaryLocalFormId >= 1 &&
+             a_auxiliaryLocalFormId <= kMaximumAppearanceTints));
+}
+
 inline constexpr std::uint32_t kFadeScreenRemainVisible = 1u << 0;
 // SetCalendar retains the local date while still applying server time and
 // timescale when SyncPlayerCalendar is disabled.

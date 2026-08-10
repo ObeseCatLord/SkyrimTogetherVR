@@ -34,23 +34,38 @@ patch_verify_file=""
 payload_file=""
 guest_report_file=""
 commonlib_bundle_file=""
+commonlib_probe_repo=""
+candidate_bundle_file=""
 guest_patch=""
 guest_payload=""
 guest_commonlib_bundle=""
+guest_commonlib_transfer_ref=""
+guest_commonlib_trusted_ref=""
+guest_candidate_bundle=""
 guest_result=""
 winboat_powershell=""
 winboat_build=""
 winboat_repo=""
 base_commit="NOT_RESOLVED"
+candidate_common_ancestor="NOT_RESOLVED"
+candidate_bundle_sha256="NOT_REQUIRED"
+candidate_bundle_required=false
+guest_candidate_transfer_ref=""
+guest_trusted_remote_ref=""
 candidate_ephemeral_revision="NOT_CREATED"
 candidate_build_success=false
 candidate_result_transferred=false
 linux_result_path=""
 commonlib_path="Libraries/CommonLibSSE-NG"
 commonlib_gitlink_changed=false
-commonlib_base_commit="NOT_REQUESTED"
-commonlib_target_commit="NOT_REQUESTED"
-commonlib_bundle_sha256="NOT_REQUESTED"
+commonlib_base_commit="NOT_RESOLVED"
+commonlib_target_commit="NOT_RESOLVED"
+commonlib_bundle_sha256="NOT_REQUIRED"
+commonlib_bundle_required=false
+commonlib_common_ancestor="NOT_RESOLVED"
+commonlib_trusted_ref=""
+commonlib_trusted_upstream_commit="NOT_RESOLVED"
+commonlib_trusted_upstream_url="https://github.com/alandtse/CommonLibVR.git"
 
 cleanup_after_build() {
     "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
@@ -61,7 +76,7 @@ cleanup_guest_candidate() {
     if [[ -z $winboat_powershell || ! -x $winboat_powershell ]]; then
         return
     fi
-    if [[ -z $guest_patch && -z $guest_payload && -z $guest_commonlib_bundle && -z $guest_result && -z $winboat_build ]]; then
+    if [[ -z $guest_patch && -z $guest_payload && -z $guest_commonlib_bundle && -z $guest_candidate_bundle && -z $guest_result && -z $winboat_build ]]; then
         return
     fi
 
@@ -73,6 +88,12 @@ $build = '__WINBOAT_BUILD__'
 $patch = '__GUEST_PATCH__'
 $payload = '__GUEST_PAYLOAD__'
 $commonLibBundle = '__GUEST_COMMONLIB_BUNDLE__'
+$commonLibPath = 'Libraries/CommonLibSSE-NG'
+$commonLibTransferRef = '__GUEST_COMMONLIB_TRANSFER_REF__'
+$commonLibTrustedRef = '__GUEST_COMMONLIB_TRUSTED_REF__'
+$candidateBundle = '__GUEST_CANDIDATE_BUNDLE__'
+$candidateTransferRef = '__GUEST_CANDIDATE_TRANSFER_REF__'
+$trustedRemoteRef = '__GUEST_TRUSTED_REMOTE_REF__'
 $result = '__GUEST_RESULT__'
 
 function Test-CandidateProcessActive {
@@ -93,6 +114,26 @@ Remove-Item -LiteralPath $patch -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $payload -Force -ErrorAction SilentlyContinue
 if (-not [string]::IsNullOrWhiteSpace($commonLibBundle)) {
     Remove-Item -LiteralPath $commonLibBundle -Force -ErrorAction SilentlyContinue
+}
+if (-not [string]::IsNullOrWhiteSpace($candidateBundle)) {
+    Remove-Item -LiteralPath $candidateBundle -Force -ErrorAction SilentlyContinue
+}
+if (-not [string]::IsNullOrWhiteSpace($candidateTransferRef)) {
+    git -C $repo update-ref -d $candidateTransferRef 2>$null
+}
+if (-not [string]::IsNullOrWhiteSpace($trustedRemoteRef)) {
+    git -C $repo update-ref -d $trustedRemoteRef 2>$null
+}
+if (-not [string]::IsNullOrWhiteSpace($build)) {
+    $commonLibWorktree = Join-Path $build $commonLibPath
+    if (Test-Path -LiteralPath $commonLibWorktree) {
+        if (-not [string]::IsNullOrWhiteSpace($commonLibTransferRef)) {
+            git -C $commonLibWorktree update-ref -d $commonLibTransferRef 2>$null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($commonLibTrustedRef)) {
+            git -C $commonLibWorktree update-ref -d $commonLibTrustedRef 2>$null
+        }
+    }
 }
 if (-not [string]::IsNullOrWhiteSpace($result)) {
     Remove-Item -LiteralPath $result -Recurse -Force -ErrorAction SilentlyContinue
@@ -116,6 +157,11 @@ POWERSHELL
     guest_cleanup=${guest_cleanup//__GUEST_PATCH__/$guest_patch}
     guest_cleanup=${guest_cleanup//__GUEST_PAYLOAD__/$guest_payload}
     guest_cleanup=${guest_cleanup//__GUEST_COMMONLIB_BUNDLE__/$guest_commonlib_bundle}
+    guest_cleanup=${guest_cleanup//__GUEST_COMMONLIB_TRANSFER_REF__/$guest_commonlib_transfer_ref}
+    guest_cleanup=${guest_cleanup//__GUEST_COMMONLIB_TRUSTED_REF__/$guest_commonlib_trusted_ref}
+    guest_cleanup=${guest_cleanup//__GUEST_CANDIDATE_BUNDLE__/$guest_candidate_bundle}
+    guest_cleanup=${guest_cleanup//__GUEST_CANDIDATE_TRANSFER_REF__/$guest_candidate_transfer_ref}
+    guest_cleanup=${guest_cleanup//__GUEST_TRUSTED_REMOTE_REF__/$guest_trusted_remote_ref}
     guest_cleanup=${guest_cleanup//__GUEST_RESULT__/$guest_result}
     "$winboat_powershell" "$guest_cleanup" >/dev/null 2>&1 || true
 }
@@ -126,6 +172,11 @@ cleanup_runtime() {
     cleanup_guest_candidate
     [[ -z $payload_file ]] || rm -f -- "$payload_file"
     [[ -z $commonlib_bundle_file ]] || rm -f -- "$commonlib_bundle_file"
+    [[ -z $commonlib_probe_repo ]] || rm -rf -- "$commonlib_probe_repo"
+    if [[ -n $commonlib_trusted_ref ]]; then
+        git -C "$commonlib_path" update-ref -d "$commonlib_trusted_ref" 2>/dev/null || true
+    fi
+    [[ -z $candidate_bundle_file ]] || rm -f -- "$candidate_bundle_file"
     [[ -z $patch_file ]] || rm -f -- "$patch_file"
     [[ -z $patch_verify_file ]] || rm -f -- "$patch_verify_file"
     [[ -z $guest_report_file ]] || rm -f -- "$guest_report_file"
@@ -138,6 +189,8 @@ cleanup_runtime() {
     printf 'STVR_CANDIDATE_BUILD_SUCCESS=%s\n' "$candidate_build_success"
     printf 'STVR_CANDIDATE_COMMONLIB_BASE=%s\n' "$commonlib_base_commit"
     printf 'STVR_CANDIDATE_COMMONLIB_TARGET=%s\n' "$commonlib_target_commit"
+    printf 'STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=%s\n' "$commonlib_common_ancestor"
+    printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
     printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
     exit "$status"
 }
@@ -178,8 +231,9 @@ if [[ $commonlib_configured != true ]]; then
     exit 2
 fi
 
+commonlib_base_commit=$(git rev-parse --verify "$base_commit:$commonlib_path")
+commonlib_target_commit=$commonlib_base_commit
 if [[ $commonlib_gitlink_changed == true ]]; then
-    commonlib_base_commit=$(git rev-parse --verify "$base_commit:$commonlib_path")
     commonlib_target_commit=$(git -C "$commonlib_path" rev-parse --verify HEAD^{commit})
     commonlib_raw_delta=$(git diff --raw --no-abbrev --no-renames "$base_commit" -- "$commonlib_path")
     expected_commonlib_index_raw_delta=":160000 160000 $commonlib_base_commit $commonlib_target_commit M"$'\t'"$commonlib_path"
@@ -197,15 +251,15 @@ if [[ $commonlib_gitlink_changed == true ]]; then
         echo "Refusing CommonLib gitlink delta whose patch does not name the requested target commit." >&2
         exit 2
     fi
-    if ! git -C "$commonlib_path" cat-file -e "$commonlib_base_commit^{commit}" || \
-       ! git -C "$commonlib_path" cat-file -e "$commonlib_target_commit^{commit}"; then
-        echo "Refusing CommonLib gitlink delta with a missing commit object." >&2
-        exit 2
-    fi
-    if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_base_commit" "$commonlib_target_commit"; then
-        echo "Refusing CommonLib gitlink delta whose target is not a descendant of the parent gitlink base." >&2
-        exit 2
-    fi
+fi
+if ! git -C "$commonlib_path" cat-file -e "$commonlib_base_commit^{commit}" || \
+   ! git -C "$commonlib_path" cat-file -e "$commonlib_target_commit^{commit}"; then
+    echo "Refusing CommonLib source state with a missing base or target commit object." >&2
+    exit 2
+fi
+if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_base_commit" "$commonlib_target_commit"; then
+    echo "Refusing CommonLib source state whose target is not descended from the exact project-base gitlink." >&2
+    exit 2
 fi
 
 submodule_state=$(git submodule status --recursive)
@@ -233,29 +287,80 @@ while IFS= read -r submodule_line; do
             ;;
     esac
 done <<<"$submodule_state"
-if [[ $commonlib_gitlink_changed == true ]]; then
-    commonlib_direct_status=$(git submodule status -- "$commonlib_path")
-    commonlib_status_prefix=${commonlib_direct_status:0:1}
-    commonlib_status_rest=${commonlib_direct_status:1}
-    commonlib_status_commit=${commonlib_status_rest%% *}
-    commonlib_status_path_and_suffix=${commonlib_status_rest#* }
-    commonlib_status_path=${commonlib_status_path_and_suffix%% *}
-    if [[ ( $commonlib_status_prefix != '+' && $commonlib_status_prefix != ' ' ) || \
-          $commonlib_status_commit != "$commonlib_target_commit" || \
-          $commonlib_status_path != "$commonlib_path" ]]; then
-        echo "CommonLib gitlink changed but its worktree does not match the requested committed target." >&2
-        exit 2
-    fi
+commonlib_direct_status=$(git submodule status -- "$commonlib_path")
+commonlib_status_prefix=${commonlib_direct_status:0:1}
+commonlib_status_rest=${commonlib_direct_status:1}
+commonlib_status_commit=${commonlib_status_rest%% *}
+commonlib_status_path_and_suffix=${commonlib_status_rest#* }
+commonlib_status_path=${commonlib_status_path_and_suffix%% *}
+if [[ ( $commonlib_status_prefix != '+' && $commonlib_status_prefix != ' ' ) || \
+      $commonlib_status_commit != "$commonlib_target_commit" || \
+      $commonlib_status_path != "$commonlib_path" ]]; then
+    echo "CommonLib worktree does not match the exact requested base/target source state." >&2
+    exit 2
 fi
 
 short_commit=${base_commit:0:8}
 status_before=$(git status --porcelain=v1 --untracked-files=all)
-commonlib_head_before="NOT_REQUESTED"
-if [[ $commonlib_gitlink_changed == true ]]; then
-    commonlib_head_before=$(git -C "$commonlib_path" rev-parse --verify HEAD^{commit})
+commonlib_head_before=$(git -C "$commonlib_path" rev-parse --verify HEAD^{commit})
+commonlib_probe_repo=$(mktemp -d "${TMPDIR:-/tmp}/stvr-winboat-commonlib-probe-${short_commit}-XXXXXX")
+git -C "$commonlib_probe_repo" init --bare --quiet
+probe_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream"
+git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+    "$commonlib_trusted_upstream_url" "+HEAD:$probe_trusted_ref"
+commonlib_trusted_upstream_commit=$(git -C "$commonlib_probe_repo" rev-parse --verify "$probe_trusted_ref^{commit}")
+if [[ ! $commonlib_trusted_upstream_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Trusted CommonLib upstream HEAD did not resolve to a full commit." >&2
+    exit 2
+fi
+
+commonlib_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream-${short_commit}-$$"
+if git -C "$commonlib_path" show-ref --verify --quiet "$commonlib_trusted_ref"; then
+    echo "Temporary local CommonLib trusted-upstream ref already exists: $commonlib_trusted_ref" >&2
+    exit 2
+fi
+git -C "$commonlib_path" fetch --quiet --no-tags --no-write-fetch-head \
+    "$commonlib_trusted_upstream_url" "+HEAD:$commonlib_trusted_ref"
+if [[ $(git -C "$commonlib_path" rev-parse --verify "$commonlib_trusted_ref^{commit}") != "$commonlib_trusted_upstream_commit" ]]; then
+    echo "Local CommonLib trusted-upstream ref does not match the isolated upstream probe." >&2
+    exit 2
+fi
+if ! commonlib_common_ancestor=$(git -C "$commonlib_path" merge-base "$commonlib_base_commit" "$commonlib_trusted_ref"); then
+    echo "Cannot derive a trusted-upstream ancestor for the exact CommonLib base gitlink." >&2
+    exit 2
+fi
+if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_base_commit" || \
+   ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_trusted_ref"; then
+    echo "Derived CommonLib bundle prerequisite failed its ancestry checks." >&2
+    exit 2
+fi
+
+commonlib_base_upstream_available=false
+commonlib_target_upstream_available=false
+if git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+    "$commonlib_trusted_upstream_url" "$commonlib_base_commit:refs/stvr/winboat-candidate/probe-base" \
+    >/dev/null 2>&1 && \
+   [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-base^{commit}') == "$commonlib_base_commit" ]]; then
+    commonlib_base_upstream_available=true
+fi
+if [[ $commonlib_target_commit == "$commonlib_base_commit" ]]; then
+    commonlib_target_upstream_available=$commonlib_base_upstream_available
+elif git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+    "$commonlib_trusted_upstream_url" "$commonlib_target_commit:refs/stvr/winboat-candidate/probe-target" \
+    >/dev/null 2>&1 && \
+     [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-target^{commit}') == "$commonlib_target_commit" ]]; then
+    commonlib_target_upstream_available=true
+fi
+
+if [[ $commonlib_base_upstream_available != true || $commonlib_target_upstream_available != true ]]; then
+    commonlib_bundle_required=true
     commonlib_bundle_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-commonlib-${short_commit}-XXXXXX.bundle")
+    if [[ $(git -C "$commonlib_path" rev-parse --verify HEAD^{commit}) != "$commonlib_target_commit" ]]; then
+        echo "CommonLib HEAD changed before creating its candidate bundle; retry from a stable tree." >&2
+        exit 2
+    fi
     git -C "$commonlib_path" bundle create "$commonlib_bundle_file" \
-        HEAD "^$commonlib_base_commit"
+        HEAD "^$commonlib_common_ancestor"
     git -C "$commonlib_path" bundle verify "$commonlib_bundle_file" >/dev/null
     bundle_head_count=$(git -C "$commonlib_path" bundle list-heads "$commonlib_bundle_file" | awk 'END { print NR }')
     bundle_head_commit=$(git -C "$commonlib_path" bundle list-heads "$commonlib_bundle_file" | awk 'NR == 1 { print $1 }')
@@ -266,6 +371,10 @@ if [[ $commonlib_gitlink_changed == true ]]; then
     fi
     commonlib_bundle_sha256=$(sha256sum "$commonlib_bundle_file" | awk '{print $1}')
 fi
+rm -rf -- "$commonlib_probe_repo"
+commonlib_probe_repo=""
+git -C "$commonlib_path" update-ref -d "$commonlib_trusted_ref"
+commonlib_trusted_ref=""
 patch_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.patch")
 git diff --binary --full-index --no-ext-diff --ignore-submodules=none "$base_commit" -- >"$patch_file"
 status_after_first_snapshot=$(git status --porcelain=v1 --untracked-files=all)
@@ -282,11 +391,42 @@ if [[ $status_before != "$status_after_first_snapshot" || \
     echo "Linux working tree or HEAD changed while creating the candidate patch; retry from a stable tree." >&2
     exit 2
 fi
-if [[ $commonlib_gitlink_changed == true && \
-      $(git -C "$commonlib_path" rev-parse --verify HEAD^{commit}) != "$commonlib_target_commit" ]]; then
+if [[ $(git -C "$commonlib_path" rev-parse --verify HEAD^{commit}) != "$commonlib_target_commit" ]]; then
     echo "CommonLib HEAD changed while creating the candidate patch; retry from a stable tree." >&2
     exit 2
 fi
+
+if ! local_origin_main=$(git rev-parse --verify refs/remotes/origin/main^{commit}); then
+    echo "Cannot derive a WinBoat-transfer ancestor: local refs/remotes/origin/main is missing." >&2
+    exit 2
+fi
+if ! candidate_common_ancestor=$(git merge-base "$base_commit" "$local_origin_main"); then
+    echo "Cannot derive a common ancestor between the candidate base and local origin/main." >&2
+    exit 2
+fi
+if ! git merge-base --is-ancestor "$candidate_common_ancestor" "$base_commit"; then
+    echo "Derived candidate-transfer ancestor is not an ancestor of the candidate base." >&2
+    exit 2
+fi
+if ! git merge-base --is-ancestor "$base_commit" "$local_origin_main"; then
+    candidate_bundle_required=true
+    candidate_bundle_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-base-${short_commit}-XXXXXX.bundle")
+    if [[ $(git rev-parse --verify HEAD^{commit}) != "$base_commit" ]]; then
+        echo "Linux HEAD changed before creating the candidate base bundle; retry from a stable tree." >&2
+        exit 2
+    fi
+    git bundle create "$candidate_bundle_file" HEAD "^$candidate_common_ancestor"
+    git bundle verify "$candidate_bundle_file" >/dev/null
+    bundle_head_count=$(git bundle list-heads "$candidate_bundle_file" | awk 'END { print NR }')
+    bundle_head_commit=$(git bundle list-heads "$candidate_bundle_file" | awk 'NR == 1 { print $1 }')
+    bundle_head_ref=$(git bundle list-heads "$candidate_bundle_file" | awk 'NR == 1 { print $2 }')
+    if [[ $bundle_head_count != 1 || $bundle_head_commit != "$base_commit" || $bundle_head_ref != HEAD ]]; then
+        echo "Candidate base bundle does not contain exactly the requested base commit." >&2
+        exit 2
+    fi
+    candidate_bundle_sha256=$(sha256sum "$candidate_bundle_file" | awk '{print $1}')
+fi
+
 if [[ ! -s $patch_file ]]; then
     echo "No tracked working-tree delta exists. Use the normal clean WinBoat build instead." >&2
     exit 2
@@ -319,11 +459,18 @@ winboat_build="${winboat_repo}-candidate-${short_commit}-${timestamp}"
 guest_result="${winboat_repo}-candidate-results\\${short_commit}-${timestamp}"
 guest_patch="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-candidate-${short_commit}-${timestamp}.patch"
 guest_payload="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-candidate-${short_commit}-${timestamp}.ps1"
-if [[ $commonlib_gitlink_changed == true ]]; then
+guest_trusted_remote_ref="refs/stvr/winboat-candidate/trusted-main-${short_commit}-${timestamp}"
+guest_commonlib_transfer_ref="refs/stvr/winboat-candidate/commonlib-target-${short_commit}-${timestamp}"
+guest_commonlib_trusted_ref="refs/stvr/winboat-candidate/commonlib-upstream-${short_commit}-${timestamp}"
+if [[ $candidate_bundle_required == true ]]; then
+    guest_candidate_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-base-${short_commit}-${timestamp}.bundle"
+    guest_candidate_transfer_ref="refs/stvr/winboat-candidate/base-${short_commit}-${timestamp}"
+fi
+if [[ $commonlib_bundle_required == true ]]; then
     guest_commonlib_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-commonlib-${short_commit}-${timestamp}.bundle"
 fi
 
-for value in "$winboat_repo" "$winboat_build" "$guest_result" "$guest_patch" "$guest_payload" "$guest_commonlib_bundle"; do
+for value in "$winboat_repo" "$winboat_build" "$guest_result" "$guest_patch" "$guest_payload" "$guest_commonlib_bundle" "$guest_commonlib_transfer_ref" "$guest_commonlib_trusted_ref" "$guest_candidate_bundle" "$guest_candidate_transfer_ref" "$guest_trusted_remote_ref"; do
     if [[ $value == *"'"* ]]; then
         echo "WinBoat paths containing a single quote are not supported." >&2
         exit 2
@@ -331,9 +478,13 @@ for value in "$winboat_repo" "$winboat_build" "$guest_result" "$guest_patch" "$g
 done
 
 printf 'STVR_CANDIDATE_BASE=%s\n' "$base_commit"
+printf 'STVR_CANDIDATE_COMMON_ANCESTOR=%s\n' "$candidate_common_ancestor"
+printf 'STVR_CANDIDATE_BUNDLE_SHA256=%s\n' "$candidate_bundle_sha256"
 printf 'STVR_CANDIDATE_PATCH_SHA256=%s\n' "$patch_sha256"
 printf 'STVR_CANDIDATE_COMMONLIB_BASE=%s\n' "$commonlib_base_commit"
 printf 'STVR_CANDIDATE_COMMONLIB_TARGET=%s\n' "$commonlib_target_commit"
+printf 'STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=%s\n' "$commonlib_common_ancestor"
+printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
 printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
 
 read -r -d '' powershell_payload <<'POWERSHELL' || true
@@ -343,17 +494,31 @@ $repo = '__WINBOAT_REPO__'
 $build = '__WINBOAT_BUILD__'
 $patch = '__GUEST_PATCH__'
 $baseCommit = '__BASE_COMMIT__'
+$commonAncestor = '__CANDIDATE_COMMON_ANCESTOR__'
+$hasCandidateBundle = [System.Convert]::ToBoolean('__HAS_CANDIDATE_BUNDLE__')
+$candidateBundle = '__GUEST_CANDIDATE_BUNDLE__'
+$candidateBundleSha256 = '__CANDIDATE_BUNDLE_SHA256__'
+$candidateTransferRef = '__GUEST_CANDIDATE_TRANSFER_REF__'
+$trustedRemoteRef = '__GUEST_TRUSTED_REMOTE_REF__'
 $patchSha256 = '__PATCH_SHA256__'
 $hasCommonLibGitlink = [System.Convert]::ToBoolean('__HAS_COMMONLIB_GITLINK__')
+$hasCommonLibBundle = [System.Convert]::ToBoolean('__HAS_COMMONLIB_BUNDLE__')
 $commonLibPath = 'Libraries/CommonLibSSE-NG'
 $commonLibBase = '__COMMONLIB_BASE__'
 $commonLibTarget = '__COMMONLIB_TARGET__'
+$commonLibCommonAncestor = '__COMMONLIB_COMMON_ANCESTOR__'
+$commonLibTrustedUpstream = '__COMMONLIB_TRUSTED_UPSTREAM__'
+$commonLibTrustedUpstreamUrl = '__COMMONLIB_TRUSTED_UPSTREAM_URL__'
 $commonLibBundle = '__GUEST_COMMONLIB_BUNDLE__'
 $commonLibBundleSha256 = '__COMMONLIB_BUNDLE_SHA256__'
+$commonLibTransferRef = '__GUEST_COMMONLIB_TRANSFER_REF__'
+$commonLibTrustedRef = '__GUEST_COMMONLIB_TRUSTED_REF__'
 $result = '__GUEST_RESULT__'
 $worktreeCreated = $false
 $candidateRevision = "NOT_CREATED"
 $buildSucceeded = $false
+$trustedRemoteCommit = "NOT_VERIFIED"
+$commonLibWorktree = ""
 
 function Get-CandidateProcesses {
     param([string]$Path)
@@ -366,6 +531,36 @@ function Get-CandidateProcesses {
             $_.CommandLine -match $escapedLeaf
         }
     )
+}
+
+function Invoke-GitStatusProbe {
+    param([string[]]$Arguments)
+
+    $savedErrorActionPreference = $ErrorActionPreference
+    $hadNativeErrorPreference = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+    if ($hadNativeErrorPreference) {
+        $savedNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    }
+    try {
+        $ErrorActionPreference = "Continue"
+        $PSNativeCommandUseErrorActionPreference = $false
+        & git @Arguments 2>$null | Out-Null
+        $probeExitCode = $LASTEXITCODE
+    } catch {
+        if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            $probeExitCode = $LASTEXITCODE
+        } else {
+            $probeExitCode = 1
+        }
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+        if ($hadNativeErrorPreference) {
+            $PSNativeCommandUseErrorActionPreference = $savedNativeErrorPreference
+        } else {
+            Remove-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Local -ErrorAction SilentlyContinue
+        }
+    }
+    return [int]$probeExitCode
 }
 
 function Remove-CandidateWorktree {
@@ -383,8 +578,8 @@ function Remove-CandidateWorktree {
         return
     }
 
-    git -C $repo worktree remove --force $Path
-    if ($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath $Path)) {
+    $removeStatus = Invoke-GitStatusProbe -Arguments @('-C', $repo, 'worktree', 'remove', '--force', $Path)
+    if ($removeStatus -ne 0 -and (Test-Path -LiteralPath $Path)) {
         Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $Path) {
@@ -416,21 +611,54 @@ function Remove-StaleCandidateWorktrees {
     if ($LASTEXITCODE -ne 0) { throw "Could not prune stale WinBoat candidate worktree metadata." }
 }
 
-function Test-CandidateBaseAncestorOfOriginMain {
-    git -C $repo show-ref --verify --quiet refs/remotes/origin/main
-    if ($LASTEXITCODE -ne 0) { return $false }
-
-    git -C $repo merge-base --is-ancestor $baseCommit refs/remotes/origin/main
-    return $LASTEXITCODE -eq 0
-}
-
 try {
-    if (-not (Test-CandidateBaseAncestorOfOriginMain)) {
-        git -C $repo fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-        if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main while verifying the candidate base." }
-        if (-not (Test-CandidateBaseAncestorOfOriginMain)) {
-            throw "Candidate base $baseCommit is not an ancestor of refs/remotes/origin/main in WinBoat."
+    git -C $repo fetch --no-tags --no-write-fetch-head origin "+refs/heads/main:$trustedRemoteRef"
+    if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main into the temporary trusted WinBoat ref." }
+    $trustedRemoteCommit = (git -C $repo rev-parse "$trustedRemoteRef^{commit}").Trim()
+    if ($LASTEXITCODE -ne 0 -or $trustedRemoteCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Temporary trusted WinBoat remote ref did not resolve to a full commit."
+    }
+    git -C $repo cat-file -e "$commonAncestor^{commit}"
+    if ($LASTEXITCODE -ne 0) { throw "Candidate common ancestor is not available after fetching the trusted WinBoat remote ref." }
+    git -C $repo merge-base --is-ancestor $commonAncestor $trustedRemoteRef
+    if ($LASTEXITCODE -ne 0) {
+        throw "Candidate common ancestor $commonAncestor is not an ancestor of the trusted WinBoat remote ref."
+    }
+
+    if ($hasCandidateBundle) {
+        if ([string]::IsNullOrWhiteSpace($candidateBundle) -or [string]::IsNullOrWhiteSpace($candidateTransferRef)) {
+            throw "Candidate base bundle transfer paths are missing."
         }
+        if (-not (Test-Path -LiteralPath $candidateBundle)) { throw "Transferred candidate base bundle is missing." }
+        $actualCandidateBundleSha256 = (Get-FileHash -LiteralPath $candidateBundle -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualCandidateBundleSha256 -ne $candidateBundleSha256) {
+            throw "Transferred candidate base bundle SHA-256 does not match the Linux snapshot."
+        }
+        git -C $repo bundle verify $candidateBundle
+        if ($LASTEXITCODE -ne 0) { throw "Candidate base bundle prerequisites are not satisfied by the trusted WinBoat remote ref." }
+        $candidateBundleHeads = @(git -C $repo bundle list-heads $candidateBundle)
+        if ($LASTEXITCODE -ne 0 -or $candidateBundleHeads.Count -ne 1) {
+            throw "Candidate base bundle does not have exactly one advertised base commit."
+        }
+        $candidateBundleHeadParts = @($candidateBundleHeads[0] -split '\s+')
+        if ($candidateBundleHeadParts.Count -ne 2 -or $candidateBundleHeadParts[0].Trim() -ne $baseCommit -or $candidateBundleHeadParts[1].Trim() -ne 'HEAD') {
+            throw "Candidate base bundle advertised commit does not match the requested base."
+        }
+        git -C $repo fetch --no-tags --no-write-fetch-head $candidateBundle "HEAD:$candidateTransferRef"
+        if ($LASTEXITCODE -ne 0) { throw "Could not fetch the verified candidate base bundle into its temporary WinBoat ref." }
+        $transferredBase = (git -C $repo rev-parse "$candidateTransferRef^{commit}").Trim()
+        if ($LASTEXITCODE -ne 0 -or $transferredBase -ne $baseCommit) {
+            throw "Temporary WinBoat candidate base ref does not match the requested base commit."
+        }
+        git -C $repo cat-file -e "$baseCommit^{commit}"
+        if ($LASTEXITCODE -ne 0) { throw "Transferred candidate base commit object is unavailable in WinBoat." }
+        git -C $repo merge-base --is-ancestor $commonAncestor $baseCommit
+        if ($LASTEXITCODE -ne 0) { throw "Transferred candidate base is not descended from the verified common ancestor." }
+    } else {
+        git -C $repo cat-file -e "$baseCommit^{commit}"
+        if ($LASTEXITCODE -ne 0) { throw "Candidate base commit is unavailable after fetching the trusted WinBoat remote ref." }
+        git -C $repo merge-base --is-ancestor $baseCommit $trustedRemoteRef
+        if ($LASTEXITCODE -ne 0) { throw "Candidate base is not an ancestor of the trusted WinBoat remote ref." }
     }
 
     Remove-StaleCandidateWorktrees
@@ -440,45 +668,89 @@ try {
     $worktreeCreated = $true
 
     Set-Location $build
-    git submodule sync --recursive
-    if ($LASTEXITCODE -ne 0) { throw "Could not synchronize submodule URLs." }
-    git submodule update --init --recursive --checkout
-    if ($LASTEXITCODE -ne 0) { throw "Could not initialize pinned submodules." }
-
-    $clean = @(git status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $clean.Count -ne 0) { throw "Fresh WinBoat candidate worktree is unexpectedly dirty." }
-    $submoduleState = @(git submodule status --recursive)
-    if ($LASTEXITCODE -ne 0 -or @($submoduleState | Where-Object { $_ -match '^[+\-U]' }).Count -ne 0) {
-        throw "Fresh WinBoat candidate worktree has an unresolved submodule."
+    git submodule sync -- $commonLibPath
+    if ($LASTEXITCODE -ne 0) { throw "Could not synchronize the CommonLib submodule URL." }
+    $earlyCommonLibUpdateStatus = Invoke-GitStatusProbe -Arguments @(
+        'submodule', 'update', '--init', '--no-fetch', '--checkout', '--', $commonLibPath
+    )
+    $commonLibWorktree = Join-Path $build $commonLibPath
+    git -C $commonLibWorktree rev-parse --git-dir | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not initialize the CommonLib repository before recursive submodule checkout." }
+    if ($earlyCommonLibUpdateStatus -ne 0) {
+        $baseObjectProbeStatus = Invoke-GitStatusProbe -Arguments @(
+            '-C', $commonLibWorktree, 'cat-file', '-e', "$commonLibBase^{commit}"
+        )
+        if ($baseObjectProbeStatus -eq 0) {
+            throw "Early CommonLib update failed even though the exact base object was already present."
+        }
     }
 
-    $commonLibWorktree = Join-Path $build $commonLibPath
-    if ($hasCommonLibGitlink) {
-        if (-not (Test-Path -LiteralPath $commonLibBundle)) {
+    git -C $commonLibWorktree fetch --no-tags --no-write-fetch-head $commonLibTrustedUpstreamUrl "+HEAD:$commonLibTrustedRef"
+    if ($LASTEXITCODE -ne 0) { throw "Could not fetch trusted CommonLib upstream HEAD into its temporary ref." }
+    $guestCommonLibTrustedUpstream = (git -C $commonLibWorktree rev-parse "$commonLibTrustedRef^{commit}").Trim()
+    if ($LASTEXITCODE -ne 0 -or $guestCommonLibTrustedUpstream -ne $commonLibTrustedUpstream) {
+        throw "Guest CommonLib trusted-upstream ref does not match the Linux probe."
+    }
+    git -C $commonLibWorktree cat-file -e "$commonLibCommonAncestor^{commit}"
+    if ($LASTEXITCODE -ne 0) { throw "CommonLib bundle prerequisite is missing from the trusted guest upstream checkout." }
+    git -C $commonLibWorktree merge-base --is-ancestor $commonLibCommonAncestor $commonLibTrustedRef
+    if ($LASTEXITCODE -ne 0) { throw "CommonLib bundle prerequisite is not descended from trusted guest upstream HEAD." }
+
+    if ($hasCommonLibBundle) {
+        if ([string]::IsNullOrWhiteSpace($commonLibBundle) -or -not (Test-Path -LiteralPath $commonLibBundle)) {
             throw "Transferred CommonLib bundle is missing."
-        }
-        $initialCommonLibHead = (git -C $commonLibWorktree rev-parse HEAD).Trim()
-        if ($LASTEXITCODE -ne 0 -or $initialCommonLibHead -ne $commonLibBase) {
-            throw "Candidate CommonLib checkout does not match the parent gitlink base."
         }
         $actualCommonLibBundleSha256 = (Get-FileHash -LiteralPath $commonLibBundle -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualCommonLibBundleSha256 -ne $commonLibBundleSha256) {
             throw "Transferred CommonLib bundle SHA-256 does not match the Linux snapshot."
         }
         git -C $commonLibWorktree bundle verify $commonLibBundle
-        if ($LASTEXITCODE -ne 0) { throw "CommonLib bundle prerequisites are not satisfied by the candidate checkout." }
+        if ($LASTEXITCODE -ne 0) { throw "CommonLib bundle prerequisites are not satisfied by trusted upstream HEAD." }
         $bundleHeads = @(git -C $commonLibWorktree bundle list-heads $commonLibBundle)
         if ($LASTEXITCODE -ne 0 -or $bundleHeads.Count -ne 1) {
-            throw "CommonLib bundle does not have exactly one advertised target." }
+            throw "CommonLib bundle does not have exactly one advertised target."
+        }
         $bundleHeadParts = @($bundleHeads[0] -split '\s+')
-        $bundleTarget = $bundleHeadParts[0].Trim()
-        $bundleRef = $bundleHeadParts[1].Trim()
-        if ($bundleHeadParts.Count -ne 2 -or $bundleTarget -ne $commonLibTarget -or $bundleRef -ne 'HEAD') {
-            throw "CommonLib bundle target does not match the requested gitlink." }
-        git -C $commonLibWorktree bundle unbundle $commonLibBundle | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not import the CommonLib bundle into the candidate object database." }
-        git -C $commonLibWorktree cat-file -e "$commonLibTarget^{commit}"
-        if ($LASTEXITCODE -ne 0) { throw "Imported CommonLib target commit is not available in the candidate object database." }
+        if ($bundleHeadParts.Count -ne 2 -or $bundleHeadParts[0].Trim() -ne $commonLibTarget -or $bundleHeadParts[1].Trim() -ne 'HEAD') {
+            throw "CommonLib bundle target does not match the requested gitlink target."
+        }
+        git -C $commonLibWorktree fetch --no-tags --no-write-fetch-head $commonLibBundle "HEAD:$commonLibTransferRef"
+        if ($LASTEXITCODE -ne 0) { throw "Could not fetch the verified CommonLib bundle into its temporary ref." }
+    } else {
+        if ($commonLibBundleSha256 -ne 'NOT_REQUIRED' -or -not [string]::IsNullOrWhiteSpace($commonLibBundle)) {
+            throw "CommonLib no-bundle provenance is inconsistent."
+        }
+        git -C $commonLibWorktree fetch --no-tags --no-write-fetch-head $commonLibTrustedUpstreamUrl "${commonLibTarget}:$commonLibTransferRef"
+        if ($LASTEXITCODE -ne 0) { throw "Trusted CommonLib upstream could not provide the exact requested target." }
+    }
+
+    $importedCommonLibTarget = (git -C $commonLibWorktree rev-parse "$commonLibTransferRef^{commit}").Trim()
+    if ($LASTEXITCODE -ne 0 -or $importedCommonLibTarget -ne $commonLibTarget) {
+        throw "Temporary CommonLib transfer ref does not match the exact requested target."
+    }
+    git -C $commonLibWorktree cat-file -e "$commonLibBase^{commit}"
+    if ($LASTEXITCODE -ne 0) { throw "Exact CommonLib base object is unavailable after the verified transfer." }
+    git -C $commonLibWorktree merge-base --is-ancestor $commonLibCommonAncestor $commonLibBase
+    if ($LASTEXITCODE -ne 0) { throw "Exact CommonLib base is not descended from the verified upstream prerequisite." }
+    git -C $commonLibWorktree merge-base --is-ancestor $commonLibBase $commonLibTarget
+    if ($LASTEXITCODE -ne 0) { throw "Exact CommonLib target is not descended from the project-base gitlink." }
+    git -C $commonLibWorktree checkout --detach $commonLibBase
+    if ($LASTEXITCODE -ne 0) { throw "Could not establish the exact CommonLib base checkout before applying the patch." }
+    $initialCommonLibHead = (git -C $commonLibWorktree rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $initialCommonLibHead -ne $commonLibBase) {
+        throw "Candidate CommonLib source state does not match the exact project-base gitlink."
+    }
+
+    git submodule sync --recursive
+    if ($LASTEXITCODE -ne 0) { throw "Could not synchronize submodule URLs." }
+    git submodule update --init --recursive --checkout
+    if ($LASTEXITCODE -ne 0) { throw "Could not initialize pinned submodules after preparing CommonLib." }
+
+    $clean = @(git status --porcelain=v1 --untracked-files=all)
+    if ($LASTEXITCODE -ne 0 -or $clean.Count -ne 0) { throw "Fresh WinBoat candidate worktree is unexpectedly dirty." }
+    $submoduleState = @(git submodule status --recursive)
+    if ($LASTEXITCODE -ne 0 -or @($submoduleState | Where-Object { $_ -match '^[+\-U]' }).Count -ne 0) {
+        throw "Fresh WinBoat candidate worktree has an unresolved submodule."
     }
 
     $actualPatchSha256 = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -539,10 +811,15 @@ try {
     @(
         'schema=stvr-winboat-candidate-result-v1'
         "baseCommit=$baseCommit"
+        "commonAncestor=$commonAncestor"
+        "trustedRemoteCommit=$trustedRemoteCommit"
+        "candidateBundleSha256=$candidateBundleSha256"
         "candidateRevision=$candidateRevision"
         "patchSha256=$patchSha256"
         "commonLibBase=$commonLibBase"
         "commonLibTarget=$commonLibTarget"
+        "commonLibCommonAncestor=$commonLibCommonAncestor"
+        "commonLibTrustedUpstream=$commonLibTrustedUpstream"
         "commonLibBundleSha256=$commonLibBundleSha256"
         "buildEvidence=$($evidence.Name)"
     ) | Set-Content -LiteralPath (Join-Path $result 'STVR_CandidateProvenance.txt') -Encoding ascii
@@ -552,21 +829,43 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($commonLibBundle)) {
         Remove-Item -LiteralPath $commonLibBundle -Force -ErrorAction SilentlyContinue
     }
+    if (-not [string]::IsNullOrWhiteSpace($candidateBundle)) {
+        Remove-Item -LiteralPath $candidateBundle -Force -ErrorAction SilentlyContinue
+    }
     if (-not $buildSucceeded -and (Test-Path -LiteralPath $result)) {
         Remove-Item -LiteralPath $result -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not [string]::IsNullOrWhiteSpace($commonLibWorktree) -and (Test-Path -LiteralPath $commonLibWorktree)) {
+        if (-not [string]::IsNullOrWhiteSpace($commonLibTransferRef)) {
+            Invoke-GitStatusProbe -Arguments @('-C', $commonLibWorktree, 'update-ref', '-d', $commonLibTransferRef) | Out-Null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($commonLibTrustedRef)) {
+            Invoke-GitStatusProbe -Arguments @('-C', $commonLibWorktree, 'update-ref', '-d', $commonLibTrustedRef) | Out-Null
+        }
     }
     Set-Location $repo
     if ($worktreeCreated) {
         Remove-CandidateWorktree -Path $build -FailIfActive $false
     }
-    git -C $repo worktree prune 2>$null
+    if (-not [string]::IsNullOrWhiteSpace($candidateTransferRef)) {
+        Invoke-GitStatusProbe -Arguments @('-C', $repo, 'update-ref', '-d', $candidateTransferRef) | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($trustedRemoteRef)) {
+        Invoke-GitStatusProbe -Arguments @('-C', $repo, 'update-ref', '-d', $trustedRemoteRef) | Out-Null
+    }
+    Invoke-GitStatusProbe -Arguments @('-C', $repo, 'worktree', 'prune') | Out-Null
     $normalizedBuildSucceeded = if ($buildSucceeded) { "true" } else { "false" }
     "STVR_CANDIDATE_BASE=$baseCommit"
+    "STVR_CANDIDATE_COMMON_ANCESTOR=$commonAncestor"
+    "STVR_CANDIDATE_BUNDLE_SHA256=$candidateBundleSha256"
+    "STVR_CANDIDATE_TRUSTED_REMOTE_COMMIT=$trustedRemoteCommit"
     "STVR_CANDIDATE_EPHEMERAL_REVISION=$candidateRevision"
     "STVR_CANDIDATE_BUILD_SUCCESS=$normalizedBuildSucceeded"
     "STVR_CANDIDATE_GUEST_RESULT=$result"
     "STVR_CANDIDATE_COMMONLIB_BASE=$commonLibBase"
     "STVR_CANDIDATE_COMMONLIB_TARGET=$commonLibTarget"
+    "STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=$commonLibCommonAncestor"
+    "STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=$commonLibTrustedUpstream"
     "STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=$commonLibBundleSha256"
 }
 POWERSHELL
@@ -575,19 +874,34 @@ powershell_payload=${powershell_payload//__WINBOAT_REPO__/$winboat_repo}
 powershell_payload=${powershell_payload//__WINBOAT_BUILD__/$winboat_build}
 powershell_payload=${powershell_payload//__GUEST_PATCH__/$guest_patch}
 powershell_payload=${powershell_payload//__BASE_COMMIT__/$base_commit}
+powershell_payload=${powershell_payload//__CANDIDATE_COMMON_ANCESTOR__/$candidate_common_ancestor}
+powershell_payload=${powershell_payload//__HAS_CANDIDATE_BUNDLE__/$candidate_bundle_required}
+powershell_payload=${powershell_payload//__GUEST_CANDIDATE_BUNDLE__/$guest_candidate_bundle}
+powershell_payload=${powershell_payload//__CANDIDATE_BUNDLE_SHA256__/$candidate_bundle_sha256}
+powershell_payload=${powershell_payload//__GUEST_CANDIDATE_TRANSFER_REF__/$guest_candidate_transfer_ref}
+powershell_payload=${powershell_payload//__GUEST_TRUSTED_REMOTE_REF__/$guest_trusted_remote_ref}
 powershell_payload=${powershell_payload//__PATCH_SHA256__/$patch_sha256}
 powershell_payload=${powershell_payload//__HAS_COMMONLIB_GITLINK__/$commonlib_gitlink_changed}
+powershell_payload=${powershell_payload//__HAS_COMMONLIB_BUNDLE__/$commonlib_bundle_required}
 powershell_payload=${powershell_payload//__COMMONLIB_BASE__/$commonlib_base_commit}
 powershell_payload=${powershell_payload//__COMMONLIB_TARGET__/$commonlib_target_commit}
+powershell_payload=${powershell_payload//__COMMONLIB_COMMON_ANCESTOR__/$commonlib_common_ancestor}
+powershell_payload=${powershell_payload//__COMMONLIB_TRUSTED_UPSTREAM__/$commonlib_trusted_upstream_commit}
+powershell_payload=${powershell_payload//__COMMONLIB_TRUSTED_UPSTREAM_URL__/$commonlib_trusted_upstream_url}
 powershell_payload=${powershell_payload//__GUEST_COMMONLIB_BUNDLE__/$guest_commonlib_bundle}
 powershell_payload=${powershell_payload//__COMMONLIB_BUNDLE_SHA256__/$commonlib_bundle_sha256}
+powershell_payload=${powershell_payload//__GUEST_COMMONLIB_TRANSFER_REF__/$guest_commonlib_transfer_ref}
+powershell_payload=${powershell_payload//__GUEST_COMMONLIB_TRUSTED_REF__/$guest_commonlib_trusted_ref}
 powershell_payload=${powershell_payload//__GUEST_RESULT__/$guest_result}
 
 payload_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.ps1")
 guest_report_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.log")
 printf '%s\n' "$powershell_payload" >"$payload_file"
 "$winboat_scp" to-guest "$patch_file" "$guest_patch"
-if [[ $commonlib_gitlink_changed == true ]]; then
+if [[ $candidate_bundle_required == true ]]; then
+    "$winboat_scp" to-guest "$candidate_bundle_file" "$guest_candidate_bundle"
+fi
+if [[ $commonlib_bundle_required == true ]]; then
     "$winboat_scp" to-guest "$commonlib_bundle_file" "$guest_commonlib_bundle"
 fi
 "$winboat_scp" to-guest "$payload_file" "$guest_payload"
@@ -604,20 +918,37 @@ candidate_build_success=${candidate_build_success//$'\r'/}
 candidate_build_success=${candidate_build_success,,}
 candidate_ephemeral_revision=${candidate_ephemeral_revision:-NOT_CREATED}
 candidate_build_success=${candidate_build_success:-false}
+guest_candidate_common_ancestor=$(awk -F= '/^STVR_CANDIDATE_COMMON_ANCESTOR=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_candidate_bundle_sha256=$(awk -F= '/^STVR_CANDIDATE_BUNDLE_SHA256=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_trusted_remote_commit=$(awk -F= '/^STVR_CANDIDATE_TRUSTED_REMOTE_COMMIT=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_candidate_common_ancestor=${guest_candidate_common_ancestor//$'\r'/}
+guest_candidate_bundle_sha256=${guest_candidate_bundle_sha256//$'\r'/}
+guest_trusted_remote_commit=${guest_trusted_remote_commit//$'\r'/}
 guest_commonlib_base=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_BASE=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_target=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_TARGET=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_commonlib_common_ancestor=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_commonlib_trusted_upstream=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_bundle_sha256=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_base=${guest_commonlib_base//$'\r'/}
 guest_commonlib_target=${guest_commonlib_target//$'\r'/}
+guest_commonlib_common_ancestor=${guest_commonlib_common_ancestor//$'\r'/}
+guest_commonlib_trusted_upstream=${guest_commonlib_trusted_upstream//$'\r'/}
 guest_commonlib_bundle_sha256=${guest_commonlib_bundle_sha256//$'\r'/}
 if ((guest_status != 0)); then
     exit "$guest_status"
 fi
-if [[ $commonlib_gitlink_changed == true && \
-      ( $guest_commonlib_base != "$commonlib_base_commit" || \
-        $guest_commonlib_target != "$commonlib_target_commit" || \
-        $guest_commonlib_bundle_sha256 != "$commonlib_bundle_sha256" ) ]]; then
-    echo "WinBoat candidate build did not report the verified CommonLib bundle identity." >&2
+if [[ $guest_candidate_common_ancestor != "$candidate_common_ancestor" || \
+      $guest_candidate_bundle_sha256 != "$candidate_bundle_sha256" || \
+      ! $guest_trusted_remote_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "WinBoat candidate build did not report the verified base-transfer identity." >&2
+    exit 2
+fi
+if [[ $guest_commonlib_base != "$commonlib_base_commit" || \
+      $guest_commonlib_target != "$commonlib_target_commit" || \
+      $guest_commonlib_common_ancestor != "$commonlib_common_ancestor" || \
+      $guest_commonlib_trusted_upstream != "$commonlib_trusted_upstream_commit" || \
+      $guest_commonlib_bundle_sha256 != "$commonlib_bundle_sha256" ]]; then
+    echo "WinBoat candidate build did not report the verified CommonLib transfer identity." >&2
     exit 2
 fi
 if [[ ! $candidate_ephemeral_revision =~ ^[0-9a-fA-F]{40}$ || $candidate_build_success != true ]]; then

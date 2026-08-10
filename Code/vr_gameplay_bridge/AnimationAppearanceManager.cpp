@@ -1,4 +1,6 @@
 #include "AnimationAppearanceManager.h"
+
+#include "DynamicActorBaseFlags.h"
 #include "AvatarManager.h"
 #include "LocalGameplayCapture.h"
 
@@ -784,9 +786,11 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
     npc->originalRace = nullptr;
     npc->actorData.actorBaseFlags.set(staged.Sex != 0, RE::ACTOR_BASE_DATA::Flag::kFemale);
     npc->weight = staged.Weight;
-    npc->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kPCLevelMult, false, true);
+    static_cast<void>(SetReplicatedDynamicActorBaseFlag(
+        npc, RE::ACTOR_BASE_DATA::Flag::kPCLevelMult, false));
     npc->actorData.level = staged.Level;
-    npc->SetActorBaseFlag(RE::ACTOR_BASE_DATA::Flag::kEssential, staged.Essential, true);
+    static_cast<void>(SetReplicatedDynamicActorBaseFlag(
+        npc, RE::ACTOR_BASE_DATA::Flag::kEssential, staged.Essential));
     npc->SetHairColor(staged.HairColor);
     npc->SetFaceTexture(staged.FaceTexture);
     npc->SetFullName(staged.Name.c_str());

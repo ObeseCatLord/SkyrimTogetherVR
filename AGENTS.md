@@ -224,12 +224,23 @@ Skyrim VR root:
 SKYRIMVR="/home/obesecatlord/FasterGames/SteamLibrary/steamapps/common/SkyrimVR"
 ```
 
-Verify Monado before launch:
+Start or verify Monado before launch:
 
 ```bash
-pgrep -af 'monado-service|envision'
-test -S /run/user/1000/monado_comp_ipc
+Tools/SkyrimVR/linux/manage-monado-runtime.sh start simulated-qwerty-fixed
+Tools/SkyrimVR/linux/manage-monado-runtime.sh status
 ```
+
+The helper leaves an already healthy Monado listener unchanged. If no listener
+exists, it removes only an orphan `monado_comp_ipc` socket and stale
+`monado-tools` clients, then launches the selected Envision profile in the
+persistent `stvr-monado-runtime.service` user unit. Do not run `envision
+--start &` from a short-lived shell: that shell can tear down Monado while
+leaving its socket behind, causing XRizer `XR_ERROR_RUNTIME_UNAVAILABLE` and a
+launcher status 5. Readiness requires `ss -xlp` to show `monado-service` as the
+live listener; the socket file existing by itself is not evidence. Use
+`restart`, `stop`, or a different profile UUID through the same helper when the
+runtime must change.
 
 The Linux helper must pass the game executable through Proton's standard
 `Z:` mapping, for example
