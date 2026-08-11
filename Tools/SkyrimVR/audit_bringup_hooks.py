@@ -162,12 +162,36 @@ REQUIRED_TOKENS = {
     ),
     "Code/client/Services/Generic/VRLifecycleService.cpp": (
         'constexpr char kStatusFileName[] = "SkyrimTogetherVR.lifecycle"',
+        'static const BSFixedString s_mainMenu("Main Menu")',
         'static const BSFixedString s_raceSexMenu("RaceSex Menu")',
         'static const BSFixedString s_loadingMenu("Loading Menu")',
-        'static const BSFixedString s_faderMenu("Fader Menu")',
+        '{&s_mainMenu, "main_menu"}',
+        '{&s_raceSexMenu, "racesex_menu"}',
+        '{&s_loadingMenu, "loading_menu"}',
         "TryGetReadablePlayerForVR()",
         "m_loadInvalidated.exchange(false, std::memory_order_acq_rel)",
         'Suspend("load_event", true)',
+        "ObserveBridgeLifecycleEpoch();",
+        "void VRLifecycleService::ObserveBridgeLifecycleEpoch() noexcept",
+        "SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch()",
+        "m_observedBridgeLifecycleEpoch == 0",
+        "bridgeEpoch == m_observedBridgeLifecycleEpoch",
+        (
+            "if (m_state == State::Stabilizing)\n"
+            "    {\n"
+            "        m_state = State::Suspended;\n"
+            '        m_suspendReason = "bridge_lifecycle_epoch_changed";\n'
+            "        m_candidateSample = {};\n"
+            "        m_readySample = {};\n"
+            "        m_stableTickCount = 0;\n"
+        ),
+        'm_suspendReason = "bridge_lifecycle_epoch_changed"',
+        "discarded candidate without advancing client epoch {}",
+        "if (m_state == State::Suspended)",
+        "instead of recursively advancing m_epoch",
+        "m_state != State::Ready",
+        'Suspend("bridge_lifecycle_epoch_changed", true)',
+        'file << "bridgeLifecycleEpoch=" << m_observedBridgeLifecycleEpoch',
         "m_stableTickCount >= kRequiredStableTicks",
         "stableFor >= kRequiredStableDuration",
         "lifecycle events are owned by the CommonLib gameplay bridge",
@@ -244,6 +268,10 @@ FORBIDDEN_TOKENS = {
     "Code/client/main.cpp": (
         "BSGraphics::InstallVrRenderBringupHooks();",
         "RunTiltedApp();\n    struct ShutdownGuard",
+    ),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        "Fader Menu",
+        "fader_menu",
     ),
 }
 

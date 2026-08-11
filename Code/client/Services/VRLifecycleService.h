@@ -53,6 +53,7 @@ private:
     };
 
     BSTEventResult OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*) override;
+    void ObserveBridgeLifecycleEpoch() noexcept;
     void Suspend(const char* apReason, bool aAdvanceEpoch = false) noexcept;
     void StartStabilizing(const Sample& acSample) noexcept;
     void WriteStatusFile() noexcept;
@@ -66,6 +67,7 @@ private:
     std::chrono::steady_clock::time_point m_candidateSince{};
     std::string m_suspendReason{"boot"};
     uint64_t m_epoch{1};
+    uint64_t m_observedBridgeLifecycleEpoch{0};
     uint32_t m_ownerThreadId{0};
     uint32_t m_stableTickCount{0};
     double m_statusTimer{0.0};

@@ -11,6 +11,9 @@
 #include <VR/VRPlayerReadiness.h>
 #include <World.h>
 #include <vr_common/VRHandoffPath.h>
+#if TP_SKYRIM_VR
+#include <VRGameplayBridge.h>
+#endif
 
 #include <fstream>
 #include <atomic>
@@ -36,7 +39,6 @@ const char* GetBlockingMenuName() noexcept
     static const BSFixedString s_mainMenu("Main Menu");
     static const BSFixedString s_raceSexMenu("RaceSex Menu");
     static const BSFixedString s_loadingMenu("Loading Menu");
-    static const BSFixedString s_faderMenu("Fader Menu");
 
     struct BlockingMenu
     {
@@ -47,7 +49,6 @@ const char* GetBlockingMenuName() noexcept
         {&s_mainMenu, "main_menu"},
         {&s_raceSexMenu, "racesex_menu"},
         {&s_loadingMenu, "loading_menu"},
-        {&s_faderMenu, "fader_menu"},
     };
 
     for (const auto& blockingMenu : blockingMenus)
@@ -121,6 +122,8 @@ void VRLifecycleService::Update(double aDelta) noexcept
         Suspend("load_event", true);
         m_statusTimer = kStatusWriteInterval;
     }
+
+    ObserveBridgeLifecycleEpoch();
 
     if (const char* pBlockingMenu = GetBlockingMenuName())
     {
@@ -205,6 +208,65 @@ BSTEventResult VRLifecycleService::OnEvent(const TESLoadGameEvent*, const EventD
     return BSTEventResult::kOk;
 }
 
+void VRLifecycleService::ObserveBridgeLifecycleEpoch() noexcept
+{
+#if TP_SKYRIM_VR
+    const auto bridgeEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (bridgeEpoch == 0)
+        return;
+
+    if (m_observedBridgeLifecycleEpoch == 0)
+    {
+        m_observedBridgeLifecycleEpoch = bridgeEpoch;
+        m_statusDirty = true;
+        spdlog::info("SkyrimTogetherVR lifecycle latched gameplay bridge epoch {}", bridgeEpoch);
+        return;
+    }
+
+    if (bridgeEpoch == m_observedBridgeLifecycleEpoch)
+        return;
+
+    const auto previousBridgeEpoch = m_observedBridgeLifecycleEpoch;
+    m_observedBridgeLifecycleEpoch = bridgeEpoch;
+    m_statusDirty = true;
+
+    if (m_state == State::Stabilizing)
+    {
+        m_state = State::Suspended;
+        m_suspendReason = "bridge_lifecycle_epoch_changed";
+        m_candidateSample = {};
+        m_readySample = {};
+        m_stableTickCount = 0;
+        spdlog::info(
+            "SkyrimTogetherVR lifecycle observed gameplay bridge epoch {} -> {} during stabilization; discarded candidate without advancing client epoch {}",
+            previousBridgeEpoch, bridgeEpoch, m_epoch);
+        return;
+    }
+
+    // A connection can retire its bridge session after the Ready boundary. Latch
+    // that successor while suspended instead of recursively advancing m_epoch.
+    if (m_state == State::Suspended)
+    {
+        spdlog::info(
+            "SkyrimTogetherVR lifecycle observed gameplay bridge epoch {} -> {} while suspended; boundary already active",
+            previousBridgeEpoch, bridgeEpoch);
+        return;
+    }
+
+    if (m_state != State::Ready)
+    {
+        spdlog::info(
+            "SkyrimTogetherVR lifecycle observed gameplay bridge epoch {} -> {} while state={}; no ready boundary to retire",
+            previousBridgeEpoch, bridgeEpoch, GetStateName());
+        return;
+    }
+
+    spdlog::info("SkyrimTogetherVR lifecycle observed gameplay bridge epoch {} -> {}; suspending client lifecycle",
+                 previousBridgeEpoch, bridgeEpoch);
+    Suspend("bridge_lifecycle_epoch_changed", true);
+#endif
+}
+
 void VRLifecycleService::Suspend(const char* apReason, bool aAdvanceEpoch) noexcept
 {
     const bool stateChanged = m_state != State::Suspended;
@@ -247,6 +309,7 @@ void VRLifecycleService::WriteStatusFile() noexcept
     file << "state=" << GetStateName() << "\n";
     file << "ready=" << (IsReady() ? "1" : "0") << "\n";
     file << "epoch=" << m_epoch << "\n";
+    file << "bridgeLifecycleEpoch=" << m_observedBridgeLifecycleEpoch << "\n";
     file << "ownerThreadId=" << m_ownerThreadId << "\n";
     file << "stableTickCount=" << m_stableTickCount << "\n";
     file << "playerFormId=" << m_readySample.PlayerFormId << "\n";
