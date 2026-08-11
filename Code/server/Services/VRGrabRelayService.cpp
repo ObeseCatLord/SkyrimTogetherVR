@@ -68,7 +68,7 @@ bool ApplyOperation(TiltedPhoques::Map<GameId, VRObjectAuthority::Lease>& arLeas
     {
         if (it == arLeases.end() || it->second.OwnerPlayerId != aPlayerId)
             return false;
-        it->second.ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
+        it.value().ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
         return true;
     }
 
@@ -76,7 +76,7 @@ bool ApplyOperation(TiltedPhoques::Map<GameId, VRObjectAuthority::Lease>& arLeas
     {
         if (it->second.OwnerPlayerId != aPlayerId)
             return false;
-        it->second.ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
+        it.value().ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
         return true;
     }
 
@@ -251,7 +251,7 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
     TP_UNUSED(inserted);
     if (!VRObjectAuthority::CommitBatch(std::move(authorityBatch)))
         return;
-    CommitRelayDecision(relayState->second, decision);
+    CommitRelayDecision(relayState.value(), decision);
 }
 catch (...)
 {

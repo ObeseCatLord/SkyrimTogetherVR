@@ -94,7 +94,7 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
     // classification still must be remembered so it cannot block later edges.
     if (!decision.ForwardObservation && !decision.HasMutationReplay)
     {
-        CommitRelayDecision(relayState->second, decision);
+        CommitRelayDecision(relayState.value(), decision);
         return;
     }
 
@@ -117,7 +117,7 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
     // the corresponding accepted mutation prefix.
     if (!VRObjectAuthority::CommitBatch(std::move(authorityBatch)))
         return;
-    CommitRelayDecision(relayState->second, decision);
+    CommitRelayDecision(relayState.value(), decision);
 }
 catch (...)
 {
