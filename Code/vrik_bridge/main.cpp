@@ -1,13 +1,11 @@
 #include <windows.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include <vr_common/VRHandoffPath.h>
 
@@ -18,6 +16,7 @@ static constexpr std::uint32_t kPluginInfoVersion = 1;
 static constexpr std::uint32_t kInterfaceMessaging = 5;
 static constexpr std::uint32_t kSkseMessagePostPostLoad = 1;
 static constexpr std::uint32_t kVrikMessageGetInterface = 0xF2AFAEE6;
+static constexpr std::uint64_t kHandoffWriteIntervalMs = 50;
 
 struct PluginInfo
 {
@@ -118,11 +117,13 @@ struct VrikSnapshot
 PluginHandle g_pluginHandle = kPluginHandleInvalid;
 SKSEMessagingInterface* g_messaging = nullptr;
 std::atomic<vrikPluginApi::IVrikInterface001*> g_vrik{nullptr};
-std::atomic_bool g_running{false};
+std::atomic_bool g_handoffActive{false};
 std::atomic_bool g_snapshotAvailable{false};
 std::atomic_uint32_t g_snapshotSequence{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
-std::thread g_writerThread;
+std::atomic_uint32_t g_handoffSequence{0};
+std::atomic_uint64_t g_nextHandoffWriteTick{0};
+std::atomic_flag g_handoffWriteInProgress = ATOMIC_FLAG_INIT;
 std::mutex g_snapshotLock;
 VrikSnapshot g_latestSnapshot;
 
@@ -209,89 +210,130 @@ void WriteFingerState(std::ofstream& aFile, const char* apPrefix, const VrikFing
     aFile << apPrefix << ".pinky=" << apFingers->Values[4] << "\n";
 }
 
-void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
+void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded) noexcept
 {
-    const auto path = GetHandoffPath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
+    try
+    {
+        const auto path = GetHandoffPath();
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
 
-    const auto tempPath = path.string() + ".tmp";
-    std::ofstream file(tempPath, std::ios::trunc);
-    if (!file)
+        const auto tempPath = path.string() + ".tmp";
+        std::ofstream file(tempPath, std::ios::trunc);
+        if (!file)
+            return;
+
+        auto* const pVrik = g_vrik.load(std::memory_order_acquire);
+        bool snapshotAvailable = false;
+        const auto snapshot = CopyLatestSnapshot(snapshotAvailable);
+
+        file << "bridge.loaded=" << (aLoaded ? "1" : "0") << "\n";
+        file << "bridge.sequence=" << aSequence << "\n";
+        file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
+        file << "vrik.detected=" << (IsVrikInstalled() || pVrik ? "1" : "0") << "\n";
+        file << "vrik.interfaceAvailable=" << (pVrik ? "1" : "0") << "\n";
+        file << "vrik.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
+        file << "vrik.snapshotSequence=" << (snapshotAvailable ? snapshot.Sequence : 0u) << "\n";
+        const auto bridgeTick = GetTickCount64();
+        file << "vrik.snapshotAgeMs=" << (snapshotAvailable ? bridgeTick - snapshot.CaptureTickMs : 0ull) << "\n";
+
+        if (aLoaded && pVrik && snapshotAvailable)
+        {
+            file << "vrik.buildNumber=" << snapshot.BuildNumber << "\n";
+            WriteFingerState(file, "leftFingers", &snapshot.LeftFingers);
+            WriteFingerState(file, "rightFingers", &snapshot.RightFingers);
+            file << "cameraOffsetsValid=" << (snapshot.CameraOffsetsValid ? "1" : "0") << "\n";
+            if (snapshot.CameraOffsetsValid)
+            {
+                WritePoint(file, "cameraOffset", snapshot.CameraOffset);
+                WritePoint(file, "finalCameraOffset", snapshot.FinalCameraOffset);
+                WritePoint(file, "finalSmoothingOffset", snapshot.FinalSmoothingOffset);
+            }
+        }
+        else
+        {
+            file << "vrik.buildNumber=0\n";
+            WriteFingerState(file, "leftFingers", nullptr);
+            WriteFingerState(file, "rightFingers", nullptr);
+            file << "cameraOffsetsValid=0\n";
+        }
+
+        file.close();
+        std::filesystem::rename(tempPath, path, ec);
+        if (ec)
+        {
+            std::filesystem::remove(path, ec);
+            std::filesystem::rename(tempPath, path, ec);
+        }
+    }
+    catch (...)
+    {
+        // Handoff telemetry must never escape an SKSE or HIGGS callback.
+    }
+}
+
+void PublishHandoff(bool aForce) noexcept
+{
+    if (!g_handoffActive.load(std::memory_order_acquire))
         return;
 
-    auto* const pVrik = g_vrik.load(std::memory_order_acquire);
-    bool snapshotAvailable = false;
-    const auto snapshot = CopyLatestSnapshot(snapshotAvailable);
-
-    file << "bridge.loaded=" << (aLoaded ? "1" : "0") << "\n";
-    file << "bridge.sequence=" << aSequence << "\n";
-    file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
-    file << "vrik.detected=" << (IsVrikInstalled() || pVrik ? "1" : "0") << "\n";
-    file << "vrik.interfaceAvailable=" << (pVrik ? "1" : "0") << "\n";
-    file << "vrik.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
-    file << "vrik.snapshotSequence=" << (snapshotAvailable ? snapshot.Sequence : 0u) << "\n";
-    const auto bridgeTick = GetTickCount64();
-    file << "vrik.snapshotAgeMs=" << (snapshotAvailable ? bridgeTick - snapshot.CaptureTickMs : 0ull) << "\n";
-
-    if (aLoaded && pVrik && snapshotAvailable)
+    const auto now = static_cast<std::uint64_t>(GetTickCount64());
+    if (!aForce)
     {
-        file << "vrik.buildNumber=" << snapshot.BuildNumber << "\n";
-        WriteFingerState(file, "leftFingers", &snapshot.LeftFingers);
-        WriteFingerState(file, "rightFingers", &snapshot.RightFingers);
-        file << "cameraOffsetsValid=" << (snapshot.CameraOffsetsValid ? "1" : "0") << "\n";
-        if (snapshot.CameraOffsetsValid)
+        auto next = g_nextHandoffWriteTick.load(std::memory_order_acquire);
+        while (now >= next)
         {
-            WritePoint(file, "cameraOffset", snapshot.CameraOffset);
-            WritePoint(file, "finalCameraOffset", snapshot.FinalCameraOffset);
-            WritePoint(file, "finalSmoothingOffset", snapshot.FinalSmoothingOffset);
+            if (g_nextHandoffWriteTick.compare_exchange_weak(
+                    next,
+                    now + kHandoffWriteIntervalMs,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                break;
         }
+
+        if (now < next)
+            return;
     }
     else
     {
-        file << "vrik.buildNumber=0\n";
-        WriteFingerState(file, "leftFingers", nullptr);
-        WriteFingerState(file, "rightFingers", nullptr);
-        file << "cameraOffsetsValid=0\n";
+        g_nextHandoffWriteTick.store(now + kHandoffWriteIntervalMs, std::memory_order_release);
     }
 
-    file.close();
-    std::filesystem::rename(tempPath, path, ec);
-    if (ec)
-    {
-        std::filesystem::remove(path, ec);
-        std::filesystem::rename(tempPath, path, ec);
-    }
-}
-
-void WriterMain()
-{
-    std::uint32_t sequence = 0;
-    while (g_running)
-    {
-        WriteBridgeFile(++sequence, true);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-
-    WriteBridgeFile(++sequence, false);
-}
-
-void StartWriter()
-{
-    if (g_running.exchange(true))
+    if (g_handoffWriteInProgress.test_and_set(std::memory_order_acquire))
         return;
 
-    g_bridgeEpoch.store(static_cast<std::uint64_t>(GetTickCount64()), std::memory_order_release);
-    g_writerThread = std::thread(WriterMain);
+    WriteBridgeFile(g_handoffSequence.fetch_add(1, std::memory_order_acq_rel) + 1, true);
+    g_handoffWriteInProgress.clear(std::memory_order_release);
 }
 
-void StopWriter()
+void StartHandoff() noexcept
 {
-    if (!g_running.exchange(false))
-        return;
+    bool expected = false;
+    if (g_handoffActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        g_bridgeEpoch.store(static_cast<std::uint64_t>(GetTickCount64()), std::memory_order_release);
 
-    if (g_writerThread.joinable())
-        g_writerThread.join();
+    PublishHandoff(true);
+}
+
+void PumpPlanckHandoffFromGameThread() noexcept
+{
+    using PumpCallback = void(__cdecl*)();
+    static std::atomic<PumpCallback> s_callback{nullptr};
+
+    auto callback = s_callback.load(std::memory_order_acquire);
+    if (!callback)
+    {
+        if (const auto module = GetModuleHandleW(L"SkyrimTogetherVRPlanckBridge.dll"))
+        {
+            callback = reinterpret_cast<PumpCallback>(
+                GetProcAddress(module, "SkyrimTogetherVR_PumpPlanckHandoff"));
+            if (callback)
+                s_callback.store(callback, std::memory_order_release);
+        }
+    }
+
+    if (callback)
+        callback();
 }
 
 bool RequestVrikInterface()
@@ -308,7 +350,6 @@ bool RequestVrikInterface()
 
     auto* const pVrik = static_cast<vrikPluginApi::IVrikInterface001*>(message.getApiFunction(1));
     g_vrik.store(pVrik, std::memory_order_release);
-    CaptureVrikSnapshot();
     return pVrik != nullptr;
 }
 
@@ -320,19 +361,9 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
     if (apMessage->type == kSkseMessagePostPostLoad)
     {
         RequestVrikInterface();
-        StartWriter();
+        StartHandoff();
     }
 }
-
-struct ShutdownJoiner
-{
-    ~ShutdownJoiner()
-    {
-        StopWriter();
-    }
-};
-
-ShutdownJoiner g_shutdownJoiner;
 }
 
 extern "C" __declspec(dllexport) void __cdecl SkyrimTogetherVR_CaptureVrikSnapshot() noexcept
@@ -340,6 +371,8 @@ extern "C" __declspec(dllexport) void __cdecl SkyrimTogetherVR_CaptureVrikSnapsh
     try
     {
         CaptureVrikSnapshot();
+        PublishHandoff(false);
+        PumpPlanckHandoffFromGameThread();
     }
     catch (...)
     {
@@ -370,6 +403,6 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
         return false;
 
     g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
-    StartWriter();
+    StartHandoff();
     return true;
 }

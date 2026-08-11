@@ -491,7 +491,7 @@ void ApplyRemoteAvatarPoseToActor(Actor* apActor, const VRPoseUpdate& acPose, Re
     aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
     aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
     aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
-    aResult.BodyPoseValid = acPose.Body.FormatVersion == 1 && acPose.Body.Valid;
+    aResult.BodyPoseValid = IsSupportedVRBodyPoseFormatVersion(acPose.Body.FormatVersion) && acPose.Body.Valid;
     aResult.BodyPoseSafe = aResult.BodyPoseValid && IsRemoteBodyPoseSafe(acPose.Body);
     aResult.BodyCaptureSequence = acPose.Body.CaptureSequence;
     aResult.BodyRootGeneration = acPose.Body.RootGeneration;
@@ -518,7 +518,7 @@ void ValidateRemoteAvatarPoseForStatus(const VRPoseUpdate& acPose, RemoteAvatarA
     aResult.VrikLeftFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.LeftFingers);
     aResult.VrikRightFingersValid = IsRemoteFingerCurlSafe(acPose.Vrik.RightFingers);
     aResult.VrikCameraOffsetsValid = IsRemoteVrikCameraOffsetsSafe(acPose.Vrik);
-    aResult.BodyPoseValid = acPose.Body.FormatVersion == 1 && acPose.Body.Valid;
+    aResult.BodyPoseValid = IsSupportedVRBodyPoseFormatVersion(acPose.Body.FormatVersion) && acPose.Body.Valid;
     aResult.BodyPoseSafe = aResult.BodyPoseValid && IsRemoteBodyPoseSafe(acPose.Body);
     aResult.BodyCaptureSequence = acPose.Body.CaptureSequence;
     aResult.BodyRootGeneration = acPose.Body.RootGeneration;

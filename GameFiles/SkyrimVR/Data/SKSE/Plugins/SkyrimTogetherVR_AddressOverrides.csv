@@ -21,7 +21,7 @@ id,offset,source,status,name
 17201,022fce0,addrlib,addrlib,
 18518,0275180,addrlib,addrlib,
 18563,0277910,addrlib,addrlib,
-19075,0294070,addrlib,addrlib,
+19075,027a4c0,sse_vr,exact_vr_disassembly,TESObjectCELL::GetCOCPlacementInfo
 19315,02a5710,addrlib,addrlib,
 19360,02a7d80,addrlib,addrlib,
 19361,02a7e40,addrlib,addrlib,
@@ -69,7 +69,7 @@ id,offset,source,status,name
 34408,0572c50,addrlib,addrlib,
 34410,0572ee0,addrlib,addrlib,
 34452,05754d0,addrlib,addrlib,
-34512,0579df0,addrlib,addrlib,
+34512,0557070,sse_vr,exact_vr_disassembly,MagicTarget::DispelAllSpells
 34525,057aea0,addrlib,addrlib,
 34529,057b000,addrlib,addrlib,
 34989,0598b30,addrlib,addrlib,

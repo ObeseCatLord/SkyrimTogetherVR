@@ -361,6 +361,10 @@ enum class GameplayAction : std::uint16_t
     InventoryTransactionItemExtra = 98,
     InventoryTransactionItemEffect = 99,
     InventoryTransactionEnd = 100,
+    // A versioned sparse set of post-VRIK/post-HIGGS finger-chain local
+    // rotations. These never call VRIK's local-player API on a remote actor.
+    VrJointRotationChunk = 101,
+    VrJointRotationCommit = 102,
 };
 
 [[nodiscard]] constexpr bool IsObjectSnapshotAction(const GameplayAction a_action) noexcept
@@ -510,12 +514,25 @@ enum class GameplayPoseNode : std::uint8_t
     LeftHand = 1,
     RightHand = 2,
     Pelvis = 3,
-    LeftThigh = 4,
-    LeftCalf = 5,
-    LeftFoot = 6,
-    RightThigh = 7,
-    RightCalf = 8,
-    RightFoot = 9,
+    // Body nodes are parent-first. The consumer writes this local hierarchy,
+    // propagates it, then derives the world-space HMD/hand endpoints against
+    // the updated parents.
+    Spine0 = 4,
+    Spine1 = 5,
+    Spine2 = 6,
+    Neck = 7,
+    LeftClavicle = 8,
+    LeftUpperArm = 9,
+    LeftForearm = 10,
+    RightClavicle = 11,
+    RightUpperArm = 12,
+    RightForearm = 13,
+    LeftThigh = 14,
+    LeftCalf = 15,
+    LeftFoot = 16,
+    RightThigh = 17,
+    RightCalf = 18,
+    RightFoot = 19,
     Count,
 };
 
@@ -527,6 +544,16 @@ inline constexpr std::uint32_t kPoseChunkNodeShift = 8;
 inline constexpr std::uint32_t kPoseChunkNodeMask = 0xFFu << kPoseChunkNodeShift;
 inline constexpr std::uint32_t kPoseCommitNodeMask =
     (1u << static_cast<std::uint32_t>(GameplayPoseNode::Count)) - 1u;
+
+// VrJointRotationChunk carries one unit quaternion for a named local
+// finger-joint rotation. The stable index order is left finger 11..53 followed
+// by right finger 11..53, with three joints per digit. A commit contains the
+// 30-bit sparse mask for one coherent root/sequence frame.
+inline constexpr std::uint32_t kVrikJointRotationCount = 30;
+inline constexpr std::uint32_t kVrikJointChunkPresent = 1u << 0;
+inline constexpr std::uint32_t kVrikJointChunkIndexShift = 8;
+inline constexpr std::uint32_t kVrikJointChunkIndexMask = 0x1Fu << kVrikJointChunkIndexShift;
+inline constexpr std::uint32_t kVrikJointCommitMask = (1u << kVrikJointRotationCount) - 1u;
 
 [[nodiscard]] constexpr Capability CapabilityForDomain(const GameplayDomain a_domain) noexcept
 {
@@ -602,7 +629,7 @@ inline constexpr std::uint32_t kPoseCommitNodeMask =
     case GameplayDomain::WorldState:
         return (action >= 37 && action <= 39) || action == 66 || action == 67;
     case GameplayDomain::VrBodyPose:
-        return (action >= 40 && action <= 41) || action == 87;
+        return (action >= 40 && action <= 41) || action == 87 || action == 101 || action == 102;
     case GameplayDomain::Higgs:
         return action >= 42 && action <= 46;
     case GameplayDomain::Planck:

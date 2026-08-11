@@ -80,11 +80,20 @@ The current PLANCK policy is observation-only. The main client does not request 
 - `planck.currentHitEventObservationOnly=1`
 - `planck.lastHitDataAvailable=0`
 - `planck.lastHitDataProbeEnabled=0`
-- `planck.lastHitDataReason=not_polled_nontrivial_return_boundary`
-- `planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi`
-- `planck.policy=observation_only`
+- `planck.lastHitDataReason=no_stable_hit_callback_or_canonical_action_producer`
+- `planck.lastHitDataBoundary=not_invoked_no_authoritative_transport`
+- `planck.policy=canonical_combat_observation_only`
 
-The bridge captures `GetBuildNumber()` when the interface is acquired on the SKSE messaging thread, then the writer thread serializes cached status only. It does not poll `GetCurrentHitEvent()` or `GetLastHitData()` from the writer thread. `GetLastHitData()` stays disabled because PLANCK 0.8.0 returns a by-value structure containing non-trivial SKSE/CommonLib types such as `NiPointer` and `BSFixedString`; `planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi` makes that disabled ABI boundary visible in runtime evidence. It also does not call PLANCK mutators, actor ignore APIs, aggression APIs, ragdoll-collision ignore APIs, setting setters, HIGGS mutators, or hit replay logic.
+The bridge captures `GetBuildNumber()` when the interface is acquired on the
+SKSE PostPostLoad messaging thread. A rate-limited pump reached from the
+VRIK/HIGGS game-thread callback serializes cached status; there is no background
+writer and therefore no DLL-unload join or post-unload execution path. It never
+polls `GetCurrentHitEvent()` or `GetLastHitData()`. The latter has no stable
+callback or canonical replicated action producer and also returns a by-value
+structure containing non-trivial SKSE/CommonLib types such as `NiPointer` and
+`BSFixedString`. The bridge does not call PLANCK mutators, actor ignore APIs,
+aggression APIs, ragdoll-collision ignore APIs, setting setters, HIGGS mutators,
+or hit replay logic.
 
 The staged `VRCombatService` also records whether a game-emitted `TESHitEvent` matches PLANCK's documented hit-event magic word by reconstructing the 32-bit word at the CommonLib hit-event flags offset. That data is serialized as `VRCombatHitEvent::RawHitFlags` and `VRCombatHitEvent::PlanckHit`, written to `SkyrimTogetherVR.combat` as `rawHitFlags` and `planckHit`, and relayed to other clients as telemetry only. This classification does not request the PLANCK interface and does not read extended `PlanckHitData`.
 

@@ -641,7 +641,22 @@ void VRPoseService::WritePoseStatusFile()
     file << "local.body.valid=" << (m_localBodyPose.Valid ? "1" : "0") << "\n";
     file << "local.body.captureSequence=" << m_localBodyPose.CaptureSequence << "\n";
     file << "local.body.rootGeneration=" << m_localBodyPose.RootGeneration << "\n";
+    file << "local.body.joints.formatVersion=" << m_localBodyPose.Joints.FormatVersion << "\n";
+    file << "local.body.joints.valid=" << (m_localBodyPose.Joints.Valid ? "1" : "0") << "\n";
+    file << "local.body.joints.captureSequence=" << m_localBodyPose.Joints.CaptureSequence << "\n";
+    file << "local.body.joints.rootGeneration=" << m_localBodyPose.Joints.RootGeneration << "\n";
+    file << "local.body.joints.nodeMask=" << m_localBodyPose.Joints.NodeMask << "\n";
     WriteNode(file, "local.body.pelvis", m_localBodyPose.Pelvis);
+    WriteNode(file, "local.body.spine0", m_localBodyPose.Spine0);
+    WriteNode(file, "local.body.spine1", m_localBodyPose.Spine1);
+    WriteNode(file, "local.body.spine2", m_localBodyPose.Spine2);
+    WriteNode(file, "local.body.neck", m_localBodyPose.Neck);
+    WriteNode(file, "local.body.leftClavicle", m_localBodyPose.LeftClavicle);
+    WriteNode(file, "local.body.leftUpperArm", m_localBodyPose.LeftUpperArm);
+    WriteNode(file, "local.body.leftForearm", m_localBodyPose.LeftForearm);
+    WriteNode(file, "local.body.rightClavicle", m_localBodyPose.RightClavicle);
+    WriteNode(file, "local.body.rightUpperArm", m_localBodyPose.RightUpperArm);
+    WriteNode(file, "local.body.rightForearm", m_localBodyPose.RightForearm);
     WriteNode(file, "local.body.leftThigh", m_localBodyPose.LeftThigh);
     WriteNode(file, "local.body.leftCalf", m_localBodyPose.LeftCalf);
     WriteNode(file, "local.body.leftFoot", m_localBodyPose.LeftFoot);
@@ -697,7 +712,22 @@ void VRPoseService::WritePoseStatusFile()
         file << prefix << ".body.valid=" << (pose.Body.Valid ? "1" : "0") << "\n";
         file << prefix << ".body.captureSequence=" << pose.Body.CaptureSequence << "\n";
         file << prefix << ".body.rootGeneration=" << pose.Body.RootGeneration << "\n";
+        file << prefix << ".body.joints.formatVersion=" << pose.Body.Joints.FormatVersion << "\n";
+        file << prefix << ".body.joints.valid=" << (pose.Body.Joints.Valid ? "1" : "0") << "\n";
+        file << prefix << ".body.joints.captureSequence=" << pose.Body.Joints.CaptureSequence << "\n";
+        file << prefix << ".body.joints.rootGeneration=" << pose.Body.Joints.RootGeneration << "\n";
+        file << prefix << ".body.joints.nodeMask=" << pose.Body.Joints.NodeMask << "\n";
         WriteNode(file, (prefix + ".body.pelvis").c_str(), pose.Body.Pelvis);
+        WriteNode(file, (prefix + ".body.spine0").c_str(), pose.Body.Spine0);
+        WriteNode(file, (prefix + ".body.spine1").c_str(), pose.Body.Spine1);
+        WriteNode(file, (prefix + ".body.spine2").c_str(), pose.Body.Spine2);
+        WriteNode(file, (prefix + ".body.neck").c_str(), pose.Body.Neck);
+        WriteNode(file, (prefix + ".body.leftClavicle").c_str(), pose.Body.LeftClavicle);
+        WriteNode(file, (prefix + ".body.leftUpperArm").c_str(), pose.Body.LeftUpperArm);
+        WriteNode(file, (prefix + ".body.leftForearm").c_str(), pose.Body.LeftForearm);
+        WriteNode(file, (prefix + ".body.rightClavicle").c_str(), pose.Body.RightClavicle);
+        WriteNode(file, (prefix + ".body.rightUpperArm").c_str(), pose.Body.RightUpperArm);
+        WriteNode(file, (prefix + ".body.rightForearm").c_str(), pose.Body.RightForearm);
         WriteNode(file, (prefix + ".body.leftThigh").c_str(), pose.Body.LeftThigh);
         WriteNode(file, (prefix + ".body.leftCalf").c_str(), pose.Body.LeftCalf);
         WriteNode(file, (prefix + ".body.leftFoot").c_str(), pose.Body.LeftFoot);
@@ -739,13 +769,14 @@ void VRPoseService::LogSnapshot() const
     }
 
     spdlog::info(
-        "SkyrimTogetherVR pose snapshot: hmd=({}, {}, {}), hand=({}, {}, {}), bodyValid={}, spellOriginValid={}, arrowOriginValid={}, weaponOffsetValid={}, remotePoseCount={}",
+        "SkyrimTogetherVR pose snapshot: hmd=({}, {}, {}), hand=({}, {}, {}), bodyFormat={}, bodyValid={}, spellOriginValid={}, arrowOriginValid={}, weaponOffsetValid={}, remotePoseCount={}",
         m_lastSnapshot.Hmd.Position.x,
         m_lastSnapshot.Hmd.Position.y,
         m_lastSnapshot.Hmd.Position.z,
         pHand->Position.x,
         pHand->Position.y,
         pHand->Position.z,
+        m_localBodyPose.FormatVersion,
         m_localBodyPose.Valid,
         m_lastSnapshot.SpellOrigin.Valid,
         m_lastSnapshot.ArrowOrigin.Valid,

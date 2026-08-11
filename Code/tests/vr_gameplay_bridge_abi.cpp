@@ -112,7 +112,9 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(static_cast<std::uint16_t>(GameplayAction::ConfigureDeathSystem) == 88);
     REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ConfigureDeathSystem));
     REQUIRE_FALSE(IsActionInDomain(GameplayDomain::WorldState, GameplayAction::ConfigureDeathSystem));
-    REQUIRE(kPoseCommitNodeMask == 0x3FFu);
+    REQUIRE(kPoseCommitNodeMask == 0xFFFFFu);
+    REQUIRE(kVrikJointRotationCount == 30u);
+    REQUIRE(kVrikJointCommitMask == 0x3FFFFFFFu);
     REQUIRE(kNpcSnapshotActionIdMarker == (1ull << 63));
     REQUIRE(kNpcSnapshotGraphChunkCount ==
             1 + (SkyrimTogetherVR::AnimationGraphProtocol::kMaximumFloatCount +

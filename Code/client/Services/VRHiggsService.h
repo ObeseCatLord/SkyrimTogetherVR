@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <filesystem>
+#include <string>
 
 #include <Structs/VRHiggsState.h>
 #include <TiltedCore/Stl.hpp>
@@ -32,6 +34,11 @@ private:
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
     void PruneRemoteStates(double aDelta) noexcept;
     [[nodiscard]] bool CaptureLocalHiggsState(VRHiggsState& aState) noexcept;
+    void MergeMutationReplayWindow(VRHiggsState& arState, const std::string& acBridgeEpoch,
+                                   bool aOnline) noexcept;
+    void RebaseMutationReplayFloor(const std::string& acBridgeEpoch,
+                                   uint32_t aMutationSequence) noexcept;
+    void ClearLocalStateAtConnectionBoundary() noexcept;
     void SendHiggsState() noexcept;
     void WriteHiggsNetworkStatusFile() noexcept;
 
@@ -43,7 +50,16 @@ private:
     TiltedPhoques::Map<uint32_t, VRHiggsState> m_remoteStates{};
     TiltedPhoques::Map<uint32_t, double> m_remoteStateAges{};
     VRHiggsState m_lastLocalState{};
+    std::array<VRHiggsEventSnapshot, kMaximumHiggsMutationEvents> m_mutationReplayWindow{};
+    std::size_t m_mutationReplayEventCount{0};
+    std::uint32_t m_lastCapturedMutationSequence{0};
+    std::string m_bridgeEpoch{};
+    std::string m_mutationReplayFloorEpoch{};
+    std::uint32_t m_mutationReplayFloorSequence{0};
+    bool m_hasCapturedMutationSequence{false};
+    bool m_hasMutationReplayFloor{false};
     bool m_hasLocalState{false};
+    bool m_wasOnline{false};
     bool m_bridgeReadInitialized{false};
     double m_sendTimer{0.0};
     double m_statusTimer{0.0};

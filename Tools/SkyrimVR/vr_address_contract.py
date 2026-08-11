@@ -41,6 +41,16 @@ VALIDATED_VR_VTABLE_SLOT_TARGETS = {
 # Curated function targets whose Skyrim VR ABI and executable RVA have been
 # independently established. These rows override generated translations.
 VALIDATED_VR_ADDRESS_OVERRIDES = {
+    19075: {
+        "offset": 0x27A4C0,
+        "prologue": "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48",
+        "source": "sse_vr",
+        "status": "exact_vr_disassembly",
+        "name": "TESObjectCELL::GetCOCPlacementInfo",
+        "signature": "void(RE::TESObjectCELL*, RE::NiPoint3*, RE::NiPoint3*, bool)",
+        "ownership": "cell and output vectors are borrowed for the synchronous call",
+        "evidence": "SteamStub-decrypted SkyrimVR.exe 1.4.15 SHA256 6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971: exact entry RVA 0x027A4C0/prologue and CenterOnCell RVA 0x06BC6C0 callsite 0x06BC806 with RCX=cell, RDX=position, R8=rotation, R9B=true; disproves generated 0x0294070 NiTMap allocator",
+    },
     33741: {
         "offset": 0x557830,
         "prologue": "48 89 5c 24 20 57 48 83 ec 40 48 89 6c 24 50 48",
@@ -60,6 +70,16 @@ VALIDATED_VR_ADDRESS_OVERRIDES = {
         "signature": "bool(RE::MagicTarget*, RE::MagicTarget::AddTargetData&)",
         "ownership": "both arguments are non-owning and remain valid only for the synchronous call",
         "evidence": "VR Address Library ID/RVA, exact entry bytes, CommonLib typed declaration, and VR callee argument access",
+    },
+    34512: {
+        "offset": 0x557070,
+        "prologue": "48 81 ec 88 00 00 00 48 c7 44 24 20 fe ff ff ff",
+        "source": "sse_vr",
+        "status": "exact_vr_disassembly",
+        "name": "MagicTarget::DispelAllSpells",
+        "signature": "void(RE::MagicTarget*, bool)",
+        "ownership": "MagicTarget is borrowed for the synchronous effect-list traversal",
+        "evidence": "SteamStub-decrypted SkyrimVR.exe 1.4.15 SHA256 6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971: exact entry RVA 0x0557070/prologue, VTABLE___DispelEffectFunctor RVA 0x16B1DF0, force flag at visitor+8, MagicTarget active-list virtual +0x38, traversal 0x5440A0, and visitor Accept RVA 0x559C70 conditionally calling ActiveEffect::Dispel RVA 0x541100; disproves generated 0x0579DF0",
     },
     36541: {
         "offset": 0x5F0E20,

@@ -2,6 +2,7 @@
 
 #include "DynamicActorBaseFlags.h"
 #include "LocalGameplayCapture.h"
+#include "VerifiedVrDeath.h"
 
 #include <algorithm>
 #include <array>
@@ -15,13 +16,14 @@ namespace SkyrimTogetherVR::GameplayAdapter
 namespace
 {
 constexpr float kMaximumActorValue = 1000000.0f;
-constexpr std::array<RE::FormID, 9> kCrimeFactionFormIds{
+constexpr std::array<RE::FormID, 10> kCrimeFactionFormIds{
     0x28170, 0x267E3, 0x29DB0, 0x2816D, 0x2816E, 0x2816C, 0x2816B, 0x267EA, 0x2816F,
+    0x04018279,
 };
-constexpr RE::FormID kRightHandEquipSlotFormId = 0x13F42;
-constexpr RE::FormID kLeftHandEquipSlotFormId = 0x13F43;
 constexpr auto kPostRespawnKnockdownDelay = std::chrono::milliseconds(1500);
 constexpr auto kPostRespawnProtectionDuration = std::chrono::seconds(10);
+constexpr RE::FormID kLeftHandEquipSlotFormId = 0x13F43;
+constexpr RE::FormID kRightHandEquipSlotFormId = 0x13F42;
 
 enum class PostRespawnPhase : std::uint8_t
 {
@@ -34,6 +36,32 @@ PostRespawnPhase g_postRespawnPhase{PostRespawnPhase::None};
 std::chrono::steady_clock::time_point g_postRespawnDeadline{};
 bool g_postRespawnEnabledGodMode{};
 
+struct DeathSystemPolicyState
+{
+    RE::FormID PlayerFormId{};
+    RE::FormID BaseFormId{};
+    bool PreviousActorEssential{};
+    bool PreviousNoBleedoutRecovery{};
+    bool PreviousBaseEssential{};
+    bool Active{};
+    bool RestoreFailed{};
+    CommandStatus LastRestoreFailure{CommandStatus::Success};
+};
+
+DeathSystemPolicyState g_deathSystemPolicy{};
+
+struct CachedDeathMagicState
+{
+    const RE::PlayerCharacter* Player{};
+    RE::FormID LeftSpell{};
+    RE::FormID RightSpell{};
+    RE::FormID Power{};
+    bool Valid{};
+};
+
+CachedDeathMagicState g_cachedDeathMagic{};
+bool g_bleedoutTransitionObserved{};
+
 [[nodiscard]] CommandStatus FadeScreen(
     const bool a_fadingOut,
     const bool a_blackFade,
@@ -41,21 +69,8 @@ bool g_postRespawnEnabledGodMode{};
     const bool a_remainVisible,
     const float a_secondsToFade) noexcept
 {
-    auto* skyrimVm = RE::SkyrimVM::GetSingleton();
-    auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
-    if (!vm)
-        return CommandStatus::Inactive;
-
-    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-    return vm->DispatchStaticCall(
-               RE::BSFixedString{"Game"}, RE::BSFixedString{"FadeOutGame"},
-               RE::MakeFunctionArguments(
-                   static_cast<bool>(a_fadingOut),
-                   static_cast<bool>(a_blackFade),
-                   static_cast<float>(a_fadeDuration),
-                   static_cast<bool>(a_remainVisible),
-                   static_cast<float>(a_secondsToFade)), callback) ?
-               CommandStatus::Success : CommandStatus::EngineRejected;
+    return VerifiedVrDeath::FadeScreen(
+        a_fadingOut, a_blackFade, a_fadeDuration, a_remainVisible, a_secondsToFade);
 }
 
 [[nodiscard]] bool IsZero(const GameplayActionPayload& a_payload) noexcept
@@ -115,43 +130,264 @@ bool g_postRespawnEnabledGodMode{};
     return ar_object ? CommandStatus::Success : CommandStatus::MissingForm;
 }
 
+[[nodiscard]] RE::FormID GetFormId(const RE::TESForm* a_form) noexcept
+{
+    return a_form ? a_form->GetFormID() : 0;
+}
+
+void ClearCachedDeathMagic() noexcept
+{
+    g_cachedDeathMagic = {};
+}
+
+void CacheSelectedDeathMagic(RE::PlayerCharacter& a_player) noexcept
+{
+    const auto& runtime = a_player.GetActorRuntimeData();
+    const auto* left = runtime.selectedSpells[RE::Actor::SlotTypes::kLeftHand] ?
+                           runtime.selectedSpells[RE::Actor::SlotTypes::kLeftHand]->As<RE::SpellItem>() : nullptr;
+    const auto* right = runtime.selectedSpells[RE::Actor::SlotTypes::kRightHand] ?
+                            runtime.selectedSpells[RE::Actor::SlotTypes::kRightHand]->As<RE::SpellItem>() : nullptr;
+    const auto* power = runtime.selectedPower ? runtime.selectedPower->As<RE::TESShout>() : nullptr;
+    g_cachedDeathMagic = {
+        .Player = &a_player,
+        .LeftSpell = GetFormId(left),
+        .RightSpell = GetFormId(right),
+        .Power = GetFormId(power),
+        .Valid = true,
+    };
+}
+
+[[nodiscard]] bool ForceCurrentActorValue(
+    RE::Actor& a_actor,
+    const RE::ActorValue a_actorValue,
+    const float a_target) noexcept
+{
+    const auto current = a_actor.GetActorValue(a_actorValue);
+    const auto delta = a_target - current;
+    if (!std::isfinite(current) || !std::isfinite(delta) ||
+        std::abs(delta) > kMaximumActorValue * 2.0F)
+        return false;
+
+    // Desktop calls ActorValueOwner::ForceCurrent at vtable slot six. In
+    // CommonLib VR that same engine slot is named ModActorValue, so this keeps
+    // the native damage-mode delta semantics without an unverified RVA.
+    a_actor.ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, a_actorValue, delta);
+    return true;
+}
+
+void PayCrimeGoldToAllFactions() noexcept
+{
+    for (const auto formId : kCrimeFactionFormIds) {
+        if (auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(formId))
+            faction->PlayerPayCrimeGold(false, false);
+    }
+}
+
+[[nodiscard]] bool IsActiveDeathPolicyFor(const RE::PlayerCharacter& a_player) noexcept
+{
+    const auto* base = a_player.GetActorBase();
+    return g_deathSystemPolicy.Active && !g_deathSystemPolicy.RestoreFailed && base &&
+           g_deathSystemPolicy.PlayerFormId == a_player.GetFormID() &&
+           g_deathSystemPolicy.BaseFormId == base->GetFormID();
+}
+
+[[nodiscard]] CommandStatus RetainFailedDeathPolicyRestore(const CommandStatus a_status) noexcept
+{
+    g_deathSystemPolicy.RestoreFailed = true;
+    g_deathSystemPolicy.LastRestoreFailure = a_status;
+    return a_status;
+}
+
+[[nodiscard]] CommandStatus RestoreDeathSystemPolicy() noexcept
+{
+    if (!g_deathSystemPolicy.Active)
+        return CommandStatus::Success;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player)
+        return RetainFailedDeathPolicyRestore(CommandStatus::Inactive);
+    if (player->GetFormID() != g_deathSystemPolicy.PlayerFormId)
+        return RetainFailedDeathPolicyRestore(CommandStatus::StaleEntity);
+
+    auto* base = RE::TESForm::LookupByID<RE::TESNPC>(g_deathSystemPolicy.BaseFormId);
+    if (!base)
+        return RetainFailedDeathPolicyRestore(CommandStatus::MissingForm);
+    if (base->IsDynamicForm())
+        return RetainFailedDeathPolicyRestore(CommandStatus::Inactive);
+
+    VerifiedVrDeath::DeathPolicyTargets targets{};
+    if (!VerifiedVrDeath::ResolveDeathPolicyTargets(targets))
+        return RetainFailedDeathPolicyRestore(CommandStatus::Unsupported);
+
+    try {
+        auto& flags = player->GetActorRuntimeData().boolFlags;
+        flags.set(g_deathSystemPolicy.PreviousActorEssential, RE::Actor::BOOL_FLAGS::kEssential);
+        targets.SetBaseFlag(static_cast<RE::TESActorBaseData*>(base), RE::ACTOR_BASE_DATA::Flag::kEssential,
+                            g_deathSystemPolicy.PreviousBaseEssential, true);
+        targets.SetNoBleedout(player, g_deathSystemPolicy.PreviousNoBleedoutRecovery);
+    } catch (...) {
+        return RetainFailedDeathPolicyRestore(CommandStatus::EngineRejected);
+    }
+
+    g_deathSystemPolicy = {};
+    ClearCachedDeathMagic();
+    g_bleedoutTransitionObserved = false;
+    return CommandStatus::Success;
+}
+
+void ProcessDeathSystemTransition() noexcept
+{
+    if (!g_deathSystemPolicy.Active)
+        return;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player || !IsActiveDeathPolicyFor(*player))
+        return;
+
+    const auto* actorState = player->AsActorState();
+    if (!actorState || !actorState->IsBleedingOut()) {
+        CacheSelectedDeathMagic(*player);
+        g_bleedoutTransitionObserved = false;
+        return;
+    }
+
+    if (g_bleedoutTransitionObserved)
+        return;
+
+    g_bleedoutTransitionObserved = true;
+    static_cast<void>(FadeScreen(true, true, 3.0F, true, 2.0F));
+    if (player->GetActorValue(RE::ActorValue::kHealth) > 0.0F)
+        static_cast<void>(ForceCurrentActorValue(*player, RE::ActorValue::kHealth, 0.0F));
+    PayCrimeGoldToAllFactions();
+}
+
+[[nodiscard]] CommandStatus ResolveRespawnDestination(
+    RE::PlayerCharacter& a_player,
+    RE::TESObjectCELL*& ar_cell,
+    RE::TESWorldSpace*& ar_worldspace) noexcept
+{
+    ar_cell = nullptr;
+    ar_worldspace = nullptr;
+    if (auto* worldspace = a_player.GetWorldspace()) {
+        auto* tes = RE::TES::GetSingleton();
+        if (!tes || tes->currentGridX < std::numeric_limits<std::int16_t>::min() ||
+            tes->currentGridX > std::numeric_limits<std::int16_t>::max() ||
+            tes->currentGridY < std::numeric_limits<std::int16_t>::min() ||
+            tes->currentGridY > std::numeric_limits<std::int16_t>::max())
+            return CommandStatus::MissingCell;
+
+        const RE::CellID centerCell{
+            static_cast<std::int16_t>(tes->currentGridY), static_cast<std::int16_t>(tes->currentGridX)};
+        const auto entry = worldspace->cellMap.find(centerCell);
+        if (entry == worldspace->cellMap.end() || !entry->second || entry->second->IsInteriorCell() ||
+            entry->second->GetRuntimeData().worldSpace != worldspace)
+            return CommandStatus::MissingCell;
+
+        ar_cell = entry->second;
+        ar_worldspace = worldspace;
+        return CommandStatus::Success;
+    }
+
+    ar_cell = a_player.GetParentCell();
+    return ar_cell && ar_cell->IsInteriorCell() ? CommandStatus::Success : CommandStatus::MissingCell;
+}
+
+[[nodiscard]] bool IsFinite(const RE::NiPoint3& a_value) noexcept
+{
+    return std::isfinite(a_value.x) && std::isfinite(a_value.y) && std::isfinite(a_value.z);
+}
+
+class ScopedNoBleedoutRecovery final
+{
+public:
+    ScopedNoBleedoutRecovery(
+        RE::PlayerCharacter& a_player,
+        VerifiedVrDeath::RespawnTargets::SetNoBleedoutRecovery* a_setNoBleedout) noexcept
+        : m_player(&a_player), m_setNoBleedout(a_setNoBleedout)
+    {
+    }
+
+    ~ScopedNoBleedoutRecovery() noexcept
+    {
+        if (m_player && m_setNoBleedout)
+            m_setNoBleedout(m_player, true);
+    }
+
+private:
+    RE::PlayerCharacter* m_player{};
+    VerifiedVrDeath::RespawnTargets::SetNoBleedoutRecovery* m_setNoBleedout{};
+};
+
+void ReequipCachedDeathMagic(RE::PlayerCharacter& a_player) noexcept
+{
+    const auto cached = g_cachedDeathMagic;
+    ClearCachedDeathMagic();
+    if (!cached.Valid || cached.Player != &a_player)
+        return;
+
+    auto* equipManager = RE::ActorEquipManager::GetSingleton();
+    if (!equipManager)
+        return;
+
+    const auto* leftSlot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlotFormId);
+    const auto* rightSlot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId);
+    if (auto* leftSpell = RE::TESForm::LookupByID<RE::SpellItem>(cached.LeftSpell); leftSpell && leftSlot)
+        equipManager->EquipSpell(&a_player, leftSpell, leftSlot);
+    if (auto* rightSpell = RE::TESForm::LookupByID<RE::SpellItem>(cached.RightSpell); rightSpell && rightSlot)
+        equipManager->EquipSpell(&a_player, rightSpell, rightSlot);
+    if (auto* power = RE::TESForm::LookupByID<RE::TESShout>(cached.Power))
+        equipManager->EquipShout(&a_player, power);
+}
+
 [[nodiscard]] CommandStatus RespawnLocalPlayer(RE::Actor& a_actor) noexcept
 {
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player || &a_actor != player)
         return CommandStatus::Malformed;
 
-    const auto& runtime = player->GetActorRuntimeData();
-    auto* rightSpell = runtime.selectedSpells[0] ? runtime.selectedSpells[0]->As<RE::SpellItem>() : nullptr;
-    auto* leftSpell = runtime.selectedSpells[1] ? runtime.selectedSpells[1]->As<RE::SpellItem>() : nullptr;
-    auto* shout = runtime.selectedPower ? runtime.selectedPower->As<RE::TESShout>() : nullptr;
-    auto* destination = player->GetParentCell();
+    if (!IsActiveDeathPolicyFor(*player))
+        return CommandStatus::Inactive;
 
-    for (const auto formId : kCrimeFactionFormIds) {
-        if (auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(formId))
-            faction->PlayerPayCrimeGold(false, false);
-    }
+    ProcessDeathSystemTransition();
 
-    player->Resurrect(false, true);
-    if (destination)
-        static_cast<void>(player->CenterOnCell(destination));
+    VerifiedVrDeath::RespawnTargets targets{};
+    if (!VerifiedVrDeath::ResolveRespawnTargets(targets))
+        return CommandStatus::Unsupported;
 
-    if (auto* equipManager = RE::ActorEquipManager::GetSingleton()) {
-        const auto* rightSlot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId);
-        const auto* leftSlot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlotFormId);
-        if (rightSpell && rightSlot)
-            equipManager->EquipSpell(player, rightSpell, rightSlot);
-        if (leftSpell && leftSlot)
-            equipManager->EquipSpell(player, leftSpell, leftSlot);
-        if (shout)
-            equipManager->EquipShout(player, shout);
-    }
-    if (player->IsDead())
+    auto* magicTarget = player->AsMagicTarget();
+    if (!magicTarget)
         return CommandStatus::EngineRejected;
+
+    RE::TESObjectCELL* destination{};
+    RE::TESWorldSpace* destinationWorldspace{};
+    const auto destinationStatus = ResolveRespawnDestination(*player, destination, destinationWorldspace);
+    if (destinationStatus != CommandStatus::Success)
+        return destinationStatus;
+
+    // Literal PlayerCharacter::RespawnPlayer ordering from the desktop branch:
+    // recoverable bleedout, dispel, force health, COC placement, move, then
+    // restore unrecoverable bleedout for the next death.
+    targets.SetNoBleedout(player, false);
+    {
+        const ScopedNoBleedoutRecovery restoreNoBleedout{*player, targets.SetNoBleedout};
+        targets.DispelAll(magicTarget, false);
+        if (!ForceCurrentActorValue(*player, RE::ActorValue::kHealth, kMaximumActorValue))
+            return CommandStatus::EngineRejected;
+
+        RE::NiPoint3 position{};
+        RE::NiPoint3 cocRotation{};
+        const auto actorRotation = player->GetAngle();
+        targets.GetCocPlacement(destination, &position, &cocRotation, true);
+        if (!IsFinite(position) || !IsFinite(cocRotation) || !IsFinite(actorRotation))
+            return CommandStatus::EngineRejected;
+        targets.MoveToCell(
+            player, RE::ObjectRefHandle{}, destination, destinationWorldspace, position, actorRotation);
+    }
 
     g_postRespawnEnabledGodMode = false;
     g_postRespawnPhase = PostRespawnPhase::WaitingForKnockdown;
     g_postRespawnDeadline = std::chrono::steady_clock::now() + kPostRespawnKnockdownDelay;
+    ReequipCachedDeathMagic(*player);
     return CommandStatus::Success;
 }
 
@@ -160,11 +396,86 @@ bool g_postRespawnEnabledGodMode{};
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player || &a_actor != player)
         return CommandStatus::Malformed;
-    static_cast<void>(a_enabled);
 
-    // Skyrim VR has no verified equivalent for the desktop notification
-    // semantics.  Do not partially mutate local death-policy state.
-    return CommandStatus::Unsupported;
+    // The tracked desktop method skips PlayerFaction only for the local player
+    // (form 0x14). This local-only bridge therefore reproduces precisely its
+    // SetEssentialEx plus SetNoBleedoutRecovery policy, and nothing else.
+
+    if (!a_enabled) {
+        return RestoreDeathSystemPolicy();
+    }
+
+    if (g_deathSystemPolicy.Active && !IsActiveDeathPolicyFor(*player)) {
+        if (const auto restoreStatus = RestoreDeathSystemPolicy(); restoreStatus != CommandStatus::Success)
+            return restoreStatus;
+    }
+
+    auto* base = player->GetActorBase();
+    if (!base || base->IsDynamicForm())
+        return CommandStatus::Inactive;
+
+    VerifiedVrDeath::DeathPolicyTargets targets{};
+    if (!VerifiedVrDeath::ResolveDeathPolicyTargets(targets))
+        return CommandStatus::Unsupported;
+
+    if (!g_deathSystemPolicy.Active) {
+        const auto& flags = player->GetActorRuntimeData().boolFlags;
+        g_deathSystemPolicy = {
+            .PlayerFormId = player->GetFormID(),
+            .BaseFormId = base->GetFormID(),
+            .PreviousActorEssential = flags.all(RE::Actor::BOOL_FLAGS::kEssential),
+            .PreviousNoBleedoutRecovery = flags.all(RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery),
+            .PreviousBaseEssential = base->IsEssential(),
+            .Active = true,
+        };
+    }
+
+    player->GetActorRuntimeData().boolFlags.set(true, RE::Actor::BOOL_FLAGS::kEssential);
+    targets.SetBaseFlag(static_cast<RE::TESActorBaseData*>(base), RE::ACTOR_BASE_DATA::Flag::kEssential, true, true);
+    targets.SetNoBleedout(player, true);
+    if (const auto* actorState = player->AsActorState(); actorState && !actorState->IsBleedingOut())
+        CacheSelectedDeathMagic(*player);
+    return CommandStatus::Success;
+}
+
+[[nodiscard]] CommandStatus ReconcileDeathSystemPolicy() noexcept
+{
+    if (!g_deathSystemPolicy.Active || g_deathSystemPolicy.RestoreFailed)
+        return CommandStatus::Success;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player)
+        return RetainFailedDeathPolicyRestore(CommandStatus::Inactive);
+
+    if (!IsActiveDeathPolicyFor(*player)) {
+        if (const auto restoreStatus = RestoreDeathSystemPolicy(); restoreStatus != CommandStatus::Success)
+            return restoreStatus;
+        return ConfigureDeathSystemPolicy(*player, true);
+    }
+
+    auto* base = player->GetActorBase();
+    VerifiedVrDeath::DeathPolicyTargets targets{};
+    if (!base || base->IsDynamicForm() || !VerifiedVrDeath::ResolveDeathPolicyTargets(targets))
+        return CommandStatus::Unsupported;
+
+    try {
+        auto& flags = player->GetActorRuntimeData().boolFlags;
+        if (!flags.all(RE::Actor::BOOL_FLAGS::kEssential))
+            flags.set(true, RE::Actor::BOOL_FLAGS::kEssential);
+        if (!base->IsEssential())
+            targets.SetBaseFlag(static_cast<RE::TESActorBaseData*>(base), RE::ACTOR_BASE_DATA::Flag::kEssential, true,
+                                true);
+        if (!flags.all(RE::Actor::BOOL_FLAGS::kNoBleedoutRecovery))
+            targets.SetNoBleedout(player, true);
+    } catch (...) {
+        return CommandStatus::EngineRejected;
+    }
+    return CommandStatus::Success;
+}
+
+void RestoreDeathSystemPolicyForRetirement() noexcept
+{
+    static_cast<void>(RestoreDeathSystemPolicy());
 }
 
 void ResetPostRespawnState() noexcept
@@ -572,6 +883,18 @@ CommandStatus ActorWorldManager::Execute(const CommandRecord& a_command) noexcep
 
 void ActorWorldManager::ProcessPeriodic() noexcept
 {
+    if (g_deathSystemPolicy.Active) {
+        if (g_deathSystemPolicy.RestoreFailed)
+            static_cast<void>(RestoreDeathSystemPolicy());
+        else
+            static_cast<void>(ReconcileDeathSystemPolicy());
+    }
+
+    try {
+        ProcessDeathSystemTransition();
+    } catch (...) {
+    }
+
     if (g_postRespawnPhase == PostRespawnPhase::None ||
         std::chrono::steady_clock::now() < g_postRespawnDeadline)
         return;
@@ -611,6 +934,9 @@ void ActorWorldManager::ProcessPeriodic() noexcept
 
 void ActorWorldManager::Reset() noexcept
 {
+    RestoreDeathSystemPolicyForRetirement();
     ResetPostRespawnState();
+    ClearCachedDeathMagic();
+    g_bleedoutTransitionObserved = false;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

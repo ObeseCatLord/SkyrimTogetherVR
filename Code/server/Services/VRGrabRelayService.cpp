@@ -1,6 +1,7 @@
 #include <Services/VRGrabRelayService.h>
 
 #include <cstddef>
+#include <utility>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -10,20 +11,14 @@
 #include <Messages/RequestVRGrabEvent.h>
 #include <Structs/GameplayCapabilities.h>
 #include <Structs/VRGrabEvent.h>
+#include <Structs/VRInteractionValidation.h>
 
 namespace
 {
-constexpr uint64_t kMinGrabRelayIntervalMs = 45;
 constexpr uint64_t kObjectAuthorityLeaseDurationMs = 1000;
 constexpr size_t kMaxObjectAuthorityLeases = 1024;
 
-struct ObjectAuthorityLease
-{
-    uint32_t OwnerPlayerId{0};
-    uint64_t ExpiryTick{0};
-};
-
-TiltedPhoques::Map<GameId, ObjectAuthorityLease> s_objectAuthorityLeases{};
+TiltedPhoques::Map<GameId, VRObjectAuthority::Lease> s_objectAuthorityLeases{};
 
 bool IsNewerSequence(uint32_t aCandidate, uint32_t aCurrent) noexcept
 {
@@ -35,44 +30,140 @@ bool HasGrabObject(const VRGrabEvent& acGrab) noexcept
     return static_cast<bool>(acGrab.ObjectId);
 }
 
-bool IsLeaseExpired(const ObjectAuthorityLease& acLease, uint64_t aTick) noexcept
+bool IsLeaseExpired(const VRObjectAuthority::Lease& acLease, uint64_t aTick) noexcept
 {
     return aTick >= acLease.ExpiryTick;
 }
+
+void ExpireLeases(TiltedPhoques::Map<GameId, VRObjectAuthority::Lease>& arLeases,
+                  const uint64_t aTick) noexcept
+{
+    auto it = arLeases.begin();
+    while (it != arLeases.end())
+    {
+        if (IsLeaseExpired(it->second, aTick))
+            it = arLeases.erase(it);
+        else
+            ++it;
+    }
 }
 
-bool VRObjectAuthority::AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick)
+bool ApplyOperation(TiltedPhoques::Map<GameId, VRObjectAuthority::Lease>& arLeases,
+                    const VRObjectAuthority::Operation& acOperation,
+                    const uint32_t aPlayerId, const uint64_t aTick)
 {
-    if (!acObjectId || aPlayerId == 0)
+    if (!acOperation.ObjectId || aPlayerId == 0)
         return false;
 
-    const auto it = s_objectAuthorityLeases.find(acObjectId);
-    if (it != s_objectAuthorityLeases.end())
+    const auto it = arLeases.find(acOperation.ObjectId);
+    if (acOperation.Kind == VRObjectAuthority::OperationKind::Release)
     {
-        if (!IsLeaseExpired(it->second, aTick) && it->second.OwnerPlayerId != aPlayerId)
+        if (it == arLeases.end() || it->second.OwnerPlayerId != aPlayerId)
             return false;
-
-        s_objectAuthorityLeases.erase(it);
-        s_objectAuthorityLeases.emplace(
-            acObjectId, ObjectAuthorityLease{aPlayerId, aTick + kObjectAuthorityLeaseDurationMs});
+        arLeases.erase(it);
         return true;
     }
 
-    if (s_objectAuthorityLeases.size() >= kMaxObjectAuthorityLeases)
+    if (acOperation.Kind == VRObjectAuthority::OperationKind::RenewExisting)
+    {
+        if (it == arLeases.end() || it->second.OwnerPlayerId != aPlayerId)
+            return false;
+        it->second.ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
+        return true;
+    }
+
+    if (it != arLeases.end())
+    {
+        if (it->second.OwnerPlayerId != aPlayerId)
+            return false;
+        it->second.ExpiryTick = aTick + kObjectAuthorityLeaseDurationMs;
+        return true;
+    }
+
+    if (arLeases.size() >= kMaxObjectAuthorityLeases)
         return false;
 
-    s_objectAuthorityLeases.emplace(acObjectId, ObjectAuthorityLease{aPlayerId, aTick + kObjectAuthorityLeaseDurationMs});
+    return arLeases.emplace(
+        acOperation.ObjectId, VRObjectAuthority::Lease{aPlayerId, aTick + kObjectAuthorityLeaseDurationMs}).second;
+}
+}
+
+bool VRObjectAuthority::PrepareBatch(Batch& arBatch, const Operation* const apOperations,
+                                     const std::size_t aOperationCount, const uint32_t aPlayerId,
+                                     const uint64_t aTick) noexcept
+{
+    if ((aOperationCount != 0 && !apOperations) || aPlayerId == 0)
+        return false;
+
+    if (!BeginBatch(arBatch, aTick))
+        return false;
+
+    for (std::size_t index = 0; index < aOperationCount; ++index)
+    {
+        if (!TryApplyOperation(arBatch, apOperations[index], aPlayerId, aTick))
+        {
+            arBatch = {};
+            return false;
+        }
+    }
     return true;
+}
+
+bool VRObjectAuthority::BeginBatch(Batch& arBatch, const uint64_t aTick) noexcept
+{
+    try
+    {
+        auto shadow = s_objectAuthorityLeases;
+        ExpireLeases(shadow, aTick);
+        arBatch.Leases.swap(shadow);
+        arBatch.Prepared = true;
+        return true;
+    }
+    catch (...)
+    {
+        arBatch = {};
+        return false;
+    }
+}
+
+bool VRObjectAuthority::TryApplyOperation(Batch& arBatch, const Operation& acOperation,
+                                           const uint32_t aPlayerId, const uint64_t aTick) noexcept
+{
+    if (!arBatch.Prepared)
+        return false;
+
+    try
+    {
+        return ApplyOperation(arBatch.Leases, acOperation, aPlayerId, aTick);
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool VRObjectAuthority::CommitBatch(Batch&& arBatch) noexcept
+{
+    if (!arBatch.Prepared)
+        return false;
+
+    s_objectAuthorityLeases.swap(arBatch.Leases);
+    arBatch.Prepared = false;
+    return true;
+}
+
+bool VRObjectAuthority::AcquireOrRenew(const GameId& acObjectId, const uint32_t aPlayerId, const uint64_t aTick)
+{
+    const Operation operation{acObjectId, OperationKind::AcquireOrRenew};
+    Batch batch{};
+    return PrepareBatch(batch, &operation, 1, aPlayerId, aTick) && CommitBatch(std::move(batch));
 }
 
 bool VRObjectAuthority::Release(const GameId& acObjectId, uint32_t aPlayerId) noexcept
 {
-    const auto it = s_objectAuthorityLeases.find(acObjectId);
-    if (it == s_objectAuthorityLeases.end() || it->second.OwnerPlayerId != aPlayerId)
-        return false;
-
-    s_objectAuthorityLeases.erase(it);
-    return true;
+    const Operation operation{acObjectId, OperationKind::Release};
+    Batch batch{};
+    return PrepareBatch(batch, &operation, 1, aPlayerId, 0) && CommitBatch(std::move(batch));
 }
 
 void VRObjectAuthority::ReleasePlayer(uint32_t aPlayerId) noexcept
@@ -89,14 +180,7 @@ void VRObjectAuthority::ReleasePlayer(uint32_t aPlayerId) noexcept
 
 void VRObjectAuthority::Expire(uint64_t aTick) noexcept
 {
-    auto it = s_objectAuthorityLeases.begin();
-    while (it != s_objectAuthorityLeases.end())
-    {
-        if (IsLeaseExpired(it->second, aTick))
-            it = s_objectAuthorityLeases.erase(it);
-        else
-            ++it;
-    }
+    ExpireLeases(s_objectAuthorityLeases, aTick);
 }
 
 void VRObjectAuthority::Reset() noexcept
@@ -138,7 +222,13 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
         return;
 
     const auto playerId = acMessage.pPlayer->GetId();
-    if (!ShouldRelayGrab(playerId, acMessage.Packet))
+    const PlayerGrabRelayState emptyState{};
+    const auto existingState = m_playerGrabRelayState.find(playerId);
+    const auto& previousState = existingState != m_playerGrabRelayState.end() ?
+                                    existingState->second : emptyState;
+    RelayDecision decision{};
+    VRObjectAuthority::Batch authorityBatch{};
+    if (!PrepareRelayDecision(previousState, playerId, acMessage.Packet, decision, authorityBatch))
         return;
 
     NotifyVRGrabEvent notify{};
@@ -150,7 +240,18 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
             notify, *character,
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRGrabRelay),
             acMessage.pPlayer))
+    {
         spdlog::warn("VR relay dropped because sender has no routable character");
+        return;
+    }
+
+    // The state entry is created only after fanout. If that allocation fails,
+    // the staged batch is discarded and the sender can retry the same packet.
+    auto [relayState, inserted] = m_playerGrabRelayState.try_emplace(playerId);
+    TP_UNUSED(inserted);
+    if (!VRObjectAuthority::CommitBatch(std::move(authorityBatch)))
+        return;
+    CommitRelayDecision(relayState->second, decision);
 }
 catch (...)
 {
@@ -171,28 +272,32 @@ void VRGrabRelayService::OnUpdate(const UpdateEvent&) noexcept
     VRObjectAuthority::Expire(GameServer::Get()->GetTick());
 }
 
-bool VRGrabRelayService::ShouldRelayGrab(uint32_t aPlayerId, const RequestVRGrabEvent& acRequest)
+bool VRGrabRelayService::PrepareRelayDecision(
+    const PlayerGrabRelayState& acPrevious, const uint32_t aPlayerId,
+    const RequestVRGrabEvent& acRequest, RelayDecision& arDecision,
+    VRObjectAuthority::Batch& arAuthorityBatch) const noexcept
 {
     const auto& grab = acRequest.Grab;
-    if (grab.Sequence == 0 || !HasGrabObject(grab))
+    if (grab.Sequence == 0 || !HasGrabObject(grab) || !SkyrimTogether::VR::IsVRGrabPositionValid(grab.Position))
         return false;
 
-    auto& state = m_playerGrabRelayState[aPlayerId];
-    if (state.HasSequence && !IsNewerSequence(grab.Sequence, state.LastSequence))
+    if (acPrevious.HasSequence && !IsNewerSequence(grab.Sequence, acPrevious.LastSequence))
         return false;
 
     const auto now = GameServer::Get()->GetTick();
-    if (state.LastRelayTick != 0 && now >= state.LastRelayTick && now - state.LastRelayTick < kMinGrabRelayIntervalMs)
+    const VRObjectAuthority::Operation operation{
+        grab.ObjectId, grab.Grabbed ? VRObjectAuthority::OperationKind::AcquireOrRenew :
+                                     VRObjectAuthority::OperationKind::Release};
+    if (!VRObjectAuthority::PrepareBatch(arAuthorityBatch, &operation, 1, aPlayerId, now))
         return false;
 
-    const bool hasAuthority = grab.Grabbed
-        ? VRObjectAuthority::AcquireOrRenew(grab.ObjectId, aPlayerId, now)
-        : VRObjectAuthority::Release(grab.ObjectId, aPlayerId);
-    if (!hasAuthority)
-        return false;
-
-    state.LastSequence = grab.Sequence;
-    state.LastRelayTick = now;
-    state.HasSequence = true;
+    arDecision.Sequence = grab.Sequence;
     return true;
+}
+
+void VRGrabRelayService::CommitRelayDecision(
+    PlayerGrabRelayState& arState, const RelayDecision& acDecision) noexcept
+{
+    arState.LastSequence = acDecision.Sequence;
+    arState.HasSequence = true;
 }

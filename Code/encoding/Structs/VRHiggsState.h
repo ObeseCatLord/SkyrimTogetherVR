@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include <Structs/GameId.h>
@@ -88,6 +90,8 @@ struct VRHiggsEventSnapshot
     float SeparatingVelocity{0.0f};
 };
 
+inline constexpr std::size_t kMaximumHiggsMutationEvents = 32;
+
 struct VRHiggsState
 {
     bool operator==(const VRHiggsState& acRhs) const noexcept;
@@ -95,8 +99,12 @@ struct VRHiggsState
 
     void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
     void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
+    [[nodiscard]] bool IsMutationReplayValid() const noexcept;
 
     uint32_t Sequence{0};
+    // Sequence is sampled bridge telemetry. Mutation events have their own
+    // ordered sequence space and are replayed independently of telemetry.
+    uint32_t MutationSequence{0};
     bool BridgeLoaded{false};
     bool Detected{false};
     bool InterfaceAvailable{false};
@@ -106,6 +114,10 @@ struct VRHiggsState
     bool TwoHanding{false};
     VRHiggsHandState Left{};
     VRHiggsHandState Right{};
-    bool LastEventValid{false};
-    VRHiggsEventSnapshot LastEvent{};
+    std::array<VRHiggsEventSnapshot, kMaximumHiggsMutationEvents> MutationEvents{};
+    uint8_t MutationEventCount{0};
+    // Decode-only validity. It is intentionally not serialized so protocol
+    // revision 14 stays wire-compatible while malformed bounded counts are
+    // rejected by both relay endpoints.
+    bool IsDecodedValid{true};
 };

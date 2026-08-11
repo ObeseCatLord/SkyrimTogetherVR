@@ -21,6 +21,7 @@ struct ServerSettingsState
     std::int32_t PreviousPlayerDifficulty{};
     float PreviousGreetDistance{};
     float PreviousWorldEncounters{};
+    float PreviousKillMoveFrequency{};
     std::int32_t ServerDifficulty{};
     bool GreetingsEnabled{};
     bool WorldEncountersEnabled{};
@@ -41,6 +42,14 @@ bool g_weatherOverrideActive{};
 [[nodiscard]] RE::TESGlobal* WorldEncountersGlobal() noexcept
 {
     return RE::TESForm::LookupByID<RE::TESGlobal>(0x000B8EC1);
+}
+
+[[nodiscard]] RE::TESGlobal* KillMoveFrequencyGlobal() noexcept
+{
+    // PlayerService suppresses vanilla kill moves for every connected desktop
+    // session. This global is lifecycle state, not part of the death-system
+    // configuration that controls respawn behavior.
+    return RE::TESForm::LookupByID<RE::TESGlobal>(0x00100F19);
 }
 
 [[nodiscard]] bool IsFinite(const GameplayActionPayload& a_payload) noexcept
@@ -181,14 +190,17 @@ template <class T>
     auto* player = RE::PlayerCharacter::GetSingleton();
     auto* greetDistance = GreetDistanceSetting();
     auto* worldEncounters = WorldEncountersGlobal();
-    if (!player || !greetDistance || !worldEncounters ||
-        !std::isfinite(greetDistance->GetFloat()) || !std::isfinite(worldEncounters->value))
+    auto* killMoveFrequency = KillMoveFrequencyGlobal();
+    if (!player || !greetDistance || !worldEncounters || !killMoveFrequency ||
+        !std::isfinite(greetDistance->GetFloat()) || !std::isfinite(worldEncounters->value) ||
+        !std::isfinite(killMoveFrequency->value))
         return CommandStatus::Inactive;
 
     if (!g_serverSettings.Active) {
         g_serverSettings.PreviousPlayerDifficulty = player->GetGameStatsData().difficulty;
         g_serverSettings.PreviousGreetDistance = greetDistance->GetFloat();
         g_serverSettings.PreviousWorldEncounters = worldEncounters->value;
+        g_serverSettings.PreviousKillMoveFrequency = killMoveFrequency->value;
     }
     g_serverSettings.ServerDifficulty = a_payload.ValueA;
     g_serverSettings.GreetingsEnabled = a_payload.ValueB != 0;
@@ -199,6 +211,7 @@ template <class T>
     player->GetGameStatsData().difficulty = g_serverSettings.ServerDifficulty;
     greetDistance->SetFloat(g_serverSettings.GreetingsEnabled ? g_serverSettings.PreviousGreetDistance : 0.0F);
     worldEncounters->value = g_serverSettings.WorldEncountersEnabled ? 1.0F : 0.0F;
+    killMoveFrequency->value = 0.0F;
     return CommandStatus::Success;
 }
 
@@ -423,11 +436,15 @@ void VRInteractionManager::ProcessPeriodic() noexcept
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* greetDistance = GreetDistanceSetting();
         auto* worldEncounters = WorldEncountersGlobal();
-        if (!player || !greetDistance || !worldEncounters)
+        auto* killMoveFrequency = KillMoveFrequencyGlobal();
+        if (!player || !greetDistance || !worldEncounters || !killMoveFrequency ||
+            !std::isfinite(greetDistance->GetFloat()) || !std::isfinite(worldEncounters->value) ||
+            !std::isfinite(killMoveFrequency->value))
             return;
         player->GetGameStatsData().difficulty = g_serverSettings.ServerDifficulty;
         greetDistance->SetFloat(g_serverSettings.GreetingsEnabled ? g_serverSettings.PreviousGreetDistance : 0.0F);
         worldEncounters->value = g_serverSettings.WorldEncountersEnabled ? 1.0F : 0.0F;
+        killMoveFrequency->value = 0.0F;
     } catch (...) {
     }
 }
@@ -442,6 +459,8 @@ void VRInteractionManager::Reset() noexcept
                 greetDistance->SetFloat(g_serverSettings.PreviousGreetDistance);
             if (auto* worldEncounters = WorldEncountersGlobal())
                 worldEncounters->value = g_serverSettings.PreviousWorldEncounters;
+            if (auto* killMoveFrequency = KillMoveFrequencyGlobal())
+                killMoveFrequency->value = g_serverSettings.PreviousKillMoveFrequency;
         }
         g_serverSettings = {};
         if (g_weatherOverrideActive) {

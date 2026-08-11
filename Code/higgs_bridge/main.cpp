@@ -1,7 +1,6 @@
 #include <windows.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cwctype>
@@ -13,7 +12,6 @@
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 
 #include <vr_common/VRHandoffPath.h>
 #include <vr_common/VRTickBridge.h>
@@ -28,6 +26,7 @@ static constexpr std::uint32_t kSkseMessagePostPostLoad = 1;
 static constexpr std::uint32_t kHiggsMessageGetInterface = 0xF9279A57;
 static constexpr std::uintptr_t kTesFormFormIdOffset = 0x14;
 static constexpr std::size_t kMaxRecentEvents = 32;
+static constexpr std::uint64_t kHandoffPublishIntervalMs = 50;
 
 struct PluginInfo
 {
@@ -213,21 +212,35 @@ SKSEMessagingInterface* g_messaging = nullptr;
 std::atomic<HiggsPluginAPI::IHiggsInterface001*> g_higgs{nullptr};
 std::atomic_bool g_callbacksRegistered{false};
 std::atomic_bool g_snapshotAvailable{false};
-std::atomic_bool g_running{false};
 std::atomic_uint32_t g_eventSequence{0};
 std::atomic_uint32_t g_snapshotSequence{0};
+std::atomic_uint32_t g_bridgeSequence{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
+std::atomic_uint64_t g_lastHandoffPublishTick{0};
 std::atomic_uint64_t g_bodyCaptureSequence{0};
 std::atomic_uint64_t g_bodyCaptureAttemptCount{0};
 std::atomic_uint64_t g_bodyCaptureSuccessCount{0};
 std::atomic_uint32_t g_bodyCaptureLastResult{static_cast<std::uint32_t>(SkyrimTogetherVR::TickBridge::DispatchResult::Inactive)};
 std::atomic_bool g_endpointFaulted{false};
-std::thread g_writerThread;
 std::mutex g_eventLock;
 std::deque<HiggsEvent> g_recentEvents;
 std::mutex g_snapshotLock;
 HiggsSnapshot g_latestSnapshot;
 std::atomic<SkyrimTogetherVR::TickBridge::Endpoint*> g_endpoint{nullptr};
+
+std::uint32_t NextNonZeroSequence(std::atomic_uint32_t& arSequence) noexcept
+{
+    auto current = arSequence.load(std::memory_order_relaxed);
+    for (;;)
+    {
+        auto next = current + 1;
+        if (next == 0)
+            next = 1;
+        if (arSequence.compare_exchange_weak(current, next, std::memory_order_relaxed,
+                                              std::memory_order_relaxed))
+            return next;
+    }
+}
 
 LONG ReadEndpointState(const SkyrimTogetherVR::TickBridge::Endpoint& acEndpoint) noexcept
 {
@@ -424,7 +437,7 @@ std::uint32_t ReadFormId(const void* apForm) noexcept
 
 void PushEvent(HiggsEvent aEvent)
 {
-    aEvent.Sequence = ++g_eventSequence;
+    aEvent.Sequence = NextNonZeroSequence(g_eventSequence);
 
     std::lock_guard lock(g_eventLock);
     g_recentEvents.push_back(aEvent);
@@ -537,7 +550,7 @@ void CaptureHiggsSnapshot()
         return;
 
     HiggsSnapshot snapshot{};
-    snapshot.Sequence = ++g_snapshotSequence;
+    snapshot.Sequence = NextNonZeroSequence(g_snapshotSequence);
     snapshot.BuildNumber = pHiggs->GetBuildNumber();
     snapshot.TwoHanding = pHiggs->IsTwoHanding();
     snapshot.Left = CaptureHandSnapshot(pHiggs, true);
@@ -570,11 +583,14 @@ void CaptureVrikSnapshotFromGameThread() noexcept
         callback();
 }
 
+void PublishHandoff(bool aForce) noexcept;
+
 void OnPostVrikPostHiggs()
 {
     CaptureVrikSnapshotFromGameThread();
     CaptureHiggsSnapshot();
     PublishPostHiggsBodyPose();
+    PublishHandoff(false);
 }
 
 void RegisterCallbacks(HiggsPluginAPI::IHiggsInterface001* apHiggs)
@@ -657,7 +673,7 @@ HiggsSnapshot CopyLatestSnapshot(bool& aAvailable)
     return g_latestSnapshot;
 }
 
-void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
+void WriteBridgeFile(const std::uint32_t aSequence)
 {
     const auto path = GetHandoffPath();
     std::error_code ec;
@@ -672,7 +688,7 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
     bool snapshotAvailable = false;
     const auto snapshot = CopyLatestSnapshot(snapshotAvailable);
 
-    file << "bridge.loaded=" << (aLoaded ? "1" : "0") << "\n";
+    file << "bridge.loaded=1\n";
     file << "bridge.sequence=" << aSequence << "\n";
     file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
     file << "higgs.detected=" << (IsHiggsInstalled() || pHiggs ? "1" : "0") << "\n";
@@ -686,7 +702,7 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
     file << "bodyCapture.successCount=" << g_bodyCaptureSuccessCount.load(std::memory_order_acquire) << "\n";
     file << "bodyCapture.lastResult=" << g_bodyCaptureLastResult.load(std::memory_order_acquire) << "\n";
 
-    if (aLoaded && pHiggs && snapshotAvailable)
+    if (snapshotAvailable)
     {
         file << "higgs.buildNumber=" << snapshot.BuildNumber << "\n";
         file << "higgs.twoHanding=" << (snapshot.TwoHanding ? "1" : "0") << "\n";
@@ -727,34 +743,49 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
     }
 }
 
-void WriterMain()
+bool ClaimHandoffPublishSlot(const bool aForce) noexcept
 {
-    std::uint32_t sequence = 0;
-    while (g_running)
+    const auto now = static_cast<std::uint64_t>(GetTickCount64());
+    if (aForce)
     {
-        WriteBridgeFile(++sequence, true);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        g_lastHandoffPublishTick.store(now, std::memory_order_release);
+        return true;
     }
 
-    WriteBridgeFile(++sequence, false);
+    auto last = g_lastHandoffPublishTick.load(std::memory_order_acquire);
+    for (;;)
+    {
+        if (last != 0 && now - last < kHandoffPublishIntervalMs)
+            return false;
+        if (g_lastHandoffPublishTick.compare_exchange_weak(last, now, std::memory_order_acq_rel,
+                                                            std::memory_order_acquire))
+            return true;
+    }
 }
 
-void StartWriter()
+void PublishHandoff(const bool aForce) noexcept
 {
-    if (g_running.exchange(true))
+    if (!ClaimHandoffPublishSlot(aForce))
         return;
 
-    g_bridgeEpoch.store(static_cast<std::uint64_t>(GetTickCount64()), std::memory_order_release);
-    g_writerThread = std::thread(WriterMain);
+    try
+    {
+        WriteBridgeFile(NextNonZeroSequence(g_bridgeSequence));
+    }
+    catch (...)
+    {
+    }
 }
 
-void StopWriter()
+void StartHandoff() noexcept
 {
-    if (!g_running.exchange(false))
-        return;
-
-    if (g_writerThread.joinable())
-        g_writerThread.join();
+    auto expected = std::uint64_t{0};
+    auto epoch = static_cast<std::uint64_t>(GetTickCount64());
+    if (epoch == 0)
+        epoch = 1;
+    g_bridgeEpoch.compare_exchange_strong(expected, epoch, std::memory_order_release,
+                                          std::memory_order_acquire);
+    PublishHandoff(true);
 }
 
 bool RequestHiggsInterface()
@@ -784,19 +815,9 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
     {
         MapEndpoint();
         RequestHiggsInterface();
-        StartWriter();
+        StartHandoff();
     }
 }
-
-struct ShutdownJoiner
-{
-    ~ShutdownJoiner()
-    {
-        StopWriter();
-    }
-};
-
-ShutdownJoiner g_shutdownJoiner;
 }
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSkse, PluginInfo* apInfo)
@@ -823,6 +844,6 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
 
     MapEndpoint();
     g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
-    StartWriter();
+    StartHandoff();
     return true;
 }

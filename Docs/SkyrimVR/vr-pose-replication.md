@@ -1,8 +1,12 @@
 # VR Pose Replication
 
-The current VR pose work has a dedicated network stream for connection-only bring-up. It captures local Skyrim VR node transforms, sends them to the server through a VR-only pose packet, and relays them to other connected clients without enabling actor spawn, ownership, animation, or gameplay sync.
+The VR pose stream captures local Skyrim VR node transforms, sends them through
+the matched gameplay protocol, and applies them to canonical managed remote
+actors created by the normal character/ownership flow.
 
-VRIK IK sync is mandatory for SkyrimTogetherVR. The pose packet therefore carries both the core IK driver targets and an explicit VRIK data lane. The current client publishes the lane through the relay and handoff surfaces; `SkyrimTogetherVRVrikBridge` fills the VRIK API-backed fields through a small SKSEVR plugin handoff file. The default build remains non-mutating. The explicit avatar-sync and gameplay targets validate remote VRIK payload readiness, while the CommonLib embodiment slice applies actor lifecycle, root/spatial movement, and named humanoid graph snapshots. Direct HMD/hand scene-node and VRIK skeleton writes remain disabled until a validated integration is added to the gameplay bridge.
+VRIK IK sync is mandatory for SkyrimTogetherVR. The pose packet carries core
+world-space HMD/hand targets, a versioned post-VRIK/post-HIGGS body hierarchy,
+sparse named finger rotations, and a VRIK diagnostics lane.
 
 ## Captured Nodes
 
@@ -25,12 +29,9 @@ For each valid node, `VRPlayerPoseSnapshot` reads the `NiAVObject::world` transf
 
 ## Runtime Service
 
-`VRPoseService` is disabled in the default connection-proof target. It is
-enabled as an observation/relay service in the explicit avatar-sync and
-gameplay branches. `VRAvatarService` separately consumes canonical character
-and movement messages and sends root-transform commands to the CommonLib
-gameplay bridge; it does not consume pose/VRIK packets yet. `VRMovementService`
-remains active in those broader branches for relay and readiness evidence.
+`VRPoseService` publishes local samples and caches validated remote samples.
+`VRActorReplicationService` translates those remote packets into bounded,
+result-owned bridge transactions targeting actors managed by `VRAvatarService`.
 
 When connected, it sends `RequestVRPoseUpdate` at 20 Hz. The packet contains a shared `VRPoseUpdate` payload with:
 
@@ -42,7 +43,8 @@ When connected, it sends `RequestVRPoseUpdate` at 20 Hz. The packet contains a s
 - bow aim and bow rotation transforms
 - left and right weapon offset transforms
 - primary and secondary magic offset/aim transforms
-- body format 1: pelvis local translation/rotation and left/right thigh, calf, and foot local rotations
+- body format 3: pelvis/legs, spine0/1/2, neck, clavicles, upper arms, and forearms
+- sparse unit-quaternion rotations for 30 named left/right finger joints
 - independent body capture sequence and skeleton-root generation
 - VRIK detection state
 - left and right VRIK finger curl values when the VRIK/HIGGS bridge provides them
@@ -56,9 +58,20 @@ It also subscribes to `NotifyVRPoseUpdate` and stores the latest remote pose by 
 
 `SkyrimTogetherVRHiggsBridge` attaches to the process-local callback endpoint before registering its HIGGS callbacks. Its post-VRIK/post-HIGGS callback asks the launcher to capture the current local player body into a nonblocking SRW mailbox. `VRPoseService` reads that mailbox on its normal update, treats samples older than 250 ms as invalid, and sends the body alongside the normal pose.
 
-Body format 1 intentionally omits spine nodes. SkyrimVR-FBT defaults to a world-only lower-spine correction, so the local spine transforms do not faithfully encode the rendered correction. The pelvis carries local translation and rotation; thigh, calf, and foot carry rotation only. Shared server/client validation requires finite, near-unit, orthogonal, right-handed rotation bases, near-one scale, bounded pelvis translation, and near-zero limb translation.
+Body format 3 reads the final callback state after VRIK, SkyrimVR-FBT, and HIGGS.
+SkyrimVR-FBT may publish lower-spine correction through world transforms only,
+so capture derives each spine node's effective rotation as parent-world inverse
+times node-world. Pelvis carries local translation and rotation; all other body
+nodes carry rotation only. Shared validation requires finite, near-unit,
+orthogonal, right-handed bases, near-one scale, bounded pelvis translation,
+near-zero limb translation, coherent capture/root generations, and safe sparse
+finger quaternions. Formats 1 and 2 remain decodable inside protocol revision
+13, but mixed protocol revisions fail before fixed-order packet decoding.
 
-Remote body samples are relay/cache/telemetry only. HIGGS's local-player callback is not a safe per-remote-actor post-animation phase, so no remote body node writes occur in this version. See `fbt-compatibility.md` and `fbt-networking-senior-disposition-20260714.md`.
+The CommonLib gameplay bridge applies remote body nodes parent-first and updates
+the hierarchy before deriving head/hand locals from their world targets. It then
+applies sparse named finger rotations. Writes require managed remote identity,
+matching root generation, safe transforms, and non-ragdoll state.
 
 ## VRIK IK Data Lane
 
@@ -67,7 +80,8 @@ The VRIK interface reference inspected from `_refs/higgs/include/vrikinterface00
 - HMD, left-hand, and right-hand transforms are mandatory IK targets.
 - Weapon, bow, arrow, and magic nodes provide the combat/interaction target context needed by a remote avatar.
 - `VRVrikData` carries VRIK installation/API state, finger curl values, and camera/smoothing offsets.
-- HIGGS pre/post VRIK callback phases remain the safest future timing point for filling API-backed fields.
+- The post-VRIK/post-HIGGS callback fills the API-backed fields and captures the
+  final body state.
 
 The current implementation sets VRIK detection from `Data/SKSE/Plugins/vrik.dll` or `VRIK.dll`, serializes the VRIK lane in `VRPoseUpdate`, relays it through the server, writes it to `SkyrimTogetherVR.pose`, and exposes it in the VR Papyrus telemetry readout. `SkyrimTogetherVRVrikBridge` is built as a separate SKSEVR plugin, requests VRIK's interface with message `0xF2AFAEE6` after SKSE's `PostPostLoad` messaging, and writes API-backed values into:
 
@@ -75,7 +89,14 @@ The current implementation sets VRIK detection from `Data/SKSE/Plugins/vrik.dll`
 Data/SkyrimTogetherReborn/SkyrimTogetherVR.vrik
 ```
 
-`VRPoseService` reads that file at the 20 Hz pose cadence and requires a coherent `bridge.loaded`/`bridge.sequence`/`bridge.epoch` snapshot plus an observed newer `vrik.snapshotSequence` before relaying API-backed values. The bridge now emits `vrik.snapshotAvailable` and `vrik.snapshotSequence` with each heartbeat (`vrik.snapshotAgeMs` for diagnostics), so unchanged snapshots clear finger/camera payload validity while preserving VRIK detection/API capability flags. If the bridge is absent, stale, partially written, or VRIK does not provide an interface, the lane still reports VRIK detection capability while finger curl and camera-offset values remain invalid. The VRIK bridge no longer polls VRIK getters from its writer thread; it serializes cached snapshot data until a validated main-thread/update-phase VRIK snapshot hook is added for live finger/camera updates.
+`VRPoseService` reads that file at the 20 Hz pose cadence and requires a coherent
+`bridge.loaded`/`bridge.sequence`/`bridge.epoch` snapshot plus an observed newer
+`vrik.snapshotSequence` before relaying API-backed values. The VRIK bridge
+captures and rate-limits handoff publication from the validated
+post-VRIK/post-HIGGS game-thread callback; it has no background writer. If the
+bridge is absent, stale, partially written, or VRIK does not provide an
+interface, detection remains visible while finger/camera payload validity is
+cleared.
 
 ## Pose Handoff File
 
@@ -93,9 +114,13 @@ The file is rewritten at 4 Hz and contains:
 - selected local nodes: `local.hmd`, `local.leftHand`, `local.rightHand`, `local.spellOrigin`, `local.arrowOrigin`, `local.bowAim`
 - selected remote nodes by player id: `remote.<playerId>.hmd`, `remote.<playerId>.leftHand`, `remote.<playerId>.rightHand`, `remote.<playerId>.spellOrigin`, `remote.<playerId>.arrowOrigin`, `remote.<playerId>.bowAim`
 - local and remote VRIK state: `.vrik.detected`, `.vrik.interfaceAvailable`, `.vrik.leftFingers`, `.vrik.rightFingers`, and `.vrik.cameraOffsetsValid`
-- local and remote body state: `.body.formatVersion`, `.body.valid`, `.body.captureSequence`, `.body.rootGeneration`, and pelvis/leg nodes
+- local and remote body state: `.body.formatVersion`, `.body.valid`,
+  `.body.captureSequence`, `.body.rootGeneration`, joint metadata, and all
+  pelvis/leg/spine/neck/clavicle/arm nodes
 
-Each node records `.valid`, and valid nodes also record `.position`, `.axisX`, `.axisY`, `.axisZ`, and `.scale`. This is a read-only consumer of the replicated pose stream; it does not create actors, move nodes, or apply animation/physics.
+Each node records `.valid`, and valid nodes also record `.position`, `.axisX`,
+`.axisY`, `.axisZ`, and `.scale`. The file is diagnostic; native remote actor
+mutation occurs only through the CommonLib gameplay bridge.
 
 This keeps HIGGS-owned hand physics and grab state untouched. The service reads node transforms and sends pose data only.
 
@@ -103,7 +128,13 @@ This keeps HIGGS-owned hand physics and grab state untouched. The service reads 
 
 `VRPoseService` owns remote pose liveness and clears remote pose entries on disconnect, `NotifyPlayerLeft`, or three seconds without an update. `VRInventoryService` separately owns the remote equipment map. The previous `CharacterService` cache prototype (`RemoteVRPoseComponent` and `RemoteVREquipmentComponent`) remains in source for comparison but is not constructed by VR targets.
 
-The canonical embodiment path is now `VRAvatarService` plus `SkyrimTogetherVRGameplayBridge.dll`. It intentionally consumes only character lifecycle and root movement. Pose, finger, camera-offset, weapon, magic, projectile, HIGGS, PLANCK, and FBT data remains relayed/observable but is not written into CommonLib-owned remote actors yet.
+The canonical embodiment path is `VRAvatarService` plus
+`SkyrimTogetherVRGameplayBridge.dll`. It owns character lifecycle, root
+movement, graph state, body/HMD/hand/finger pose, equipment, appearance, combat,
+magic, projectiles, interactions, world state, and death/respawn through typed
+or verified native boundaries. VRIK camera offsets and PLANCK physical replay
+remain diagnostics because their public APIs do not expose safe remote-actor
+mutation contracts.
 
 The explicit avatar-sync and gameplay targets have a readout-only proxy cache,
 `VRRemotePlayerService`, which writes
@@ -112,11 +143,18 @@ player notifications with the enabled relay maps without creating actors,
 marker objects, or scene nodes. The proxy is disabled in the default
 connection-proof target.
 
-The default `SkyrimTogetherVRClient` target does not construct `VRAvatarService`. The explicit `SkyrimTogetherVRClientAvatarSync` target keeps connection-only mode, enables remote-avatar sync, and loads the gameplay bridge; the gameplay target uses the same bridge with the wider VR-safe observer graph. These targets apply actor lifecycle, root/spatial movement, and named humanoid animation graph snapshots through CommonLib. Direct HMD/hand scene-node and VRIK skeleton writes remain disabled because graph-variable replication is not actor-specific VRIK skeleton integration.
+The gameplay target loads the same bridge used by canonical avatar lifecycle and
+applies physical pose only to those managed remote actor records. The older
+connection-only/avatar-sync targets remain bounded diagnostics packages and are
+not evidence of full gameplay parity.
 
-`VRAvatarService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.avatar` once per second using schema `commonlib_bridge_v2`. It reports bridge readiness and epoch, local assignment/snapshot state, pending/tracked/active avatars, lifecycle/root commands, accepted and stale canonical movement, animation snapshot submissions/rejections, same-space observations, rejected commands, and invalid transforms. The strict audit requires a positive epoch and local server id, at least one successful actor create, an accepted `ServerReferencesMoveRequest`, and submitted root and animation updates, with no pending spawn and zero rejected commands, animation snapshots, or invalid transforms. `actorSkeletonWritesEnabled` must remain `0`; pose-relay telemetry is validated separately.
+`VRAvatarService` writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.avatar`
+once per second with bridge readiness, lifecycle/root/animation state, pose
+submission results, and remote actor diagnostics. Physical pose writes are
+performed only by the managed-actor CommonLib bridge and are audited separately
+from the readout file.
 
-This still needs two-client runtime validation and likely a proper VRIK/animation/equipment integration before it should be enabled in normal builds.
+This still needs two-client runtime validation before release enablement.
 
 ## Server Relay
 
@@ -133,7 +171,11 @@ The relay intentionally does not:
 ## Next Steps
 
 - Build and install `SkyrimTogetherVRVrikBridge.dll` on Windows, then validate that SKSEVR loads it and that `SkyrimTogetherVR.vrik` updates while VRIK is installed.
-- Validate FBT locally by proving `bodyCapture.successCount` increases and `local.body.valid=1`, then validate the matched remote body cache with two clients. Keep remote body writes disabled until an actor-specific post-animation hook is proven.
-- Runtime-validate `SkyrimTogetherVRAvatarSync.exe` with two clients, then validate `SkyrimTogetherVRGameplay.exe` with the same pose/avatar evidence plus gameplay relay evidence before adding ghost-hand/ghost-avatar rendering or a proper VRIK/animation integration for remote avatars.
+- Validate FBT locally by proving `bodyCapture.successCount` increases and
+  `local.body.valid=1`, then prove format-3 spine/arms/legs/fingers on the
+  managed remote actor with two clients.
+- Runtime-validate `SkyrimTogetherVRGameplay.exe` with matched pose/avatar and
+  gameplay evidence, including tracker loss, ragdoll suppression, rollback, and
+  root replacement.
 - Extend similar server-side sequence/rate guards to the staged non-pose gameplay relay lanes before any of those leave observation mode.
 - Keep HIGGS interactions behind a separate bridge for grabs, collisions, and held objects.

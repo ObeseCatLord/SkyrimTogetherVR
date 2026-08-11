@@ -17,6 +17,7 @@ namespace
 {
 constexpr std::uint32_t kKnownPoseFlags = kPoseChunkPresent | kPoseChunkBasis |
                                           kPoseChunkAxisMask | kPoseChunkNodeMask;
+constexpr std::uint32_t kKnownJointRotationFlags = kVrikJointChunkPresent | kVrikJointChunkIndexMask;
 constexpr float kMaximumWorldPosition = 1000000.0f;
 constexpr float kMaximumLocalPosition = 500.0f;
 constexpr float kMinimumLocalScale = 0.5f;
@@ -43,6 +44,17 @@ struct DecodedPoseChunk
     float Scale{1.0F};
 };
 
+struct DecodedJointRotationChunk
+{
+    std::uint8_t Joint{};
+    std::uint32_t Sequence{};
+    std::uint32_t RootGeneration{};
+    float X{};
+    float Y{};
+    float Z{};
+    float W{1.0f};
+};
+
 struct PendingPose
 {
     PoseNode Node{};
@@ -61,6 +73,7 @@ using PendingNodes = std::array<PendingPose, static_cast<std::size_t>(PoseNode::
 struct PendingActorPose
 {
     RE::ActorHandle Actor{};
+    std::uint64_t TargetHandle{};
     PendingNodes Nodes{};
     std::uint32_t Sequence{};
     std::uint32_t RootGeneration{};
@@ -69,6 +82,37 @@ struct PendingActorPose
     bool CommitReceived{};
 };
 std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
+
+struct PendingJointRotation
+{
+    std::uint32_t Sequence{};
+    std::uint32_t RootGeneration{};
+    bool RotationValid{};
+    RE::NiMatrix3 Rotation{};
+
+    [[nodiscard]] bool Complete() const noexcept { return RotationValid; }
+};
+
+struct PendingActorJointPose
+{
+    RE::ActorHandle Actor{};
+    std::uint64_t TargetHandle{};
+    std::array<PendingJointRotation, kVrikJointRotationCount> Joints{};
+    std::uint32_t Sequence{};
+    std::uint32_t RootGeneration{};
+    std::uint32_t ExpectedJointMask{};
+    std::uint16_t Attempts{};
+    bool CommitReceived{};
+};
+std::unordered_map<std::uint64_t, PendingActorJointPose> s_pendingJointPoses;
+
+struct AppliedJointRoot
+{
+    std::uintptr_t Address{};
+    std::uint32_t RootGeneration{};
+};
+std::unordered_map<std::uint64_t, AppliedJointRoot> s_appliedJointRoots;
+std::unordered_map<std::uint64_t, AppliedJointRoot> s_appliedPoseRoots;
 
 [[nodiscard]] bool IsFinite(const float a_value) noexcept
 {
@@ -118,6 +162,46 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
            zLengthSquared >= minimumLengthSquared && zLengthSquared <= maximumLengthSquared &&
            std::abs(Dot(x, y)) <= kMaximumBasisDot && std::abs(Dot(x, z)) <= kMaximumBasisDot &&
            std::abs(Dot(y, z)) <= kMaximumBasisDot && Dot(Cross(x, y), z) >= kMinimumBasisDeterminant;
+}
+
+[[nodiscard]] bool IsUnitQuaternion(
+    const float a_x,
+    const float a_y,
+    const float a_z,
+    const float a_w) noexcept
+{
+    if (!IsFinite(a_x) || !IsFinite(a_y) || !IsFinite(a_z) || !IsFinite(a_w))
+        return false;
+    const auto lengthSquared = a_x * a_x + a_y * a_y + a_z * a_z + a_w * a_w;
+    return lengthSquared >= 0.95f && lengthSquared <= 1.05f;
+}
+
+[[nodiscard]] RE::NiMatrix3 QuaternionToMatrix(
+    const float a_x,
+    const float a_y,
+    const float a_z,
+    const float a_w) noexcept
+{
+    const auto xx = a_x * a_x;
+    const auto yy = a_y * a_y;
+    const auto zz = a_z * a_z;
+    const auto xy = a_x * a_y;
+    const auto xz = a_x * a_z;
+    const auto yz = a_y * a_z;
+    const auto xw = a_x * a_w;
+    const auto yw = a_y * a_w;
+    const auto zw = a_z * a_w;
+    RE::NiMatrix3 result{};
+    result.entry[0][0] = 1.0f - 2.0f * (yy + zz);
+    result.entry[0][1] = 2.0f * (xy - zw);
+    result.entry[0][2] = 2.0f * (xz + yw);
+    result.entry[1][0] = 2.0f * (xy + zw);
+    result.entry[1][1] = 1.0f - 2.0f * (xx + zz);
+    result.entry[1][2] = 2.0f * (yz - xw);
+    result.entry[2][0] = 2.0f * (xz - yw);
+    result.entry[2][1] = 2.0f * (yz + xw);
+    result.entry[2][2] = 1.0f - 2.0f * (xx + yy);
+    return result;
 }
 
 [[nodiscard]] bool IsSafeTransform(const RE::NiTransform& a_transform, const float a_minimumScale,
@@ -188,6 +272,49 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
     return true;
 }
 
+[[nodiscard]] bool DecodeJointRotationChunk(
+    const GameplayActionPayload& a_payload,
+    DecodedJointRotationChunk& ar_chunk) noexcept
+{
+    if (!HasNoPoseForms(a_payload) || (a_payload.ActionFlags & ~kKnownJointRotationFlags) != 0 ||
+        (a_payload.ActionFlags & kVrikJointChunkPresent) == 0 || a_payload.ValueA == 0 ||
+        !IsFinite(a_payload.ScalarA) || !IsFinite(a_payload.ScalarB) || !IsFinite(a_payload.ScalarC) ||
+        !IsFinite(a_payload.ScalarD))
+        return false;
+
+    const auto rawJoint = (a_payload.ActionFlags & kVrikJointChunkIndexMask) >> kVrikJointChunkIndexShift;
+    if (rawJoint >= kVrikJointRotationCount)
+        return false;
+
+    ar_chunk.Joint = static_cast<std::uint8_t>(rawJoint);
+    ar_chunk.Sequence = static_cast<std::uint32_t>(a_payload.ValueA);
+    ar_chunk.RootGeneration = static_cast<std::uint32_t>(a_payload.ValueB);
+    ar_chunk.X = a_payload.ScalarA;
+    ar_chunk.Y = a_payload.ScalarB;
+    ar_chunk.Z = a_payload.ScalarC;
+    ar_chunk.W = a_payload.ScalarD;
+    return ar_chunk.RootGeneration != 0 && IsUnitQuaternion(ar_chunk.X, ar_chunk.Y, ar_chunk.Z, ar_chunk.W) &&
+           IsOrthonormal(QuaternionToMatrix(ar_chunk.X, ar_chunk.Y, ar_chunk.Z, ar_chunk.W));
+}
+
+[[nodiscard]] bool DecodeJointRotationCommit(
+    const GameplayActionPayload& a_payload,
+    std::uint32_t& ar_sequence,
+    std::uint32_t& ar_rootGeneration,
+    std::uint32_t& ar_expectedJointMask) noexcept
+{
+    if (!HasNoPoseForms(a_payload) || a_payload.ValueA == 0 || a_payload.ValueB == 0 ||
+        (a_payload.ActionFlags & ~kVrikJointCommitMask) != 0 || a_payload.ActionFlags == 0 ||
+        a_payload.ScalarA != 0.0F || a_payload.ScalarB != 0.0F ||
+        a_payload.ScalarC != 0.0F || a_payload.ScalarD != 0.0F)
+        return false;
+
+    ar_sequence = static_cast<std::uint32_t>(a_payload.ValueA);
+    ar_rootGeneration = static_cast<std::uint32_t>(a_payload.ValueB);
+    ar_expectedJointMask = a_payload.ActionFlags;
+    return true;
+}
+
 [[nodiscard]] bool IsVrikFingerPayload(const GameplayActionPayload& a_payload) noexcept
 {
     constexpr std::uint32_t kBothFingerSetsPresent = (1u << 0) | (1u << 1);
@@ -212,6 +339,26 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
         return "NPC R Hand [RHnd]";
     case PoseNode::Pelvis:
         return "NPC Pelvis [Pelv]";
+    case PoseNode::Spine0:
+        return "NPC Spine [Spn0]";
+    case PoseNode::Spine1:
+        return "NPC Spine1 [Spn1]";
+    case PoseNode::Spine2:
+        return "NPC Spine2 [Spn2]";
+    case PoseNode::Neck:
+        return "NPC Neck [Neck]";
+    case PoseNode::LeftClavicle:
+        return "NPC L Clavicle [LClv]";
+    case PoseNode::LeftUpperArm:
+        return "NPC L UpperArm [LUar]";
+    case PoseNode::LeftForearm:
+        return "NPC L Forearm [LLar]";
+    case PoseNode::RightClavicle:
+        return "NPC R Clavicle [RClv]";
+    case PoseNode::RightUpperArm:
+        return "NPC R UpperArm [RUar]";
+    case PoseNode::RightForearm:
+        return "NPC R Forearm [RLar]";
     case PoseNode::LeftThigh:
         return "NPC L Thigh [LThg]";
     case PoseNode::LeftCalf:
@@ -227,6 +374,23 @@ std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
     default:
         return nullptr;
     }
+}
+
+[[nodiscard]] const char* JointNodeName(const std::uint8_t a_joint) noexcept
+{
+    constexpr std::array<const char*, kVrikJointRotationCount> kJointNames{
+        "NPC L Finger11 [LF11]", "NPC L Finger12 [LF12]", "NPC L Finger13 [LF13]",
+        "NPC L Finger21 [LF21]", "NPC L Finger22 [LF22]", "NPC L Finger23 [LF23]",
+        "NPC L Finger31 [LF31]", "NPC L Finger32 [LF32]", "NPC L Finger33 [LF33]",
+        "NPC L Finger41 [LF41]", "NPC L Finger42 [LF42]", "NPC L Finger43 [LF43]",
+        "NPC L Finger51 [LF51]", "NPC L Finger52 [LF52]", "NPC L Finger53 [LF53]",
+        "NPC R Finger11 [RF11]", "NPC R Finger12 [RF12]", "NPC R Finger13 [RF13]",
+        "NPC R Finger21 [RF21]", "NPC R Finger22 [RF22]", "NPC R Finger23 [RF23]",
+        "NPC R Finger31 [RF31]", "NPC R Finger32 [RF32]", "NPC R Finger33 [RF33]",
+        "NPC R Finger41 [RF41]", "NPC R Finger42 [RF42]", "NPC R Finger43 [RF43]",
+        "NPC R Finger51 [RF51]", "NPC R Finger52 [RF52]", "NPC R Finger53 [RF53]",
+    };
+    return a_joint < kJointNames.size() ? kJointNames[a_joint] : nullptr;
 }
 
 [[nodiscard]] bool IsPhysicsControlled(const RE::Actor& a_actor, RE::NiAVObject& a_node,
@@ -280,7 +444,62 @@ struct PoseApplication
 {
     RE::NiPointer<RE::NiAVObject> Node{};
     RE::NiTransform Local{};
+    RE::NiTransform OriginalLocal{};
 };
+
+class ScopedPoseRollback
+{
+public:
+    ScopedPoseRollback(
+        RE::NiAVObject& a_root,
+        PoseApplication* a_bodyApplications,
+        const std::size_t a_bodyApplicationCount,
+        PoseApplication* a_endpointApplications,
+        const std::size_t& a_endpointApplicationCount) noexcept :
+        Root(a_root),
+        BodyApplications(a_bodyApplications),
+        BodyApplicationCount(a_bodyApplicationCount),
+        EndpointApplications(a_endpointApplications),
+        EndpointApplicationCount(a_endpointApplicationCount)
+    {}
+
+    ~ScopedPoseRollback() noexcept
+    {
+        if (!Active)
+            return;
+
+        try {
+            RestoreLocals(BodyApplications, BodyApplicationCount);
+            RestoreLocals(EndpointApplications, EndpointApplicationCount);
+
+            RE::NiUpdateData update{};
+            Root.UpdateDownwardPass(update, 0);
+            Root.UpdateWorldBound();
+        } catch (...) {
+        }
+    }
+
+    void Release() noexcept { Active = false; }
+
+private:
+    static void RestoreLocals(PoseApplication* a_applications, const std::size_t a_applicationCount)
+    {
+        for (std::size_t index = 0; index < a_applicationCount; ++index)
+            a_applications[index].Node->local = a_applications[index].OriginalLocal;
+    }
+
+    RE::NiAVObject& Root;
+    PoseApplication* BodyApplications;
+    std::size_t BodyApplicationCount;
+    PoseApplication* EndpointApplications;
+    const std::size_t& EndpointApplicationCount;
+    bool Active{true};
+};
+
+[[nodiscard]] bool IsNewerSequence(const std::uint32_t a_candidate, const std::uint32_t a_current) noexcept
+{
+    return static_cast<std::int32_t>(a_candidate - a_current) > 0;
+}
 
 [[nodiscard]] bool ApplyCommittedPose(
     RE::Actor& a_actor,
@@ -290,9 +509,18 @@ struct PoseApplication
     if (!a_pending.CommitReceived || a_pending.ExpectedNodeMask == 0 || a_actor.IsInRagdollState())
         return false;
 
-    std::array<PoseApplication, static_cast<std::size_t>(PoseNode::Count)> applications{};
-    std::size_t applicationCount{};
-    for (std::size_t index = 0; index < a_pending.Nodes.size(); ++index) {
+    const auto rootAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_root));
+    if (a_pending.RootGeneration != 0) {
+        if (const auto known = s_appliedPoseRoots.find(a_pending.TargetHandle);
+            known != s_appliedPoseRoots.end() && known->second.Address != rootAddress &&
+            known->second.RootGeneration != a_pending.RootGeneration &&
+            !IsNewerSequence(a_pending.RootGeneration, known->second.RootGeneration))
+            return false;
+    }
+
+    std::array<PoseApplication, static_cast<std::size_t>(PoseNode::Count)> bodyApplications{};
+    std::size_t bodyApplicationCount{};
+    for (std::size_t index = static_cast<std::size_t>(PoseNode::Pelvis); index < a_pending.Nodes.size(); ++index) {
         const auto nodeBit = 1u << static_cast<std::uint32_t>(index);
         if ((a_pending.ExpectedNodeMask & nodeBit) == 0)
             continue;
@@ -305,28 +533,70 @@ struct PoseApplication
         const auto* const name = SkeletonNodeName(pose.Node);
         if (!name)
             return false;
-        auto& application = applications[applicationCount];
+        auto& application = bodyApplications[bodyApplicationCount];
         application.Node.reset(a_root.GetObjectByName(RE::BSFixedString(name)));
         if (!application.Node || IsPhysicsControlled(a_actor, *application.Node, a_root) ||
             !BuildLocalPose(*application.Node, pose, application.Local))
             return false;
-        ++applicationCount;
+        application.OriginalLocal = application.Node->local;
+        ++bodyApplicationCount;
     }
 
-    if (applicationCount == 0)
+    // Body pose nodes are parent-first in GameplayPoseNode. Apply and
+    // propagate this complete local chain before resolving source-world HMD
+    // and hand endpoints through their now-updated remote parents.
+    std::array<PoseApplication, static_cast<std::size_t>(PoseNode::Pelvis)> endpointApplications{};
+    std::size_t endpointApplicationCount{};
+
+    ScopedPoseRollback rollback{a_root, bodyApplications.data(), bodyApplicationCount,
+                                endpointApplications.data(), endpointApplicationCount};
+    try {
+        for (std::size_t index = 0; index < bodyApplicationCount; ++index)
+            bodyApplications[index].Node->local = bodyApplications[index].Local;
+
+        RE::NiUpdateData update{};
+        a_root.UpdateDownwardPass(update, 0);
+
+        for (std::size_t index = 0; index < static_cast<std::size_t>(PoseNode::Pelvis); ++index) {
+            const auto nodeBit = 1u << static_cast<std::uint32_t>(index);
+            if ((a_pending.ExpectedNodeMask & nodeBit) == 0)
+                continue;
+
+            const auto& pose = a_pending.Nodes[index];
+            if (!pose.Complete() || pose.Sequence != a_pending.Sequence ||
+                pose.RootGeneration != a_pending.RootGeneration)
+                return false;
+
+            const auto* const name = SkeletonNodeName(pose.Node);
+            if (!name)
+                return false;
+            auto& application = endpointApplications[endpointApplicationCount];
+            application.Node.reset(a_root.GetObjectByName(RE::BSFixedString(name)));
+            if (!application.Node || IsPhysicsControlled(a_actor, *application.Node, a_root) ||
+                !BuildLocalPose(*application.Node, pose, application.Local))
+                return false;
+            application.OriginalLocal = application.Node->local;
+            ++endpointApplicationCount;
+        }
+
+        if (bodyApplicationCount == 0 && endpointApplicationCount == 0)
+            return false;
+        for (std::size_t index = 0; index < endpointApplicationCount; ++index)
+            endpointApplications[index].Node->local = endpointApplications[index].Local;
+
+        a_root.UpdateDownwardPass(update, 0);
+        a_root.UpdateWorldBound();
+        if (a_pending.RootGeneration != 0) {
+            if (!s_appliedPoseRoots.contains(a_pending.TargetHandle) &&
+                s_appliedPoseRoots.size() >= kMaximumPendingActors)
+                s_appliedPoseRoots.erase(s_appliedPoseRoots.begin());
+            s_appliedPoseRoots[a_pending.TargetHandle] = {rootAddress, a_pending.RootGeneration};
+        }
+        rollback.Release();
+    } catch (...) {
         return false;
-    for (std::size_t index = 0; index < applicationCount; ++index)
-        applications[index].Node->local = applications[index].Local;
-
-    RE::NiUpdateData update{};
-    a_root.UpdateDownwardPass(update, 0);
-    a_root.UpdateWorldBound();
+    }
     return true;
-}
-
-[[nodiscard]] bool IsNewerSequence(const std::uint32_t a_candidate, const std::uint32_t a_current) noexcept
-{
-    return static_cast<std::int32_t>(a_candidate - a_current) > 0;
 }
 
 [[nodiscard]] PendingActorPose* GetPendingActor(
@@ -334,6 +604,7 @@ struct PoseApplication
 {
     if (const auto existing = s_pendingPoses.find(a_handle); existing != s_pendingPoses.end()) {
         existing->second.Actor = RE::ActorHandle{std::addressof(a_actor)};
+        existing->second.TargetHandle = a_handle;
         return std::addressof(existing->second);
     }
     if (s_pendingPoses.size() >= kMaximumPendingActors)
@@ -343,6 +614,7 @@ struct PoseApplication
     if (!inserted)
         return nullptr;
     it->second.Actor = RE::ActorHandle{std::addressof(a_actor)};
+    it->second.TargetHandle = a_handle;
     return std::addressof(it->second);
 }
 
@@ -410,6 +682,165 @@ struct PoseApplication
     return true;
 }
 
+[[nodiscard]] bool PreparePendingJointFrame(
+    PendingActorJointPose& ar_pending,
+    const std::uint32_t a_sequence,
+    const std::uint32_t a_rootGeneration) noexcept
+{
+    if (ar_pending.Sequence != 0 && ar_pending.Sequence != a_sequence &&
+        !IsNewerSequence(a_sequence, ar_pending.Sequence))
+        return false;
+
+    if (ar_pending.Sequence != a_sequence) {
+        ar_pending.Joints = {};
+        ar_pending.Sequence = a_sequence;
+        ar_pending.RootGeneration = a_rootGeneration;
+        ar_pending.ExpectedJointMask = 0;
+        ar_pending.CommitReceived = false;
+    } else if (ar_pending.RootGeneration != a_rootGeneration) {
+        return false;
+    }
+    ar_pending.Attempts = 0;
+    return true;
+}
+
+[[nodiscard]] PendingActorJointPose* GetPendingJointActor(
+    const std::uint64_t a_handle,
+    RE::Actor& a_actor)
+{
+    if (const auto existing = s_pendingJointPoses.find(a_handle); existing != s_pendingJointPoses.end()) {
+        existing->second.Actor = RE::ActorHandle{std::addressof(a_actor)};
+        return std::addressof(existing->second);
+    }
+    if (s_pendingJointPoses.size() >= kMaximumPendingActors)
+        return nullptr;
+
+    auto [it, inserted] = s_pendingJointPoses.try_emplace(a_handle);
+    if (!inserted)
+        return nullptr;
+    it->second.Actor = RE::ActorHandle{std::addressof(a_actor)};
+    it->second.TargetHandle = a_handle;
+    return std::addressof(it->second);
+}
+
+[[nodiscard]] bool MergeJointRotationChunk(
+    PendingActorJointPose& ar_pending,
+    const DecodedJointRotationChunk& a_chunk) noexcept
+{
+    if (!PreparePendingJointFrame(ar_pending, a_chunk.Sequence, a_chunk.RootGeneration))
+        return false;
+
+    auto& joint = ar_pending.Joints[a_chunk.Joint];
+    if (joint.Sequence == 0) {
+        joint.Sequence = a_chunk.Sequence;
+        joint.RootGeneration = a_chunk.RootGeneration;
+    } else if (joint.Sequence != a_chunk.Sequence || joint.RootGeneration != a_chunk.RootGeneration) {
+        return false;
+    }
+
+    joint.Rotation = QuaternionToMatrix(a_chunk.X, a_chunk.Y, a_chunk.Z, a_chunk.W);
+    joint.RotationValid = IsOrthonormal(joint.Rotation);
+    return true;
+}
+
+[[nodiscard]] bool IsCommittedJointFrameComplete(const PendingActorJointPose& a_pending) noexcept
+{
+    if (!a_pending.CommitReceived || a_pending.ExpectedJointMask == 0)
+        return false;
+    for (std::uint32_t index = 0; index < kVrikJointRotationCount; ++index) {
+        if ((a_pending.ExpectedJointMask & (1u << index)) == 0)
+            continue;
+        const auto& joint = a_pending.Joints[index];
+        if (!joint.Complete() || joint.Sequence != a_pending.Sequence ||
+            joint.RootGeneration != a_pending.RootGeneration || !IsOrthonormal(joint.Rotation))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool ApplyCommittedJointPose(
+    RE::Actor& a_actor,
+    RE::NiAVObject& a_root,
+    const PendingActorJointPose& a_pending) noexcept
+{
+    try {
+        if (!a_pending.CommitReceived || a_pending.ExpectedJointMask == 0 || a_actor.IsInRagdollState())
+            return false;
+
+        const auto rootAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_root));
+        const auto known = s_appliedJointRoots.find(a_pending.TargetHandle);
+        if (known != s_appliedJointRoots.end() && known->second.Address != rootAddress &&
+            known->second.RootGeneration != a_pending.RootGeneration &&
+            !IsNewerSequence(a_pending.RootGeneration, known->second.RootGeneration))
+            return false;
+        const bool hasPublishedRoot = known != s_appliedJointRoots.end();
+
+        std::array<PoseApplication, kVrikJointRotationCount> applications{};
+        std::size_t applicationCount{};
+        for (std::uint32_t index = 0; index < kVrikJointRotationCount; ++index) {
+            if ((a_pending.ExpectedJointMask & (1u << index)) == 0)
+                continue;
+
+            const auto& joint = a_pending.Joints[index];
+            if (!joint.Complete() || joint.Sequence != a_pending.Sequence ||
+                joint.RootGeneration != a_pending.RootGeneration || !IsOrthonormal(joint.Rotation))
+                return false;
+
+            const auto* const name = JointNodeName(static_cast<std::uint8_t>(index));
+            if (!name)
+                return false;
+            auto& application = applications[applicationCount];
+            application.Node.reset(a_root.GetObjectByName(RE::BSFixedString(name)));
+            if (!application.Node || IsPhysicsControlled(a_actor, *application.Node, a_root) ||
+                !IsSafeTransform(application.Node->local, kMinimumLocalScale, kMaximumLocalScale))
+                return false;
+            application.OriginalLocal = application.Node->local;
+            application.Local = application.OriginalLocal;
+            application.Local.rotate = joint.Rotation;
+            if (!IsOrthonormal(application.Local.rotate))
+                return false;
+            ++applicationCount;
+        }
+
+        if (applicationCount == 0)
+            return false;
+
+        decltype(s_appliedJointRoots)::node_type preparedRoot{};
+        if (!hasPublishedRoot) {
+            s_appliedJointRoots.reserve(s_appliedJointRoots.size() + 1);
+            decltype(s_appliedJointRoots) preparedRoots;
+            preparedRoots.emplace(a_pending.TargetHandle, AppliedJointRoot{rootAddress, a_pending.RootGeneration});
+            preparedRoot = preparedRoots.extract(a_pending.TargetHandle);
+        }
+
+        const std::size_t noEndpointApplications{};
+        ScopedPoseRollback rollback{a_root, applications.data(), applicationCount, applications.data(),
+                                    noEndpointApplications};
+        for (std::size_t index = 0; index < applicationCount; ++index)
+            applications[index].Node->local = applications[index].Local;
+
+        RE::NiUpdateData update{};
+        a_root.UpdateDownwardPass(update, 0);
+        a_root.UpdateWorldBound();
+        if (hasPublishedRoot) {
+            s_appliedJointRoots[a_pending.TargetHandle] = {rootAddress, a_pending.RootGeneration};
+        } else {
+            const auto eviction = s_appliedJointRoots.size() >= kMaximumPendingActors ?
+                                      s_appliedJointRoots.begin() :
+                                      s_appliedJointRoots.end();
+            const auto inserted = s_appliedJointRoots.insert(std::move(preparedRoot));
+            if (!inserted.inserted)
+                inserted.position->second = {rootAddress, a_pending.RootGeneration};
+            if (eviction != s_appliedJointRoots.end())
+                s_appliedJointRoots.erase(eviction);
+        }
+        rollback.Release();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 [[nodiscard]] bool ApplyLegacyGraphFloats(RE::Actor& a_actor, const GameplayActionPayload& a_payload,
                                           const std::array<std::string_view, 4>& a_names) noexcept
 {
@@ -459,18 +890,27 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         }
 
         DecodedPoseChunk poseChunk{};
+        DecodedJointRotationChunk jointChunk{};
         std::uint32_t commitSequence{};
         std::uint32_t commitRootGeneration{};
         std::uint32_t commitNodeMask{};
+        std::uint32_t jointCommitSequence{};
+        std::uint32_t jointCommitRootGeneration{};
+        std::uint32_t jointCommitMask{};
         const bool isPoseChunk = action == GameplayAction::VrPoseChunk;
         const bool isPhysicalPose = isPoseChunk && DecodePoseChunk(payload, poseChunk);
         const bool isPoseCommit = action == GameplayAction::VrPoseCommit;
         const bool isPhysicalCommit = isPoseCommit &&
             DecodePoseCommit(payload, commitSequence, commitRootGeneration, commitNodeMask);
+        const bool isJointRotation = action == GameplayAction::VrJointRotationChunk &&
+            DecodeJointRotationChunk(payload, jointChunk);
+        const bool isJointCommit = action == GameplayAction::VrJointRotationCommit &&
+            DecodeJointRotationCommit(payload, jointCommitSequence, jointCommitRootGeneration, jointCommitMask);
         const bool isLegacyPose = isPoseChunk && IsLegacyGraphPayload(payload, 6.28318530717958647692f);
         const bool isLegacyCalibration = action == GameplayAction::VrCalibration && IsLegacyGraphPayload(payload, 10000.0f);
         const bool isVrikFingerPayload = action == GameplayAction::VrCalibration && IsVrikFingerPayload(payload);
-        if (!isPhysicalPose && !isPhysicalCommit && !isLegacyPose && !isLegacyCalibration && !isVrikFingerPayload) {
+        if (!isPhysicalPose && !isPhysicalCommit && !isJointRotation && !isJointCommit && !isLegacyPose &&
+            !isLegacyCalibration && !isVrikFingerPayload) {
             // Current VrCalibration carries VRIK finger samples.  VRIK exposes
             // no remote-actor application API, so accepting it as a graph or
             // local-player call would be both unsafe and semantically wrong.
@@ -481,6 +921,8 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         const auto actorStatus = AvatarManager::Get().ResolveGameplayActor(a_command, actor);
         if (actorStatus != CommandStatus::Success)
             return actorStatus;
+        if ((isJointRotation || isJointCommit) && !AvatarManager::Get().IsManagedRemoteActor(actor.get()))
+            return CommandStatus::InvalidHandle;
 
         if (isLegacyPose) {
             constexpr std::array<std::string_view, 4> kLegacyPoseVariables{
@@ -499,7 +941,33 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
 
         if (actor->IsInRagdollState()) {
             s_pendingPoses.erase(payload.TargetHandle.Value);
+            s_pendingJointPoses.erase(payload.TargetHandle.Value);
+            s_appliedPoseRoots.erase(payload.TargetHandle.Value);
+            s_appliedJointRoots.erase(payload.TargetHandle.Value);
             return CommandStatus::Unsupported;
+        }
+
+        if (isJointRotation || isJointCommit) {
+            auto* pendingJoint = GetPendingJointActor(payload.TargetHandle.Value, *actor);
+            if (!pendingJoint)
+                return CommandStatus::QueueOverflow;
+            if (isJointRotation)
+                return MergeJointRotationChunk(*pendingJoint, jointChunk) ? CommandStatus::Success :
+                                                                           CommandStatus::StaleEntity;
+
+            if (!PreparePendingJointFrame(*pendingJoint, jointCommitSequence, jointCommitRootGeneration))
+                return CommandStatus::StaleEntity;
+            pendingJoint->ExpectedJointMask = jointCommitMask;
+            pendingJoint->CommitReceived = true;
+            if (!IsCommittedJointFrameComplete(*pendingJoint))
+                return CommandStatus::Success;
+
+            RE::NiPointer<RE::NiAVObject> root{actor->Get3D()};
+            if (!root)
+                return CommandStatus::Success;
+            if (ApplyCommittedJointPose(*actor, *root, *pendingJoint))
+                s_pendingJointPoses.erase(payload.TargetHandle.Value);
+            return CommandStatus::Success;
         }
 
         auto* pending = GetPendingActor(payload.TargetHandle.Value, *actor);
@@ -541,6 +1009,7 @@ void VRBodyPoseManager::ProcessPending() noexcept
                 continue;
             }
             if (actor->IsInRagdollState()) {
+                s_appliedPoseRoots.erase(it->first);
                 it = s_pendingPoses.erase(it);
                 continue;
             }
@@ -555,6 +1024,33 @@ void VRBodyPoseManager::ProcessPending() noexcept
             }
             it = ApplyCommittedPose(*actor, *root, it->second) ? s_pendingPoses.erase(it) : std::next(it);
         }
+        for (auto it = s_pendingJointPoses.begin(); it != s_pendingJointPoses.end();) {
+            auto actor = it->second.Actor.get();
+            if (!actor || !AvatarManager::Get().IsManagedRemoteActor(actor.get()) ||
+                ++it->second.Attempts >= kMaximumPendingAttempts) {
+                s_appliedJointRoots.erase(it->first);
+                it = s_pendingJointPoses.erase(it);
+                continue;
+            }
+            if (actor->IsInRagdollState()) {
+                s_appliedJointRoots.erase(it->first);
+                it = s_pendingJointPoses.erase(it);
+                continue;
+            }
+            if (!IsCommittedJointFrameComplete(it->second)) {
+                ++it;
+                continue;
+            }
+            RE::NiPointer<RE::NiAVObject> root{actor->Get3D()};
+            if (!root) {
+                ++it;
+                continue;
+            }
+            if (ApplyCommittedJointPose(*actor, *root, it->second))
+                it = s_pendingJointPoses.erase(it);
+            else
+                ++it;
+        }
     } catch (...) {
     }
 }
@@ -562,5 +1058,8 @@ void VRBodyPoseManager::ProcessPending() noexcept
 void VRBodyPoseManager::Reset() noexcept
 {
     s_pendingPoses.clear();
+    s_pendingJointPoses.clear();
+    s_appliedPoseRoots.clear();
+    s_appliedJointRoots.clear();
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

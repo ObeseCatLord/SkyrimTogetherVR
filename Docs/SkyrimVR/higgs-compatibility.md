@@ -36,7 +36,11 @@ This is deliberate. The existing Skyrim Together hook batch was written for flat
 
 HIGGS exposes its C++ API through SKSE messaging. A normal SKSE plugin requests the interface after SKSE `PostPostLoad` by dispatching `0xF9279A57` to plugin name `HIGGS`; HIGGS returns revision `1` of `IHiggsInterface001`.
 
-The current Skyrim Together client is not structured as a normal SKSE plugin, so the port does not directly consume the HIGGS API. Instead, `SkyrimTogetherVRHiggsBridge` is a separate SKSEVR plugin that owns the SKSE messaging phase and writes an observation-only handoff file for the client/companion surfaces. The bridge listens for both SKSE `PostLoad` and `PostPostLoad` and requests the API once it sees either phase, matching the upstream HIGGS helper while remaining tolerant of load-order timing.
+The mapped Skyrim Together client is not a normal SKSE plugin, so
+`SkyrimTogetherVRHiggsBridge` owns HIGGS messaging and callbacks. It listens for
+SKSE `PostLoad`/`PostPostLoad`, requests revision 1, captures only from HIGGS's
+post-VRIK/post-HIGGS phase, and writes a compact handoff consumed by the mapped
+client.
 
 - keep the small companion SKSEVR plugin as the HIGGS interface owner and forward compact state/events to the SkyrimTogetherVR client
 - restructure the client-side SKSE bridge so it can safely participate in SKSE messaging phases
@@ -55,13 +59,15 @@ Reference headers inspected:
 
 ## Bridge Plan
 
-Stage 1 is now observation-only:
+The bridge boundary is callback-owned and non-mutating:
 
 - request `IHiggsInterface001` from `SkyrimTogetherVRHiggsBridge` after SKSE `PostLoad` or `PostPostLoad`
 - register pulled, grabbed, dropped, stashed, consumed, collision, and two-handing callbacks
 - register a `PostVrikPostHiggs` callback and read `GetGrabbedObject`, `IsHoldingObject`, `IsTwoHanding`, `GetFingerValues`, and `GetGrabTransform` from that HIGGS-owned update phase
 - do not query live HIGGS state while registering callbacks during SKSE `PostLoad`/`PostPostLoad`; the first snapshot must come from `PostVrikPostHiggs`
-- cache the HIGGS snapshot under a bridge mutex; the file writer thread serializes only cached data and recent event records, not live HIGGS API calls
+- cache the HIGGS snapshot under bridge mutexes and rate-limit handoff writes
+  from the same game-thread callback; no background writer or unload-time join
+  exists
 - forward compact events/state through `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgs` for logging and remote visualization
 - do not call mutating HIGGS functions
 
@@ -76,21 +82,34 @@ observation-only owner of HIGGS API callbacks.
 
 `GetGrabbedNodeName` is intentionally not polled in this first bridge pass because `BSFixedString` lifetime handling needs to be mirrored precisely before calling a by-value string-returning HIGGS API from the standalone bridge.
 
-Stage 2 now replicates intent/state, not local physics:
+The network path replicates intent/state, not HIGGS-owned local physics:
 
 - `VRHiggsService` reads `SkyrimTogetherVR.higgs`, sends `RequestVRHiggsState` snapshots when connected, receives `NotifyVRHiggsState` snapshots by server player id, and writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgsnet`
-- `VRHiggsRelayService` stamps the authenticated server player id and rebroadcasts HIGGS state to other clients
-- let remote clients render proxy hand/object state from network data
+- `VRHiggsRelayService` stamps the authenticated server player id and relays a
+  bounded ordered mutation batch independently of throttled observation state;
+  its mutation ledger advances only after successful fanout
+- transport is at least once; the receiver serializes mutations per player and
+  advances its independent deduplication ledger only after bridge admission
+- authority changes are staged in wire order and published only after fanout;
+  conflicting edges receive bounded skipped terminals instead of blocking later
+  events, and direct VRGrab edges are never discarded by a rate throttle
+- offline/disconnect processing establishes a replay floor so retained handoff
+  events from an earlier connection are not emitted into a new session
+- the receiver translates pull/grab/drop to bounded engine motion-state updates;
+  stash/consume durable mutation remains owned by canonical inventory traffic
 - keep local HIGGS physics authoritative on the local machine
-- keep the relay observation-only and do not call mutating HIGGS functions from the main client
+- do not call mutating HIGGS functions from the mapped client or remote bridge
 
-Stage 3 is required before authoritative shared object interaction:
+Direct physical remote-hand attachment remains outside the public API:
 
 - add object ownership, conflict resolution, and latency handling
 - validate references through VR-safe `TESObjectREFR`/`Actor` layouts
 - only then consider mutating calls such as `GrabObject`, `SetGrabTransform`, `DisableHand`, `EnableHand`, `DisableWeaponCollision`, `ForceWeaponCollisionEnabled`, or `SetHiggsLayerBitfield`
 
-The current VR pose, movement, equipment, activation, magic-effect, combat-hit, projectile intent, grab/release, and HIGGS state relays are compatible with Stage 1/2 because they only observe local state, bridge files, or game-emitted events and do not modify HIGGS state.
+The current pose, movement, equipment, activation, magic, combat, projectile,
+grab/release, and HIGGS paths do not modify HIGGS-owned hand state. HIGGS is an
+explicit prerequisite for live full-body/VRIK/FBT/finger capture; base HMD/hand
+pose and connection still work without it.
 
 `VRGrabService` remains a narrow game-event bridge point. It observes Bethesda `TESGrabReleaseEvent` through the CommonLib `ScriptEventSourceHolder` offset and writes `SkyrimTogetherVR.grab`, but it does not request `IHiggsInterface001`, does not call HIGGS mutating APIs, and does not replay remote grabs or drops. `SkyrimTogetherVRHiggsBridge` covers the HIGGS API callback/state side without changing that no-mutation boundary.
 

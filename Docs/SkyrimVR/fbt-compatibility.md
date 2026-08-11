@@ -7,32 +7,37 @@ FBT, VRIK, HIGGS, and PLANCK ownership separate.
 
 ## Captured Body Data
 
-Body format 1 contains pelvis local translation and rotation, left/right
-thigh, calf, and foot local rotations, a capture sequence, and a skeleton-root
-generation. Limb translation and scale are not network-authoritative. The
-sender writes zero limb translation and scale one, and both client and server
-reject values outside strict bounds. Capture older than 250 ms becomes an
-explicit invalid body sample.
+Body format 3 contains pelvis local translation/rotation; spine0/1/2, neck,
+clavicle, upper-arm, forearm, thigh, calf, and foot local rotations; sparse
+rotations for 30 named finger joints; a capture sequence; and a skeleton-root
+generation. Non-pelvis translation and scale are not network-authoritative.
+Both client and server reject values outside strict bounds. Capture older than
+250 ms becomes an explicit invalid body sample.
 
 The supplied FBT source replaces VRIK's small `updateBody` wrapper, calls the
-real VRIK body update, and then runs its FBT pelvis/leg pass. HIGGS invokes the
-registered post-VRIK/post-HIGGS callback after that wrapper returns, so the
-capture observes the FBT result when all three plugins are loaded normally.
+real VRIK body update, and then runs its FBT body pass. Some lower-spine output
+is world-only, so capture derives effective parent-local spine rotations from
+the final world transforms. HIGGS invokes the registered post-VRIK/post-HIGGS
+callback after that wrapper returns, so capture observes the final FBT result
+when all three plugins are loaded normally.
 Runtime evidence must still prove `bodyCapture.successCount` increases and
 `local.body.valid=1` before treating that ordering as validated on a given
 installation.
 
 ## Remote Boundary
 
-Remote body data is relayed, validated again, cached by server player id, and
-reported in `SkyrimTogetherVR.pose` and `SkyrimTogetherVR.avatar`. It is not
-written to remote actor bones. The HIGGS callback is a local-player phase, not
-a per-remote-actor post-animation barrier; applying body locals there would be
-racy and would usually be overwritten by animation.
+Remote body data is relayed, validated again, and applied only to CommonLib
+managed remote actors. The gameplay bridge writes parent-local body rotations
+parent-first, propagates the skeleton, then derives head/hand locals from their
+world targets and applies sparse finger rotations. It preserves remote actor
+limb translations/scales and suppresses all pose writes during PLANCK/engine
+ragdoll state. Failed endpoint preparation rolls the body transaction back.
 
-A later rendering implementation needs a proven actor-specific post-animation
-hook or a dedicated remote avatar rig. It must preserve remote actor limb
-translations/scales and coordinate with PLANCK ragdoll ownership.
+HIGGS is the explicit prerequisite for live body, FBT, named-finger, and VRIK
+API snapshot capture because its public post-VRIK/post-HIGGS callback is the
+only validated final-skeleton phase. Without HIGGS, base HMD/hand capture and
+connection remain available, while the full-body lane fails closed as stale or
+invalid instead of using an unverified animation hook.
 
 ## FBT Installation
 
@@ -62,7 +67,8 @@ before enabling the hook.
 
 - `SkyrimTogetherVR.compatibility`: `fbt.installed`, `fbt.loaded`, and `fbtPolicy`
 - `SkyrimTogetherVR.higgs`: endpoint fault state, capture attempts, successes, and last callback result
-- `SkyrimTogetherVR.pose`: local body version, validity, sequence, generation, and pelvis/leg nodes
+- `SkyrimTogetherVR.pose`: local body version, validity, sequence, generation,
+  joint mask, and pelvis/leg/spine/neck/clavicle/arm nodes
 - `SkyrimTogetherVR.avatar`: validated remote body availability and sequence
 
 The desktop companion mirrors these fields in its compatibility, HIGGS, pose,
@@ -72,5 +78,5 @@ body sequence values. A successful callback can still publish an invalid body
 sample while the player skeleton is unavailable, so success count alone is not
 proof that FBT data is being captured.
 
-An unavailable or stale FBT/body lane does not block connection, head/hand
-pose relay, HIGGS, PLANCK, or VRIK. It fails closed as invalid body data.
+An unavailable or stale FBT/body lane does not block connection or base
+head/hand pose relay. It fails closed as invalid body data.

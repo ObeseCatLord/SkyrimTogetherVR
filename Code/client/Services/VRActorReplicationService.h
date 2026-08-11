@@ -3,6 +3,7 @@
 #include <array>
 #include <bitset>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -19,6 +20,7 @@
 #include <Structs/Inventory.h>
 #include <Structs/VRAppearance.h>
 #include <Structs/VREquipmentUpdate.h>
+#include <Structs/VRHiggsState.h>
 
 struct DisconnectedEvent;
 struct NotifyActorMaxValueChanges;
@@ -92,6 +94,27 @@ private:
     // dedicated grab observer. Their producer sequence counters are unrelated.
     using DomainLedgers = std::array<SequenceLedger, 36>;
 
+    struct HiggsEventLedger
+    {
+        std::uint32_t LastAdmittedMutationSequence{0};
+        std::uint32_t LastSkippedMutationSequence{0};
+        std::uint32_t LastTerminalMutationSequence{0};
+        std::uint32_t LastQueuedMutationSequence{0};
+        bool HasAdmittedMutationSequence{false};
+        bool HasSkippedMutationSequence{false};
+        bool HasTerminalMutationSequence{false};
+        bool HasQueuedMutationSequence{false};
+        std::uint32_t SkippedMutationCount{0};
+    };
+
+    struct PendingHiggsMutation
+    {
+        VRHiggsEventSnapshot Event{};
+        bool TwoHanding{false};
+        double ResolutionElapsed{0.0};
+        std::uint8_t ResolutionAttempts{0};
+    };
+
     // This is a snapshot of the committed ledger, not an ActionId. A retry
     // rebuilds bridge commands and gets new identities while retaining the
     // original semantic admission.
@@ -150,6 +173,7 @@ private:
         double ResultWaitElapsed{};
         std::uint8_t Attempts{};
         std::uint16_t NextResultIndex{};
+        std::uint32_t HiggsMutationSequence{};
         bool TargetIsPlayer{};
         bool IsProjectile{};
         bool IsText{};
@@ -313,6 +337,7 @@ private:
         VRAppearance Appearance{};
         AcceptanceToken Acceptance{};
         std::vector<std::uint64_t> ActionIds{};
+        std::uint32_t TransactionSequence{};
         std::uint16_t RemainingResults{};
         std::uint8_t ResultFailures{};
         std::uint8_t SubmissionFailures{};
@@ -320,6 +345,8 @@ private:
         double RetryWaitElapsed{};
         bool AwaitingResult{};
         bool HadFailure{};
+        bool HadRetryableFailure{};
+        bool HadPermanentFailure{};
     };
 
     struct AppearanceActionTracking
@@ -393,6 +420,16 @@ private:
     [[nodiscard]] bool RememberSemanticTombstone(const AcceptanceToken& acToken,
                                                   bool aAcceptanceCommitted) noexcept;
     void ForgetSemanticTombstones(std::uint32_t aPlayerId) noexcept;
+    [[nodiscard]] HiggsEventLedger* GetHiggsEventLedger(std::uint32_t aPlayerId) noexcept;
+    [[nodiscard]] bool EnqueueHiggsMutationTail(std::uint32_t aPlayerId,
+                                                 const VRHiggsState& acState) noexcept;
+    void TrySubmitNextHiggsMutation(std::uint32_t aPlayerId,
+                                    double aResolutionDelta = 0.0) noexcept;
+    void CommitHiggsMutationAdmission(const PendingGameplayWork& acWork) noexcept;
+    void SkipUnresolvableHiggsMutation(std::uint32_t aPlayerId,
+                                       const PendingHiggsMutation& acMutation) noexcept;
+    [[nodiscard]] static bool IsHiggsMutationWork(const PendingGameplayWork& acWork) noexcept;
+    [[nodiscard]] bool HasPendingHiggsMutationWork(std::uint32_t aPlayerId) const noexcept;
     void RequestSemanticTombstoneRebase() noexcept;
     [[nodiscard]] bool QueueReliableForServer(const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
                                               SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
@@ -422,6 +459,12 @@ private:
         std::uint64_t aTextId, std::string_view acText) noexcept;
     [[nodiscard]] bool QueueReliableGameplayWork(PendingGameplayWork&& arWork) noexcept;
     [[nodiscard]] bool TrySubmitReliableGameplayWork(std::size_t aIndex) noexcept;
+    [[nodiscard]] static bool IsVrBodyPoseWork(const PendingGameplayWork& acWork) noexcept;
+    [[nodiscard]] bool HasAdmittedVrBodyPoseWork(std::uint32_t aPlayerId,
+                                                 std::uint64_t aExceptWorkId = 0) const noexcept;
+    [[nodiscard]] bool HasVrBodyPoseWorkCapacity() const noexcept;
+    [[nodiscard]] std::size_t GetVrBodyPoseResultOwnerCount() const noexcept;
+    void TrySubmitLatestVrBodyPoseWork(std::uint32_t aPlayerId) noexcept;
     void ForgetReliableGameplayWork(std::uint64_t aWorkId) noexcept;
     void RetireReliableGameplayWork(std::uint64_t aWorkId) noexcept;
     void ForgetReliableGameplayWorkForPlayer(std::uint32_t aPlayerId) noexcept;
@@ -491,6 +534,7 @@ private:
     void ForgetInventoryTransactions(std::uint32_t aServerId) noexcept;
     [[nodiscard]] bool HasPendingSpawnInventoryTransaction(std::uint32_t aServerId) const noexcept;
     [[nodiscard]] std::uint64_t NextRemoteActorActionId() noexcept;
+    [[nodiscard]] std::uint32_t NextAppearanceTransactionSequence() noexcept;
     void QueueRemoteActorAction(std::uint32_t aServerId, const ActionEvent& acAction,
                                 std::uint8_t aAttempts = 0) noexcept;
     [[nodiscard]] bool IsKnownRemoteActorAction(std::uint32_t aServerId,
@@ -518,6 +562,8 @@ private:
     std::unordered_map<std::uint32_t, PendingMount> m_pendingMounts{};
     std::unordered_map<std::uint32_t, std::uint8_t> m_resyncAttempts{};
     std::unordered_map<std::uint32_t, DomainLedgers> m_ledgers{};
+    std::unordered_map<std::uint32_t, HiggsEventLedger> m_higgsEventLedgers{};
+    std::unordered_map<std::uint32_t, std::deque<PendingHiggsMutation>> m_pendingHiggsMutations{};
     std::unordered_set<SemanticTombstone, SemanticTombstoneHash> m_semanticTombstones{};
     std::vector<PendingGameplayWork> m_pendingGameplayWork{};
     std::unordered_map<std::uint64_t, GameplayResultOwner> m_gameplayResultOwners{};
@@ -540,6 +586,7 @@ private:
     std::uint64_t m_observedLifecycleEpoch{0};
     std::uint64_t m_nextLocalActorActionOrder{1};
     std::uint64_t m_nextRemoteActorActionId{1};
+    std::uint32_t m_nextAppearanceTransactionSequence{1};
     std::uint64_t m_nextGameplayWorkId{1};
     std::uint64_t m_semanticTombstoneRebaseEpoch{0};
     double m_semanticTombstoneRebaseElapsed{0.0};

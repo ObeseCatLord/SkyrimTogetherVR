@@ -1,9 +1,18 @@
 #include <Structs/VRHiggsState.h>
 
+#include <algorithm>
+
 #include <TiltedCore/Serialization.hpp>
+
+#include <Structs/VRInteractionValidation.h>
 
 namespace
 {
+bool IsNewerMutationSequence(const uint32_t aCandidate, const uint32_t aCurrent) noexcept
+{
+    return static_cast<int32_t>(aCandidate - aCurrent) > 0;
+}
+
 void SerializeVector3(TiltedPhoques::Buffer::Writer& aWriter, const glm::vec3& acValue) noexcept
 {
     TiltedPhoques::Serialization::WriteFloat(aWriter, acValue.x);
@@ -221,13 +230,18 @@ void VRHiggsEventSnapshot::Deserialize(TiltedPhoques::Buffer::Reader& aReader) n
 
 bool VRHiggsState::operator==(const VRHiggsState& acRhs) const noexcept
 {
-    return Sequence == acRhs.Sequence && BridgeLoaded == acRhs.BridgeLoaded &&
+    const auto eventCount = std::min<std::size_t>(MutationEventCount, MutationEvents.size());
+    const auto rhsEventCount = std::min<std::size_t>(acRhs.MutationEventCount, acRhs.MutationEvents.size());
+    return IsDecodedValid == acRhs.IsDecodedValid &&
+           Sequence == acRhs.Sequence && MutationSequence == acRhs.MutationSequence &&
+           BridgeLoaded == acRhs.BridgeLoaded &&
            Detected == acRhs.Detected && InterfaceAvailable == acRhs.InterfaceAvailable &&
            CallbacksRegistered == acRhs.CallbacksRegistered &&
            SnapshotAvailable == acRhs.SnapshotAvailable &&
            SnapshotSequence == acRhs.SnapshotSequence && TwoHanding == acRhs.TwoHanding &&
            Left == acRhs.Left && Right == acRhs.Right &&
-           LastEventValid == acRhs.LastEventValid && LastEvent == acRhs.LastEvent;
+           eventCount == rhsEventCount &&
+           std::equal(MutationEvents.begin(), MutationEvents.begin() + eventCount, acRhs.MutationEvents.begin());
 }
 
 bool VRHiggsState::operator!=(const VRHiggsState& acRhs) const noexcept
@@ -237,7 +251,13 @@ bool VRHiggsState::operator!=(const VRHiggsState& acRhs) const noexcept
 
 void VRHiggsState::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
+    const auto eventCount = std::min<std::size_t>(MutationEventCount, MutationEvents.size());
+    // Never emit a count/terminal-sequence mismatch when an in-memory caller
+    // supplied more than the bounded wire window. The excess events are
+    // intentionally clamped rather than becoming an invalid packet.
+    const auto mutationSequence = eventCount != 0 ? MutationEvents[eventCount - 1].Sequence : 0;
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Sequence);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, mutationSequence);
     TiltedPhoques::Serialization::WriteBool(aWriter, BridgeLoaded);
     TiltedPhoques::Serialization::WriteBool(aWriter, Detected);
     TiltedPhoques::Serialization::WriteBool(aWriter, InterfaceAvailable);
@@ -247,14 +267,17 @@ void VRHiggsState::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexc
     TiltedPhoques::Serialization::WriteBool(aWriter, TwoHanding);
     Left.Serialize(aWriter);
     Right.Serialize(aWriter);
-    TiltedPhoques::Serialization::WriteBool(aWriter, LastEventValid);
-    if (LastEventValid)
-        LastEvent.Serialize(aWriter);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, eventCount);
+    for (std::size_t index = 0; index < eventCount; ++index)
+        MutationEvents[index].Serialize(aWriter);
 }
 
 void VRHiggsState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
+    IsDecodedValid = true;
     Sequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    MutationSequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     BridgeLoaded = TiltedPhoques::Serialization::ReadBool(aReader);
     Detected = TiltedPhoques::Serialization::ReadBool(aReader);
     InterfaceAvailable = TiltedPhoques::Serialization::ReadBool(aReader);
@@ -265,13 +288,36 @@ void VRHiggsState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     Left.Deserialize(aReader);
     Right.Deserialize(aReader);
 
-    LastEventValid = TiltedPhoques::Serialization::ReadBool(aReader);
-    if (LastEventValid)
+    MutationEvents = {};
+    const auto eventCount = TiltedPhoques::Serialization::ReadVarInt(aReader);
+    if (eventCount > MutationEvents.size())
     {
-        LastEvent.Deserialize(aReader);
+        MutationEventCount = 0;
+        IsDecodedValid = false;
+        return;
     }
-    else
+    MutationEventCount = static_cast<uint8_t>(eventCount);
+    for (std::size_t index = 0; index < MutationEventCount; ++index)
+        MutationEvents[index].Deserialize(aReader);
+}
+
+bool VRHiggsState::IsMutationReplayValid() const noexcept
+{
+    if (!IsDecodedValid || MutationEventCount > MutationEvents.size())
+        return false;
+    if (MutationEventCount == 0)
+        return MutationSequence == 0;
+
+    uint32_t previousSequence{};
+    for (std::size_t index = 0; index < MutationEventCount; ++index)
     {
-        LastEvent = {};
+        const auto& event = MutationEvents[index];
+        const auto sequence = event.Sequence;
+        if (sequence == 0 || !SkyrimTogether::VR::IsHiggsMutationPayloadValid(
+                                 event.Mass, event.SeparatingVelocity) ||
+            (index != 0 && !IsNewerMutationSequence(sequence, previousSequence)))
+            return false;
+        previousSequence = sequence;
     }
+    return MutationSequence == previousSequence;
 }

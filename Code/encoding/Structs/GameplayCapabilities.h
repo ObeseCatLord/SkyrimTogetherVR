@@ -4,12 +4,14 @@
 
 namespace SkyrimTogether::Protocol
 {
-// Revision 11 makes animation graph payloads descriptor-shaped and permits
-// sparse VR character assignments. Exact matching prevents older endpoints
-// from decoding those changed wire semantics as revision 10 transactions.
+// Revision 13 adds the complete format-3 post-VRIK/post-HIGGS body hierarchy:
+// pelvis/legs, spine, neck, clavicles, arms, and sparse named finger rotations.
+// Revision 14 replaces the retained single HIGGS event with a bounded ordered
+// mutation batch, keeping mutation delivery independent from HIGGS telemetry.
+// Exact matching prevents older endpoints from decoding the changed layout.
 // Additive negotiated capability bits do not change this revision because
 // endpoints already intersect the advertised masks.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 11;
+inline constexpr std::uint32_t kGameplayProtocolRevision = 14;
 
 enum class GameplayCapability : std::uint64_t
 {

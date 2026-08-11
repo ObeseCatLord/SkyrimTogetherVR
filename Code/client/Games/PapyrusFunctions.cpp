@@ -1496,10 +1496,12 @@ const char* GetSkyrimTogetherTelemetryReadout()
             line += YesNo(acState.SnapshotAvailable);
             line += " twoHanding=";
             line += YesNo(acState.TwoHanding);
-            if (acState.LastEventValid)
+            if (acState.MutationEventCount != 0)
             {
-                line += " eventSeq=";
-                line += std::to_string(acState.LastEvent.Sequence);
+                line += " mutationSeq=";
+                line += std::to_string(acState.MutationSequence);
+                line += " mutations=";
+                line += std::to_string(acState.MutationEventCount);
             }
             return line;
         });

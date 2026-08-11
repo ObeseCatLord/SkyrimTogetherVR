@@ -3,6 +3,7 @@
 #include <TiltedCore/Buffer.hpp>
 #include <TiltedCore/Serialization.hpp>
 
+#include <array>
 #include <optional>
 
 #include <glm/vec2.hpp>
@@ -27,6 +28,7 @@
 #include <Structs/VREquipmentUpdate.h>
 #include <Structs/VRGrabEvent.h>
 #include <Structs/VRHiggsState.h>
+#include <Structs/VRInteractionValidation.h>
 #include <Structs/VRMagicEffectEvent.h>
 #include <Structs/VRMovementUpdate.h>
 #include <Structs/VRPoseUpdate.h>
@@ -55,6 +57,13 @@ VRPoseNodeData BuildPoseNode(float aBase)
     return node;
 }
 
+VRPoseNodeData BuildBodyRotationNode(float aBase)
+{
+    auto node = BuildPoseNode(aBase);
+    node.Position = {};
+    return node;
+}
+
 VRPoseUpdate BuildPoseUpdate()
 {
     VRPoseUpdate pose{};
@@ -74,23 +83,34 @@ VRPoseUpdate BuildPoseUpdate()
     pose.PrimaryMagicAim = BuildPoseNode(220.0f);
     pose.SecondaryMagicOffset = BuildPoseNode(230.0f);
     pose.SecondaryMagicAim = BuildPoseNode(240.0f);
-    pose.Body.FormatVersion = 1;
+    pose.Body.FormatVersion = 3;
     pose.Body.Valid = true;
     pose.Body.CaptureSequence = 1;
     pose.Body.RootGeneration = 1;
     pose.Body.Pelvis = BuildPoseNode(250.0f);
-    pose.Body.LeftThigh = BuildPoseNode(290.0f);
-    pose.Body.LeftCalf = BuildPoseNode(300.0f);
-    pose.Body.LeftFoot = BuildPoseNode(310.0f);
-    pose.Body.RightThigh = BuildPoseNode(320.0f);
-    pose.Body.RightCalf = BuildPoseNode(330.0f);
-    pose.Body.RightFoot = BuildPoseNode(340.0f);
-    pose.Body.LeftThigh.Position = {};
-    pose.Body.LeftCalf.Position = {};
-    pose.Body.LeftFoot.Position = {};
-    pose.Body.RightThigh.Position = {};
-    pose.Body.RightCalf.Position = {};
-    pose.Body.RightFoot.Position = {};
+    pose.Body.Spine0 = BuildBodyRotationNode(255.0f);
+    pose.Body.Spine1 = BuildBodyRotationNode(260.0f);
+    pose.Body.Spine2 = BuildBodyRotationNode(265.0f);
+    pose.Body.Neck = BuildBodyRotationNode(270.0f);
+    pose.Body.LeftClavicle = BuildBodyRotationNode(275.0f);
+    pose.Body.LeftUpperArm = BuildBodyRotationNode(280.0f);
+    pose.Body.LeftForearm = BuildBodyRotationNode(285.0f);
+    pose.Body.RightClavicle = BuildBodyRotationNode(290.0f);
+    pose.Body.RightUpperArm = BuildBodyRotationNode(295.0f);
+    pose.Body.RightForearm = BuildBodyRotationNode(300.0f);
+    pose.Body.LeftThigh = BuildBodyRotationNode(305.0f);
+    pose.Body.LeftCalf = BuildBodyRotationNode(310.0f);
+    pose.Body.LeftFoot = BuildBodyRotationNode(315.0f);
+    pose.Body.RightThigh = BuildBodyRotationNode(320.0f);
+    pose.Body.RightCalf = BuildBodyRotationNode(325.0f);
+    pose.Body.RightFoot = BuildBodyRotationNode(330.0f);
+    pose.Body.Joints.FormatVersion = 1;
+    pose.Body.Joints.Valid = true;
+    pose.Body.Joints.CaptureSequence = 1;
+    pose.Body.Joints.RootGeneration = 1;
+    pose.Body.Joints.NodeMask = (1u << 0) | (1u << 29);
+    pose.Body.Joints.Rotations[0] = {};
+    pose.Body.Joints.Rotations[29] = {};
     pose.Vrik.Detected = true;
     pose.Vrik.InterfaceAvailable = true;
     pose.Vrik.LeftFingers.Valid = true;
@@ -125,6 +145,41 @@ VRPoseUpdate BuildPoseUpdateBodyV1Invalid()
     auto pose = BuildPoseUpdate();
     pose.Body = {};
     pose.Body.FormatVersion = 1;
+    return pose;
+}
+
+VRPoseUpdate BuildPoseUpdateBodyV1()
+{
+    auto pose = BuildPoseUpdate();
+    pose.Body.FormatVersion = 1;
+    pose.Body.Spine0 = {};
+    pose.Body.Spine1 = {};
+    pose.Body.Spine2 = {};
+    pose.Body.Neck = {};
+    pose.Body.LeftClavicle = {};
+    pose.Body.LeftUpperArm = {};
+    pose.Body.LeftForearm = {};
+    pose.Body.RightClavicle = {};
+    pose.Body.RightUpperArm = {};
+    pose.Body.RightForearm = {};
+    pose.Body.Joints = {};
+    return pose;
+}
+
+VRPoseUpdate BuildPoseUpdateBodyV2()
+{
+    auto pose = BuildPoseUpdate();
+    pose.Body.FormatVersion = 2;
+    pose.Body.Spine0 = {};
+    pose.Body.Spine1 = {};
+    pose.Body.Spine2 = {};
+    pose.Body.Neck = {};
+    pose.Body.LeftClavicle = {};
+    pose.Body.LeftUpperArm = {};
+    pose.Body.LeftForearm = {};
+    pose.Body.RightClavicle = {};
+    pose.Body.RightUpperArm = {};
+    pose.Body.RightForearm = {};
     return pose;
 }
 
@@ -328,14 +383,29 @@ VRHiggsState BuildHiggsState()
     state.Right.Fingers.Ring = 0.9f;
     state.Right.Fingers.Pinky = 1.0f;
 
-    state.LastEventValid = true;
-    state.LastEvent.Sequence = 3;
-    state.LastEvent.EventKind = VRHiggsEventSnapshot::Kind::kGrabbed;
-    state.LastEvent.HasHand = true;
-    state.LastEvent.IsLeft = true;
-    state.LastEvent.ObjectId = BuildGameId(25, 0xBBBB);
-    state.LastEvent.Mass = 5.5f;
-    state.LastEvent.SeparatingVelocity = 12.25f;
+    state.MutationSequence = 5;
+    state.MutationEventCount = 3;
+    state.MutationEvents[0].Sequence = 1;
+    state.MutationEvents[0].EventKind = VRHiggsEventSnapshot::Kind::kPulled;
+    state.MutationEvents[0].HasHand = true;
+    state.MutationEvents[0].IsLeft = true;
+    state.MutationEvents[0].ObjectId = BuildGameId(25, 0xAAAA);
+    state.MutationEvents[0].Mass = 2.5f;
+    state.MutationEvents[0].SeparatingVelocity = 3.25f;
+    state.MutationEvents[1].Sequence = 3;
+    state.MutationEvents[1].EventKind = VRHiggsEventSnapshot::Kind::kGrabbed;
+    state.MutationEvents[1].HasHand = true;
+    state.MutationEvents[1].IsLeft = true;
+    state.MutationEvents[1].ObjectId = BuildGameId(25, 0xBBBB);
+    state.MutationEvents[1].Mass = 5.5f;
+    state.MutationEvents[1].SeparatingVelocity = 12.25f;
+    state.MutationEvents[2].Sequence = 5;
+    state.MutationEvents[2].EventKind = VRHiggsEventSnapshot::Kind::kDropped;
+    state.MutationEvents[2].HasHand = true;
+    state.MutationEvents[2].IsLeft = false;
+    state.MutationEvents[2].ObjectId = BuildGameId(25, 0xCCCC);
+    state.MutationEvents[2].Mass = 7.0f;
+    state.MutationEvents[2].SeparatingVelocity = 4.0f;
     return state;
 }
 }
@@ -762,6 +832,7 @@ TEST_CASE("Static structures", "[encoding.static]")
 
             REQUIRE(sendObjects == recvObjects);
         }
+
     }
 
     GIVEN("Vector3_NetQuantize")
@@ -782,6 +853,7 @@ TEST_CASE("Static structures", "[encoding.static]")
 
             REQUIRE(sendObjects == recvObjects);
         }
+
     }
 
     GIVEN("Vector2_NetQuantize")
@@ -947,6 +1019,161 @@ TEST_CASE("Static structures", "[encoding.static]")
         }
     }
 
+    GIVEN("VRHiggsState mutation replay bounds")
+    {
+        {
+            auto sendObjects = BuildHiggsState();
+            sendObjects.MutationEvents = {};
+            sendObjects.MutationEventCount = 0;
+            sendObjects.MutationSequence = 0;
+
+            Buffer buff(1000);
+            Buffer::Writer writer(&buff);
+            sendObjects.Serialize(writer);
+            Buffer::Reader reader(&buff);
+            VRHiggsState recvObjects{};
+            recvObjects.Deserialize(reader);
+
+            REQUIRE(recvObjects.IsDecodedValid);
+            REQUIRE(recvObjects.MutationEventCount == 0);
+            REQUIRE(recvObjects.IsMutationReplayValid());
+        }
+
+        {
+            auto sendObjects = BuildHiggsState();
+            const auto event = sendObjects.MutationEvents[0];
+            sendObjects.MutationEventCount = static_cast<uint8_t>(kMaximumHiggsMutationEvents);
+            for (std::size_t index = 0; index < kMaximumHiggsMutationEvents; ++index)
+            {
+                sendObjects.MutationEvents[index] = event;
+                sendObjects.MutationEvents[index].Sequence = static_cast<uint32_t>(index + 1);
+            }
+            sendObjects.MutationSequence = static_cast<uint32_t>(kMaximumHiggsMutationEvents);
+
+            Buffer buff(4000);
+            Buffer::Writer writer(&buff);
+            sendObjects.Serialize(writer);
+            Buffer::Reader reader(&buff);
+            VRHiggsState recvObjects{};
+            recvObjects.Deserialize(reader);
+
+            REQUIRE(recvObjects.IsDecodedValid);
+            REQUIRE(recvObjects.MutationEventCount == kMaximumHiggsMutationEvents);
+            REQUIRE(recvObjects.IsMutationReplayValid());
+
+            sendObjects.MutationEventCount = static_cast<uint8_t>(kMaximumHiggsMutationEvents + 1);
+            sendObjects.MutationSequence = 0xDEADBEEF;
+            Buffer clampedBuff(4000);
+            Buffer::Writer clampedWriter(&clampedBuff);
+            sendObjects.Serialize(clampedWriter);
+            Buffer::Reader clampedReader(&clampedBuff);
+            VRHiggsState clampedObjects{};
+            clampedObjects.Deserialize(clampedReader);
+
+            REQUIRE(clampedObjects.IsDecodedValid);
+            REQUIRE(clampedObjects.MutationEventCount == kMaximumHiggsMutationEvents);
+            REQUIRE(clampedObjects.MutationSequence == kMaximumHiggsMutationEvents);
+            REQUIRE(clampedObjects.IsMutationReplayValid());
+        }
+
+        {
+            auto sendObjects = BuildHiggsState();
+            sendObjects.MutationEvents[0].Sequence = 0xFFFFFFFE;
+            sendObjects.MutationEvents[1].Sequence = 0xFFFFFFFF;
+            sendObjects.MutationEvents[2].Sequence = 1;
+            sendObjects.MutationSequence = 1;
+
+            Buffer buff(1000);
+            Buffer::Writer writer(&buff);
+            sendObjects.Serialize(writer);
+            Buffer::Reader reader(&buff);
+            VRHiggsState recvObjects{};
+            recvObjects.Deserialize(reader);
+
+            REQUIRE(recvObjects.IsDecodedValid);
+            REQUIRE(recvObjects.IsMutationReplayValid());
+        }
+
+        // Write a deliberately malformed packet rather than going through
+        // VRHiggsState::Serialize(), which clamps in-memory counts by design.
+        auto writeHiggsPrefix = [](Buffer::Writer& arWriter, const VRHiggsState& acState,
+                                   const uint32_t aMutationSequence) {
+            Serialization::WriteVarInt(arWriter, acState.Sequence);
+            Serialization::WriteVarInt(arWriter, aMutationSequence);
+            Serialization::WriteBool(arWriter, acState.BridgeLoaded);
+            Serialization::WriteBool(arWriter, acState.Detected);
+            Serialization::WriteBool(arWriter, acState.InterfaceAvailable);
+            Serialization::WriteBool(arWriter, acState.CallbacksRegistered);
+            Serialization::WriteBool(arWriter, acState.SnapshotAvailable);
+            Serialization::WriteVarInt(arWriter, acState.SnapshotSequence);
+            Serialization::WriteBool(arWriter, acState.TwoHanding);
+            acState.Left.Serialize(arWriter);
+            acState.Right.Serialize(arWriter);
+        };
+
+        {
+            const auto sendObjects = BuildHiggsState();
+            Buffer buff(1000);
+            Buffer::Writer writer(&buff);
+            writeHiggsPrefix(writer, sendObjects, sendObjects.MutationSequence);
+            Serialization::WriteVarInt(writer, kMaximumHiggsMutationEvents + 1);
+            Buffer::Reader reader(&buff);
+            VRHiggsState recvObjects{};
+            recvObjects.Deserialize(reader);
+
+            REQUIRE_FALSE(recvObjects.IsDecodedValid);
+            REQUIRE_FALSE(recvObjects.IsMutationReplayValid());
+        }
+
+        {
+            const auto sendObjects = BuildHiggsState();
+            Buffer buff(1000);
+            Buffer::Writer writer(&buff);
+            writeHiggsPrefix(writer, sendObjects, sendObjects.MutationSequence - 1);
+            Serialization::WriteVarInt(writer, sendObjects.MutationEventCount);
+            for (std::size_t index = 0; index < sendObjects.MutationEventCount; ++index)
+                sendObjects.MutationEvents[index].Serialize(writer);
+            Buffer::Reader reader(&buff);
+            VRHiggsState recvObjects{};
+            recvObjects.Deserialize(reader);
+
+            REQUIRE(recvObjects.IsDecodedValid);
+            REQUIRE_FALSE(recvObjects.IsMutationReplayValid());
+        }
+    }
+
+    GIVEN("VR interaction scalar bounds")
+    {
+        THEN("HIGGS mutation payloads use the bridge's finite one-million limit")
+        {
+            REQUIRE(SkyrimTogether::VR::IsHiggsMutationPayloadValid(
+                SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude,
+                -SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude));
+            REQUIRE_FALSE(SkyrimTogether::VR::IsHiggsMutationPayloadValid(
+                SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude + 1.0F, 0.0F));
+            REQUIRE_FALSE(SkyrimTogether::VR::IsHiggsMutationPayloadValid(0.0F,
+                -SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude - 1.0F));
+
+            auto state = BuildHiggsState();
+            state.MutationEvents[0].Mass = SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude + 1.0F;
+            REQUIRE_FALSE(state.IsMutationReplayValid());
+        }
+
+        THEN("VRGrab position components use the same finite limit")
+        {
+            auto grab = BuildGrabEvent();
+            grab.Position = glm::vec3{
+                SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude,
+                -SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude,
+                0.0F,
+            };
+            REQUIRE(SkyrimTogether::VR::IsVRGrabPositionValid(grab.Position));
+
+            grab.Position.z = SkyrimTogether::VR::kMaximumHiggsInteractionMagnitude + 1.0F;
+            REQUIRE_FALSE(SkyrimTogether::VR::IsVRGrabPositionValid(grab.Position));
+        }
+    }
+
     GIVEN("Rotator2_NetQuantize")
     {
         Rotator2_NetQuantize sendObjects, recvObjects;
@@ -1008,6 +1235,30 @@ TEST_CASE("Static structures", "[encoding.static]")
         }
     }
 
+    GIVEN("VRPoseUpdate fixed body formats")
+    {
+        const std::array<VRPoseUpdate, 3> variants{
+            BuildPoseUpdateBodyV1(),
+            BuildPoseUpdateBodyV2(),
+            BuildPoseUpdate(),
+        };
+
+        THEN("format-1, format-2, and format-3 each round-trip at their fixed wire boundary")
+        {
+            for (const auto& send : variants) {
+                VRPoseUpdate recv{};
+                Buffer buff(4096);
+                Buffer::Writer writer(&buff);
+                send.Serialize(writer);
+                Buffer::Reader reader(&buff);
+                recv.Deserialize(reader);
+                REQUIRE(IsSupportedVRBodyPoseFormatVersion(send.Body.FormatVersion));
+                REQUIRE(IsVRBodyPoseDataSafe(send.Body));
+                REQUIRE(send == recv);
+            }
+        }
+    }
+
     GIVEN("VRPoseUpdate validation")
     {
         auto pose = BuildPoseUpdate();
@@ -1048,7 +1299,7 @@ TEST_CASE("Static structures", "[encoding.static]")
         WHEN("body capture is explicitly stale")
         {
             pose.Body = {};
-            pose.Body.FormatVersion = 1;
+            pose.Body.FormatVersion = 2;
             THEN("the zero invalid state is accepted")
             {
                 REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
@@ -1059,11 +1310,178 @@ TEST_CASE("Static structures", "[encoding.static]")
         WHEN("the body format is unknown")
         {
             pose.Body = {};
-            pose.Body.FormatVersion = 2;
+            pose.Body.FormatVersion = 4;
             THEN("the fixed-order schema fails closed")
+            {
+                REQUIRE_FALSE(IsSupportedVRBodyPoseFormatVersion(pose.Body.FormatVersion));
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a sparse joint rotation is not unit length")
+        {
+            pose.Body.Joints.Rotations[0].W = 0.0f;
+            THEN("joint validation rejects the frame")
+            {
+                REQUIRE_FALSE(IsVRBodyJointPoseDataSafe(pose.Body.Joints));
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+            }
+        }
+
+        WHEN("the joint mask contains an unknown bit")
+        {
+            pose.Body.Joints.NodeMask |= 1u << 30;
+            THEN("the body payload fails closed")
+            {
+                REQUIRE_FALSE(IsVRBodyJointPoseDataSafe(pose.Body.Joints));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-3 body has an explicitly absent joint extension")
+        {
+            pose.Body.Joints = {};
+            THEN("the body remains relayable")
+            {
+                REQUIRE_FALSE(pose.Body.Joints.Valid);
+                REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-3 joint extension capture sequence differs from its body")
+        {
+            ++pose.Body.Joints.CaptureSequence;
+            THEN("the incoherent version-3 frame is rejected")
             {
                 REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
                 REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-3 joint extension root generation differs from its body")
+        {
+            ++pose.Body.Joints.RootGeneration;
+            THEN("the incoherent version-3 frame is rejected")
+            {
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-1 body has no extended joints")
+        {
+            pose = BuildPoseUpdateBodyV1();
+            THEN("the legacy body remains relayable")
+            {
+                REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-2 body retains fingers but omits the format-3 upper body")
+        {
+            pose = BuildPoseUpdateBodyV2();
+            THEN("the older fixed layout remains safe")
+            {
+                REQUIRE(pose.Body.FormatVersion == 2);
+                REQUIRE_FALSE(pose.Body.Spine0.Valid);
+                REQUIRE(pose.Body.Joints.Valid);
+                REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
+            }
+        }
+
+        WHEN("a version-3 body omits an upper chain node")
+        {
+            pose.Body.LeftForearm = {};
+            THEN("the complete full-body frame fails closed")
+            {
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(pose.Body));
+                REQUIRE_FALSE(IsVRPoseUpdateSafe(pose));
+            }
+        }
+
+        WHEN("a version-3 body carries the complete upper chain")
+        {
+            THEN("all new parent-local nodes are required and safe")
+            {
+                REQUIRE(pose.Body.FormatVersion == 3);
+                REQUIRE(pose.Body.Spine0.Valid);
+                REQUIRE(pose.Body.Spine1.Valid);
+                REQUIRE(pose.Body.Spine2.Valid);
+                REQUIRE(pose.Body.Neck.Valid);
+                REQUIRE(pose.Body.LeftClavicle.Valid);
+                REQUIRE(pose.Body.LeftUpperArm.Valid);
+                REQUIRE(pose.Body.LeftForearm.Valid);
+                REQUIRE(pose.Body.RightClavicle.Valid);
+                REQUIRE(pose.Body.RightUpperArm.Valid);
+                REQUIRE(pose.Body.RightForearm.Valid);
+                REQUIRE(IsVRBodyPoseDataSafe(pose.Body));
+            }
+        }
+
+        WHEN("an unknown body format is followed by another fixed field")
+        {
+            VRBodyPoseData sendBody{};
+            sendBody.FormatVersion = 99;
+            VRFingerCurlData sendFollower{};
+            sendFollower.Valid = true;
+            sendFollower.Thumb = 0.1f;
+            sendFollower.Index = 0.2f;
+            sendFollower.Middle = 0.3f;
+            sendFollower.Ring = 0.4f;
+            sendFollower.Pinky = 0.5f;
+
+            THEN("the unknown body consumes only its format tag and preserves the following field")
+            {
+                Buffer buff(256);
+                Buffer::Writer writer(&buff);
+                sendBody.Serialize(writer);
+                sendFollower.Serialize(writer);
+
+                VRBodyPoseData recvBody{};
+                VRFingerCurlData recvFollower{};
+                Buffer::Reader reader(&buff);
+                recvBody.Deserialize(reader);
+                recvFollower.Deserialize(reader);
+                REQUIRE_FALSE(IsVRBodyPoseDataSafe(recvBody));
+                REQUIRE(sendFollower == recvFollower);
+            }
+        }
+
+        WHEN("a sparse mask declares an unknown quaternion")
+        {
+            VRFingerCurlData sendFollower{};
+            sendFollower.Valid = true;
+            sendFollower.Thumb = 0.1f;
+            sendFollower.Index = 0.2f;
+            sendFollower.Middle = 0.3f;
+            sendFollower.Ring = 0.4f;
+            sendFollower.Pinky = 0.5f;
+
+            THEN("the declared malformed payload is consumed before validation fails")
+            {
+                Buffer buff(256);
+                Buffer::Writer writer(&buff);
+                TiltedPhoques::Serialization::WriteVarInt(writer, 1);
+                TiltedPhoques::Serialization::WriteBool(writer, true);
+                TiltedPhoques::Serialization::WriteVarInt(writer, 7);
+                TiltedPhoques::Serialization::WriteVarInt(writer, 3);
+                TiltedPhoques::Serialization::WriteVarInt(writer, 1u << 30);
+                TiltedPhoques::Serialization::WriteFloat(writer, 0.0f);
+                TiltedPhoques::Serialization::WriteFloat(writer, 0.0f);
+                TiltedPhoques::Serialization::WriteFloat(writer, 0.0f);
+                TiltedPhoques::Serialization::WriteFloat(writer, 1.0f);
+                sendFollower.Serialize(writer);
+
+                VRBodyJointPoseData recvJoints{};
+                VRFingerCurlData recvFollower{};
+                Buffer::Reader reader(&buff);
+                recvJoints.Deserialize(reader);
+                recvFollower.Deserialize(reader);
+                REQUIRE_FALSE(IsVRBodyJointPoseDataSafe(recvJoints));
+                REQUIRE(sendFollower == recvFollower);
             }
         }
     }
@@ -1863,6 +2281,31 @@ TEST_CASE("Packets", "[encoding.packets]")
                  !sendMessage.Pose.Body.LeftCalf.Valid && !sendMessage.Pose.Body.LeftFoot.Valid &&
                  !sendMessage.Pose.Body.RightThigh.Valid && !sendMessage.Pose.Body.RightCalf.Valid &&
                  !sendMessage.Pose.Body.RightFoot.Valid));
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        uint64_t trash;
+        reader.ReadBits(trash, 8); // pop opcode
+
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+    }
+
+    SECTION("RequestVRPoseUpdate::BodyV1WithoutJointExtension")
+    {
+        Buffer buff(4096);
+
+        RequestVRPoseUpdate sendMessage, recvMessage;
+        sendMessage.Pose = BuildPoseUpdateBodyV1();
+
+        REQUIRE(sendMessage.Pose.Body.FormatVersion == 1);
+        REQUIRE(sendMessage.Pose.Body.Valid);
+        REQUIRE(sendMessage.Pose.Body.Joints.FormatVersion == 0);
+        REQUIRE_FALSE(sendMessage.Pose.Body.Joints.Valid);
 
         Buffer::Writer writer(&buff);
         sendMessage.Serialize(writer);

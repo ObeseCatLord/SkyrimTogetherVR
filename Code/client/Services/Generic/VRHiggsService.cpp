@@ -247,27 +247,58 @@ void ParseHandState(World& aWorld, const KeyValueMap& acValues, const std::strin
     ParseTransform(acValues, acPrefix, aHand.GrabTransform);
 }
 
-void ParseLastEvent(World& aWorld, const KeyValueMap& acValues, VRHiggsState& aState) noexcept
+bool IsMutationEvent(const VRHiggsEventSnapshot::Kind aKind) noexcept
 {
-    const auto eventCount = GetUInt32(acValues, "recentEventCount");
-    if (eventCount == 0)
-        return;
-
-    const auto prefix = std::string("recentEvent.") + std::to_string(eventCount - 1);
-    aState.LastEventValid = true;
-    aState.LastEvent.Sequence = GetUInt32(acValues, prefix + ".sequence");
-    aState.LastEvent.EventKind = ParseEventKind(FindValue(acValues, prefix + ".type"));
-    aState.LastEvent.HasHand = GetBool(acValues, prefix + ".hasHand");
-    const auto* pHand = FindValue(acValues, prefix + ".hand");
-    aState.LastEvent.IsLeft = pHand && *pHand == "left";
-    aState.LastEvent.ObjectId = ToServerId(aWorld, GetUInt32(acValues, prefix + ".formId"));
-    aState.LastEvent.Mass = GetFloat(acValues, prefix + ".mass");
-    aState.LastEvent.SeparatingVelocity = GetFloat(acValues, prefix + ".separatingVelocity");
+    return aKind == VRHiggsEventSnapshot::Kind::kPulled ||
+           aKind == VRHiggsEventSnapshot::Kind::kGrabbed ||
+           aKind == VRHiggsEventSnapshot::Kind::kDropped ||
+           aKind == VRHiggsEventSnapshot::Kind::kStashed ||
+           aKind == VRHiggsEventSnapshot::Kind::kConsumed;
 }
 
 bool IsNewerSequence(uint32_t aCandidate, uint32_t aCurrent) noexcept
 {
     return static_cast<int32_t>(aCandidate - aCurrent) > 0;
+}
+
+bool ParseMutationEvents(World& aWorld, const KeyValueMap& acValues, VRHiggsState& arState) noexcept
+{
+    const auto eventCount = GetUInt32(acValues, "recentEventCount");
+    if (eventCount > kMaximumHiggsMutationEvents)
+        return false;
+
+    std::uint32_t previousMutationSequence{};
+    bool hasPreviousMutationSequence{false};
+    for (std::uint32_t index = 0; index < eventCount; ++index)
+    {
+        const auto prefix = std::string("recentEvent.") + std::to_string(index);
+        VRHiggsEventSnapshot event{};
+        event.Sequence = GetUInt32(acValues, prefix + ".sequence");
+        event.EventKind = ParseEventKind(FindValue(acValues, prefix + ".type"));
+        event.HasHand = GetBool(acValues, prefix + ".hasHand");
+        const auto* pHand = FindValue(acValues, prefix + ".hand");
+        event.IsLeft = pHand && *pHand == "left";
+        event.ObjectId = ToServerId(aWorld, GetUInt32(acValues, prefix + ".formId"));
+        event.Mass = GetFloat(acValues, prefix + ".mass");
+        event.SeparatingVelocity = GetFloat(acValues, prefix + ".separatingVelocity");
+
+        // Collisions and two-handing callbacks remain snapshot telemetry. Only
+        // object mutations enter the reliable replay window.
+        if (!IsMutationEvent(event.EventKind))
+            continue;
+        if (event.Sequence == 0 || (hasPreviousMutationSequence &&
+                                    !IsNewerSequence(event.Sequence, previousMutationSequence)))
+            return false;
+        if (arState.MutationEventCount >= arState.MutationEvents.size())
+            return false;
+
+        arState.MutationEvents[arState.MutationEventCount++] = event;
+        previousMutationSequence = event.Sequence;
+        hasPreviousMutationSequence = true;
+    }
+
+    arState.MutationSequence = hasPreviousMutationSequence ? previousMutationSequence : 0;
+    return true;
 }
 
 bool HasCoherentHiggsFingerState(const KeyValueMap& acValues, const std::string& acPrefix) noexcept
@@ -319,14 +350,18 @@ bool HasCoherentHiggsEventState(const KeyValueMap& acValues) noexcept
         return false;
 
     const auto eventCount = GetUInt32(acValues, "recentEventCount");
-    if (eventCount == 0)
-        return true;
-
-    const auto prefix = std::string("recentEvent.") + std::to_string(eventCount - 1);
-    return HasKey(acValues, prefix + ".sequence") && HasKey(acValues, prefix + ".type") &&
-           HasKey(acValues, prefix + ".hasHand") && HasKey(acValues, prefix + ".hand") &&
-           HasKey(acValues, prefix + ".formId") && HasKey(acValues, prefix + ".mass") &&
-           HasKey(acValues, prefix + ".separatingVelocity");
+    if (eventCount > kMaximumHiggsMutationEvents)
+        return false;
+    for (std::uint32_t index = 0; index < eventCount; ++index)
+    {
+        const auto prefix = std::string("recentEvent.") + std::to_string(index);
+        if (!HasKey(acValues, prefix + ".sequence") || !HasKey(acValues, prefix + ".type") ||
+            !HasKey(acValues, prefix + ".hasHand") || !HasKey(acValues, prefix + ".hand") ||
+            !HasKey(acValues, prefix + ".formId") || !HasKey(acValues, prefix + ".mass") ||
+            !HasKey(acValues, prefix + ".separatingVelocity"))
+            return false;
+    }
+    return true;
 }
 
 bool HasCoherentHiggsBridgeData(const KeyValueMap& acValues) noexcept
@@ -403,6 +438,7 @@ void WriteEventSnapshot(std::ofstream& aFile, const std::string& acPrefix, const
 void WriteHiggsState(std::ofstream& aFile, const std::string& acPrefix, const VRHiggsState& acState)
 {
     aFile << acPrefix << ".sequence=" << acState.Sequence << "\n";
+    aFile << acPrefix << ".mutationSequence=" << acState.MutationSequence << "\n";
     aFile << acPrefix << ".bridgeLoaded=" << (acState.BridgeLoaded ? "1" : "0") << "\n";
     aFile << acPrefix << ".detected=" << (acState.Detected ? "1" : "0") << "\n";
     aFile << acPrefix << ".interfaceAvailable=" << (acState.InterfaceAvailable ? "1" : "0") << "\n";
@@ -412,9 +448,10 @@ void WriteHiggsState(std::ofstream& aFile, const std::string& acPrefix, const VR
     aFile << acPrefix << ".twoHanding=" << (acState.TwoHanding ? "1" : "0") << "\n";
     WriteHandState(aFile, acPrefix + ".left", acState.Left);
     WriteHandState(aFile, acPrefix + ".right", acState.Right);
-    aFile << acPrefix << ".lastEvent.valid=" << (acState.LastEventValid ? "1" : "0") << "\n";
-    if (acState.LastEventValid)
-        WriteEventSnapshot(aFile, acPrefix + ".lastEvent", acState.LastEvent);
+    const auto eventCount = std::min<std::size_t>(acState.MutationEventCount, acState.MutationEvents.size());
+    aFile << acPrefix << ".mutationEventCount=" << eventCount << "\n";
+    for (std::size_t index = 0; index < eventCount; ++index)
+        WriteEventSnapshot(aFile, acPrefix + ".mutationEvent." + std::to_string(index), acState.MutationEvents[index]);
 }
 } // namespace
 
@@ -438,6 +475,10 @@ VRHiggsService::VRHiggsService(World& aWorld, entt::dispatcher& aDispatcher, Tra
 
 void VRHiggsService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
+    const bool online = m_transport.IsOnline();
+    if (!online && m_wasOnline)
+        ClearLocalStateAtConnectionBoundary();
+
     m_bridgeReadTimer += acEvent.Delta;
     if (!m_bridgeReadInitialized || m_bridgeReadTimer >= kHiggsBridgeReadInterval)
     {
@@ -465,11 +506,13 @@ void VRHiggsService::OnUpdate(const UpdateEvent& acEvent) noexcept
     PruneRemoteStates(acEvent.Delta);
 
     m_sendTimer += acEvent.Delta;
-    if (m_sendTimer >= kHiggsSendInterval)
+    if (online && m_sendTimer >= kHiggsSendInterval)
     {
         m_sendTimer = 0.0;
         SendHiggsState();
     }
+
+    m_wasOnline = online;
 
     m_statusTimer += acEvent.Delta;
     if (!m_statusDirty && m_statusTimer < kHiggsStatusWriteInterval)
@@ -481,7 +524,8 @@ void VRHiggsService::OnUpdate(const UpdateEvent& acEvent) noexcept
 
 void VRHiggsService::OnVRHiggsState(const NotifyVRHiggsState& acMessage) noexcept
 {
-    if (acMessage.PlayerId == m_transport.GetLocalPlayerId())
+    if (acMessage.PlayerId == m_transport.GetLocalPlayerId() ||
+        !acMessage.State.IsDecodedValid || !acMessage.State.IsMutationReplayValid())
         return;
 
     const auto existingIt = m_remoteStates.find(acMessage.PlayerId);
@@ -504,6 +548,8 @@ void VRHiggsService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
 void VRHiggsService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     TP_UNUSED(acEvent);
+
+    ClearLocalStateAtConnectionBoundary();
 
     if (!m_remoteStates.empty() || !m_remoteStateAges.empty())
     {
@@ -566,6 +612,7 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
         if (cachedFresh)
         {
             aState = s_cachedBridgeState;
+            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
             return true;
         }
         return false;
@@ -579,6 +626,7 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
         if (cachedFresh)
         {
             aState = s_cachedBridgeState;
+            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
             return true;
         }
         return false;
@@ -590,6 +638,7 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
         if (cachedFresh)
         {
             aState = s_cachedBridgeState;
+            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
             return true;
         }
         return false;
@@ -605,13 +654,16 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
     aState.TwoHanding = GetBool(values, "higgs.twoHanding");
     ParseHandState(m_world, values, "left", aState.Left);
     ParseHandState(m_world, values, "right", aState.Right);
-    ParseLastEvent(m_world, values, aState);
+    if (!ParseMutationEvents(m_world, values, aState))
+        return false;
 
     const bool hasState = aState.BridgeLoaded || aState.Detected || aState.InterfaceAvailable ||
                           aState.CallbacksRegistered || aState.SnapshotAvailable || aState.Left.Valid ||
                           aState.Right.Valid;
     if (hasState)
     {
+        // Cache bridge output before replay-floor processing. The cache must
+        // remain a source snapshot, never an already filtered session packet.
         s_cachedBridgeState = aState;
         s_cachedBridgeSequence = bridgeSequence;
         s_cachedBridgeEpoch = bridgeEpoch;
@@ -619,7 +671,101 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
         s_hasCachedBridgeState = true;
     }
 
+    MergeMutationReplayWindow(aState, bridgeEpoch, m_transport.IsOnline());
+
     return hasState;
+}
+
+void VRHiggsService::MergeMutationReplayWindow(
+    VRHiggsState& arState, const std::string& acBridgeEpoch, const bool aOnline) noexcept
+{
+    const bool epochChanged = !m_bridgeEpoch.empty() && m_bridgeEpoch != acBridgeEpoch;
+    if (epochChanged)
+    {
+        m_mutationReplayWindow = {};
+        m_mutationReplayEventCount = 0;
+        m_lastCapturedMutationSequence = 0;
+        m_hasCapturedMutationSequence = false;
+        // A bridge epoch is an explicit producer reset. It starts a fresh
+        // online stream, while an offline epoch is immediately rebased below.
+        m_mutationReplayFloorEpoch.clear();
+        m_mutationReplayFloorSequence = 0;
+        m_hasMutationReplayFloor = false;
+    }
+    m_bridgeEpoch = acBridgeEpoch;
+
+    const auto eventCount = std::min<std::size_t>(arState.MutationEventCount, arState.MutationEvents.size());
+    if (!aOnline)
+    {
+        const auto floorSequence = eventCount != 0 ?
+            arState.MutationEvents[eventCount - 1].Sequence : 0;
+        RebaseMutationReplayFloor(acBridgeEpoch, floorSequence);
+        arState.MutationEvents = {};
+        arState.MutationEventCount = 0;
+        arState.MutationSequence = 0;
+        return;
+    }
+
+    if (m_hasMutationReplayFloor && m_mutationReplayFloorEpoch == acBridgeEpoch)
+    {
+        m_lastCapturedMutationSequence = m_mutationReplayFloorSequence;
+        m_hasCapturedMutationSequence = m_mutationReplayFloorSequence != 0;
+        m_mutationReplayFloorEpoch.clear();
+        m_mutationReplayFloorSequence = 0;
+        m_hasMutationReplayFloor = false;
+    }
+    else if (m_hasMutationReplayFloor)
+    {
+        m_mutationReplayFloorEpoch.clear();
+        m_mutationReplayFloorSequence = 0;
+        m_hasMutationReplayFloor = false;
+    }
+
+    for (std::size_t index = 0; index < eventCount; ++index)
+    {
+        const auto& event = arState.MutationEvents[index];
+        if (event.Sequence == 0 || (m_hasCapturedMutationSequence &&
+                                    !IsNewerSequence(event.Sequence, m_lastCapturedMutationSequence)))
+            continue;
+
+        if (m_mutationReplayEventCount == m_mutationReplayWindow.size())
+        {
+            for (std::size_t replayIndex = 1; replayIndex < m_mutationReplayEventCount; ++replayIndex)
+                m_mutationReplayWindow[replayIndex - 1] = m_mutationReplayWindow[replayIndex];
+            --m_mutationReplayEventCount;
+        }
+        m_mutationReplayWindow[m_mutationReplayEventCount++] = event;
+        m_lastCapturedMutationSequence = event.Sequence;
+        m_hasCapturedMutationSequence = true;
+    }
+
+    arState.MutationEvents = m_mutationReplayWindow;
+    arState.MutationEventCount = static_cast<uint8_t>(m_mutationReplayEventCount);
+    arState.MutationSequence = m_hasCapturedMutationSequence ? m_lastCapturedMutationSequence : 0;
+}
+
+void VRHiggsService::RebaseMutationReplayFloor(
+    const std::string& acBridgeEpoch, const uint32_t aMutationSequence) noexcept
+{
+    m_mutationReplayWindow = {};
+    m_mutationReplayEventCount = 0;
+    m_mutationReplayFloorEpoch = acBridgeEpoch;
+    m_mutationReplayFloorSequence = aMutationSequence;
+    m_hasMutationReplayFloor = aMutationSequence != 0;
+    m_lastCapturedMutationSequence = aMutationSequence;
+    m_hasCapturedMutationSequence = aMutationSequence != 0;
+}
+
+void VRHiggsService::ClearLocalStateAtConnectionBoundary() noexcept
+{
+    const auto floorSequence = m_hasCapturedMutationSequence ?
+        m_lastCapturedMutationSequence : m_lastLocalState.MutationSequence;
+    RebaseMutationReplayFloor(m_bridgeEpoch, floorSequence);
+    m_lastLocalState = {};
+    m_hasLocalState = false;
+    m_sendTimer = 0.0;
+    m_statusDirty = true;
+    m_wasOnline = false;
 }
 
 void VRHiggsService::SendHiggsState() noexcept

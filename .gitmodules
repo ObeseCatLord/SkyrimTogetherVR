@@ -16,10 +16,7 @@
 [submodule "Libraries/TiltedScript"]
 	path = Libraries/TiltedScript
 	url = https://github.com/TiltedPhoques/TiltedScript
-[submodule "Libraries/cpp-httplib"]
-	path = Libraries/cpp-httplib
-	url = https://github.com/yhirose/cpp-httplib.git
 [submodule "Libraries/CommonLibSSE-NG"]
 	path = Libraries/CommonLibSSE-NG
 	url = https://github.com/ObeseCatLord/CommonLibSSE-NG.git
-	branch = stvr-exclusive-vr-5.4.2
+	branch = stvr-exclusive-vr-6.1.1

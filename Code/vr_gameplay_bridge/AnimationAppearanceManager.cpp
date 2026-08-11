@@ -3,6 +3,7 @@
 #include "DynamicActorBaseFlags.h"
 #include "AvatarManager.h"
 #include "LocalGameplayCapture.h"
+#include "VRFaceGen.h"
 
 #include <vr_common/VRCanonicalEntity.h>
 
@@ -372,17 +373,13 @@ struct StagedAppearanceTransaction
     std::array<std::int32_t, kFacePartCount> FaceParts{};
     std::bitset<kFaceMorphCount> FaceMorphPresent{};
     std::bitset<kFacePartCount> FacePartPresent{};
-    struct Tint
+    struct StagedTint : VRFaceGen::Tint
     {
-        std::string TexturePath{};
-        std::uint32_t Color{};
-        float Alpha{};
-        std::uint8_t Type{};
         bool Present{};
         bool PathExpected{};
         bool PathSpecified{};
     };
-    std::array<Tint, kMaximumAppearanceTints> Tints{};
+    std::array<StagedTint, kMaximumAppearanceTints> Tints{};
     std::string Name{};
     float Weight{};
     std::int32_t Sex{};
@@ -730,16 +727,35 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
     for (std::size_t index = 0; index < staged.ExpectedTintCount; ++index)
         if (!staged.Tints[index].Present || !staged.Tints[index].PathSpecified)
             return CommandStatus::Malformed;
-    const auto completionStatus = staged.ExpectedTintCount != 0 ?
-        CommandStatus::Degraded : CommandStatus::Success;
+
+    // StagedTint has transaction bookkeeping after its Tint base. Materialize
+    // a contiguous Tint array so span iteration always uses the correct stride.
+    std::array<VRFaceGen::Tint, kMaximumAppearanceTints> compositionTints{};
+    try
+    {
+        for (std::size_t index = 0; index < staged.ExpectedTintCount; ++index)
+        {
+            const auto& source = staged.Tints[index];
+            auto& destination = compositionTints[index];
+            destination.TexturePath = source.TexturePath;
+            destination.Color = source.Color;
+            destination.Alpha = source.Alpha;
+            destination.Type = source.Type;
+        }
+    }
+    catch (...)
+    {
+        return CommandStatus::EngineRejected;
+    }
     if (const auto applied = s_appliedAppearances.find(target);
-        applied != s_appliedAppearances.end() && applied->second.Sequence == staged.Sequence &&
-        applied->second.Digest == staged.Digest)
-        return completionStatus;
+        applied != s_appliedAppearances.end() && applied->second.Sequence == staged.Sequence && applied->second.Digest == staged.Digest)
+        return CommandStatus::Success;
 
     auto* npc = a_actor.GetActorBase();
     if (!npc || !npc->IsDynamicForm())
         return CommandStatus::EngineRejected;
+    if (staged.ExpectedTintCount != 0 && !VRFaceGen::HasVerifiedTargets())
+        return CommandStatus::Unsupported;
 
     // Reserve the applied-sequence entry before changing the NPC. This map may
     // allocate, while assigning the completed sequence below cannot.
@@ -826,9 +842,31 @@ std::array<ManagedHeadPartBuffer, kMaximumStagedAppearanceTransactions> s_manage
         break;
     }
     a_actor.Update3DModel();
+    if (staged.ExpectedTintCount != 0)
+    {
+        const auto composition = VRFaceGen::Compose(a_actor, std::span<const VRFaceGen::Tint>{compositionTints.data(), staged.ExpectedTintCount});
+        if (composition != VRFaceGen::CompositionResult::Success)
+        {
+            RE::free(retiredManagedHeadParts);
+            // A safe rollback would need to restore both the dynamic NPC base
+            // and the engine-owned 3D/material state. Leave this coherent base
+            // snapshot installed but unmarked. The mapped client may retry an
+            // explicitly transient commit failure as a complete idempotent
+            // transaction with a fresh bridge sequence; ambiguous or permanent
+            // failures remain terminal.
+            discardPreparedAppliedEntry();
+            switch (composition)
+            {
+            case VRFaceGen::CompositionResult::Unavailable: return CommandStatus::Unsupported;
+            case VRFaceGen::CompositionResult::Inactive: return CommandStatus::Inactive;
+            case VRFaceGen::CompositionResult::Rejected: return CommandStatus::EngineRejected;
+            case VRFaceGen::CompositionResult::Success: break;
+            }
+        }
+    }
     RE::free(retiredManagedHeadParts);
     appliedEntry->second = {staged.Sequence, staged.Digest};
-    return completionStatus;
+    return CommandStatus::Success;
 }
 
 [[nodiscard]] CommandStatus ApplyAppearance(

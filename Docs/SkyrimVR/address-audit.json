@@ -527,19 +527,19 @@
   ],
   "missingRttiUsedByCast": [],
   "nonRttiResolutionSources": {
-    "addrlib": 179,
+    "addrlib": 177,
     "commonlib_vtable": 1,
     "database": 3,
     "release": 74,
-    "sse_vr": 27
+    "sse_vr": 29
   },
   "resolutionSources": {
-    "addrlib": 179,
+    "addrlib": 177,
     "commonlib_vtable": 1,
     "database": 3,
     "missing": 47,
     "release": 75,
-    "sse_vr": 2786
+    "sse_vr": 2788
   },
   "resolvedNonRtti": [
     {
@@ -1056,8 +1056,8 @@
     },
     {
       "id": 19075,
-      "name": "",
-      "offset": "0x294070",
+      "name": "TESObjectCELL::GetCOCPlacementInfo",
+      "offset": "0x27a4c0",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Forms/TESObjectCELL.cpp",
@@ -1066,8 +1066,8 @@
         }
       ],
       "resolvedId": 19075,
-      "source": "addrlib",
-      "status": "addrlib",
+      "source": "sse_vr",
+      "status": "exact_vr_disassembly",
       "translation": "direct"
     },
     {
@@ -1968,8 +1968,8 @@
     },
     {
       "id": 34512,
-      "name": "",
-      "offset": "0x579df0",
+      "name": "MagicTarget::DispelAllSpells",
+      "offset": "0x557070",
       "references": [
         {
           "file": "Code/client/Games/Skyrim/Magic/MagicTarget.cpp",
@@ -1978,8 +1978,8 @@
         }
       ],
       "resolvedId": 34512,
-      "source": "addrlib",
-      "status": "addrlib",
+      "source": "sse_vr",
+      "status": "exact_vr_disassembly",
       "translation": "direct"
     },
     {

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <atomic>
+#include <memory>
+#include <thread>
+
 struct World;
 struct UpdateEvent;
 struct PlayerJoinEvent;
@@ -11,7 +15,7 @@ struct PlayerLeaveEvent;
 struct ServerListService
 {
     ServerListService(World& aWorld, entt::dispatcher& aDispatcher) noexcept;
-    ~ServerListService() noexcept = default;
+    ~ServerListService() noexcept;
 
     TP_NOCOPYMOVE(ServerListService);
 
@@ -21,11 +25,32 @@ protected:
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
 
 private:
-    void Announce() noexcept;
+    struct AnnouncementState
+    {
+        std::atomic_bool m_inFlight{false};
+        std::atomic_bool m_serverRejected{false};
+        std::atomic_bool m_stopRequested{false};
+    };
 
-    static void PostAnnouncement(String acName, String acDesc, String acIconUrl, uint16_t aPort, uint16_t aTick,
-                                 uint16_t aPlayerCount, uint16_t aPlayerMaxCount, String acTagList, bool aPublic,
-                                 bool aPassword, int32 aFlags) noexcept;
+    struct AnnouncementRequest
+    {
+        String m_name;
+        String m_desc;
+        String m_iconUrl;
+        uint16_t m_port;
+        uint16_t m_tickRate;
+        uint16_t m_playerCount;
+        uint16_t m_playerMaxCount;
+        String m_tagList;
+        bool m_isPublic;
+        bool m_isPasswordProtected;
+        int32 m_flags;
+    };
+
+    void Announce() noexcept;
+    bool ProcessAnnouncementResult() noexcept;
+
+    static bool PostAnnouncement(const AnnouncementState& acState, const AnnouncementRequest& acRequest);
 
     World& m_world;
 
@@ -33,6 +58,9 @@ private:
     entt::scoped_connection m_playerJoinConnection;
     entt::scoped_connection m_playerLeaveConnection;
     mutable std::chrono::steady_clock::time_point m_nextAnnounce;
+
+    std::shared_ptr<AnnouncementState> m_announcementState;
+    std::thread m_announcementThread;
 
     int32 m_flags = 0;
 

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <thread>
+
 #include <discord.h>
 
 class DiscordService final : public entt::registry
@@ -30,13 +33,16 @@ private:
 
     bool m_bCustomPresence = false;
     bool m_bOverlayEnabled = false;
-    bool m_bRequestThreadKillHack = false;
+    std::atomic_bool m_stopCallbacks{false};
+
+    std::thread m_callbackThread;
 
     IDiscordCore* m_pCore = nullptr;
     IDiscordUserManager* m_pUserMgr = nullptr;
     IDiscordActivityManager* m_pActivity = nullptr;
     IDiscordApplicationManager* m_pAppMgr = nullptr;
     IDiscordOverlayManager* m_pOverlayMgr = nullptr;
+    HMODULE m_pModule = nullptr;
 
     DiscordUser m_userData{};
     DiscordActivity m_ActivityState{};

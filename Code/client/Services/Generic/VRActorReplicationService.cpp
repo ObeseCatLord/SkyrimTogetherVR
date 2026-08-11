@@ -35,6 +35,7 @@
 #include <Messages/NotifyVRMagicEffectEvent.h>
 #include <Messages/NotifyVRPoseUpdate.h>
 #include <Messages/NotifyVRProjectileEvent.h>
+#include <Structs/VRInteractionValidation.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Services/TransportService.h>
 #include <Services/VRAvatarService.h>
@@ -75,7 +76,22 @@ constexpr std::uint8_t kMaximumPendingMagicEffectAttempts = 8;
 constexpr double kMagicActorRetryDelaySeconds = 0.25;
 constexpr std::size_t kMaximumPendingGameplayWork = 192;
 constexpr std::size_t kMaximumGameplayResultOwners = 512;
+// Format-3 full-body pose batches are bounded at 112 result-owning commands:
+// 20 transform nodes * four chunks, one transform commit, 30 sparse finger
+// rotations, and one finger commit. Leave half of the shared result-owner
+// table available for state-changing gameplay.
+constexpr std::size_t kReservedGameplayResultOwnersForState = 256;
+constexpr std::size_t kMaximumVrBodyPoseResultOwners =
+    kMaximumGameplayResultOwners - kReservedGameplayResultOwnersForState;
+// Retain room in the work list for non-visual reliable gameplay while remote
+// players wait for the bridge to accept their latest visual frame.
+constexpr std::size_t kReservedGameplayWorkSlotsForState = 64;
+constexpr std::size_t kMaximumVrBodyPosePendingWork =
+    kMaximumPendingGameplayWork - kReservedGameplayWorkSlotsForState;
 constexpr std::size_t kMaximumSemanticTombstones = 2048;
+constexpr std::size_t kMaximumPendingHiggsMutationsPerPlayer = kMaximumHiggsMutationEvents;
+constexpr std::uint8_t kMaximumHiggsMutationResolutionAttempts = 20;
+constexpr double kMaximumHiggsMutationResolutionSeconds = 5.0;
 constexpr double kSemanticTombstoneRebaseRetrySeconds = 0.25;
 constexpr std::uint8_t kMaximumGameplayWorkAttempts = 3;
 constexpr double kGameplayAdmissionTimeoutSeconds = 10.0;
@@ -132,6 +148,25 @@ constexpr std::uint64_t kNpcAppearanceTargetBit = 1ull << 63;
 {
     const auto exponent = std::min<std::uint8_t>(aFailures, 4);
     return std::min(2.0, 0.125 * static_cast<double>(1u << exponent));
+}
+
+[[nodiscard]] constexpr bool IsRetryableAppearanceCommitFailure(
+    const GameplayBridge::CommandStatus aStatus,
+    const GameplayBridge::GameplayDomain aDomain,
+    const GameplayBridge::GameplayAction aAction) noexcept
+{
+    if (aDomain != GameplayBridge::GameplayDomain::Appearance ||
+        aAction != GameplayBridge::GameplayAction::CommitAppearance)
+        return false;
+
+    // These statuses can result from an actor/3D/renderer that is temporarily
+    // unavailable. A fresh complete transaction is idempotent and can converge
+    // after the engine finishes rebuilding the remote actor.
+    return aStatus == GameplayBridge::CommandStatus::Inactive ||
+           aStatus == GameplayBridge::CommandStatus::EngineRejected ||
+           aStatus == GameplayBridge::CommandStatus::QueueOverflow ||
+           aStatus == GameplayBridge::CommandStatus::StaleEntity ||
+           aStatus == GameplayBridge::CommandStatus::InvalidHandle;
 }
 
 [[nodiscard]] bool MatchesTrackedResult(
@@ -236,6 +271,29 @@ template <class... Ts> [[nodiscard]] std::uint64_t Signature(const Ts... aValues
 [[nodiscard]] bool IsRemotePlayer(const TransportService& acTransport, const std::uint32_t aPlayerId) noexcept
 {
     return aPlayerId != 0 && aPlayerId != acTransport.GetLocalPlayerId();
+}
+
+[[nodiscard]] bool IsHiggsMutationEvent(const VRHiggsEventSnapshot::Kind aKind) noexcept
+{
+    return aKind == VRHiggsEventSnapshot::Kind::kPulled ||
+           aKind == VRHiggsEventSnapshot::Kind::kGrabbed ||
+           aKind == VRHiggsEventSnapshot::Kind::kDropped ||
+           aKind == VRHiggsEventSnapshot::Kind::kStashed ||
+           aKind == VRHiggsEventSnapshot::Kind::kConsumed;
+}
+
+[[nodiscard]] GameplayBridge::GameplayAction HiggsActionForEvent(
+    const VRHiggsEventSnapshot::Kind aKind) noexcept
+{
+    switch (aKind)
+    {
+    case VRHiggsEventSnapshot::Kind::kPulled: return GameplayBridge::GameplayAction::HiggsPull;
+    case VRHiggsEventSnapshot::Kind::kGrabbed: return GameplayBridge::GameplayAction::HiggsGrab;
+    case VRHiggsEventSnapshot::Kind::kDropped: return GameplayBridge::GameplayAction::HiggsDrop;
+    case VRHiggsEventSnapshot::Kind::kStashed: return GameplayBridge::GameplayAction::HiggsStash;
+    case VRHiggsEventSnapshot::Kind::kConsumed: return GameplayBridge::GameplayAction::HiggsConsume;
+    default: return {};
+    }
 }
 
 void RememberBoundedServerId(std::unordered_set<std::uint32_t>& arIds, const std::uint32_t aServerId) noexcept
@@ -413,6 +471,210 @@ void VRActorReplicationService::ForgetSemanticTombstones(const std::uint32_t aPl
     });
 }
 
+VRActorReplicationService::HiggsEventLedger*
+VRActorReplicationService::GetHiggsEventLedger(const std::uint32_t aPlayerId) noexcept try
+{
+    if (aPlayerId == 0)
+        return nullptr;
+    return &m_higgsEventLedgers.try_emplace(aPlayerId).first->second;
+}
+catch (...)
+{
+    return nullptr;
+}
+
+bool VRActorReplicationService::EnqueueHiggsMutationTail(
+    const std::uint32_t aPlayerId, const VRHiggsState& acState) noexcept try
+{
+    if (aPlayerId == 0 || !acState.IsMutationReplayValid() || acState.MutationEventCount == 0)
+        return false;
+
+    auto* const pLedger = GetHiggsEventLedger(aPlayerId);
+    if (!pLedger)
+        return false;
+
+    const auto queued = m_pendingHiggsMutations.find(aPlayerId);
+    const auto queuedCount = queued != m_pendingHiggsMutations.end() ? queued->second.size() : 0;
+    const auto hasKnownSequence = pLedger->HasQueuedMutationSequence || pLedger->HasTerminalMutationSequence;
+    const auto knownSequence = pLedger->HasQueuedMutationSequence ? pLedger->LastQueuedMutationSequence :
+                                                                     pLedger->LastTerminalMutationSequence;
+
+    std::size_t firstUnseen = acState.MutationEventCount;
+    for (std::size_t index = 0; index < acState.MutationEventCount; ++index)
+    {
+        if (!hasKnownSequence || IsNewer(acState.MutationEvents[index].Sequence, knownSequence))
+        {
+            firstUnseen = index;
+            break;
+        }
+    }
+    if (firstUnseen == acState.MutationEventCount)
+        return true;
+
+    const auto unseenCount = static_cast<std::size_t>(acState.MutationEventCount) - firstUnseen;
+    if (unseenCount > kMaximumPendingHiggsMutationsPerPlayer - queuedCount)
+        return false;
+
+    // Build a complete replacement before publishing anything. A repeated
+    // server replay must either reserve its full unseen tail or remain wholly
+    // unobserved so the next packet can retry it intact.
+    std::deque<PendingHiggsMutation> replacement;
+    if (queued != m_pendingHiggsMutations.end())
+        replacement = queued->second;
+    for (std::size_t index = firstUnseen; index < acState.MutationEventCount; ++index)
+        replacement.push_back({acState.MutationEvents[index], acState.TwoHanding});
+
+    const auto [queue, inserted] = m_pendingHiggsMutations.try_emplace(aPlayerId);
+    TP_UNUSED(inserted);
+    queue->second.swap(replacement);
+    pLedger->LastQueuedMutationSequence = acState.MutationEvents[acState.MutationEventCount - 1].Sequence;
+    pLedger->HasQueuedMutationSequence = true;
+    return true;
+}
+catch (...)
+{
+    return false;
+}
+
+bool VRActorReplicationService::IsHiggsMutationWork(const PendingGameplayWork& acWork) noexcept
+{
+    return acWork.TargetIsPlayer && acWork.Domain == GameplayBridge::GameplayDomain::Higgs &&
+           acWork.HiggsMutationSequence != 0;
+}
+
+bool VRActorReplicationService::HasPendingHiggsMutationWork(const std::uint32_t aPlayerId) const noexcept
+{
+    return std::any_of(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+        [aPlayerId](const PendingGameplayWork& acWork) noexcept {
+            return IsHiggsMutationWork(acWork) && acWork.PlayerId == aPlayerId;
+        });
+}
+
+void VRActorReplicationService::TrySubmitNextHiggsMutation(const std::uint32_t aPlayerId,
+                                                            const double aResolutionDelta) noexcept
+{
+    if (!IsRemotePlayer(m_transport, aPlayerId) || HasPendingHiggsMutationWork(aPlayerId))
+        return;
+
+    const auto queued = m_pendingHiggsMutations.find(aPlayerId);
+    const auto ledgerIt = m_higgsEventLedgers.find(aPlayerId);
+    if (queued == m_pendingHiggsMutations.end() || queued->second.empty() ||
+        ledgerIt == m_higgsEventLedgers.end())
+        return;
+
+    auto& mutation = queued->second.front();
+    const auto& event = mutation.Event;
+    auto& ledger = ledgerIt->second;
+    if (ledger.HasTerminalMutationSequence && !IsNewer(event.Sequence, ledger.LastTerminalMutationSequence))
+    {
+        queued->second.pop_front();
+        return;
+    }
+    if (!IsHiggsMutationEvent(event.EventKind) ||
+        !SkyrimTogether::VR::IsHiggsMutationPayloadValid(event.Mass, event.SeparatingVelocity) ||
+        !event.ObjectId)
+    {
+        SkipUnresolvableHiggsMutation(aPlayerId, mutation);
+        return;
+    }
+
+    const auto localObject = ToLocal(m_world, event.ObjectId);
+    if (localObject == 0)
+    {
+        if (std::isfinite(aResolutionDelta) && aResolutionDelta > 0.0)
+        {
+            mutation.ResolutionElapsed += aResolutionDelta;
+            if (mutation.ResolutionAttempts != std::numeric_limits<std::uint8_t>::max())
+                ++mutation.ResolutionAttempts;
+        }
+        if (mutation.ResolutionAttempts >= kMaximumHiggsMutationResolutionAttempts ||
+            mutation.ResolutionElapsed >= kMaximumHiggsMutationResolutionSeconds)
+            SkipUnresolvableHiggsMutation(aPlayerId, mutation);
+        return;
+    }
+
+    const auto acceptance = PrepareAccept(
+        aPlayerId, GameplayBridge::GameplayDomain::Higgs, event.Sequence,
+        Signature(event.Sequence, event.EventKind, event.ObjectId.LogFormat(), event.HasHand,
+                  event.IsLeft, FloatBits(event.Mass), FloatBits(event.SeparatingVelocity), mutation.TwoHanding));
+    if (!acceptance.Valid)
+        return;
+
+    auto payload = Payload();
+    payload.LocalFormIdA = localObject;
+    payload.ScalarA = event.Mass;
+    payload.ScalarB = event.SeparatingVelocity;
+    payload.ActionFlags = (event.HasHand ? kFlagBool0 : 0) | (event.IsLeft ? kFlagLeftHand : 0) |
+                          (mutation.TwoHanding ? kFlagBool1 : 0);
+
+    PendingGameplayWork work{};
+    work.PlayerId = aPlayerId;
+    work.Domain = GameplayBridge::GameplayDomain::Higgs;
+    work.Actions = {HiggsActionForEvent(event.EventKind)};
+    work.Payloads = {payload};
+    work.Acceptance = acceptance;
+    work.TargetIsPlayer = true;
+    work.HiggsMutationSequence = event.Sequence;
+    TP_UNUSED(QueueReliableGameplayWork(std::move(work)));
+}
+
+void VRActorReplicationService::CommitHiggsMutationAdmission(const PendingGameplayWork& acWork) noexcept
+{
+    if (!IsHiggsMutationWork(acWork))
+        return;
+
+    const auto ledger = m_higgsEventLedgers.find(acWork.PlayerId);
+    if (ledger == m_higgsEventLedgers.end())
+        return;
+
+    auto& state = ledger->second;
+    if (!state.HasAdmittedMutationSequence ||
+        IsNewer(acWork.HiggsMutationSequence, state.LastAdmittedMutationSequence))
+    {
+        state.LastAdmittedMutationSequence = acWork.HiggsMutationSequence;
+        state.HasAdmittedMutationSequence = true;
+    }
+    if (!state.HasTerminalMutationSequence ||
+        IsNewer(acWork.HiggsMutationSequence, state.LastTerminalMutationSequence))
+    {
+        state.LastTerminalMutationSequence = acWork.HiggsMutationSequence;
+        state.HasTerminalMutationSequence = true;
+    }
+
+    const auto queued = m_pendingHiggsMutations.find(acWork.PlayerId);
+    if (queued != m_pendingHiggsMutations.end() && !queued->second.empty() &&
+        queued->second.front().Event.Sequence == acWork.HiggsMutationSequence)
+        queued->second.pop_front();
+}
+
+void VRActorReplicationService::SkipUnresolvableHiggsMutation(
+    const std::uint32_t aPlayerId, const PendingHiggsMutation& acMutation) noexcept
+{
+    const auto queued = m_pendingHiggsMutations.find(aPlayerId);
+    const auto ledger = m_higgsEventLedgers.find(aPlayerId);
+    if (queued == m_pendingHiggsMutations.end() || queued->second.empty() ||
+        ledger == m_higgsEventLedgers.end() ||
+        queued->second.front().Event.Sequence != acMutation.Event.Sequence)
+        return;
+
+    auto& state = ledger->second;
+    state.LastSkippedMutationSequence = acMutation.Event.Sequence;
+    state.HasSkippedMutationSequence = true;
+    if (!state.HasTerminalMutationSequence ||
+        IsNewer(acMutation.Event.Sequence, state.LastTerminalMutationSequence))
+    {
+        state.LastTerminalMutationSequence = acMutation.Event.Sequence;
+        state.HasTerminalMutationSequence = true;
+    }
+    if (state.SkippedMutationCount != std::numeric_limits<std::uint32_t>::max())
+        ++state.SkippedMutationCount;
+
+    queued->second.pop_front();
+    spdlog::warn("VR HIGGS skipped unresolved mutation {} for player {} after {} attempts / {:.2f}s",
+                 acMutation.Event.Sequence, aPlayerId, acMutation.ResolutionAttempts,
+                 acMutation.ResolutionElapsed);
+}
+
 void VRActorReplicationService::RequestSemanticTombstoneRebase() noexcept
 {
     if (m_semanticTombstoneRebaseRequested)
@@ -522,6 +784,26 @@ bool VRActorReplicationService::QueueReliableGameplayWork(PendingGameplayWork&& 
         });
     if (duplicate != m_pendingGameplayWork.end())
         return true;
+
+    if (IsVrBodyPoseWork(arWork)) {
+        // Pose work has no externally visible state until it enters the
+        // bridge. Keep only the newest such pre-admission frame for a remote
+        // player; an admitted batch must remain immutable until it retires.
+        const auto replaceable = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+            [&arWork](const PendingGameplayWork& acExisting) noexcept {
+                return IsVrBodyPoseWork(acExisting) && acExisting.PlayerId == arWork.PlayerId &&
+                       !acExisting.Admitted;
+            });
+        if (replaceable != m_pendingGameplayWork.end()) {
+            if (replaceable->AwaitingResult || replaceable->Terminal)
+                return false;
+            if (!IsNewer(arWork.Acceptance.Sequence, replaceable->Acceptance.Sequence))
+                return true;
+            m_pendingGameplayWork.erase(replaceable);
+        } else if (!HasVrBodyPoseWorkCapacity()) {
+            return false;
+        }
+    }
     if (m_pendingGameplayWork.size() >= kMaximumPendingGameplayWork)
         return false;
 
@@ -539,6 +821,63 @@ catch (...)
     return false;
 }
 
+bool VRActorReplicationService::IsVrBodyPoseWork(const PendingGameplayWork& acWork) noexcept
+{
+    return acWork.TargetIsPlayer && acWork.Domain == GameplayBridge::GameplayDomain::VrBodyPose;
+}
+
+bool VRActorReplicationService::HasAdmittedVrBodyPoseWork(
+    const std::uint32_t aPlayerId, const std::uint64_t aExceptWorkId) const noexcept
+{
+    return std::any_of(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+        [aPlayerId, aExceptWorkId](const PendingGameplayWork& acWork) noexcept {
+            return IsVrBodyPoseWork(acWork) && acWork.PlayerId == aPlayerId &&
+                   acWork.WorkId != aExceptWorkId && acWork.Admitted;
+        });
+}
+
+bool VRActorReplicationService::HasVrBodyPoseWorkCapacity() const noexcept
+{
+    const auto poseWorkCount = static_cast<std::size_t>(std::count_if(
+        m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+        [](const PendingGameplayWork& acWork) noexcept { return IsVrBodyPoseWork(acWork); }));
+    return poseWorkCount < kMaximumVrBodyPosePendingWork;
+}
+
+std::size_t VRActorReplicationService::GetVrBodyPoseResultOwnerCount() const noexcept
+{
+    return static_cast<std::size_t>(std::count_if(
+        m_gameplayResultOwners.begin(), m_gameplayResultOwners.end(),
+        [](const auto& acEntry) noexcept {
+            return acEntry.second.Domain == GameplayBridge::GameplayDomain::VrBodyPose;
+        }));
+}
+
+void VRActorReplicationService::TrySubmitLatestVrBodyPoseWork(const std::uint32_t aPlayerId) noexcept
+{
+    if (aPlayerId == 0 || HasAdmittedVrBodyPoseWork(aPlayerId))
+        return;
+    const auto work = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+        [aPlayerId](const PendingGameplayWork& acWork) noexcept {
+            return IsVrBodyPoseWork(acWork) && acWork.PlayerId == aPlayerId && !acWork.Admitted &&
+                   !acWork.AwaitingResult && !acWork.Terminal;
+        });
+    if (work == m_pendingGameplayWork.end())
+        return;
+
+    if (!CanCommitAccept(work->Acceptance)) {
+        const auto refreshed = PrepareAccept(work->Acceptance.PlayerId, work->Acceptance.Domain,
+                                             work->Acceptance.Sequence, work->Acceptance.Signature,
+                                             work->Acceptance.Channel);
+        if (!refreshed.Valid) {
+            ForgetReliableGameplayWork(work->WorkId);
+            return;
+        }
+        work->Acceptance = refreshed;
+    }
+    TP_UNUSED(TrySubmitReliableGameplayWork(static_cast<std::size_t>(work - m_pendingGameplayWork.begin())));
+}
+
 bool VRActorReplicationService::TrySubmitReliableGameplayWork(const std::size_t aIndex) noexcept try
 {
     if (aIndex >= m_pendingGameplayWork.size())
@@ -546,7 +885,16 @@ bool VRActorReplicationService::TrySubmitReliableGameplayWork(const std::size_t 
     auto& work = m_pendingGameplayWork[aIndex];
     if (work.AwaitingResult || work.Terminal || (!work.Admitted && !CanCommitAccept(work.Acceptance)))
         return false;
-    if (m_gameplayResultOwners.size() > kMaximumGameplayResultOwners - work.Actions.size())
+    if (IsVrBodyPoseWork(work)) {
+        // Never replay an admitted visual batch. Its action IDs may already
+        // have reached the bridge even when a result is delayed or lost.
+        if (work.Admitted || HasAdmittedVrBodyPoseWork(work.PlayerId, work.WorkId) ||
+            work.Actions.size() > kMaximumVrBodyPoseResultOwners ||
+            GetVrBodyPoseResultOwnerCount() > kMaximumVrBodyPoseResultOwners - work.Actions.size())
+            return false;
+    }
+    if (work.Actions.size() > kMaximumGameplayResultOwners ||
+        m_gameplayResultOwners.size() > kMaximumGameplayResultOwners - work.Actions.size())
         return false;
 
     std::vector<GameplayBridge::CommandRecord> commands;
@@ -607,6 +955,11 @@ bool VRActorReplicationService::TrySubmitReliableGameplayWork(const std::size_t 
         return false;
     }
     work.Admitted = true;
+
+    // HIGGS mutations are serialized per remote player. Once the native
+    // bridge accepts this work, retain its sequence before any later result
+    // bookkeeping can fail; retransmitted packets are now safely deduped.
+    CommitHiggsMutationAdmission(work);
 
     const auto firstActionId = commands.front().Header.Identity.ActionId;
     if (firstActionId == 0 || commands.back().Header.Identity.ActionId !=
@@ -673,6 +1026,9 @@ void VRActorReplicationService::RetireReliableGameplayWork(const std::uint64_t a
         [aWorkId](const PendingGameplayWork& acWork) noexcept { return acWork.WorkId == aWorkId; });
     if (work == m_pendingGameplayWork.end())
         return;
+    const auto isVrBodyPose = IsVrBodyPoseWork(*work);
+    const auto isHiggsMutation = IsHiggsMutationWork(*work);
+    const auto playerId = work->PlayerId;
     if (work->Admitted && !RememberSemanticTombstone(work->Acceptance, work->AcceptanceCommitted)) {
         // Do not evict a retained semantic identity. The requested epoch
         // rebase clears this terminal entry as one lifecycle operation.
@@ -681,6 +1037,10 @@ void VRActorReplicationService::RetireReliableGameplayWork(const std::uint64_t a
         return;
     }
     ForgetReliableGameplayWork(aWorkId);
+    if (isVrBodyPose)
+        TrySubmitLatestVrBodyPoseWork(playerId);
+    if (isHiggsMutation)
+        TrySubmitNextHiggsMutation(playerId);
 }
 
 void VRActorReplicationService::ForgetReliableGameplayWorkForPlayer(const std::uint32_t aPlayerId) noexcept
@@ -1534,6 +1894,14 @@ std::uint64_t VRActorReplicationService::NextRemoteActorActionId() noexcept
     return actionId == 0 ? NextRemoteActorActionId() : actionId;
 }
 
+std::uint32_t VRActorReplicationService::NextAppearanceTransactionSequence() noexcept
+{
+    const auto sequence = m_nextAppearanceTransactionSequence++;
+    if (m_nextAppearanceTransactionSequence == 0)
+        m_nextAppearanceTransactionSequence = 1;
+    return sequence == 0 ? NextAppearanceTransactionSequence() : sequence;
+}
+
 bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aServerId,
                                                          const ActionEvent& acAction,
                                                          const std::uint8_t aAttempts) noexcept try
@@ -1766,6 +2134,8 @@ void VRActorReplicationService::ForgetPlayer(const std::uint32_t aPlayerId) noex
     ForgetAppearanceApplication(aPlayerId);
     ForgetReliableGameplayWorkForPlayer(aPlayerId);
     ForgetSemanticTombstones(aPlayerId);
+    m_higgsEventLedgers.erase(aPlayerId);
+    m_pendingHiggsMutations.erase(aPlayerId);
     m_appliedAppearanceSequences.erase(aPlayerId);
     m_failedAppearanceSequences.erase(aPlayerId);
     m_ledgers.erase(aPlayerId);
@@ -1816,6 +2186,8 @@ void VRActorReplicationService::ForgetServer(const std::uint32_t aServerId) noex
         ForgetAppearanceApplication(playerId);
         ForgetReliableGameplayWorkForPlayer(playerId);
         ForgetSemanticTombstones(playerId);
+        m_higgsEventLedgers.erase(playerId);
+        m_pendingHiggsMutations.erase(playerId);
         m_ledgers.erase(playerId);
     }
     m_serverPlayers.erase(aServerId);
@@ -1963,6 +2335,8 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_pendingGameplayWork.clear();
         m_gameplayResultOwners.clear();
         m_semanticTombstones.clear();
+        m_higgsEventLedgers.clear();
+        m_pendingHiggsMutations.clear();
         m_resyncAttempts.clear();
         m_ledgers.clear();
         m_lastEquipmentTransactionByServer.clear();
@@ -2009,6 +2383,8 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_pendingGameplayWork.clear();
         m_gameplayResultOwners.clear();
         m_semanticTombstones.clear();
+        m_higgsEventLedgers.clear();
+        m_pendingHiggsMutations.clear();
         m_resyncAttempts.clear();
         m_localActorActions.clear();
         m_pendingRemoteActorActions.clear();
@@ -2070,8 +2446,29 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
                 ++index;
             continue;
         }
+        if (IsVrBodyPoseWork(work) && work.Admitted) {
+            // Result handling never retries a pose batch. This guard keeps a
+            // malformed or late result from turning an admitted visual frame
+            // into a second bridge submission.
+            RetireReliableGameplayWork(workId);
+            continue;
+        }
         if (!work.Admitted && !CanCommitAccept(work.Acceptance)) {
-            if (work.Acceptance.Sequence == 0) {
+            if (IsVrBodyPoseWork(work)) {
+                // An older admitted pose may have advanced the shared ledger
+                // while this latest frame was waiting for result-owner space.
+                // Refresh only the pre-admission token; the frame itself has
+                // never entered the bridge and can safely retain its payload.
+                const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain,
+                                                     work.Acceptance.Sequence, work.Acceptance.Signature,
+                                                     work.Acceptance.Channel);
+                if (refreshed.Valid) {
+                    work.Acceptance = refreshed;
+                } else {
+                    ForgetReliableGameplayWork(workId);
+                    continue;
+                }
+            } else if (work.Acceptance.Sequence == 0) {
                 const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain, 0,
                                                      work.Acceptance.Signature, work.Acceptance.Channel);
                 if (refreshed.Valid) {
@@ -2106,6 +2503,19 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         if (index < m_pendingGameplayWork.size() && m_pendingGameplayWork[index].WorkId == workId)
             ++index;
     }
+
+    // A HIGGS mutation remains at the head of its per-player queue until the
+    // bridge accepts it. Retry only that head so a later event cannot advance
+    // the shared HIGGS domain ledger ahead of an older event.
+    std::vector<std::uint32_t> higgsPlayers;
+    higgsPlayers.reserve(m_pendingHiggsMutations.size());
+    for (const auto& [playerId, mutations] : m_pendingHiggsMutations) {
+        if (!mutations.empty())
+            higgsPlayers.push_back(playerId);
+    }
+    for (const auto playerId : higgsPlayers)
+        TrySubmitNextHiggsMutation(playerId, reliableDelta);
+
     if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0) {
         for (auto it = m_remoteActorActionOwners.begin(); it != m_remoteActorActionOwners.end();) {
             auto& tracking = it->second;
@@ -3168,10 +3578,14 @@ void VRActorReplicationService::OnVrProjectile(const NotifyVRProjectileEvent& ac
 void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) noexcept
 {
     const auto& pose = acMessage.Pose;
+    if (pose.Sequence == 0 || !IsVRPoseUpdateSafe(pose))
+        return;
+
     const auto acceptance = PrepareAccept(
         acMessage.PlayerId, GameplayBridge::GameplayDomain::VrBodyPose, pose.Sequence,
-        Signature(pose.Body.CaptureSequence, pose.Body.RootGeneration, pose.Hmd.Valid, pose.LeftHand.Valid,
-                  pose.RightHand.Valid));
+        Signature(pose.Body.FormatVersion, pose.Body.CaptureSequence, pose.Body.RootGeneration, pose.Hmd.Valid, pose.LeftHand.Valid,
+                  pose.RightHand.Valid, pose.Body.Joints.CaptureSequence, pose.Body.Joints.RootGeneration,
+                  pose.Body.Joints.NodeMask));
     if (!acceptance.Valid)
         return;
     const std::array<const VRPoseNodeData*, static_cast<std::size_t>(GameplayBridge::GameplayPoseNode::Count)> nodes{
@@ -3179,6 +3593,16 @@ void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) no
         &pose.LeftHand,
         &pose.RightHand,
         &pose.Body.Pelvis,
+        &pose.Body.Spine0,
+        &pose.Body.Spine1,
+        &pose.Body.Spine2,
+        &pose.Body.Neck,
+        &pose.Body.LeftClavicle,
+        &pose.Body.LeftUpperArm,
+        &pose.Body.LeftForearm,
+        &pose.Body.RightClavicle,
+        &pose.Body.RightUpperArm,
+        &pose.Body.RightForearm,
         &pose.Body.LeftThigh,
         &pose.Body.LeftCalf,
         &pose.Body.LeftFoot,
@@ -3189,8 +3613,8 @@ void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) no
     std::uint32_t expectedNodeMask{};
     std::vector<GameplayBridge::GameplayAction> actions;
     std::vector<GameplayBridge::GameplayActionPayload> payloads;
-    actions.reserve(nodes.size() * 4 + 1);
-    payloads.reserve(nodes.size() * 4 + 1);
+    actions.reserve(nodes.size() * 4 + 1 + GameplayBridge::kVrikJointRotationCount + 1);
+    payloads.reserve(nodes.size() * 4 + 1 + GameplayBridge::kVrikJointRotationCount + 1);
     for (std::size_t index = 0; index < nodes.size(); ++index)
     {
         const auto& node = *nodes[index];
@@ -3228,14 +3652,48 @@ void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) no
         expectedNodeMask |= 1u << static_cast<std::uint32_t>(index);
     }
 
-    if (expectedNodeMask == 0)
+    if (expectedNodeMask != 0) {
+        auto commit = Payload();
+        commit.ValueA = static_cast<std::int32_t>(pose.Sequence);
+        commit.ValueB = static_cast<std::int32_t>(pose.Body.RootGeneration);
+        commit.ActionFlags = expectedNodeMask;
+        actions.push_back(GameplayBridge::GameplayAction::VrPoseCommit);
+        payloads.push_back(commit);
+    }
+
+    // The bridge applies these exact local rotations directly to a managed
+    // remote actor's named finger nodes after the format-3 body hierarchy has
+    // been applied. No remote path invokes VRIK's local-player-only API, and
+    // format-v1/v0 body peers simply omit this independent transaction.
+    const auto& joints = pose.Body.Joints;
+    if (joints.Valid && IsVRBodyJointPoseDataSafe(joints)) {
+        for (std::uint32_t index = 0; index < GameplayBridge::kVrikJointRotationCount; ++index) {
+            if ((joints.NodeMask & (1u << index)) == 0)
+                continue;
+
+            const auto& rotation = joints.Rotations[index];
+            auto payload = Payload();
+            payload.ValueA = static_cast<std::int32_t>(joints.CaptureSequence);
+            payload.ValueB = static_cast<std::int32_t>(joints.RootGeneration);
+            payload.ScalarA = rotation.X;
+            payload.ScalarB = rotation.Y;
+            payload.ScalarC = rotation.Z;
+            payload.ScalarD = rotation.W;
+            payload.ActionFlags = GameplayBridge::kVrikJointChunkPresent |
+                                  (index << GameplayBridge::kVrikJointChunkIndexShift);
+            actions.push_back(GameplayBridge::GameplayAction::VrJointRotationChunk);
+            payloads.push_back(payload);
+        }
+
+        auto jointCommit = Payload();
+        jointCommit.ValueA = static_cast<std::int32_t>(joints.CaptureSequence);
+        jointCommit.ValueB = static_cast<std::int32_t>(joints.RootGeneration);
+        jointCommit.ActionFlags = joints.NodeMask;
+        actions.push_back(GameplayBridge::GameplayAction::VrJointRotationCommit);
+        payloads.push_back(jointCommit);
+    }
+    if (actions.empty())
         return;
-    auto commit = Payload();
-    commit.ValueA = static_cast<std::int32_t>(pose.Sequence);
-    commit.ValueB = static_cast<std::int32_t>(pose.Body.RootGeneration);
-    commit.ActionFlags = expectedNodeMask;
-    actions.push_back(GameplayBridge::GameplayAction::VrPoseCommit);
-    payloads.push_back(commit);
     TP_UNUSED(QueueReliableBatchForPlayer(acceptance, acMessage.PlayerId, GameplayBridge::GameplayDomain::VrBodyPose,
                                            std::move(actions), std::move(payloads)));
 }
@@ -3243,35 +3701,27 @@ void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) no
 void VRActorReplicationService::OnVrHiggs(const NotifyVRHiggsState& acMessage) noexcept
 {
     const auto& state = acMessage.State;
-    const auto acceptance = PrepareAccept(acMessage.PlayerId, GameplayBridge::GameplayDomain::Higgs, state.Sequence,
-                                          Signature(state.LastEvent.Sequence, state.LastEvent.EventKind,
-                                                    state.LastEvent.ObjectId.LogFormat()));
-    if (!acceptance.Valid)
+    // Revision 14 carries no producer epoch. Transport/session lifecycle
+    // cleanup resets these ledgers; a bridge-only sequence reset remains
+    // intentionally fail-closed as stale replay.
+    if (!IsRemotePlayer(m_transport, acMessage.PlayerId) ||
+        state.MutationEventCount == 0 || !state.IsMutationReplayValid())
         return;
-    if (!state.LastEventValid)
-        return;
-    GameplayBridge::GameplayAction action{};
-    switch (state.LastEvent.EventKind)
+
+    for (std::size_t index = 0; index < state.MutationEventCount; ++index)
     {
-    case VRHiggsEventSnapshot::Kind::kPulled: action = GameplayBridge::GameplayAction::HiggsPull; break;
-    case VRHiggsEventSnapshot::Kind::kGrabbed: action = GameplayBridge::GameplayAction::HiggsGrab; break;
-    case VRHiggsEventSnapshot::Kind::kDropped: action = GameplayBridge::GameplayAction::HiggsDrop; break;
-    case VRHiggsEventSnapshot::Kind::kStashed: action = GameplayBridge::GameplayAction::HiggsStash; break;
-    case VRHiggsEventSnapshot::Kind::kConsumed: action = GameplayBridge::GameplayAction::HiggsConsume; break;
-    default: return;
+        const auto& event = state.MutationEvents[index];
+        if (event.Sequence == 0 || !IsHiggsMutationEvent(event.EventKind) ||
+            !SkyrimTogether::VR::IsHiggsMutationPayloadValid(event.Mass, event.SeparatingVelocity) ||
+            !event.ObjectId ||
+            (index != 0 && !IsNewer(event.Sequence, state.MutationEvents[index - 1].Sequence)))
+            return;
     }
-    if (!IsFinite(state.LastEvent.Mass) || !IsFinite(state.LastEvent.SeparatingVelocity))
+
+    if (!EnqueueHiggsMutationTail(acMessage.PlayerId, state))
         return;
-    auto payload = Payload();
-    payload.LocalFormIdA = ToLocal(m_world, state.LastEvent.ObjectId);
-    if (payload.LocalFormIdA == 0)
-        return;
-    payload.ScalarA = state.LastEvent.Mass;
-    payload.ScalarB = state.LastEvent.SeparatingVelocity;
-    payload.ActionFlags = (state.LastEvent.HasHand ? kFlagBool0 : 0) | (state.LastEvent.IsLeft ? kFlagLeftHand : 0) |
-                          (state.TwoHanding ? kFlagBool1 : 0);
-    TP_UNUSED(QueueReliableForPlayer(acceptance, acMessage.PlayerId, GameplayBridge::GameplayDomain::Higgs,
-                                     action, payload));
+
+    TrySubmitNextHiggsMutation(acMessage.PlayerId);
 }
 
 void VRActorReplicationService::OnVrAppearance(const NotifyVRAppearance& acMessage) noexcept
@@ -3309,6 +3759,7 @@ void VRActorReplicationService::QueueVRAppearance(
 
     auto& pending = m_pendingAppearanceApplications[aTargetKey];
     pending.Appearance = acAppearance;
+    pending.TransactionSequence = NextAppearanceTransactionSequence();
     if (apAcceptance)
         pending.Acceptance = *apAcceptance;
     m_appliedAppearanceSequences.erase(aTargetKey);
@@ -3430,7 +3881,10 @@ bool VRActorReplicationService::ApplyVRAppearance(
     auto digest = AppearanceSignature(appearance);
     if (digest == 0)
         digest = 1;
-    payload.LocalFormIdA = appearance.Sequence;
+    if (pending.TransactionSequence == 0)
+        pending.TransactionSequence = NextAppearanceTransactionSequence();
+    const auto transactionSequence = pending.TransactionSequence;
+    payload.LocalFormIdA = transactionSequence;
     payload.LocalFormIdB = static_cast<std::uint32_t>(digest);
     payload.LocalFormIdC = static_cast<std::uint32_t>(digest >> 32);
     payload.LocalFormIdD = VRAppearance::kSchemaVersion;
@@ -3507,14 +3961,14 @@ bool VRActorReplicationService::ApplyVRAppearance(
         if (tint.TexturePathLength != 0 &&
             !appendText(
                 GameplayBridge::GameplayAction::SetTint,
-                (static_cast<std::uint64_t>(appearance.Sequence) << 32) | (static_cast<std::uint64_t>(index) + 2),
+                (static_cast<std::uint64_t>(transactionSequence) << 32) | (static_cast<std::uint64_t>(index) + 2),
                 static_cast<std::uint32_t>(index) + 1,
                 std::string_view{tint.TexturePath.data(), tint.TexturePathLength}))
             return false;
     }
     if (!appendText(
             GameplayBridge::GameplayAction::SetName,
-            (static_cast<std::uint64_t>(appearance.Sequence) << 32) | 1u,
+            (static_cast<std::uint64_t>(transactionSequence) << 32) | 1u,
             0,
             std::string_view{appearance.Name.data(), appearance.NameLength}))
         return false;
@@ -3531,6 +3985,8 @@ bool VRActorReplicationService::ApplyVRAppearance(
     pending.RemainingResults = 0;
     pending.ResultWaitElapsed = 0.0;
     pending.HadFailure = false;
+    pending.HadRetryableFailure = false;
+    pending.HadPermanentFailure = false;
     const auto track = [this, aTargetKey, &appearance, &pending](
                            const GameplayBridge::BridgeIdentity& acIdentity,
                            const GameplayBridge::AdapterHandle aTargetHandle,
@@ -3573,6 +4029,7 @@ bool VRActorReplicationService::ApplyVRAppearance(
         pending.HadFailure = true;
         return false;
     }
+    pending.Acceptance = {};
     pending.SubmissionFailures = 0;
     pending.RetryWaitElapsed = 0.0;
     return true;
@@ -3590,7 +4047,7 @@ void VRActorReplicationService::OnVrGrab(const NotifyVRGrabEvent& acMessage) noe
     if (!acceptance.Valid)
         return;
     const auto object = ToLocal(m_world, grab.ObjectId);
-    if (object == 0 || !IsFinite(grab.Position))
+    if (object == 0 || !SkyrimTogether::VR::IsVRGrabPositionValid(grab.Position))
         return;
     auto payload = Payload();
     payload.LocalFormIdA = object;
@@ -3652,6 +4109,8 @@ void VRActorReplicationService::OnDisconnected(const DisconnectedEvent& acEvent)
     m_pendingGameplayWork.clear();
     m_gameplayResultOwners.clear();
     m_semanticTombstones.clear();
+    m_higgsEventLedgers.clear();
+    m_pendingHiggsMutations.clear();
     m_localActorActions.clear();
     m_pendingRemoteActorActions.clear();
     m_remoteActorActionOwners.clear();
@@ -3723,6 +4182,13 @@ void VRActorReplicationService::OnGameplayResult(
                 return acEntry.second.WorkId == workId;
             });
             work->AwaitingResult = false;
+            if (IsVrBodyPoseWork(*work)) {
+                // Visual pose batches are intentionally non-replayable once
+                // admitted. A later frame is a better recovery than replaying
+                // stale skeleton state with new bridge action IDs.
+                RetireReliableGameplayWork(owner.WorkId);
+                return;
+            }
             work->ResultWaitElapsed = 0.0;
             work->AdmissionWaitElapsed = 0.0;
             ++work->Attempts;
@@ -3838,9 +4304,13 @@ void VRActorReplicationService::OnGameplayResult(
             expectedResult && status == GameplayBridge::CommandStatus::Degraded &&
             domain == GameplayBridge::GameplayDomain::Appearance &&
             action == GameplayBridge::GameplayAction::CommitAppearance;
-        if (!expectedResult || !GameplayBridge::IsSuccessfulCommandResult(status, domain, action))
+        if (!expectedResult || !GameplayBridge::IsSuccessfulCommandResult(status, domain, action)) {
             pending.HadFailure = true;
-        else if (degradedAppearanceCommit)
+            if (expectedResult && IsRetryableAppearanceCommitFailure(status, domain, action))
+                pending.HadRetryableFailure = true;
+            else
+                pending.HadPermanentFailure = true;
+        } else if (degradedAppearanceCommit)
             spdlog::warn("VR appearance sequence {} applied with uncomposed face tint masks", owner.Sequence);
         if (owner.RemainingResults > 0)
             --owner.RemainingResults;
@@ -3862,8 +4332,22 @@ void VRActorReplicationService::OnGameplayResult(
             m_pendingAppearanceApplications.erase(pendingIt);
             return;
         }
-        // A post-admission appearance result is not replayed. Even a bridge
-        // failure can arrive after native mutation in this staged batch.
+        if (pending.HadRetryableFailure && !pending.HadPermanentFailure &&
+            pending.ResultFailures < kMaximumAppearanceResultFailures) {
+            ++pending.ResultFailures;
+            pending.TransactionSequence = NextAppearanceTransactionSequence();
+            pending.RemainingResults = 0;
+            pending.ResultWaitElapsed = 0.0;
+            pending.RetryWaitElapsed = 0.0;
+            pending.HadFailure = false;
+            pending.HadRetryableFailure = false;
+            pending.HadPermanentFailure = false;
+            spdlog::warn(
+                "VR appearance sequence {} will retry as bridge transaction {} after a transient commit failure",
+                ownerSequence, pending.TransactionSequence);
+            return;
+        }
+        // Permanent failures and ambiguous result timeouts are not replayed.
         m_failedAppearanceSequences[ownerTargetKey] = ownerSequence;
         m_pendingAppearanceApplications.erase(pendingIt);
         return;

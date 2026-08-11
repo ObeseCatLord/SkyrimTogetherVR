@@ -1,7 +1,6 @@
 #include <windows.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cwctype>
@@ -10,7 +9,6 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
-#include <thread>
 
 #include <vr_common/VRHandoffPath.h>
 
@@ -21,6 +19,11 @@ static constexpr std::uint32_t kPluginInfoVersion = 1;
 static constexpr std::uint32_t kInterfaceMessaging = 5;
 static constexpr std::uint32_t kSkseMessagePostPostLoad = 1;
 static constexpr std::uint32_t kPlanckMessageGetInterface = 0x92F38745;
+static constexpr std::uint32_t kPlanckInterfaceRevision = 1;
+static constexpr std::uint64_t kHandoffWriteIntervalMs = 250;
+// PLANCK 0.8.0 reports V00.08.00.00 as 80000. Interface revision, rather than
+// this diagnostic build number, is the public compatibility contract.
+static constexpr std::uint32_t kPlanck0080BuildNumber = 80000;
 
 struct PluginInfo
 {
@@ -60,6 +63,7 @@ struct SKSEMessagingInterface
 struct Actor;
 struct TESTopic;
 struct TESHitEvent;
+struct NiAVObject;
 
 struct NiPoint3
 {
@@ -68,14 +72,33 @@ struct NiPoint3
     float z;
 };
 
+template <class T>
+struct NiPointerBoundary
+{
+    T* data = nullptr;
+};
+
+struct BSFixedStringBoundary
+{
+    const char* data = nullptr;
+};
+
+// This is intentionally a layout-only mirror. GetLastHitData is not polled:
+// PLANCK supplies no hit callback, and its current-event pointer is valid only
+// during the engine's hit-event dispatch. Polling either from this bridge would
+// create an unauthoritative second combat path.
 struct PlanckHitDataBoundary
 {
     NiPoint3 position;
     NiPoint3 velocity;
-    void* node;
-    const char* nodeName;
+    NiPointerBoundary<NiAVObject> node;
+    BSFixedStringBoundary nodeName;
     bool isLeft;
 };
+
+static_assert(sizeof(NiPointerBoundary<NiAVObject>) == sizeof(void*));
+static_assert(sizeof(BSFixedStringBoundary) == sizeof(void*));
+static_assert(sizeof(PlanckHitDataBoundary) == 48);
 
 namespace PlanckPluginAPI
 {
@@ -107,13 +130,16 @@ struct PlanckMessage
 };
 
 PluginHandle g_pluginHandle = kPluginHandleInvalid;
-SKSEMessagingInterface* g_messaging = nullptr;
+std::atomic<SKSEMessagingInterface*> g_messaging{nullptr};
 std::atomic<PlanckPluginAPI::IPlanckInterface001*> g_planck{nullptr};
-std::atomic_bool g_running{false};
+std::atomic_bool g_handoffActive{false};
 std::atomic_bool g_requestAttempted{false};
+std::atomic_uint32_t g_requestCount{0};
 std::atomic_uint32_t g_planckBuildNumber{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
-std::thread g_writerThread;
+std::atomic_uint32_t g_handoffSequence{0};
+std::atomic_uint64_t g_nextHandoffWriteTick{0};
+std::atomic_flag g_handoffWriteInProgress = ATOMIC_FLAG_INIT;
 
 std::filesystem::path GetHandoffPath()
 {
@@ -169,93 +195,131 @@ bool IsPlanckInstalled()
     return installed;
 }
 
-void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded)
+void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded) noexcept
 {
-    const auto path = GetHandoffPath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-
-    const auto tempPath = path.string() + ".tmp";
-    std::ofstream file(tempPath, std::ios::trunc);
-    if (!file)
-        return;
-
-    auto* const pPlanck = g_planck.load(std::memory_order_acquire);
-
-    file << "bridge.loaded=" << (aLoaded ? "1" : "0") << "\n";
-    file << "bridge.sequence=" << aSequence << "\n";
-    file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
-    file << "planck.detected=" << (IsPlanckInstalled() || pPlanck ? "1" : "0") << "\n";
-    file << "planck.interfaceRequestAttempted=" << (g_requestAttempted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
-    file << "planck.interfaceAvailable=" << (pPlanck ? "1" : "0") << "\n";
-    file << "planck.buildNumber=" << g_planckBuildNumber.load(std::memory_order_acquire) << "\n";
-    file << "planck.currentHitEventAddress=0\n";
-    file << "planck.currentHitEventAvailable=0\n";
-    file << "planck.currentHitEventObservationOnly=1\n";
-    file << "planck.lastHitDataAvailable=0\n";
-    file << "planck.lastHitDataProbeEnabled=0\n";
-    file << "planck.lastHitDataReason=not_polled_nontrivial_return_boundary\n";
-    file << "planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi\n";
-    file << "planck.policy=observation_only\n";
-
-    file.close();
-    std::filesystem::rename(tempPath, path, ec);
-    if (ec)
+    try
     {
-        std::filesystem::remove(path, ec);
+        const auto path = GetHandoffPath();
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+
+        auto tempPath = path;
+        tempPath += L".tmp";
+        std::ofstream file(tempPath, std::ios::trunc);
+        if (!file)
+            return;
+
+        auto* const pPlanck = g_planck.load(std::memory_order_acquire);
+
+        file << "bridge.loaded=" << (aLoaded ? "1" : "0") << "\n";
+        file << "bridge.sequence=" << aSequence << "\n";
+        file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
+        file << "planck.detected=" << (IsPlanckInstalled() || pPlanck ? "1" : "0") << "\n";
+        file << "planck.interfaceRequestAttempted=" << (g_requestAttempted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
+        file << "planck.interfaceRequestCount=" << g_requestCount.load(std::memory_order_acquire) << "\n";
+        file << "planck.interfaceAvailable=" << (pPlanck ? "1" : "0") << "\n";
+        file << "planck.interfaceRevision=" << kPlanckInterfaceRevision << "\n";
+        file << "planck.buildNumber=" << g_planckBuildNumber.load(std::memory_order_acquire) << "\n";
+        file << "planck.buildNumberMatches0080="
+             << (g_planckBuildNumber.load(std::memory_order_acquire) == kPlanck0080BuildNumber ? "1" : "0") << "\n";
+        file << "planck.currentHitEventAddress=0\n";
+        file << "planck.currentHitEventAvailable=0\n";
+        file << "planck.currentHitEventObservationOnly=1\n";
+        file << "planck.lastHitDataAvailable=0\n";
+        file << "planck.lastHitDataProbeEnabled=0\n";
+        file << "planck.lastHitDataReason=no_stable_hit_callback_or_canonical_action_producer\n";
+        file << "planck.lastHitDataBoundary=not_invoked_no_authoritative_transport\n";
+        file << "planck.observationBufferCapacity=0\n";
+        file << "planck.damageAuthority=canonical_engine_hit_events\n";
+        file << "planck.remotePhysicsReplay=unsupported_public_api\n";
+        file << "planck.policy=canonical_combat_observation_only\n";
+
+        file.close();
         std::filesystem::rename(tempPath, path, ec);
+        if (ec)
+        {
+            std::filesystem::remove(path, ec);
+            std::filesystem::rename(tempPath, path, ec);
+        }
     }
-}
-
-void WriterMain()
-{
-    std::uint32_t sequence = 0;
-    while (g_running)
+    catch (...)
     {
-        WriteBridgeFile(++sequence, true);
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // Handoff telemetry must never escape an SKSE callback.
+    }
+}
+
+void PublishHandoff(bool aForce) noexcept
+{
+    if (!g_handoffActive.load(std::memory_order_acquire))
+        return;
+
+    const auto now = static_cast<std::uint64_t>(GetTickCount64());
+    if (!aForce)
+    {
+        auto next = g_nextHandoffWriteTick.load(std::memory_order_acquire);
+        while (now >= next)
+        {
+            if (g_nextHandoffWriteTick.compare_exchange_weak(
+                    next,
+                    now + kHandoffWriteIntervalMs,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                break;
+        }
+
+        if (now < next)
+            return;
+    }
+    else
+    {
+        g_nextHandoffWriteTick.store(now + kHandoffWriteIntervalMs, std::memory_order_release);
     }
 
-    WriteBridgeFile(++sequence, false);
-}
-
-void StartWriter()
-{
-    if (g_running.exchange(true))
+    if (g_handoffWriteInProgress.test_and_set(std::memory_order_acquire))
         return;
 
-    g_bridgeEpoch.store(static_cast<std::uint64_t>(GetTickCount64()), std::memory_order_release);
-    g_writerThread = std::thread(WriterMain);
+    WriteBridgeFile(g_handoffSequence.fetch_add(1, std::memory_order_acq_rel) + 1, true);
+    g_handoffWriteInProgress.clear(std::memory_order_release);
 }
 
-void StopWriter()
+void StartHandoff() noexcept
 {
-    if (!g_running.exchange(false))
-        return;
+    bool expected = false;
+    if (g_handoffActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        g_bridgeEpoch.store(static_cast<std::uint64_t>(GetTickCount64()), std::memory_order_release);
 
-    if (g_writerThread.joinable())
-        g_writerThread.join();
+    PublishHandoff(true);
 }
 
 bool RequestPlanckInterface()
 {
-    g_requestAttempted.store(true, std::memory_order_release);
+    if (g_planck.load(std::memory_order_acquire))
+        return true;
 
-    if (!g_messaging || g_pluginHandle == kPluginHandleInvalid)
+    g_requestAttempted.store(true, std::memory_order_release);
+    g_requestCount.fetch_add(1, std::memory_order_acq_rel);
+
+    auto* const pMessaging = g_messaging.load(std::memory_order_acquire);
+    if (!pMessaging || g_pluginHandle == kPluginHandleInvalid)
         return false;
 
     PlanckMessage message{};
-    if (!g_messaging->Dispatch(g_pluginHandle, kPlanckMessageGetInterface, &message, sizeof(PlanckMessage*), "PLANCK"))
+    if (!pMessaging->Dispatch(g_pluginHandle, kPlanckMessageGetInterface, &message, sizeof(PlanckMessage*), "PLANCK"))
         return false;
 
     if (!message.GetApiFunction)
         return false;
 
-    auto* const pPlanck = static_cast<PlanckPluginAPI::IPlanckInterface001*>(message.GetApiFunction(1));
+    auto* const pPlanck = static_cast<PlanckPluginAPI::IPlanckInterface001*>(message.GetApiFunction(kPlanckInterfaceRevision));
+    if (!pPlanck)
+        return false;
+
+    // Revision 1 defines this first virtual slot. The build number is recorded
+    // for diagnostics only; later PLANCK builds retaining revision 1 are valid.
+    const auto buildNumber = pPlanck->GetBuildNumber();
+    g_planckBuildNumber.store(buildNumber, std::memory_order_release);
     g_planck.store(pPlanck, std::memory_order_release);
-    if (pPlanck)
-        g_planckBuildNumber.store(pPlanck->GetBuildNumber(), std::memory_order_release);
-    return pPlanck != nullptr;
+    return true;
 }
 
 void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
@@ -263,22 +327,23 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
     if (!apMessage)
         return;
 
+    // PLANCK's public API permits interface acquisition only after this
+    // broadcast. The initial write from SKSEPlugin_Load remains diagnostics
+    // only and never dereferences PLANCK.
     if (apMessage->type == kSkseMessagePostPostLoad)
     {
         RequestPlanckInterface();
-        StartWriter();
+        StartHandoff();
     }
 }
+}
 
-struct ShutdownJoiner
+// HIGGS invokes the VRIK bridge on its post-VRIK game-thread callback. That is
+// the only periodic callback available to this bridge family; it replaces the
+// old background writer without risking code execution after DLL unload.
+extern "C" __declspec(dllexport) void __cdecl SkyrimTogetherVR_PumpPlanckHandoff() noexcept
 {
-    ~ShutdownJoiner()
-    {
-        StopWriter();
-    }
-};
-
-ShutdownJoiner g_shutdownJoiner;
+    PublishHandoff(false);
 }
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSkse, PluginInfo* apInfo)
@@ -290,8 +355,11 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSk
     apInfo->name = "SkyrimTogetherVRPlanckBridge";
     apInfo->version = 1;
 
-    g_pluginHandle = apSkse->GetPluginHandle ? apSkse->GetPluginHandle() : kPluginHandleInvalid;
-    return true;
+    if (!apSkse->GetPluginHandle)
+        return false;
+
+    g_pluginHandle = apSkse->GetPluginHandle();
+    return g_pluginHandle != kPluginHandleInvalid;
 }
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSkse)
@@ -299,11 +367,14 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
     if (!apSkse || !apSkse->QueryInterface)
         return false;
 
-    g_messaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
-    if (!g_messaging || !g_messaging->RegisterListener)
+    auto* const pMessaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
+    if (g_pluginHandle == kPluginHandleInvalid || !pMessaging || !pMessaging->RegisterListener)
         return false;
 
-    g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
-    StartWriter();
+    if (!pMessaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage)))
+        return false;
+
+    g_messaging.store(pMessaging, std::memory_order_release);
+    StartHandoff();
     return true;
 }

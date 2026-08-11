@@ -2,39 +2,47 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
-## 2026-08-02 Current Parity-Safety Stage
+## 2026-08-11 Current Literal-Parity Source Stage
 
 The only built evidence is the clean WinBoat audited baseline `82c7999a`.
-The current source tree contains unbuilt parity-safety changes and is not yet a
-package, deployment, or runtime candidate. Do not infer current build or
-runtime proof from the historical sections below.
+The current source tree contains the unbuilt literal desktop-parity and VR
+embodiment tranche. It is not yet a package, deployment, or runtime candidate.
+Do not infer current build or runtime proof from the historical sections below.
 
-The mapping ABI changed from 19 to 20 for `CommandStatus::Degraded`.
-Tint-bearing appearance commits now validate and apply only the proven race,
-sex, weight, name, headparts, morphs, hair, face texture, and body skin-tone
-fields. Unsafe FaceGen texture-mask composition was removed. That safe subset
-returns `Degraded`, which is accepted only for `Appearance` `CommitAppearance`;
-all other degraded commands remain rejected.
+Mapping ABI 22 and exact-match gameplay protocol revision 14 carry the current
+assignment, gameplay, body-format-3, sparse finger-joint, and bounded HIGGS
+mutation-batch contracts.
+Tint-bearing appearance now includes the Skyrim VR FaceGen compositor pinned to
+official SKSEVR 2.0.12 targets. Exact ActorMediator actions are enabled only
+after their complete native target set passes runtime/prologue/layout checks.
+Respawn now uses exact decrypted Skyrim VR implementations for
+`DispelAllSpells` at RVA `0x0557070`, `GetCOCPlacementInfo` at RVA `0x027A4C0`,
+native movement, and native fade while preserving desktop ordering.
 
 For the first mixed VR final-equipment transaction, the legacy baseline is
 captured before the owner inventory mutation. It is capability-gated and scoped
 to the connection session and entity generation. Pure legacy-equipment diff
-tests exist but have not run. Exact `ActorMediator` actions are instead wholly
-fail-closed: there is no `PerformAction` detour, capture, capability, or remote
-replay because public VR mappings for the upstream `ForceAction` helpers are
-incompatible code/data. The generic animation graph/event fallback remains.
+tests exist but have not run. Protocol-14 embodiment captures and applies
+HMD/hands, pelvis/legs, spine, neck, clavicles, arms, and 30 named finger joints
+after VRIK/HIGGS, including SkyrimVR-FBT spine-space conversion. HIGGS mutations
+use a bounded ordered replay window with at-least-once transport; transactional
+server authority classifies accepted and skipped edges after fanout, while the
+receiver atomically reserves unseen tails and deduplicates after bridge admission.
+HIGGS, VRIK, and PLANCK handoff publishing owns no unload-unsafe background
+writer.
 
-Respawn fade stays within safe Papyrus-equivalent/admission behavior; no native
-VR fade call is guessed. Vivox, remote VRIK finger/calibration application, and
-direct PLANCK physical replay remain blocked by absent, proprietary, or
-insufficient public APIs.
+The tracked desktop source is represented natively. VRIK calibration and direct
+remote PLANCK physics are explicit public-API limitations rather than desktop
+gameplay omissions. Vivox is absent and disabled in both reviewable branches.
 
-The mandatory order is: candidate WinBoat build, commit/push only if it passes,
-clean `--skip-handoff` build, matching local/server deployment, Monado
-connection proof, then the two-client matrix. No handoff update is authorized
-in this stage. See `parity-safety-stage-20260802.md` and the parity checklist.
+The split Sol xhigh source review is complete and every verified source finding
+has been dispositioned. The remaining mandatory order is: candidate WinBoat
+build, commit/push only if it passes, clean `--skip-handoff` build, matching
+local/server deployment, Monado connection proof, then the two-client matrix.
+No handoff update is authorized in this stage. See
+`parity-safety-stage-20260802.md` and the parity checklist.
 
-## 2026-07-16 Full Gameplay Source Tranche
+## Historical 2026-07-16 Full Gameplay Source Tranche
 
 The active gameplay target is no longer connection-only or observation-only.
 The mapped client translates original Skyrim Together protocol messages while
@@ -72,17 +80,16 @@ successful Linux/Monado connection smoke test. The client finalized a new
 character, authenticated as player 1, and synchronized the Realm of Lorkhan
 interior cell. This is connection proof, not two-client gameplay parity.
 
-The run also exposed two shutdown defects: CommonLib gameplay-session
+At that revision, the run exposed two shutdown defects: CommonLib gameplay-session
 retirement warned during disconnect, and the outer Proton launcher remained
 alive after Skyrim's WinMain and Skyrim Together teardown completed. Multiple
 gameplay event subscriptions also failed closed as unvalidated
 `BSTEventSource::AddEventSink` requests, so affected producer lanes must be
-validated before their runtime boxes can pass. The current deliberate source
-limitations are unsafe FaceGen texture-mask composition, native respawn fade,
-remote VRIK finger/calibration application, direct PLANCK physical
-grab/ragdoll replay, exact `ActorMediator` action capture/replay, and Vivox
-voice. Exact actions are wholly fail-closed because the public VR mappings for
-upstream `ForceAction` helpers are incompatible. The upstream
+validated before their runtime boxes can pass. This historical revision still
+omitted FaceGen texture-mask composition, native respawn fade, remote finger
+application, and exact ActorMediator replay; the current stage above supersedes
+those source limitations. Direct PLANCK physical grab/ragdoll replay remains a
+public-API boundary. The upstream
 scripted-object-animation producer is also compiled out on the original branch;
 VR supports incoming replay but does not install a guessed hook against its
 Address Library registration rows. See
@@ -143,7 +150,14 @@ supersedes them.
 ## Implemented Foundations
 
 - Added a VR-only xmake target graph with `SkyrimTogetherVRClient`, `SkyrimTogetherVRVrikBridge`, `SkyrimTogetherVRHiggsBridge`, `SkyrimTogetherVRPlanckBridge`, and `SkyrimVRImmersiveLauncher`; the normal Skyrim SE `SkyrimTogetherClient` and `SkyrimImmersiveLauncher` targets are intentionally absent.
-- Added explicit experimental VRIK/HIGGS remote-avatar validation targets `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync`, which build `SkyrimTogetherVRAvatarSync.exe` in staged connection-only mode. The current targets use `VRAvatarService` plus the CommonLib gameplay bridge for canonical actor lifecycle, retained-identity root/spatial movement, and named humanoid animation graph snapshots; HMD/hand/VRIK data remains observation-only.
+- Added explicit VRIK/HIGGS remote-avatar validation targets
+  `SkyrimTogetherVRClientAvatarSync` and
+  `SkyrimVRImmersiveLauncherAvatarSync`, which build
+  `SkyrimTogetherVRAvatarSync.exe` in staged connection-only mode. The gameplay
+  target uses `VRAvatarService` plus the CommonLib gameplay bridge for canonical
+  actor lifecycle, retained-identity root/spatial movement, named humanoid graph
+  snapshots, and validated physical HMD/hand/body/finger application. The
+  avatar-sync package remains a narrower diagnostics gate.
 - Added `BuildSkyrimTogetherVR-Windows.ps1` plus `BuildSkyrimTogetherVR-Windows.bat` so the Windows/MSVC build can be run from a machine where the client/launcher targets are visible. `SetupSkyrimTogetherVRBuildEnv-Windows.bat` is the shared Windows environment bootstrap for the default, avatar-sync, and DLL-only build wrappers; it keeps x64 Native Tools Prompt runs working and tries `vswhere.exe` plus `VsDevCmd.bat -arch=x64 -host_arch=x64` when `cl.exe` is not already visible. The shared PowerShell script supports `-PreflightOnly` for a no-build Windows target/package-helper sanity check before compiling, writes the latest package to `artifacts\SkyrimTogetherVR\releasedbg`, and copies per-flavor package snapshots to `artifacts\SkyrimTogetherVR\packages\default`, `artifacts\SkyrimTogetherVR\packages\avatar-sync`, and `artifacts\SkyrimTogetherVR\packages\dll-only`. The legacy root `Build.bat` is now a Skyrim VR-only compatibility wrapper that delegates to `BuildAndAuditSkyrimTogetherVR-Windows.bat` instead of the old generic xmake/distrib path. Added `BuildSkyrimTogetherVR-DLL-Windows.bat`, the plural compatibility alias `BuildSkyrimTogetherVR-DLLs-Windows.bat`, and the wording-compatible `BuildSkyrimTogetherVR-ClientDLL-Windows.bat` alias as DLL-focused wrappers for `SkyrimTogetherVRVrikBridge.dll`, `SkyrimTogetherVRHiggsBridge.dll`, `SkyrimTogetherVRPlanckBridge.dll`, and `EarlyLoad.dll`; the main VR client remains launcher-linked as `SkyrimTogetherVR.exe`, not `SkyrimTogetherVR.dll`. Added `BuildAndAuditSkyrimTogetherVR-DLL-Windows.bat` plus `Tools\SkyrimVR\audit_built_package.py --dll-only` so the partial DLL package can be audited without requiring launcher artifacts. Added `CollectSkyrimTogetherVRBuildEvidence-Windows.bat` plus `Tools\SkyrimVR\collect_build_evidence.py` so Windows build/package evidence can be zipped after a successful or failed build attempt without compiling again. Added `AuditSkyrimTogetherVRBuildEvidence-Windows.bat` plus `Tools\SkyrimVR\audit_build_evidence_zip.py` so a collected Windows build evidence archive can be audited offline for package-audit failures, manifest mode mismatches, missing runtime artifact listings, and command failures. Added `BuildAuditCollectSkyrimTogetherVR-Windows.bat` as a one-command Windows handoff wrapper that builds/audits the selected default, avatar-sync, or DLL-only package, always collects build evidence, audits the newest evidence zip, and still exits with the original build/package failure code when the build step fails. Added `VerifySkyrimTogetherVRWindowsPackages-Windows.bat` as a no-build/no-install/no-launch verifier for the default/avatar-sync/DLL-only package snapshots after a multi-mode handoff build. Added `BuildSkyrimTogetherVR-AvatarSync-Windows.bat` as a one-command wrapper for the explicit two-client VRIK/HIGGS remote-avatar validation package. Added `BuildAndAuditSkyrimTogetherVR-Windows.bat` so a Windows/MSVC machine can build the default or avatar-sync package and immediately run the no-launch built-package audit before install. Added `AuditSkyrimTogetherVRReadiness-Windows.bat` as the no-build/no-install/no-launch Windows wrapper for `Tools\SkyrimVR\audit_vr_readiness.py`.
 - Added `Docs\SkyrimVR\final-handoff-checklist.md` as the concise Windows/MSVC end-to-end checklist covering preflight, default/avatar-sync/DLL-only build evidence, built-package readiness, install dry runs, install, default runtime evidence, avatar-sync runtime evidence, full gameplay relay evidence, and final exit criteria.
 - Added `Tools\SkyrimVR\audit_final_handoff.py` (`Tools/SkyrimVR/audit_final_handoff.py` in source-tree commands) and `AuditSkyrimTogetherVRFinalHandoff-Windows.bat` so the collected default/avatar-sync/DLL-only build evidence and default/avatar-sync/gameplay runtime evidence can be audited together without launching Skyrim. The final audit auto-discovers the newest matching build/runtime evidence archives from the standard folders, with `--build-evidence-dir` and `--runtime-evidence-dir` available for moved archives. Its self-test now also creates a weakened build evidence zip missing `source\SetupSkyrimTogetherVRBuildEnv-Windows.bat` and requires that final handoff audit to fail. Explicit runtime zip paths are role-checked by manifest flags, so an avatar-sync runtime zip cannot pass as default runtime evidence and a full gameplay-relay zip cannot pass as the narrower avatar-sync runtime evidence.
@@ -170,13 +184,17 @@ supersedes them.
   - requests the VRIK API through the documented `0xF2AFAEE6` SKSE messaging request to receiver `VRIK`
   - writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.vrik` with VRIK detection, API availability, bridge epoch, cached finger curl, and cached camera/smoothing offset fields
   - includes bridge loaded, sequence, and epoch markers; `VRPoseService` reads the bridge at the 20 Hz pose cadence, accepts sequence resets only when the epoch changes, and otherwise falls back to installed-detected/API-unavailable state
-  - the VRIK bridge writer serializes cached snapshot data instead of polling VRIK API getters from its writer thread; live per-frame VRIK finger/camera snapshots still need a validated main-thread/update-phase callback before they are treated as real-time data
+  - the VRIK bridge captures API-backed finger/camera data from the validated
+    post-VRIK/post-HIGGS callback and rate-limits cached handoff writes on that
+    same game thread; it owns no background writer or unload-time join
   - is packaged by the Windows build script under `Data\SKSE\Plugins`
 - Added a separate `SkyrimTogetherVRHiggsBridge` SKSEVR plugin target:
   - exports `SKSEPlugin_Query`/`SKSEPlugin_Load`
   - requests the HIGGS API through the documented `0xF9279A57` SKSE messaging request to receiver `HIGGS` after SKSE `PostLoad` or `PostPostLoad`
   - registers HIGGS pulled, grabbed, dropped, stashed, consumed, collision, and two-handing callbacks
-  - registers a post-VRIK/post-HIGGS update callback to snapshot HIGGS getters on the HIGGS-owned update phase; the bridge writer thread serializes only cached snapshot data and recent event fields
+  - registers a post-VRIK/post-HIGGS update callback to snapshot HIGGS getters
+    on the HIGGS-owned update phase and rate-limit handoff publication on that
+    same game thread; no writer thread or unload-time join remains
   - writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgs` with HIGGS detection, API availability, callback registration, snapshot availability/sequence, hand state, finger values, grab transform, and recent event fields
   - includes bridge loaded, sequence, and epoch markers; `VRHiggsService` reads the bridge at the bridge cadence, tolerates bridge reload sequence resets by epoch, and marks `SkyrimTogetherVR.higgsnet` ready after current bridge data has parsed
   - is packaged by the Windows build script under `Data\SKSE\Plugins`
@@ -184,9 +202,21 @@ supersedes them.
   - exports `SKSEPlugin_Query`/`SKSEPlugin_Load`
   - requests the PLANCK API through the documented `0x92F38745` SKSE messaging request to receiver `PLANCK` after SKSE `PostPostLoad`
   - writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.planck` with bridge loaded/sequence/epoch markers, PLANCK detection, interface request/availability, cached build number, disabled current-hit polling, disabled last-hit-data probe state, and observation-only policy fields
+  - refreshes the diagnostic handoff through the VRIK/HIGGS game-thread pump,
+    with no background writer or unload-time join
   - leaves `GetLastHitData()` disabled with `planck.lastHitDataProbeEnabled=0`, `planck.lastHitDataReason=not_polled_nontrivial_return_boundary`, and `planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi` until the by-value `PlanckHitData` ABI is validated against SKSEVR/CommonLib headers
   - does not call PLANCK mutators, actor ignore APIs, aggression APIs, ragdoll-collision ignore APIs, setting setters, HIGGS mutators, or hit replay logic
   - is packaged by the Windows build script under `Data\SKSE\Plugins`
+- Added protocol-13/body-format-3 remote embodiment:
+  - captures pelvis/legs, spine0/1/2, neck, clavicles, upper arms, forearms,
+    HMD/hands, and sparse rotations for 30 named finger joints after VRIK/HIGGS
+  - converts SkyrimVR-FBT world-only spine corrections into effective
+    parent-local rotations
+  - applies remote body nodes parent-first, propagates the skeleton, then derives
+    head/hand locals from their source-world targets
+  - keeps format-1/2 decode validation, exact protocol matching, managed actor
+    identity, root-generation checks, bounded latest-frame delivery, and
+    ragdoll suppression
 - Added a staged HIGGS observation relay:
   - enables `VRHiggsService` in observation-only mode through `TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE=1`
   - reads `Data/SkyrimTogetherReborn/SkyrimTogetherVR.higgs` without requesting the HIGGS API from the main client
@@ -755,7 +785,12 @@ This tranche remains intentionally unbuilt. Address artifact regeneration,
 static/source checks, commit/push, the single WinBoat gameplay build, package
 audit, handoff refresh, and exact client/server deployment are the next stage.
 
-## Remaining High-Risk Work
+## Historical July Runtime Checklist
+
+This list records the validation backlog at the July source tranche. The
+maintained current gates and their status are in
+`original-gameplay-parity-checklist.md`; entries below are not current source
+omissions when that checklist marks their source path complete.
 
 - Run `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all` from Windows with Visual Studio/MSVC available and verify the default, avatar-sync, gameplay, and DLL-only artifacts compile plus their package audits and build-evidence audits pass, then run `VerifySkyrimTogetherVRWindowsPackages-Windows.bat --skyrim-vr "C:\Path\To\SkyrimVR"` before copying any package into Skyrim VR.
 - Run the explicit VRIK/HIGGS remote-avatar validation package from `artifacts\SkyrimTogetherVR\packages\avatar-sync`, then collect strict avatar-sync runtime evidence with `CollectSkyrimTogetherVRAvatarSyncEvidence-Windows.bat --require-vr-pose-context`.

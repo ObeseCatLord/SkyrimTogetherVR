@@ -13,7 +13,11 @@ constexpr float kMinPoseScale = 0.01f;
 constexpr float kMaxPoseScale = 100.0f;
 constexpr float kMaxVrikOffsetComponent = 1000.0f;
 constexpr float kMaxFingerCurl = 1.0f;
-constexpr uint32_t kBodyPoseFormatVersionCurrent = 1;
+constexpr uint32_t kBodyPoseFormatVersionLegacy = 1;
+constexpr uint32_t kBodyPoseFormatVersionJoints = 2;
+constexpr uint32_t kBodyPoseFormatVersionCurrent = 3;
+constexpr uint32_t kBodyJointPoseFormatVersionCurrent = 1;
+constexpr uint32_t kBodyJointPoseKnownMask = (1u << kVRBodyJointRotationCount) - 1u;
 constexpr float kMaxBodyPelvisPositionComponent = 500.0f;
 constexpr float kMaxBodyLimbPositionComponent = 0.05f;
 constexpr float kBodyPoseMinScale = 0.95f;
@@ -101,11 +105,59 @@ bool IsBodyNodeSafe(const VRPoseNodeData& acPose, float aMaxPositionComponent) n
     return Dot(Cross(acPose.AxisX, acPose.AxisY), acPose.AxisZ) >= kBodyPoseMinDeterminant;
 }
 
+bool IsBodyJointRotationSafe(const VRBodyJointRotationData& acRotation) noexcept
+{
+    if (!std::isfinite(acRotation.X) || !std::isfinite(acRotation.Y) || !std::isfinite(acRotation.Z) ||
+        !std::isfinite(acRotation.W))
+        return false;
+    const auto lengthSquared = acRotation.X * acRotation.X + acRotation.Y * acRotation.Y +
+                               acRotation.Z * acRotation.Z + acRotation.W * acRotation.W;
+    if (lengthSquared < 0.95f || lengthSquared > 1.05f)
+        return false;
+
+    const auto xx = acRotation.X * acRotation.X;
+    const auto yy = acRotation.Y * acRotation.Y;
+    const auto zz = acRotation.Z * acRotation.Z;
+    const auto xy = acRotation.X * acRotation.Y;
+    const auto xz = acRotation.X * acRotation.Z;
+    const auto yz = acRotation.Y * acRotation.Z;
+    const auto xw = acRotation.X * acRotation.W;
+    const auto yw = acRotation.Y * acRotation.W;
+    const auto zw = acRotation.Z * acRotation.W;
+    const VRPoseNodeData probe{
+        true,
+        {},
+        {1.0f - 2.0f * (yy + zz), 2.0f * (xy - zw), 2.0f * (xz + yw)},
+        {2.0f * (xy + zw), 1.0f - 2.0f * (xx + zz), 2.0f * (yz - xw)},
+        {2.0f * (xz - yw), 2.0f * (yz + xw), 1.0f - 2.0f * (xx + yy)},
+        1.0f,
+    };
+    return IsBodyNodeSafe(probe, 0.0f);
+}
+
 bool IsBodyPoseZeroState(const VRBodyPoseData& acBody) noexcept
 {
     return !acBody.Valid && acBody.CaptureSequence == 0 && acBody.RootGeneration == 0 && !acBody.Pelvis.Valid &&
+           !acBody.Spine0.Valid && !acBody.Spine1.Valid && !acBody.Spine2.Valid && !acBody.Neck.Valid &&
+           !acBody.LeftClavicle.Valid && !acBody.LeftUpperArm.Valid && !acBody.LeftForearm.Valid &&
+           !acBody.RightClavicle.Valid && !acBody.RightUpperArm.Valid && !acBody.RightForearm.Valid &&
            !acBody.LeftThigh.Valid && !acBody.LeftCalf.Valid && !acBody.LeftFoot.Valid && !acBody.RightThigh.Valid &&
-           !acBody.RightCalf.Valid && !acBody.RightFoot.Valid;
+           !acBody.RightCalf.Valid && !acBody.RightFoot.Valid && acBody.Joints.FormatVersion == 0 &&
+           !acBody.Joints.Valid && acBody.Joints.CaptureSequence == 0 && acBody.Joints.RootGeneration == 0 &&
+           acBody.Joints.NodeMask == 0;
+}
+
+bool HasNoUpperBodyExtension(const VRBodyPoseData& acBody) noexcept
+{
+    return !acBody.Spine0.Valid && !acBody.Spine1.Valid && !acBody.Spine2.Valid && !acBody.Neck.Valid &&
+           !acBody.LeftClavicle.Valid && !acBody.LeftUpperArm.Valid && !acBody.LeftForearm.Valid &&
+           !acBody.RightClavicle.Valid && !acBody.RightUpperArm.Valid && !acBody.RightForearm.Valid;
+}
+
+bool IsBodyJointPoseZeroState(const VRBodyJointPoseData& acJoints) noexcept
+{
+    return acJoints.FormatVersion == 0 && !acJoints.Valid && acJoints.CaptureSequence == 0 &&
+           acJoints.RootGeneration == 0 && acJoints.NodeMask == 0;
 }
 
 bool IsFingerCurlSafe(const VRFingerCurlData& acFingers) noexcept
@@ -304,12 +356,114 @@ void VRVrikData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     DeserializeVector3(aReader, FinalSmoothingOffset);
 }
 
+bool VRBodyJointRotationData::operator==(const VRBodyJointRotationData& acRhs) const noexcept
+{
+    return X == acRhs.X && Y == acRhs.Y && Z == acRhs.Z && W == acRhs.W;
+}
+
+bool VRBodyJointRotationData::operator!=(const VRBodyJointRotationData& acRhs) const noexcept
+{
+    return !this->operator==(acRhs);
+}
+
+void VRBodyJointRotationData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
+{
+    TiltedPhoques::Serialization::WriteFloat(aWriter, X);
+    TiltedPhoques::Serialization::WriteFloat(aWriter, Y);
+    TiltedPhoques::Serialization::WriteFloat(aWriter, Z);
+    TiltedPhoques::Serialization::WriteFloat(aWriter, W);
+}
+
+void VRBodyJointRotationData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
+{
+    X = TiltedPhoques::Serialization::ReadFloat(aReader);
+    Y = TiltedPhoques::Serialization::ReadFloat(aReader);
+    Z = TiltedPhoques::Serialization::ReadFloat(aReader);
+    W = TiltedPhoques::Serialization::ReadFloat(aReader);
+}
+
+bool VRBodyJointPoseData::operator==(const VRBodyJointPoseData& acRhs) const noexcept
+{
+    return FormatVersion == acRhs.FormatVersion && Valid == acRhs.Valid && CaptureSequence == acRhs.CaptureSequence &&
+           RootGeneration == acRhs.RootGeneration && NodeMask == acRhs.NodeMask && Rotations == acRhs.Rotations;
+}
+
+bool VRBodyJointPoseData::operator!=(const VRBodyJointPoseData& acRhs) const noexcept
+{
+    return !this->operator==(acRhs);
+}
+
+void VRBodyJointPoseData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
+{
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, FormatVersion);
+    if (FormatVersion != kBodyJointPoseFormatVersionCurrent)
+        return;
+
+    TiltedPhoques::Serialization::WriteBool(aWriter, Valid);
+    if (!Valid)
+        return;
+
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, CaptureSequence);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, RootGeneration);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, NodeMask);
+    for (std::size_t index = 0; index < Rotations.size(); ++index) {
+        if ((NodeMask & (1u << index)) != 0)
+            Rotations[index].Serialize(aWriter);
+    }
+}
+
+void VRBodyJointPoseData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
+{
+    FormatVersion = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    if (FormatVersion != kBodyJointPoseFormatVersionCurrent) {
+        Valid = false;
+        CaptureSequence = 0;
+        RootGeneration = 0;
+        NodeMask = 0;
+        Rotations = {};
+        return;
+    }
+
+    Valid = TiltedPhoques::Serialization::ReadBool(aReader);
+    if (!Valid) {
+        CaptureSequence = 0;
+        RootGeneration = 0;
+        NodeMask = 0;
+        Rotations = {};
+        return;
+    }
+
+    CaptureSequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    RootGeneration = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    NodeMask = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    Rotations = {};
+    // A set bit declares a four-float quaternion on the fixed wire. Consume
+    // unknown sparse bits too, then leave validation to reject the frame; this
+    // preserves the following field boundary for malformed packets that still
+    // carry their declared payload.
+    for (std::uint32_t index = 0; index < 32; ++index) {
+        if ((NodeMask & (1u << index)) == 0)
+            continue;
+        if (index < Rotations.size())
+            Rotations[index].Deserialize(aReader);
+        else {
+            VRBodyJointRotationData ignored{};
+            ignored.Deserialize(aReader);
+        }
+    }
+}
+
 bool VRBodyPoseData::operator==(const VRBodyPoseData& acRhs) const noexcept
 {
     return FormatVersion == acRhs.FormatVersion && Valid == acRhs.Valid && CaptureSequence == acRhs.CaptureSequence &&
-           RootGeneration == acRhs.RootGeneration && Pelvis == acRhs.Pelvis && LeftThigh == acRhs.LeftThigh &&
+           RootGeneration == acRhs.RootGeneration && Pelvis == acRhs.Pelvis && Spine0 == acRhs.Spine0 &&
+           Spine1 == acRhs.Spine1 && Spine2 == acRhs.Spine2 && Neck == acRhs.Neck &&
+           LeftClavicle == acRhs.LeftClavicle && LeftUpperArm == acRhs.LeftUpperArm &&
+           LeftForearm == acRhs.LeftForearm && RightClavicle == acRhs.RightClavicle &&
+           RightUpperArm == acRhs.RightUpperArm && RightForearm == acRhs.RightForearm &&
+           LeftThigh == acRhs.LeftThigh &&
            LeftCalf == acRhs.LeftCalf && LeftFoot == acRhs.LeftFoot && RightThigh == acRhs.RightThigh &&
-           RightCalf == acRhs.RightCalf && RightFoot == acRhs.RightFoot;
+           RightCalf == acRhs.RightCalf && RightFoot == acRhs.RightFoot && Joints == acRhs.Joints;
 }
 
 bool VRBodyPoseData::operator!=(const VRBodyPoseData& acRhs) const noexcept
@@ -320,7 +474,7 @@ bool VRBodyPoseData::operator!=(const VRBodyPoseData& acRhs) const noexcept
 void VRBodyPoseData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
     TiltedPhoques::Serialization::WriteVarInt(aWriter, FormatVersion);
-    if (FormatVersion != 1)
+    if (!IsSupportedVRBodyPoseFormatVersion(FormatVersion))
         return;
 
     TiltedPhoques::Serialization::WriteBool(aWriter, Valid);
@@ -333,23 +487,48 @@ void VRBodyPoseData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noe
     RightThigh.Serialize(aWriter);
     RightCalf.Serialize(aWriter);
     RightFoot.Serialize(aWriter);
+    if (FormatVersion == kBodyPoseFormatVersionCurrent) {
+        Spine0.Serialize(aWriter);
+        Spine1.Serialize(aWriter);
+        Spine2.Serialize(aWriter);
+        Neck.Serialize(aWriter);
+        LeftClavicle.Serialize(aWriter);
+        LeftUpperArm.Serialize(aWriter);
+        LeftForearm.Serialize(aWriter);
+        RightClavicle.Serialize(aWriter);
+        RightUpperArm.Serialize(aWriter);
+        RightForearm.Serialize(aWriter);
+    }
+    if (FormatVersion == kBodyPoseFormatVersionJoints || FormatVersion == kBodyPoseFormatVersionCurrent)
+        Joints.Serialize(aWriter);
 }
 
 void VRBodyPoseData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
     FormatVersion = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
-    if (FormatVersion != 1)
+    if (!IsSupportedVRBodyPoseFormatVersion(FormatVersion))
     {
         Valid = false;
         CaptureSequence = 0;
         RootGeneration = 0;
         Pelvis = {};
+        Spine0 = {};
+        Spine1 = {};
+        Spine2 = {};
+        Neck = {};
+        LeftClavicle = {};
+        LeftUpperArm = {};
+        LeftForearm = {};
+        RightClavicle = {};
+        RightUpperArm = {};
+        RightForearm = {};
         LeftThigh = {};
         LeftCalf = {};
         LeftFoot = {};
         RightThigh = {};
         RightCalf = {};
         RightFoot = {};
+        Joints = {};
         return;
     }
 
@@ -363,6 +542,33 @@ void VRBodyPoseData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcep
     RightThigh.Deserialize(aReader);
     RightCalf.Deserialize(aReader);
     RightFoot.Deserialize(aReader);
+    if (FormatVersion == kBodyPoseFormatVersionCurrent) {
+        Spine0.Deserialize(aReader);
+        Spine1.Deserialize(aReader);
+        Spine2.Deserialize(aReader);
+        Neck.Deserialize(aReader);
+        LeftClavicle.Deserialize(aReader);
+        LeftUpperArm.Deserialize(aReader);
+        LeftForearm.Deserialize(aReader);
+        RightClavicle.Deserialize(aReader);
+        RightUpperArm.Deserialize(aReader);
+        RightForearm.Deserialize(aReader);
+    } else {
+        Spine0 = {};
+        Spine1 = {};
+        Spine2 = {};
+        Neck = {};
+        LeftClavicle = {};
+        LeftUpperArm = {};
+        LeftForearm = {};
+        RightClavicle = {};
+        RightUpperArm = {};
+        RightForearm = {};
+    }
+    if (FormatVersion == kBodyPoseFormatVersionJoints || FormatVersion == kBodyPoseFormatVersionCurrent)
+        Joints.Deserialize(aReader);
+    else
+        Joints = {};
 }
 
 bool VRPoseUpdate::operator==(const VRPoseUpdate& acRhs) const noexcept
@@ -426,24 +632,78 @@ void VRPoseUpdate::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     Vrik.Deserialize(aReader);
 }
 
+bool IsSupportedVRBodyPoseFormatVersion(const uint32_t aFormatVersion) noexcept
+{
+    return aFormatVersion == kBodyPoseFormatVersionLegacy || aFormatVersion == kBodyPoseFormatVersionJoints ||
+           aFormatVersion == kBodyPoseFormatVersionCurrent;
+}
+
 bool IsVRBodyPoseDataSafe(const VRBodyPoseData& acBody) noexcept
 {
     if (acBody.FormatVersion == 0)
         return IsBodyPoseZeroState(acBody);
-    if (acBody.FormatVersion != kBodyPoseFormatVersionCurrent)
+    if (!IsSupportedVRBodyPoseFormatVersion(acBody.FormatVersion))
         return false;
     if (!acBody.Valid)
         return IsBodyPoseZeroState(acBody);
     if (acBody.CaptureSequence == 0 || acBody.RootGeneration == 0)
         return false;
 
-    return IsBodyNodeSafe(acBody.Pelvis, kMaxBodyPelvisPositionComponent) &&
-           IsBodyNodeSafe(acBody.LeftThigh, kMaxBodyLimbPositionComponent) &&
-           IsBodyNodeSafe(acBody.LeftCalf, kMaxBodyLimbPositionComponent) &&
-           IsBodyNodeSafe(acBody.LeftFoot, kMaxBodyLimbPositionComponent) &&
-           IsBodyNodeSafe(acBody.RightThigh, kMaxBodyLimbPositionComponent) &&
-           IsBodyNodeSafe(acBody.RightCalf, kMaxBodyLimbPositionComponent) &&
-           IsBodyNodeSafe(acBody.RightFoot, kMaxBodyLimbPositionComponent);
+    const auto bodySafe = IsBodyNodeSafe(acBody.Pelvis, kMaxBodyPelvisPositionComponent) &&
+                          IsBodyNodeSafe(acBody.LeftThigh, kMaxBodyLimbPositionComponent) &&
+                          IsBodyNodeSafe(acBody.LeftCalf, kMaxBodyLimbPositionComponent) &&
+                          IsBodyNodeSafe(acBody.LeftFoot, kMaxBodyLimbPositionComponent) &&
+                          IsBodyNodeSafe(acBody.RightThigh, kMaxBodyLimbPositionComponent) &&
+                          IsBodyNodeSafe(acBody.RightCalf, kMaxBodyLimbPositionComponent) &&
+                          IsBodyNodeSafe(acBody.RightFoot, kMaxBodyLimbPositionComponent);
+    if (!bodySafe)
+        return false;
+    if (acBody.FormatVersion == kBodyPoseFormatVersionLegacy)
+        return HasNoUpperBodyExtension(acBody) && IsBodyJointPoseZeroState(acBody.Joints);
+    if (!IsVRBodyJointPoseDataSafe(acBody.Joints))
+        return false;
+    if (acBody.FormatVersion == kBodyPoseFormatVersionJoints)
+        return HasNoUpperBodyExtension(acBody) &&
+               (!acBody.Joints.Valid ||
+                (acBody.Joints.CaptureSequence == acBody.CaptureSequence &&
+                 acBody.Joints.RootGeneration == acBody.RootGeneration));
+
+    const auto upperBodySafe = IsBodyNodeSafe(acBody.Spine0, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.Spine1, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.Spine2, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.Neck, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.LeftClavicle, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.LeftUpperArm, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.LeftForearm, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.RightClavicle, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.RightUpperArm, kMaxBodyLimbPositionComponent) &&
+                               IsBodyNodeSafe(acBody.RightForearm, kMaxBodyLimbPositionComponent);
+    if (!upperBodySafe)
+        return false;
+    return !acBody.Joints.Valid ||
+           (acBody.Joints.CaptureSequence == acBody.CaptureSequence &&
+            acBody.Joints.RootGeneration == acBody.RootGeneration);
+}
+
+bool IsVRBodyJointPoseDataSafe(const VRBodyJointPoseData& acJoints) noexcept
+{
+    if (acJoints.FormatVersion == 0)
+        return IsBodyJointPoseZeroState(acJoints);
+    if (acJoints.FormatVersion != kBodyJointPoseFormatVersionCurrent)
+        return false;
+    if (!acJoints.Valid)
+        return acJoints.CaptureSequence == 0 && acJoints.RootGeneration == 0 && acJoints.NodeMask == 0;
+    if (acJoints.CaptureSequence == 0 || acJoints.RootGeneration == 0 || acJoints.NodeMask == 0 ||
+        (acJoints.NodeMask & ~kBodyJointPoseKnownMask) != 0)
+        return false;
+
+    for (std::size_t index = 0; index < acJoints.Rotations.size(); ++index) {
+        if ((acJoints.NodeMask & (1u << index)) == 0)
+            continue;
+        if (!IsBodyJointRotationSafe(acJoints.Rotations[index]))
+            return false;
+    }
+    return true;
 }
 
 bool IsVRPoseUpdateSafe(const VRPoseUpdate& acPose) noexcept
@@ -470,6 +730,7 @@ bool HasAnyVRPosePayload(const VRPoseUpdate& acPose) noexcept
            acPose.BowAim.Valid || acPose.BowRotation.Valid || acPose.LeftWeaponOffset.Valid ||
            acPose.RightWeaponOffset.Valid || acPose.PrimaryMagicOffset.Valid || acPose.PrimaryMagicAim.Valid ||
            acPose.SecondaryMagicOffset.Valid || acPose.SecondaryMagicAim.Valid || acPose.Body.Valid ||
+           acPose.Body.Joints.Valid ||
            acPose.Vrik.Detected || acPose.Vrik.InterfaceAvailable || acPose.Vrik.LeftFingers.Valid ||
            acPose.Vrik.RightFingers.Valid || acPose.Vrik.CameraOffsetsValid;
 }

@@ -40,12 +40,37 @@ DiscordService::DiscordService(entt::dispatcher& aDispatcher)
 #endif
 }
 
-DiscordService::~DiscordService() = default;
+DiscordService::~DiscordService()
+{
+    m_cellChangeConnection.release();
+    m_stopCallbacks.store(true, std::memory_order_release);
+
+    if (m_callbackThread.joinable())
+        m_callbackThread.join();
+
+    if (m_pCore)
+    {
+        m_pCore->destroy(m_pCore);
+        m_pCore = nullptr;
+    }
+
+    m_pUserMgr = nullptr;
+    m_pActivity = nullptr;
+    m_pAppMgr = nullptr;
+    m_pOverlayMgr = nullptr;
+
+    if (m_pModule)
+    {
+        FreeLibrary(m_pModule);
+        m_pModule = nullptr;
+    }
+}
 
 void DiscordService::OnUserUpdate(void* userp)
 {
     auto* pDiscord = static_cast<DiscordService*>(userp);
-    pDiscord->m_pUserMgr->get_current_user(pDiscord->m_pUserMgr, &pDiscord->m_userData);
+    if (pDiscord && pDiscord->m_pUserMgr)
+        pDiscord->m_pUserMgr->get_current_user(pDiscord->m_pUserMgr, &pDiscord->m_userData);
 }
 
 void DiscordService::OnLocationChangeEvent() noexcept
@@ -115,7 +140,7 @@ void DiscordService::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     // to quit in a timely manner
     if (msg == WM_QUIT)
     {
-        m_bRequestThreadKillHack = true;
+        m_stopCallbacks.store(true, std::memory_order_release);
         m_bOverlayEnabled = false;
         return;
     }
@@ -149,6 +174,9 @@ void DiscordService::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 bool DiscordService::Init()
 {
+    if (m_pCore)
+        return true;
+
     auto dllPath = TiltedPhoques::GetPath().wstring() + L"\\discord_game_sdk.dll";
 
     // as we make the game sdk optional we need to dynamiclly resolve the export
@@ -159,7 +187,10 @@ bool DiscordService::Init()
     auto* f_pDiscordCreate = (decltype(&DiscordCreate))(GetProcAddress(pHandle, "DiscordCreate"));
 
     if (!f_pDiscordCreate)
+    {
+        FreeLibrary(pHandle);
         return false;
+    }
 
     DiscordCreateParams params{};
     DiscordCreateParamsSetDefault(&params); // initialize version fields
@@ -174,6 +205,13 @@ bool DiscordService::Init()
     if (result != DiscordResult_Ok || !m_pCore)
     {
         spdlog::error("Failed to create Discord instance ({})", static_cast<int>(result));
+
+        if (m_pCore)
+        {
+            m_pCore->destroy(m_pCore);
+            m_pCore = nullptr;
+        }
+
         FreeLibrary(pHandle);
         return false;
     }
@@ -192,9 +230,16 @@ bool DiscordService::Init()
     if (!m_pUserMgr || !m_pActivity || !m_pAppMgr || !m_pOverlayMgr)
     {
         m_pCore->destroy(m_pCore);
+        m_pCore = nullptr;
+        m_pUserMgr = nullptr;
+        m_pActivity = nullptr;
+        m_pAppMgr = nullptr;
+        m_pOverlayMgr = nullptr;
         FreeLibrary(pHandle);
         return false;
     }
+
+    m_pModule = pHandle;
 
     // set initial presence state
     m_ActivityState.application_id = params.client_id;
@@ -202,12 +247,13 @@ bool DiscordService::Init()
 
     // TODO (Force): i want to move this away from its own thread
     // this is done because discord needs to be ticked before world
-    static std::thread updateThread(
-        [&]()
+    m_stopCallbacks.store(false, std::memory_order_release);
+    m_callbackThread = std::thread(
+        [this]()
         {
             Base::SetCurrentThreadName("DiscordCallbacks");
 
-            while (!m_bRequestThreadKillHack)
+            while (!m_stopCallbacks.load(std::memory_order_acquire))
             {
                 const auto runResult = m_pCore->run_callbacks(m_pCore);
                 if (runResult != DiscordResult_Ok)
@@ -217,7 +263,6 @@ bool DiscordService::Init()
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
         });
-    updateThread.detach();
 
     return true;
 }

@@ -56,7 +56,7 @@ add_requires(
     "recastnavigation v1.6.0", 
     "tiltedcore 0.2.8", 
     "cryptopp 8.9.0", 
-    "cpp-httplib 0.14.0",
+    "libcurl 8.7.1",
     "gtest v1.14.0", 
     "mem 1.0.0", 
     "glm 0.9.9+8", 
@@ -81,14 +81,16 @@ end
 -- dependencies' dependencies version pinning
 add_requireconfs("*.mimalloc", { version = "2.2.4", override = true })
 add_requireconfs("*.cmake", { version = "3.30.2", override = true })
+add_requireconfs("*.c-ares", { version = "1.34.6", override = true })
 add_requireconfs("*.openssl", { version = "1.1.1-w", override = true })
 add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
 if is_plat("linux") then
-    add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
+    add_requireconfs("libcurl", { version = "8.7.1", override = true, configs = {cares = true, openssl = true, openssl3 = false} })
     add_requireconfs("spdlog.fmt", { version = "12.2.0", override = true })
+else
+    add_requireconfs("libcurl", { version = "8.7.1", override = true, configs = {cares = true} })
 end
 
-add_requireconfs("cpp-httplib", {configs = {ssl = true}})
 --[[
 add_requireconfs("magnum", { configs = { sdl2 = true }})
 add_requireconfs("magnum-integration",  { configs = { imgui = true }})

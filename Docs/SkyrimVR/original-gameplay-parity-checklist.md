@@ -1,6 +1,6 @@
 # Skyrim Together VR Gameplay Parity Checklist
 
-Updated: 2026-08-02
+Updated: 2026-08-11
 
 ## Status Rules
 
@@ -17,20 +17,21 @@ The target is original `original-skyrim-together` gameplay on Skyrim VR
   replace, the original canonical message that owns mutation.
 
 Baseline revision `82c7999a` passed a clean WinBoat audited build. It is
-historical evidence only. The current parity-safety source tree is dirty and
+historical evidence only. The current literal-parity source tree is dirty and
 has not been built, package-audited, deployed, or runtime-tested. Every
 current-stage build and runtime gate is pending; no runtime checkbox below is
 evidence for this source tree.
 
-`Docs/SkyrimVR/parity-safety-stage-20260802.md` is the current-stage record.
-It supersedes stale lower-page references to a deployable full-tint path,
-missing mixed-client equipment fanout, or an exact-action prototype.
+`Docs/SkyrimVR/parity-safety-stage-20260802.md` is the current-stage record;
+despite the date in its filename, its contents are maintained for this stage.
 
 ## Native Boundary
 
-- [x] Source: maintained alandtse `CommonLibVR` `ng` v4.37.0 is pinned by
-  repository, tag, commit, runtime, SKSEVR, executable hash, and Address Library
-  hash.
+- [x] Source: maintained alandtse `CommonLibVR` `ng` 6.1.1 is pinned at upstream
+  `5ae93ea9059aae23990ad7f2cbf3a2624d85c117`, with the project VR-only
+  source-build commit `612394bda3e2674da585831702308d571cf991b6` on top.
+  The dependency remains pinned by repository, commit, runtime, SKSEVR,
+  executable hash, and Address Library hash.
 - [x] Source: the mapped client owns networking and canonical entities; the
   CommonLib SKSEVR plugin exclusively owns game pointers, retained handles,
   events, and engine mutation; the server owns authority and interest routing.
@@ -42,14 +43,20 @@ missing mixed-client equipment fanout, or an exact-action prototype.
   storage, flat desktop actor construction, or Papyrus-maintained state.
 - [x] Source: the fixed bridge ABI carries nonce, connection generation,
   lifecycle epoch, entity generation, action ID, and sequence ID.
-- [x] Source: mapping ABI is bumped from 19 to 20 for
-  `CommandStatus::Degraded`; readers distinguish accepted degraded appearance
-  application from rejected commands.
-- [x] Source: exact-match gameplay protocol revision 7 gates the token-bound NPC
-  ownership and final-equipment wire layouts before either endpoint decodes them.
+- [x] Source: mapping ABI is 22. ABI 20 introduced
+  `CommandStatus::Degraded`; later assignment/bootstrap records raised it again,
+  so readers reject every incompatible fixed bridge layout.
+- [x] Source: exact-match gameplay protocol revision 14 gates token-bound NPC
+  ownership, final-equipment, version-3 full-body/finger-pose wire layouts, and
+  bounded ordered HIGGS mutation batches
+  before either endpoint decodes them. Body formats 1 and 2 remain decodable
+  inside a revision-14 endpoint for fixture and persisted-data compatibility.
+- [x] Source: HIGGS authority is transactional and post-fanout, receiver replay
+  tails publish atomically, conflict/unresolvable skips are bounded, reconnect
+  rebases retained events, and direct VRGrab does not throttle discrete edges.
 - [x] Source: generated CommonLib aliases and curated VR overrides are
   collision-aware and fail closed on unverified addresses or prologues.
-- [ ] Build: verify mapping ABI 20, capability behavior, and the curated
+- [ ] Build: verify mapping ABI 22, capability behavior, and the curated
   address overlay in the current WinBoat candidate package.
 - [ ] Runtime: prove clean attach, owner-thread pumping, disconnect, reconnect,
   load, new game, and shutdown without stale commands or leaked references.
@@ -63,11 +70,12 @@ missing mixed-client equipment fanout, or an exact-action prototype.
   interior/exterior cell and worldspace transfer.
 - [x] Source: named humanoid graph snapshots use bounded assembly, ordering,
   rollback, stale rejection, and quarantine.
-- [x] Source: exact `ActorMediator` action capture and replay are wholly
-  fail-closed. No `PerformAction` detour/capture, exact-action capability, or
-  remote replay is registered. Public mappings for the upstream `ForceAction`
-  helpers resolve to incompatible VR code or data. Generic animation
-  graph/event fallback remains available.
+- [x] Source: exact `ActorMediator` action capture and replay use verified Skyrim
+  VR 1.4.15 `PerformAction`, complex-action, animation-variable, constructor,
+  singleton, context, and vtable targets. Capability publication and every raw
+  call fail closed unless the complete RVA, prologue, call-sequence, layout, and
+  live-object contract validates. Generic animation graph/event fallback remains
+  available when exact actions are unavailable.
 - [x] Source: draw/sheath and the supported idle, jump, sneak, sprint,
   ragdoll, furniture, and mount animation events replay through CommonLib.
 - [x] Source: package changes are captured for both owned NPCs and the local
@@ -83,14 +91,16 @@ missing mixed-client equipment fanout, or an exact-action prototype.
 
 ### Appearance, Equipment, And Inventory
 
-- [x] Source: a tint-bearing appearance transaction validates and applies the
-  proven race, sex, weight, dynamic name, head parts, morphs, hair, face
-  texture, and body skin tone fields on dynamic remote actor bases. Unsafe
-  FaceGen texture-mask composition is removed.
-- [x] Source: appearance returns explicit `CommandStatus::Degraded` when that
-  safe subset is applied. `Degraded` counts as executed and accepted only for
-  `Appearance` `CommitAppearance`; it remains rejection for every other
-  command.
+- [x] Source: a tint-bearing appearance transaction validates and applies race,
+  sex, weight, dynamic name, head parts, morphs, hair, face texture, body skin
+  tone, and full FaceGen tint-mask composition on dynamic remote actor bases.
+  The compositor is pinned to official SKSEVR 2.0.12 Skyrim VR 1.4.15 targets
+  and fails closed before any raw call if its ABI or executable evidence differs.
+- [x] Source: a complete appearance transaction is marked applied only after 3D
+  rebuild and tint composition succeed. Explicit transient commit failures
+  retry the complete idempotent snapshot with a fresh bridge transaction
+  sequence and bounded backoff; permanent failures and ambiguous timeouts remain
+  terminal because engine-owned 3D/material state cannot be rolled back safely.
 - [x] Source: bounded full worn-equipment snapshots include armor, weapons,
   shields, ammo, left/right spells, and shout or power state.
 - [x] Source: each VR equipment change is one protocol-revision-7 final-state
@@ -101,9 +111,9 @@ missing mixed-client equipment fanout, or an exact-action prototype.
   ownership, and quest-item handling use original requests.
 - [x] Source: incoming equipment, inventory, and appearance replay uses typed
   CommonLib APIs and session-scoped baselines.
-- [ ] Source: unsafe remote FaceGen texture-mask composition remains omitted;
-  the safe transaction is deliberately degraded rather than represented as a
-  complete face-generation result.
+- [x] Source: remote FaceGen texture-mask composition uses the verified VR
+  renderer, `TESTexture`, render-target, tint factory, and mask-application ABI;
+  no translated desktop Address Library row is trusted for this path.
 - [x] Source: the first mixed VR final-equipment legacy baseline is seeded
   before owner inventory mutation. It is session/generation-bound and gated by
   the negotiated VR capability so legacy delta fanout starts from the real
@@ -120,15 +130,21 @@ missing mixed-client equipment fanout, or an exact-action prototype.
 - [x] Source: owned NPC state, inventory, faction, package, movement, death,
   and ownership snapshots are bounded and transactionally published.
 - [x] Source: local death and respawn preserve original gold-loss chunks,
-  bounty clearing, spell/shout restoration, resurrection, cell centering,
-  delayed knockdown, and temporary god-mode protection.
+  bounty clearing, selected left/right spells and shout/power restoration,
+  exterior center-grid or interior parent-cell placement, native move,
+  delayed knockdown, and temporary god-mode protection in desktop order. The
+  `DispelAllSpells` (ID 34512, RVA `0x0557070`) and `GetCOCPlacementInfo`
+  (ID 19075, RVA `0x027A4C0`) gates are exact Skyrim VR 1.4.15 decrypted
+  targets; the generated `0x0579DF0` and `0x0294070` mappings are overridden.
 - [x] Source: local resurrection happens once; the server respawn request
   retries independently, and all pending state is lifecycle/session scoped.
 - [x] Source: mount ownership and mount requests preserve actor ordering; zero
   mount is retained only as local cancellation because the original protocol
   has no dismount request.
-- [x] Source: respawn fade retains safe Papyrus-equivalent/admission behavior.
-  No guessed native fade call is made because a verified VR callable is absent.
+- [x] Source: respawn fade uses the verified Skyrim VR 1.4.15 native
+  `FadeOutGame` target and prologue, failing closed when unavailable. Death and
+  respawn also capture and restore essential/no-bleedout state around the
+  canonical resurrection flow.
 - [ ] Build: compile and audit actor-state/death/respawn paths.
 - [ ] Runtime: prove damage, death, gold loss, respawn, simultaneous deaths,
   mount, disconnect during respawn, and reconnect convergence.
@@ -176,7 +192,11 @@ missing mixed-client equipment fanout, or an exact-action prototype.
   and world-encounter settings apply and restore on lifecycle reset.
 - [x] Source: connect/disconnect, party state, player list, command-file control,
   and VR companion controls do not require the desktop D3D overlay.
-- [ ] Source/product: restore Vivox voice chat or define a supported equivalent.
+- [x] Source: literal tracked-branch voice parity is preserved. Both current and
+  `original-skyrim-together` builds default to `TP_VIVOX=0`; the original branch
+  contains only an optional `Services/Vivox` build hook while the proprietary,
+  gitignored SDK/source is absent. Shipping voice remains a separate product and
+  licensing task, not missing behavior from the reviewable desktop source branch.
 - [ ] Build: compile and audit quest/dialogue/party/world-state paths.
 - [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
   weather, server restart, save/load, and reconnect behavior.
@@ -185,15 +205,30 @@ missing mixed-client equipment fanout, or an exact-action prototype.
 
 ### VRIK And FBT
 
-- [x] Source: HMD, hands, pelvis, thighs, calves, and feet are validated,
-  sequenced, relayed, and applied to the canonical remote actor skeleton.
+- [x] Source: HMD, hands, pelvis, spine0/1/2, neck, clavicles, upper arms,
+  forearms, thighs, calves, and feet are validated, sequenced, relayed, and
+  applied to the canonical remote actor skeleton.
 - [x] Source: world/local-space conversion, orthonormal basis checks, root
   generation, bounded pending state, and ragdoll write suppression are present.
 - [x] Source: mixed clients without FBT fall back to available head/hand/body
   nodes without changing actor identity.
-- [ ] Source: remote VRIK finger curls and VRIK calibration. The public VRIK
-  interface has no remote-actor application API; samples remain explicitly
-  unsupported instead of being sent to the local-player API.
+- [x] Source: body format 3 captures the final post-VRIK/post-HIGGS hierarchy,
+  including SkyrimVR-FBT world-only spine corrections converted back to
+  parent-local rotations. Remote application writes the body parent-first,
+  updates the hierarchy, then derives HMD/hand endpoints against the updated
+  parent worlds so upstream body changes do not displace controller targets.
+- [x] Source: post-VRIK/post-HIGGS local rotations for the 30 named finger-chain
+  nodes use a sparse, versioned quaternion payload and an atomic chunk/commit
+  bridge transaction. The remote bridge re-resolves the current actor root,
+  validates sequence/root generation and matrices, and suppresses writes during
+  ragdoll. VRIK camera/calibration diagnostics remain observation-only because
+  its public interface exposes local-player state but no remote-actor solver API.
+- [x] Source: format-2/3 joint data must match its enclosing body capture sequence
+  and root generation. Visual frames keep at most one admitted and one
+  replaceable pre-admission batch per remote player; 256 of 512 result-owner
+  slots and 64 of 192 pending-work slots remain reserved for state-changing
+  gameplay. A maximum format-3 frame owns 112 results, and admitted pose work is
+  never replayed.
 - [ ] Runtime: mixed VRIK, SkyrimVR-FBT, and non-FBT clients prove stable pose,
   tracker loss/recovery, seated/standing transitions, and save/load.
 
@@ -213,7 +248,12 @@ missing mixed-client equipment fanout, or an exact-action prototype.
   canonical health/effect messages own damage.
 - [x] Source: network skeleton writes stop while a remote actor is in ragdoll,
   preventing pose replication from fighting PLANCK physics.
-- [ ] Source: direct remote physical grab/ragdoll replay. No stable public
+- [x] Source: PLANCK interface revision 1 acquisition occurs only at SKSE
+  PostPostLoad, as required by its public API, without polling transient hit
+  pointers. Diagnostic handoff refreshes ride the existing VRIK/HIGGS
+  game-thread callback; no unload-unsafe writer thread exists. Canonical engine
+  hit events remain the sole replicated damage authority.
+- [ ] External API: direct remote physical grab/ragdoll replay. No stable public
   remote-actor PLANCK API is available, and invoking local-player physics entry
   points for a remote actor is unsafe.
 - [ ] Runtime: PLANCK and non-PLANCK clients prove hit/damage deduplication,
@@ -257,9 +297,9 @@ missing mixed-client equipment fanout, or an exact-action prototype.
 - [x] Source: host and WinBoat cleanup locks prevent cleanup during a build;
   scheduled disk-pressure cleanup removes only reproducible project output and
   bounded caches while preserving source, games, current handoffs, and evidence.
-- [x] Review: the final Sol max architecture, ABI, concurrency, lifecycle,
-  protocol, and crash-surface review is dispositioned in
-  `full-gameplay-source-postfix-senior-disposition-20260716.md`.
+- [ ] Review: run a new Sol max/xhigh architecture, ABI, concurrency, lifecycle,
+  protocol, crash-surface, and original-branch parity review for this dirty
+  source stage and disposition every finding before building.
 - [ ] Build: run the current source through the WinBoat candidate build and its
   compile, unit/static, package, and evidence audits.
 - [ ] Deploy: after a passing candidate, commit/push only that buildable source,
@@ -275,9 +315,10 @@ missing mixed-client equipment fanout, or an exact-action prototype.
 
 ## Next Stage Order
 
-1. Run the current dirty source through the WinBoat candidate build.
-2. Commit and push only if that candidate passes.
-3. Run a clean `--skip-handoff` build of the committed revision.
-4. Deploy matching local client and dedicated-server revisions.
-5. Prove a Monado connection, then execute the Windows/Linux two-client
+1. Run and disposition the final Sol max/xhigh source review.
+2. Run the reviewed source through the WinBoat candidate build.
+3. Commit and push only if that candidate passes.
+4. Run a clean `--skip-handoff` build of the committed revision.
+5. Deploy matching local client and dedicated-server revisions.
+6. Prove a Monado connection, then execute the Windows/Linux two-client
    gameplay matrix.
