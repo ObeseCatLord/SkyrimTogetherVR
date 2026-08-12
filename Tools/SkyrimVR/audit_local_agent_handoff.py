@@ -17,6 +17,7 @@ from local_handoff_artifacts import validate_artifact_pair
 
 REQUIRED_PATHS = (
     "START-HERE.md",
+    "INSTALL-SECOND-CLIENT.py",
     "source.bundle",
     "bundles/SkyrimTogetherVR-stvr-v0.1.0-alpha.1-linux-monado-runtime.zip",
     "bundles/SkyrimTogetherVR-stvr-v0.1.0-alpha.1-review-handoff.zip",
@@ -144,6 +145,16 @@ def main() -> int:
         for prefix in REQUIRED_PREFIXES:
             if not any(name.startswith(prefix) for name in relative_names):
                 failures.append(f"missing required payload prefix: {prefix}")
+        stale_handoff = sorted(
+            name
+            for name in relative_names
+            if name.startswith("dependencies/current-game-overlay/Data/SkyrimTogetherReborn/SkyrimTogetherVR.")
+        )
+        if stale_handoff:
+            failures.append(
+                "current-game-overlay contains stale SkyrimTogetherReborn runtime readout/control file(s): "
+                + ", ".join(stale_handoff[:5])
+            )
 
         artifact_paths: dict[str, str] = {}
         for metadata_key in ("gameplayPackage", "buildEvidence"):

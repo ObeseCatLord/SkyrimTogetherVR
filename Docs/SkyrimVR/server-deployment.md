@@ -100,7 +100,7 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 - Runtime executable SHA-256:
   `a45f474ee0d4509cd307c389b0aff5a742c6b0043dca7cab0a8ae51edcf0744b`.
 - Runtime core SHA-256:
--  `2ea02772fb7324eb39730ee0c8178976af292d8519fe5663b8f413e32590870f`.
+  `2ea02772fb7324eb39730ee0c8178976af292d8519fe5663b8f413e32590870f`.
 - Server deployment revision: `a4b90e01`; the matching client build is
   `a4b90e0129197039f2a7f94170caf618c8ab8965` and reports
   `stvr-v0.1.0-alpha.1-68-ga4b90e01`.
