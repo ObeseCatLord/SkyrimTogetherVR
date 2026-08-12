@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build:
@@ -48,6 +48,15 @@ jobs:
     # Build the server
     - name: Build
       run: xmake -y
+
+    - name: Run native tests
+      run: xmake run TPTests
+
+    - name: Validate Linux launch scripts
+      run: bash -n Tools/SkyrimVR/linux/*.sh
+
+    - name: Run handoff installer self-test
+      run: python3 Tools/SkyrimVR/install_local_agent_handoff.py --self-test
 
     # Create install
     #- name: Install

@@ -1,0 +1,94 @@
+name: Build Skyrim Together VR client
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: skyrim-vr-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-gameplay-client:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout source and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: '3.0.9'
+          actions-cache-folder: '.xmake-cache'
+          actions-cache-key: windows-x64-stvr
+
+      - name: Cache xmake packages
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/.xmake/packages
+          key: windows-xmake-stvr-${{ hashFiles('xmake.lua', 'Code/**/xmake.lua', 'Libraries/CommonLibSSE-NG/xmake.lua') }}
+          restore-keys: |
+            windows-xmake-stvr-
+
+      - name: Install Caprica Papyrus compiler
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'Caprica.v0.3.0.7z'
+          $destination = Join-Path $env:RUNNER_TEMP 'Caprica'
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri 'https://github.com/Orvid/Caprica/releases/download/v0.3.0/Caprica.v0.3.0.7z' `
+            -OutFile $archive
+          $expectedSha256 = '0037e54cf3a1021e976278d9a637e8ae541aaf9ebeb8d274b6c2cfe32f4ee559'
+          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Caprica archive checksum mismatch: expected $expectedSha256, got $actualSha256."
+          }
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          & 'C:\Program Files\7-Zip\7z.exe' x -y "-o$destination" $archive | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip failed to extract Caprica (exit $LASTEXITCODE)."
+          }
+          $caprica = Get-ChildItem -LiteralPath $destination -Recurse -File -Filter Caprica.exe |
+            Select-Object -First 1 -ExpandProperty FullName
+          if ([string]::IsNullOrWhiteSpace($caprica)) {
+            throw 'Caprica.exe was not present in the pinned release archive.'
+          }
+          "CAPRICA=$caprica" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build, test, package, and audit gameplay client
+        shell: cmd
+        run: BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay -- -Mode releasedbg
+
+      - name: Upload installable gameplay package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyrimTogetherVR-gameplay-${{ github.sha }}
+          path: artifacts/SkyrimTogetherVR/releasedbg/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyrimTogetherVR-build-evidence-${{ github.sha }}
+          path: |
+            artifacts/SkyrimTogetherVR/build-evidence/**
+            artifacts/SkyrimTogetherVR/packages/gameplay/**
+          if-no-files-found: warn
+          retention-days: 14

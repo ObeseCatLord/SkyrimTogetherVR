@@ -263,6 +263,28 @@ python3 Tools/SkyrimVR/devbench_new_game.py \
   --timeout 180
 ```
 
+## GitHub CI Builds
+
+Pushes and pull requests targeting `main` run two build paths:
+
+- `.github/workflows/linux.yml` builds and tests the Linux dedicated server.
+- `.github/workflows/skyrim-vr-client.yml` uses the audited Windows gameplay
+  wrapper to compile, run `TPTests`, rebuild the VR Papyrus scripts, package the
+  gameplay client, audit it, collect build evidence, and upload both outputs as
+  GitHub Actions artifacts.
+
+The Windows workflow is the CI equivalent of:
+
+```bat
+BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay -- -Mode releasedbg
+```
+
+It downloads the pinned public Caprica 0.3.0 release and lets the existing build
+script download and checksum the official SKSEVR 2.0.12 SDK. It does not need a
+Skyrim installation and therefore cannot perform installed-prerequisite or live
+VR checks. Treat a green artifact as compile/package evidence, then perform the
+documented target-machine audit and runtime test before release acceptance.
+
 The persistent synthetic keyboard socket is:
 
 ```bash
