@@ -2,6 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
+
 #include "MagicEquipment.h"
 
 using TiltedPhoques::Buffer;
