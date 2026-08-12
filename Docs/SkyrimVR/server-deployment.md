@@ -94,30 +94,30 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:a7b71d90`.
+- Image tag: `skyrim-together-vr-server:a4b90e01-arm64`.
 - Image ID:
-  `sha256:2d5757bb014826ed2cfc360ed036804f8edda1d9006a6cde8f09d6c4c6f8650f`.
+  `sha256:2055ddf7e05527378e1e901a0948db6cd21b369c37f77796db265f193277244f`.
 - Runtime executable SHA-256:
-  `23c6ff365a390138faa6d2d4b4286c10408b47197a5d4fc89dd89cb36c4c6c21`.
+  `a45f474ee0d4509cd307c389b0aff5a742c6b0043dca7cab0a8ae51edcf0744b`.
 - Runtime core SHA-256:
-  `4360245debe4dbaf28c1094245d85a70f7de37f5431ddd96ec222cff8b76287d`.
-- Server binary source revision: `a7b71d900a72c44e8e31436a245fe448b97d0daa`;
-  startup reports `stvr-v0.1.0-alpha.1-54-ga7b71d90`.
-- Packaged client binary source revision:
-  `a7b71d900a72c44e8e31436a245fe448b97d0daa`.
+-  `2ea02772fb7324eb39730ee0c8178976af292d8519fe5663b8f413e32590870f`.
+- Server deployment revision: `a4b90e01`; the matching client build is
+  `a4b90e0129197039f2a7f94170caf618c8ab8965` and reports
+  `stvr-v0.1.0-alpha.1-68-ga4b90e01`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server binaries use the same `a7b71d90` source and exact network
-version. The container was recreated through the existing Compose project on
-2026-07-16 and verified with one container, zero restarts, host networking, UDP
-26099 listening, and the existing public-zone `26001-27000/udp` firewall
-allowance. A Linux/Monado gameplay client completed authentication as player 1
-with 10 plugins and synchronized its Realm of Lorkhan interior cell. See
-`runtime-connection-result-20260716-a7b71d90.md`. Rebuild and redeploy whenever
-shared message definitions, encoding, or server code changes.
+The client and server use the exact `a4b90e01` network version. The current
+deployment has one container and zero restarts. A fresh Linux/Monado gameplay
+client reached RealmLorkhan, authenticated as player 1, synchronized its
+interior cell, and completed avatar bootstrap with the server admitting Skyrim
+VR Player with 10 mods. See
+`runtime-connection-result-20260811-a4b90e01.md`. This is single-client
+connection/bootstrap proof; it does not claim two-client remote-avatar or
+deliberate per-lane gameplay replication. Rebuild and redeploy whenever shared
+message definitions, encoding, or server code changes.
 
 The existing test server currently has an empty `sPassword`. If a password is
 configured later, keep it outside the repository and handoff and obtain it

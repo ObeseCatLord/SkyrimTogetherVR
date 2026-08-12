@@ -379,7 +379,9 @@ process:
   `0x010400F1`, SKSE version at least `0x020000C0`, and release index at least
   `60`; do not confuse that SKSE interface version with SkyrimVR.exe and VR
   Address Library version `1.4.15.0`;
-- no `Main Menu`, `RaceSex Menu`, loading/fader menu, or message box;
+- no `Main Menu`, `RaceSex Menu`, loading menu, or message box; Skyrim VR's
+  persistent `Fader Menu` is presentation state and is allowed when the
+  lifecycle readout remains `ready`;
 - Realm of Lorkhan scene and stable nonempty player name/race;
 - `SkyrimTogether.esp` active;
 - lifecycle `state=ready`, `ready=1`, nonzero epoch/owner/player/cell;

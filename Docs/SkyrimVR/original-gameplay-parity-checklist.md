@@ -25,6 +25,11 @@ evidence for this source tree.
 `Docs/SkyrimVR/parity-safety-stage-20260802.md` is the current-stage record;
 despite the date in its filename, its contents are maintained for this stage.
 
+Current runtime record: `a4b90e01` passed the Windows gameplay/package/evidence
+audits and one Linux/Monado single-client connection/bootstrap run; this does
+not check off the two-client gameplay runtime items below. See
+`runtime-connection-result-20260811-a4b90e01.md`.
+
 ## Native Boundary
 
 - [x] Source: maintained alandtse `CommonLibVR` `ng` 6.1.1 is pinned at upstream

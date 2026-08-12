@@ -684,6 +684,14 @@ def avatar_assignment_ready(
     )
 
 
+def avatar_lifecycle_epoch(lifecycle: dict[str, str]) -> str:
+    """Prefer the bridge epoch used by avatar ownership when it is available."""
+    bridge_lifecycle_epoch = lifecycle.get("bridgeLifecycleEpoch", "")
+    if bridge_lifecycle_epoch not in {"", "0"}:
+        return bridge_lifecycle_epoch
+    return lifecycle.get("epoch", "")
+
+
 def verify_avatar_assignment_stability(
     avatar_path: pathlib.Path,
     online_status: dict[str, str],
@@ -1067,7 +1075,8 @@ def main() -> int:
             args.timeout,
             lambda: read_status(player_cell_path),
             lambda value: value.get("ready") == "1"
-            and value.get("playerFormId") not in {None, "", "0"},
+            and value.get("playerFormId") not in {None, "", "0"}
+            and value.get("lifecycleEpoch") == lifecycle.get("epoch"),
             on_wait=lambda: handle_blocking_message_box(args.url, "finalization"),
         )
         if player_cell_path.stat().st_mtime_ns < run_started_ns:
@@ -1075,11 +1084,6 @@ def main() -> int:
         session_id = player_cell.get("sessionId", "")
         if session_id in {"", "0"}:
             raise AutomationError(f"player readiness proof has no process session ID: {player_cell}")
-        if player_cell.get("lifecycleEpoch") != lifecycle.get("epoch"):
-            raise AutomationError(
-                "player-cell readiness does not belong to the current lifecycle epoch: "
-                f"lifecycle={lifecycle.get('epoch')} playercell={player_cell.get('lifecycleEpoch')}"
-            )
     first_identity = finalization_identity(scene, player)
     time.sleep(1.0)
     stable_scene = post_tool(args.url, "inspect", {"kind": "scene"})
@@ -1185,7 +1189,7 @@ def main() -> int:
             "Skyrim Together local avatar assignment",
             args.timeout,
             lambda: read_status(avatar_path),
-            lambda value: avatar_assignment_ready(value, status, lifecycle.get("epoch", "")),
+            lambda value: avatar_assignment_ready(value, status, avatar_lifecycle_epoch(lifecycle)),
             on_wait=maintain_connection_cadence,
         )
         try:
@@ -1199,7 +1203,7 @@ def main() -> int:
         stable_avatar, stability_sequences = verify_avatar_assignment_stability(
             avatar_path,
             status,
-            lifecycle.get("epoch", ""),
+            avatar_lifecycle_epoch(lifecycle),
             tick_bridge_log_path,
             tick_bridge_log_start_offset,
             gameplay_bridge_log_path,

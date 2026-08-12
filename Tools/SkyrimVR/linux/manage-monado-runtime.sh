@@ -6,6 +6,7 @@ PROFILE="${2:-${STVR_MONADO_PROFILE:-simulated-qwerty-fixed}}"
 UNIT="${STVR_MONADO_UNIT:-stvr-monado-runtime.service}"
 SOCKET="${STVR_MONADO_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/monado_comp_ipc}"
 START_TIMEOUT="${STVR_MONADO_START_TIMEOUT:-45}"
+SYSTEMCTL_QUERY_TIMEOUT="${STVR_MONADO_SYSTEMCTL_QUERY_TIMEOUT:-5s}"
 
 die() {
   printf 'manage-monado-runtime: %s\n' "$*" >&2
@@ -34,14 +35,27 @@ remove_orphan_socket() {
 
 wait_for_unit_removal() {
   local deadline=$((SECONDS + 10))
-  while systemctl --user show "$UNIT" >/dev/null 2>&1; do
+  local load_state
+  while :; do
+    load_state="$(unit_load_state)" || die "failed to query managed unit load state: $UNIT"
+    [ "$load_state" = not-found ] && return
     (( SECONDS < deadline )) || die "timed out waiting for transient unit removal: $UNIT"
     sleep 0.2
   done
 }
 
+unit_load_state() {
+  local load_state
+  load_state="$(timeout --foreground "$SYSTEMCTL_QUERY_TIMEOUT" \
+    systemctl --user show --property=LoadState --value "$UNIT" 2>/dev/null)" || return 1
+  [ -n "$load_state" ] || return 1
+  printf '%s\n' "$load_state"
+}
+
 stop_managed_runtime() {
-  if systemctl --user show "$UNIT" >/dev/null 2>&1; then
+  local load_state
+  load_state="$(unit_load_state)" || die "failed to query managed unit load state: $UNIT"
+  if [ "$load_state" != not-found ]; then
     systemctl --user stop "$UNIT"
     wait_for_unit_removal
   fi
