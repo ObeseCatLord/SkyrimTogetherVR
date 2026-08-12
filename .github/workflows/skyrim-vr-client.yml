@@ -34,7 +34,7 @@ jobs:
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: '3.0.9'
-          actions-cache-folder: '.xmake-cache'
+          actions-cache-folder: '${{ runner.temp }}/xmake-cache'
           actions-cache-key: windows-x64-stvr
 
       - name: Cache xmake packages

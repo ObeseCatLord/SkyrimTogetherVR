@@ -112,7 +112,7 @@ function Copy-MatchingArtifact {
 
 function Get-SourceTreeSha256 {
     $temporaryPath = [System.IO.Path]::GetTempFileName()
-    $excludedDirectoryNames = @(".git", ".xmake", ".sdk", "artifacts", "build", "node_modules", "review-handoff")
+    $excludedDirectoryNames = @(".git", ".xmake", ".xmake-cache", ".sdk", "artifacts", "build", "node_modules", "review-handoff")
     try {
         $manifestStream = [System.IO.File]::Open($temporaryPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {
@@ -171,9 +171,11 @@ function Get-SourceProvenance {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not determine whether the SkyrimTogetherVR source tree is clean."
     }
-    $isDirty = @($status).Count -gt 0
+    $statusLines = @($status | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $isDirty = $statusLines.Count -gt 0
     if ($isDirty -and -not $AllowDirtySource) {
-        throw "The SkyrimTogetherVR source tree is dirty. Commit or stash the changes, or pass -AllowDirtySource to create an explicitly marked developer package."
+        $dirtyPaths = $statusLines -join [Environment]::NewLine
+        throw "The SkyrimTogetherVR source tree is dirty. Commit or stash the changes, or pass -AllowDirtySource to create an explicitly marked developer package.`nDirty paths:`n$dirtyPaths"
     }
 
     $sourceTreeSha256 = Get-SourceTreeSha256
