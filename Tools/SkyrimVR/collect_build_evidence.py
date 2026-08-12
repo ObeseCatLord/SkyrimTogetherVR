@@ -125,6 +125,8 @@ def run_command(root: pathlib.Path, name: str, command: list[str], output_dir: p
             command,
             cwd=root,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=COMMAND_TIMEOUT_SECONDS,

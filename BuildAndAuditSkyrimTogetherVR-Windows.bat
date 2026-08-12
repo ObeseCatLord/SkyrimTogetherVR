@@ -97,9 +97,9 @@ if "%GAMEPLAY%"=="1" (
     call "%ROOT%BuildSkyrimTogetherVR-Windows.bat" %BUILD_ARGS%
 )
 if errorlevel 1 (
-    set "STVR_RESULT=%ERRORLEVEL%"
+    set "STVR_RESULT=!ERRORLEVEL!"
     popd >nul
-    exit /b %STVR_RESULT%
+    exit /b !STVR_RESULT!
 )
 
 set "PYTHON_CMD="

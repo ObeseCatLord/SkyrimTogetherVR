@@ -667,6 +667,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not initialize the pinned Libraries/CommonLibSSE-NG submodule."
 }
 
+$sourceProvenanceForPackage = $null
+if (-not $NoPackage) {
+    # Capture the reviewed source before xmake and Papyrus generation write
+    # tracked outputs. The package records generated payload hashes separately.
+    $sourceProvenanceForPackage = Get-SourceProvenance
+}
+
 if (-not $SkipConfigure) {
     $configureArgs = @(
         "f", "-p", "windows", "-a", "x64", "-m", $Mode, "-y",
@@ -784,14 +791,6 @@ if ($PreflightOnly) {
 
     Write-Host "Preflight completed; no targets were built."
     return
-}
-
-$sourceProvenanceForPackage = $null
-if (-not $NoPackage) {
-    # Capture the reviewed source revision before normal PEX generation writes
-    # tracked bytecode. The package separately records every generated payload
-    # hash, so a clean source package does not need -AllowDirtySource.
-    $sourceProvenanceForPackage = Get-SourceProvenance
 }
 
 if ($CompilePapyrus) {

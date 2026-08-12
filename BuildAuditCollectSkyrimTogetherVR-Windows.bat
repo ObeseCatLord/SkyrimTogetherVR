@@ -171,7 +171,7 @@ if defined EVIDENCE_ZIP (
     echo Auditing build evidence archive:
     echo call "%ROOT%AuditSkyrimTogetherVRBuildEvidence-Windows.bat" "%EVIDENCE_ZIP%" !EVIDENCE_AUDIT_ARGS!
     call "%ROOT%AuditSkyrimTogetherVRBuildEvidence-Windows.bat" "%EVIDENCE_ZIP%" !EVIDENCE_AUDIT_ARGS!
-    set "EVIDENCE_AUDIT_RESULT=%ERRORLEVEL%"
+    set "EVIDENCE_AUDIT_RESULT=!ERRORLEVEL!"
 ) else (
     echo.
     echo No build evidence zip was found for mode %MODE%.
