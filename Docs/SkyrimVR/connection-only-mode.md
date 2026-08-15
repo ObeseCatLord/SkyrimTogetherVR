@@ -1,8 +1,27 @@
 # Connection-Only Mode
 
-The default VR target currently builds with `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1`.
+The default VR target is configured with `TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=1`.
 
 This mode is for bringing up the client transport/session path before actor and gameplay sync are safe in Skyrim VR.
+
+## 2026-08-15 Release Scope And Evidence
+
+This is the supported release scope: **connection/bootstrap alpha**. The
+current repair worktree is unbuilt, and its source changes are not package,
+loader, readiness, deployment, or runtime evidence. Historical one-client
+connection records do not prove multi-client gameplay. The expected log
+breadcrumbs and audit commands below are acceptance requirements, not claims
+that the current source tree has passed them.
+
+The default target remains fail-closed for gameplay mutation. In the broader
+gameplay-bridge source, quest synchronization is separately disabled by an
+unadvertised `QuestMutation` capability and returns `Unsupported`; dialogue and
+party domains remain separate source paths. `SetCombatTarget` is likewise
+unsupported and fail-closed. VR command-file producers for set-time and
+teleport are source-only and unbuilt. Startup CRT-bypass, readiness, PE-loader,
+`Movement` `std::bit_cast`, and projectile-regression repairs are still
+source-only, with any in-flight agent changes recorded as pending until the
+final build.
 
 The default target enables only transport, mod mapping, connection handoff,
 discovery, and network-only player cell synchronization. Pose, movement,
@@ -10,9 +29,9 @@ inventory, action observation, HIGGS relay, save/load observation, and the
 remote-player proxy are compiled behind options that are disabled for the
 default target and enabled by the explicit avatar-sync/gameplay targets.
 
-The separate `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets are the opt-in VRIK/HIGGS remote-avatar validation build. They keep staged connection-only mode enabled, add `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1` to instantiate `VRAvatarService`, and route remote actor lifecycle, retained-identity root/spatial movement, and named humanoid graph snapshots through `SkyrimTogetherVRGameplayBridge.dll`. The default `SkyrimTogetherVRClient` target requests lifecycle capability only.
+The separate `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync` targets are opt-in VRIK/HIGGS remote-avatar validation source configurations. They keep staged connection-only mode enabled, add `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1` to instantiate `VRAvatarService`, and route remote actor lifecycle, retained-identity root/spatial movement, and named humanoid graph snapshots through `SkyrimTogetherVRGameplayBridge.dll`. The default `SkyrimTogetherVRClient` target requests lifecycle capability only.
 
-The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay` targets build `SkyrimTogetherVRGameplay.exe`. That package turns connection-only mode off and enables VR observation relays plus CommonLib-owned remote actor lifecycle, retained-identity root/spatial movement, and named humanoid graph snapshots. It does not construct the legacy desktop mutation services. Unvalidated flat-Skyrim hooks, validated inline patches, and the flat overlay remain disabled.
+The separate `SkyrimTogetherVRGameplayClient` and `SkyrimVRImmersiveLauncherGameplay` targets are configured to produce `SkyrimTogetherVRGameplay.exe`. That source configuration turns connection-only mode off and enables VR observation relays plus CommonLib-owned remote actor lifecycle, retained-identity root/spatial movement, and named humanoid graph snapshots. It does not construct the legacy desktop mutation services. Unvalidated flat-Skyrim hooks, validated inline patches, and the flat overlay remain disabled.
 
 ## Enabled
 
@@ -109,6 +128,8 @@ Connection-only mode does not instantiate:
 - character assignment/spawn/ownership sync
 - player mutation systems other than cell/grid/level network updates
 - normal object, full inventory, full magic, actor-value, full combat/projectile, map, weather, quest, and party services
+- quest mutation or `SetCombatTarget`; both are unsupported/fail-closed even
+  outside the default target until separately validated
 - behavior-variable patch initialization
 - flat D3D11 overlay/render startup
 - VM-update and renderer-init diagnostic detours
@@ -122,7 +143,10 @@ The normal initializer gameplay hook batch remains disabled by `TP_SKYRIM_VR_ENA
 
 ## Expected First-Run Log Breadcrumbs
 
-The first VR smoke test should show these one-time breadcrumbs in `logs/tp_client.log` before any gameplay systems are enabled:
+The first VR smoke test must show these breadcrumbs in `logs/tp_client.log`
+before any gameplay systems are enabled. No current result is recorded here;
+retain matching runtime evidence before marking startup, readiness, or loader
+work passed:
 
 - `SkyrimTogetherVR runtime flags:` with `connectionOnly=1`, `bringupHooks=1`, `unvalidatedHooks=0`, and `validatedInlinePatches=0`.
 - `Installing SkyrimTogetherVR deferred startup/update-owner hook`.

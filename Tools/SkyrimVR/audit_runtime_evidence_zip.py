@@ -369,6 +369,7 @@ def command_self_test() -> int:
         game = root / "SkyrimVR"
         handoff = game / "Data" / "SkyrimTogetherReborn"
         log = game / collect_runtime_evidence.DEFAULT_LOG_RELATIVE
+        gameplay_bridge_log = root / "gameplay-bridge" / collect_runtime_evidence.GAMEPLAY_BRIDGE_LOG_NAME
         out_dir = root / "out"
         handoff.mkdir(parents=True)
         log.parent.mkdir(parents=True)
@@ -378,6 +379,8 @@ def command_self_test() -> int:
             + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
             encoding="utf-8",
         )
+        gameplay_bridge_log.parent.mkdir(parents=True)
+        gameplay_bridge_log.write_text("[info] validated loader runtime=skyrimvr\n", encoding="utf-8")
 
         def write(name: str, contents: str) -> None:
             (handoff / collect_runtime_evidence.vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
@@ -617,10 +620,11 @@ def command_self_test() -> int:
             encoding="utf-8",
         )
 
-        args = argparse.Namespace(
+        args = collect_runtime_evidence.build_collection_args(
             game_path=game,
             handoff_dir=None,
             log=None,
+            gameplay_bridge_log=gameplay_bridge_log,
             out=out_dir,
             skse_log_root=None,
             extra_file=[],

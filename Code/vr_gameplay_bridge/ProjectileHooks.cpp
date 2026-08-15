@@ -100,10 +100,17 @@ RE::ProjectileHandle* HookLaunch(
         return g_originalLaunch ? g_originalLaunch(a_result, a_data) : a_result;
 
     const auto* shooter = a_data.shooter ? a_data.shooter->As<RE::Actor>() : nullptr;
-    if (shooter && AvatarManager::Get().IsManagedRemoteActor(shooter) && g_remoteLaunchAllowance == 0) {
-        if (a_result)
-            a_result->reset();
-        return a_result;
+    const bool remoteShooter = shooter && AvatarManager::Get().IsManagedRemoteActor(shooter);
+    if (remoteShooter) {
+        if (g_remoteLaunchAllowance == 0) {
+            if (a_result)
+                a_result->reset();
+            return a_result;
+        }
+
+        // A replayed remote projectile is permitted to execute once, but it
+        // must never re-enter the local projectile publication path.
+        return g_originalLaunch ? g_originalLaunch(a_result, a_data) : a_result;
     }
 
     ApplyProjectileLaunchPayload payload{};

@@ -98,6 +98,62 @@ GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS = (
 )
 
 
+def build_collection_args(**overrides: object) -> argparse.Namespace:
+    """Create a complete collect() argument namespace for programmatic callers."""
+    values: dict[str, object] = {
+        "game_path": default_game_path(),
+        "handoff_dir": None,
+        "log": None,
+        "gameplay_bridge_log": None,
+        "out": None,
+        "skse_log_root": None,
+        "extra_file": [],
+        "skip_log": False,
+        "no_audit": False,
+        "require_connected": False,
+        "require_vrik": False,
+        "require_higgs": False,
+        "require_remote_player": False,
+        "require_weapon_pose": False,
+        "require_magic_pose": False,
+        "require_projectile_pose": False,
+        "require_movement_relay": False,
+        "require_equipment_relay": False,
+        "require_activation_relay": False,
+        "require_magic_relay": False,
+        "require_combat_relay": False,
+        "require_projectile_relay": False,
+        "require_grab_relay": False,
+        "require_higgs_relay": False,
+        "require_saveload_observer": False,
+        "require_gameplay_relays": False,
+        "avatar_sync": False,
+        "gameplay": False,
+    }
+    unknown = sorted(set(overrides) - set(values))
+    if unknown:
+        raise ValueError("unknown collection argument override(s): " + ", ".join(unknown))
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def collection_args_self_test() -> list[str]:
+    failures: list[str] = []
+    defaults = build_collection_args()
+    if defaults.gameplay_bridge_log is not None:
+        failures.append("gameplay_bridge_log must default to None")
+    if defaults.extra_file:
+        failures.append("extra_file must default to an empty list")
+
+    expected_log = pathlib.Path("fixture-gameplay-bridge.log")
+    configured = build_collection_args(gameplay_bridge_log=expected_log, require_gameplay_relays=True)
+    if configured.gameplay_bridge_log != expected_log:
+        failures.append("gameplay_bridge_log override was not retained")
+    if not configured.require_gameplay_relays:
+        failures.append("require_gameplay_relays override was not retained")
+    return failures
+
+
 def repo_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2]
 
@@ -1403,6 +1459,13 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
 
 
 def command_self_test(_: argparse.Namespace) -> int:
+    argument_failures = collection_args_self_test()
+    if argument_failures:
+        print("Evidence collector argument-construction self-test failures:")
+        for failure in argument_failures:
+            print(f"- {failure}")
+        return 1
+
     with tempfile.TemporaryDirectory(prefix="stvr-evidence-test-") as temp:
         root = pathlib.Path(temp)
         game = root / "SkyrimVR"
@@ -1687,7 +1750,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         }
         (game / BUILD_MANIFEST_NAME).write_text(json.dumps(build_manifest, indent=2), encoding="utf-8")
 
-        args = argparse.Namespace(
+        args = build_collection_args(
             game_path=game,
             handoff_dir=None,
             log=None,

@@ -22,12 +22,16 @@ Tools/SkyrimVR/build_winboat_candidate.sh
 The candidate helper snapshots `HEAD`'s complete tracked delta with
 `git diff --binary --full-index`, including binary changes and staged changes,
 without altering the Linux index or creating a Linux commit. It refuses
-untracked files, dirty/unresolved submodules, and changed submodule pointers;
-this prevents an incomplete overlay from being presented as build proof. The
-current `HEAD` is the required already-pushed base. WinBoat verifies that it
-is an ancestor of `refs/remotes/origin/main`; it fetches only `origin/main`
-once when the cached remote-tracking ref is absent or does not prove that
-ancestry, then fails if the proof is still unavailable.
+untracked files, dirty/unresolved submodules, and changed submodule pointers
+other than the explicitly supported `Libraries/CommonLibSSE-NG` advancement.
+For that one submodule it verifies ancestry against the pinned base and trusted
+alandtse upstream, bundles the exact target commit for WinBoat, and validates
+the transferred bundle hash before checkout. This prevents an incomplete
+overlay or untrusted dependency commit from being presented as build proof.
+The current `HEAD` is the required already-pushed base. WinBoat verifies that
+it is an ancestor of `refs/remotes/origin/main`; it fetches only
+`origin/main` once when the cached remote-tracking ref is absent or does not
+prove that ancestry, then fails if the proof is still unavailable.
 
 On WinBoat it removes only stale `SkyrimTogetherVR-candidate-*` output after
 confirming no candidate process is active, creates a detached worktree at that
@@ -263,6 +267,30 @@ python3 Tools/SkyrimVR/devbench_new_game.py \
   --timeout 180
 ```
 
+For two simulated clients on the same Linux host, use only the named-instance
+helpers. They isolate the game tree, Proton prefix, caches, logs, transient
+user-service cgroup, and Monado IPC runtime:
+
+```bash
+export STVR_CLIENT_ROOT=/home/obesecatlord/FasterGames/SteamLibrary/steamapps/common/SkyrimTogetherVR-local-clients
+export STVR_BASE_GAME_DIR="$SKYRIMVR"
+export STVR_BASE_COMPATDATA=/home/obesecatlord/FasterGames/SteamLibrary/steamapps/compatdata/611670
+Tools/SkyrimVR/linux/manage-local-clients.sh prepare player1
+Tools/SkyrimVR/linux/manage-local-clients.sh prepare player2
+Tools/SkyrimVR/linux/manage-local-clients.sh launch player1 incidentalstoat.xyz:26099
+Tools/SkyrimVR/linux/manage-local-clients.sh launch player2 incidentalstoat.xyz:26099
+```
+
+Preparation is intentionally non-destructive and refuses existing names. On
+the current NTFS game volume, budget approximately one complete game plus one
+Proton prefix for every client. Do not place client copies on `/`. Stop clients
+through `manage-local-clients.sh stop NAME`; it validates the marker, unit
+environment, and systemd InvocationID before stopping the owned cgroup and
+never escalates to `KILL`. The launcher uses `GAMEID=umu-611670` and the
+matching Monado OpenXR manifest/state; use short client roots because the
+private Unix socket is limited to 107 bytes. Exact operation, checks, and
+limitations are in `Docs/SkyrimVR/linux-local-multi-client.md`.
+
 ## GitHub CI Builds
 
 Pushes and pull requests targeting `main` run two build paths:
@@ -284,6 +312,9 @@ script download and checksum the official SKSEVR 2.0.12 SDK. It does not need a
 Skyrim installation and therefore cannot perform installed-prerequisite or live
 VR checks. Treat a green artifact as compile/package evidence, then perform the
 documented target-machine audit and runtime test before release acceptance.
+Linux CI also runs the Monado-instance self-test, fake-systemd instance and
+client-unit fixtures, staging fixture, and launcher-runtime fixture. These
+validate isolation and command construction without starting Monado or Skyrim.
 
 The persistent synthetic keyboard socket is:
 

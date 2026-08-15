@@ -871,7 +871,7 @@ REQUIRED_PLAYER_CELL_HANDOFF_TOKENS = {
         '"RaceSex Menu" not in value.get("openMenus", [])',
         '"SkyrimTogetherVR.lifecycle"',
         '"Skyrim Together stable gameplay lifecycle"',
-        'player_cell.get("lifecycleEpoch") != lifecycle.get("epoch")',
+        'value.get("lifecycleEpoch") == lifecycle.get("epoch")',
         "--connect verification requires --launch-game",
         'value.get("sessionId") == session_id',
         'value.get("connectionGeneration") == status.get("connectionGeneration")',
@@ -1277,16 +1277,17 @@ REQUIRED_GRAB_RELAY_TOKENS = {
     "Code/server/Services/VRGrabRelayService.cpp": (
         "PacketEvent<RequestVRGrabEvent>",
         "NotifyVRGrabEvent",
-        "kMinGrabRelayIntervalMs",
         "IsNewerSequence",
         "HasGrabObject",
         "OnPlayerLeave",
-        "ShouldRelayGrab",
-        "grab.Sequence == 0 || !HasGrabObject(grab)",
-        "state.HasSequence",
+        "PrepareRelayDecision",
+        "CommitRelayDecision",
+        "grab.Sequence == 0",
+        "acPrevious.HasSequence",
         "GameServer::Get()->GetTick()",
-        "now - state.LastRelayTick < kMinGrabRelayIntervalMs",
-        "state.LastSequence = grab.Sequence",
+        "VRObjectAuthority::PrepareBatch",
+        "VRObjectAuthority::CommitBatch",
+        "arState.LastSequence = acDecision.Sequence",
         "m_playerGrabRelayState.erase",
         "notify.PlayerId = playerId;",
         "GameServer::Get()->SendToPlayersWithCapabilitiesInRange(",
@@ -1294,12 +1295,13 @@ REQUIRED_GRAB_RELAY_TOKENS = {
     "Code/server/Services/VRGrabRelayService.h": (
         "PlayerGrabRelayState",
         "LastSequence",
-        "LastRelayTick",
         "HasSequence",
         "OnPlayerLeave",
-        "ShouldRelayGrab",
+        "PrepareRelayDecision",
+        "CommitRelayDecision",
         "m_playerGrabRelayState",
         "m_playerLeaveConnection",
+        "m_updateConnection",
     ),
     "Code/server/World.cpp": (
         "#include <Services/VRGrabRelayService.h>",
@@ -4362,23 +4364,37 @@ def audit_vr_actor_base_flag_safety(root: pathlib.Path) -> list[str]:
     if not policy:
         errors.append("Could not inspect VR death-system policy gate")
     else:
-        for token in (
+        required_tokens = (
             "if (!player || &a_actor != player)",
-            "static_cast<void>(a_enabled);",
-            "return CommandStatus::Unsupported;",
-        ):
+            "if (!a_enabled)",
+            "return RestoreDeathSystemPolicy();",
+            "auto* base = player->GetActorBase();",
+            "if (!base || base->IsDynamicForm())",
+            "VerifiedVrDeath::DeathPolicyTargets targets{};",
+            "if (!VerifiedVrDeath::ResolveDeathPolicyTargets(targets))",
+            "g_deathSystemPolicy = {",
+            "PreviousActorEssential",
+            "PreviousNoBleedoutRecovery",
+            "PreviousBaseEssential",
+            "targets.SetBaseFlag(",
+            "targets.SetNoBleedout(player, true);",
+        )
+        for token in required_tokens:
             if token not in policy:
                 errors.append(f"VR death-system policy gate is missing `{token}`")
-        for token in (
-            "SetActorBoolFlag(",
-            "GetActorBase(",
-            "actorBaseFlags",
-            "TESGlobal",
-            "g_deathSystemPolicy",
-            ".value =",
-        ):
+        disable = policy.find("if (!a_enabled)")
+        restore = policy.find("return RestoreDeathSystemPolicy();", disable)
+        base = policy.find("auto* base = player->GetActorBase();")
+        resolve = policy.find("VerifiedVrDeath::ResolveDeathPolicyTargets(targets)")
+        set_base = policy.find("targets.SetBaseFlag(")
+        set_no_bleedout = policy.find("targets.SetNoBleedout(player, true);")
+        if not (0 <= disable < restore < base < resolve < set_base < set_no_bleedout):
+            errors.append(
+                "VR death-system policy must restore before inspecting the base and verify native targets before mutating flags"
+            )
+        for token in ("SetActorBaseFlag(", "AddChange("):
             if token in policy:
-                errors.append(f"VR death-system policy must return Unsupported before `{token}`")
+                errors.append(f"VR death-system policy must not call raw `{token}`")
 
     return errors
 

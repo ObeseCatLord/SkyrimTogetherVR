@@ -21,6 +21,8 @@ import vr_paths
 DEFAULT_ENDPOINT = "127.0.0.1:10578"
 COMMAND_FILE = "SkyrimTogetherVR.command"
 CONFIG_FILE = "SkyrimTogetherVR.connection"
+MAX_TELEPORT_PLAYER_ID = 65535
+MAX_ADMIN_TELEPORT_TARGET_BYTES = 512
 READOUT_FILES = {
     "status": "SkyrimTogetherVR.status",
     "lifecycle": "SkyrimTogetherVR.lifecycle",
@@ -141,6 +143,48 @@ def write_connect_command(handoff_dir: pathlib.Path, endpoint: str, password: st
 def write_disconnect_command(handoff_dir: pathlib.Path) -> pathlib.Path:
     path = command_path(handoff_dir)
     write_atomic(path, "action=disconnect\n")
+    return path
+
+
+def validate_bounded_integer(value: int, *, minimum: int, maximum: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+    return value
+
+
+def validate_admin_teleport_target(value: str) -> str:
+    target = value.strip()
+    if not target or len(target.encode("utf-8")) > MAX_ADMIN_TELEPORT_TARGET_BYTES:
+        raise ValueError("admin teleport target must be a non-empty name up to 512 bytes")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in target):
+        raise ValueError("admin teleport target must not contain control characters")
+    return target
+
+
+def write_set_time_command(handoff_dir: pathlib.Path, hours: int, minutes: int) -> pathlib.Path:
+    hours = validate_bounded_integer(hours, minimum=0, maximum=23, name="hours")
+    minutes = validate_bounded_integer(minutes, minimum=0, maximum=59, name="minutes")
+    path = command_path(handoff_dir)
+    write_atomic(path, f"action=set_time\nhours={hours}\nminutes={minutes}\n")
+    return path
+
+
+def write_teleport_to_player_command(handoff_dir: pathlib.Path, player_id: int) -> pathlib.Path:
+    player_id = validate_bounded_integer(
+        player_id,
+        minimum=1,
+        maximum=MAX_TELEPORT_PLAYER_ID,
+        name="player id",
+    )
+    path = command_path(handoff_dir)
+    write_atomic(path, f"action=teleport_to_player\nplayerId={player_id}\n")
+    return path
+
+
+def write_admin_teleport_command(handoff_dir: pathlib.Path, target_player: str) -> pathlib.Path:
+    target_player = validate_admin_teleport_target(target_player)
+    path = command_path(handoff_dir)
+    write_atomic(path, f"action=admin_teleport\ntargetPlayer={target_player}\n")
     return path
 
 
@@ -947,6 +991,27 @@ def command_disconnect(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_set_time(args: argparse.Namespace) -> int:
+    handoff_dir = resolve_handoff_dir(args)
+    path = write_set_time_command(handoff_dir, args.hours, args.minutes)
+    print(f"Wrote set-time command: {path}")
+    return 0
+
+
+def command_teleport_to_player(args: argparse.Namespace) -> int:
+    handoff_dir = resolve_handoff_dir(args)
+    path = write_teleport_to_player_command(handoff_dir, args.player_id)
+    print(f"Wrote teleport-to-player command: {path}")
+    return 0
+
+
+def command_admin_teleport(args: argparse.Namespace) -> int:
+    handoff_dir = resolve_handoff_dir(args)
+    path = write_admin_teleport_command(handoff_dir, args.target_player)
+    print(f"Wrote admin-teleport command: {path}")
+    return 0
+
+
 def command_status(args: argparse.Namespace) -> int:
     handoff_dir = resolve_handoff_dir(args)
     while True:
@@ -1460,6 +1525,29 @@ def command_self_test(args: argparse.Namespace) -> int:
         disconnect_path = write_disconnect_command(handoff_dir)
         assert disconnect_path.read_text(encoding="utf-8") == "action=disconnect\n"
 
+        set_time_path = write_set_time_command(handoff_dir, 23, 59)
+        assert set_time_path.read_text(encoding="utf-8") == "action=set_time\nhours=23\nminutes=59\n"
+
+        teleport_path = write_teleport_to_player_command(handoff_dir, MAX_TELEPORT_PLAYER_ID)
+        assert teleport_path.read_text(encoding="utf-8") == "action=teleport_to_player\nplayerId=65535\n"
+
+        admin_teleport_path = write_admin_teleport_command(handoff_dir, "Remote Tester")
+        assert admin_teleport_path.read_text(encoding="utf-8") == "action=admin_teleport\ntargetPlayer=Remote Tester\n"
+
+        for invalid_time in ((-1, 0), (24, 0), (0, 60)):
+            try:
+                write_set_time_command(handoff_dir, *invalid_time)
+                raise AssertionError("invalid set-time command was accepted")
+            except ValueError:
+                pass
+
+        for invalid_player_id in (0, MAX_TELEPORT_PLAYER_ID + 1):
+            try:
+                write_teleport_to_player_command(handoff_dir, invalid_player_id)
+                raise AssertionError("invalid teleport player id was accepted")
+            except ValueError:
+                pass
+
         payload = build_readout_payload(handoff_dir)
         assert payload["readouts"]["status"]["state"] == "online"
         assert payload["readouts"]["lifecycle"]["epoch"] == "3"
@@ -1557,6 +1645,25 @@ def add_common_path_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def bounded_cli_integer(minimum: int, maximum: int, name: str):
+    def parse(value: str) -> int:
+        if not re.fullmatch(r"[0-9]+", value):
+            raise argparse.ArgumentTypeError(f"{name} must be an integer from {minimum} to {maximum}")
+        parsed = int(value)
+        if not minimum <= parsed <= maximum:
+            raise argparse.ArgumentTypeError(f"{name} must be an integer from {minimum} to {maximum}")
+        return parsed
+
+    return parse
+
+
+def admin_teleport_target(value: str) -> str:
+    try:
+        return validate_admin_teleport_target(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_path_args(parser)
@@ -1575,6 +1682,28 @@ def main() -> int:
 
     disconnect = subparsers.add_parser("disconnect", help="Write a disconnect command file.")
     disconnect.set_defaults(func=command_disconnect)
+
+    set_time = subparsers.add_parser("set-time", help="Write an administrative set-time command file.")
+    set_time.add_argument("hours", type=bounded_cli_integer(0, 23, "hours"))
+    set_time.add_argument("minutes", type=bounded_cli_integer(0, 59, "minutes"))
+    set_time.set_defaults(func=command_set_time)
+
+    teleport_to_player = subparsers.add_parser(
+        "teleport-to-player",
+        help="Write a player-ID teleport request command file.",
+    )
+    teleport_to_player.add_argument(
+        "player_id",
+        type=bounded_cli_integer(1, MAX_TELEPORT_PLAYER_ID, "player id"),
+    )
+    teleport_to_player.set_defaults(func=command_teleport_to_player)
+
+    admin_teleport = subparsers.add_parser(
+        "admin-teleport",
+        help="Write an administrative target-name teleport command file.",
+    )
+    admin_teleport.add_argument("target_player", type=admin_teleport_target)
+    admin_teleport.set_defaults(func=command_admin_teleport)
 
     status = subparsers.add_parser("status", help="Read status and telemetry handoff files.")
     status.add_argument("--all", action="store_true", help="Print every parsed key instead of the compact summary.")

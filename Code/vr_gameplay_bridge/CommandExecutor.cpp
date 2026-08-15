@@ -278,6 +278,8 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
 
     if (!IsActionInDomain(domain, action))
         return CommandStatus::Malformed;
+    if (domain == GameplayDomain::Quest)
+        return QuestDialogueManager::QuestSynchronizationStatus();
     if (action == GameplayAction::ArmLocalCapture) {
         if (static_cast<CommandKind>(a_command.Header.Kind) != CommandKind::ApplyGameplayAction)
             return CommandStatus::Malformed;

@@ -722,6 +722,8 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         const bool authenticationGenerationChanged =
             m_serverInstanceNonce != acMessage.ServerInstanceNonce ||
             m_connectionGeneration != acMessage.ConnectionGeneration;
+        const bool authenticationMilestoneChanged =
+            !m_connected || authenticationGenerationChanged || m_localPlayerId != acMessage.PlayerId;
 
 #if TP_SKYRIM_VR
         if (authenticationGenerationChanged &&
@@ -758,6 +760,21 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             m_serverInstanceNonce,
             m_connectionGeneration);
 #endif
+        if (authenticationMilestoneChanged)
+        {
+            spdlog::info(
+                "STVR auth accepted: playerId={}, protocolRevision={}, requestedCapabilities={:#x}, "
+                "negotiatedCapabilities={:#x}, serverInstanceNonce={}, connectionGeneration={}, "
+                "clientSessionNonce={}, connectionAttempt={}",
+                m_localPlayerId,
+                acMessage.GameplayProtocolRevision,
+                m_requestedGameplayCapabilities,
+                m_negotiatedGameplayCapabilities,
+                m_serverInstanceNonce,
+                m_connectionGeneration,
+                m_sessionId,
+                m_connectionAttemptGeneration);
+        }
         SkyrimTogetherVR::LogRuntimeCheckpoint("auth.identity.done");
 
         m_world.SetServerSettings(acMessage.Settings);

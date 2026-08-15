@@ -46,7 +46,10 @@ or:
 disconnect
 ```
 
-After a command is accepted, the client renames it to `SkyrimTogetherVR.command.processed`. Invalid commands are renamed to `SkyrimTogetherVR.command.error`.
+After a command is validated and accepted for local dispatch, the client renames
+it to `SkyrimTogetherVR.command.sent`. This records only client-side enqueue or
+dispatch, not server authorization or gameplay application. Invalid commands or
+local send failures are renamed to `SkyrimTogetherVR.command.error`.
 
 The helper writes the same format:
 

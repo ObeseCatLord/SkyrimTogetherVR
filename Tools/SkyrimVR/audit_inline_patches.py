@@ -992,6 +992,73 @@ def collect_safety_failures(code_image, rows, missing_source_tokens, guard_polic
     return failures
 
 
+def run_source_policy_audit(repo):
+    rows = [{**site, "vr_default_active": site.get("vr_default_active", False)} for site in PATCH_SITES]
+    missing_source_tokens = audit_required_source_tokens(repo)
+    guard_policy_failures = audit_vr_guard_policy(repo, rows)
+    active = [row for row in rows if row["active"]]
+    vr_default_active = [row for row in rows if row["vr_default_active"]]
+    source_blocked_without_resolution_gate = [
+        row for row in rows if row.get("vr_source_blocked", False) and not row.get("vr_resolution_flag")
+    ]
+    source_blocked_default_active = [
+        row for row in vr_default_active if row.get("vr_source_blocked", False)
+    ]
+    default_enablement_without_evidence = [
+        row
+        for row in active
+        if default_enablement_allowed(row)
+        and (
+            not row.get("manual_validation_evidence")
+            or not row.get("runtime_validation_evidence")
+        )
+    ]
+    source_blocked_default_enablement = [
+        row for row in active if row.get("vr_source_blocked", False) and default_enablement_allowed(row)
+    ]
+    failures = []
+    if missing_source_tokens:
+        failures.append(
+            "Missing source guard/addend tokens: "
+            + ", ".join(f"{rel_path}::{token}" for rel_path, token in missing_source_tokens)
+        )
+    failures.extend(f"VR inline patch guard policy failure: {failure}" for failure in guard_policy_failures)
+    if vr_default_active:
+        failures.append(
+            "Inline patch sites active in the default VR target: "
+            + ", ".join(row["name"] for row in vr_default_active)
+        )
+    if source_blocked_without_resolution_gate:
+        failures.append(
+            "Source-blocked VR call sites without a dedicated resolution gate: "
+            + ", ".join(row["name"] for row in source_blocked_without_resolution_gate)
+        )
+    if source_blocked_default_active:
+        failures.append(
+            "Source-blocked VR call sites active in the default VR target: "
+            + ", ".join(row["name"] for row in source_blocked_default_active)
+        )
+    if default_enablement_without_evidence:
+        failures.append(
+            "Inline patch sites marked default-enableable without manual/runtime evidence: "
+            + ", ".join(row["name"] for row in default_enablement_without_evidence)
+        )
+    if source_blocked_default_enablement:
+        failures.append(
+            "Source-blocked inline patch sites marked default-enableable: "
+            + ", ".join(row["name"] for row in source_blocked_default_enablement)
+        )
+
+    print(f"Tracked inline patch sites: {len(rows)}")
+    print(f"Active default VR inline patch sites: {len(vr_default_active)}")
+    print(f"Missing source guard/addend tokens: {len(missing_source_tokens)}")
+    print(f"VR guard policy failures: {len(guard_policy_failures)}")
+    print(f"Source-only inline patch audit failures: {len(failures)}")
+    for failure in failures:
+        print(f"ERROR: {failure}")
+    return 1 if failures else 0
+
+
 def semantic_validation_status(row):
     if not row["active"]:
         return "not-required-disabled-upstream"
@@ -1341,9 +1408,17 @@ def main():
     )
     parser.add_argument("--report", type=pathlib.Path, default=pathlib.Path("Docs/SkyrimVR/inline-patch-audit.md"))
     parser.add_argument("--manifest", type=pathlib.Path, default=pathlib.Path("Docs/SkyrimVR/inline-patch-manifest.json"))
+    parser.add_argument(
+        "--source-only",
+        action="store_true",
+        help="audit source guards without opening a local SkyrimVR executable or writing reports",
+    )
     args = parser.parse_args()
 
     repo = args.repo.resolve()
+    if args.source_only:
+        return run_source_policy_audit(repo)
+
     release = (repo / args.release).resolve() if not args.release.is_absolute() else args.release
     exe = args.exe.resolve()
     decrypted_exe = args.decrypted_exe.resolve() if args.decrypted_exe else None

@@ -23,6 +23,8 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::WorldReferences) |
     static_cast<CapabilityMask>(Capability::CombatAndMagic) |
     static_cast<CapabilityMask>(Capability::QuestAndDialogue) |
+    // Quest mutation is intentionally unavailable until its completion can be
+    // observed synchronously with sound suppression and ordering semantics.
     static_cast<CapabilityMask>(Capability::WorldState) |
     static_cast<CapabilityMask>(Capability::VrBodyPose) |
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |

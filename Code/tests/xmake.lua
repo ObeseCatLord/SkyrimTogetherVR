@@ -28,9 +28,15 @@ target("TPTests")
 
     if is_plat("windows") then
         add_defines("TP_SKYRIM_VR=1", "TP_CRASH_HANDLER_TESTING=1")
-        add_includedirs("../../build")
-        add_files("version_db.cpp", "runtime_version.rc", "../client/CrashHandler.cpp")
+        add_includedirs("../../build", "../immersive_launcher")
+        add_files(
+            "version_db.cpp",
+            "runtime_version.rc",
+            "../client/CrashHandler.cpp",
+            "../immersive_launcher/loader/ExeLoader.cpp",
+            "../immersive_launcher/loader/TlsMemory.cpp",
+            "../immersive_launcher/steam/SteamCeg.cpp")
         add_deps("TPCrashHandlerProbe")
-        add_packages("spdlog")
+        add_packages("cryptopp", "mem", "spdlog")
         add_syslinks("version", "dbghelp", "kernel32")
     end

@@ -1,6 +1,7 @@
 #include <GameServer.h>
 
 #include <Services/OverlayService.h>
+#include <Services/PartyService.h>
 
 #include <ChatMessageTypes.h>
 
@@ -78,9 +79,25 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
 
 void OverlayService::OnTeleport(const PacketEvent<TeleportRequest>& acMessage) const noexcept
 {
-    Player* pTargetPlayer = m_world.GetPlayerManager().GetById(acMessage.Packet.PlayerId);
-    if (!pTargetPlayer)
+    Player* const pSendingPlayer = acMessage.pPlayer;
+    if (!pSendingPlayer)
+    {
+        spdlog::debug("[OverlayService]: Rejected teleport request without a sender");
         return;
+    }
+
+    Player* const pTargetPlayer = m_world.GetPlayerManager().GetById(acMessage.Packet.PlayerId);
+    const auto& partyService = m_world.GetPartyService();
+    // Self and partyless requests are intentionally denied; only verified party peers share locations.
+    const bool isSameParty = pTargetPlayer && pTargetPlayer != pSendingPlayer &&
+        partyService.IsPlayerInParty(pSendingPlayer) && partyService.IsPlayerInParty(pTargetPlayer) &&
+        pSendingPlayer->GetParty().JoinedPartyId && pTargetPlayer->GetParty().JoinedPartyId &&
+        pSendingPlayer->GetParty().JoinedPartyId == pTargetPlayer->GetParty().JoinedPartyId;
+    if (!isSameParty)
+    {
+        spdlog::debug("[OverlayService]: Rejected teleport request outside the sender party");
+        return;
+    }
 
     NotifyTeleport response{};
 
@@ -97,7 +114,7 @@ void OverlayService::OnTeleport(const PacketEvent<TeleportRequest>& acMessage) c
         }
     }
 
-    acMessage.pPlayer->Send(response);
+    pSendingPlayer->Send(response);
 }
 
 void OverlayService::OnPlayerHealthUpdate(const PacketEvent<RequestPlayerHealthUpdate>& acMessage) const noexcept

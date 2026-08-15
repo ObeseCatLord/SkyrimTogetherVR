@@ -43,6 +43,131 @@
 
 using TiltedPhoques::Debug;
 
+#if TP_SKYRIM_VR
+namespace
+{
+constexpr auto kBridgeHealthSummaryInterval = std::chrono::seconds(30);
+
+struct BridgeHealthSummaryState
+{
+    struct SessionIdentity
+    {
+        std::uint32_t PlayerId{};
+        std::uint64_t SessionNonce{};
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+    } LastOnlineSession{};
+
+    std::chrono::steady_clock::time_point LastPeriodicSummary{};
+    bool HasPeriodicSummary{};
+    bool WasOnline{};
+    bool FinalSummaryWritten{};
+};
+
+BridgeHealthSummaryState s_bridgeHealthSummary;
+
+void LogBridgeHealthSummary(const char* apReason, const bool aFinal)
+{
+    if (!World::Exists())
+        return;
+
+    auto& world = World::Get();
+    const auto& transport = world.GetTransport();
+    const auto online = transport.IsOnline();
+    auto& state = s_bridgeHealthSummary;
+
+    if (online)
+    {
+        state.LastOnlineSession = {
+            transport.GetLocalPlayerId(),
+            transport.GetSessionId(),
+            transport.GetServerInstanceNonce(),
+            transport.GetConnectionGeneration(),
+        };
+        state.WasOnline = true;
+        state.FinalSummaryWritten = false;
+    }
+
+    if (aFinal && state.FinalSummaryWritten)
+        return;
+
+    const auto diagnostics = SkyrimTogetherVR::GameplayBridgeClient::GetDiagnostics();
+    const auto& session = online ? BridgeHealthSummaryState::SessionIdentity{
+                                       transport.GetLocalPlayerId(),
+                                       transport.GetSessionId(),
+                                       transport.GetServerInstanceNonce(),
+                                       transport.GetConnectionGeneration(),
+                                   }
+                                 : state.LastOnlineSession;
+
+    spdlog::info(
+        "STVR bridge health{}: online={}, playerId={}, sessionNonce={}, serverInstanceNonce={}, connectionGeneration={}, "
+        "lifecycleEpoch={}, endpointState={}, ready={}, producedEvents={}, consumedEvents={}, submittedCommands={}, "
+        "executedCommands={}, rejectedCommands={}, staleCommands={}, discardedEvents={}, rejectedSubmissions={}, "
+        "eventRingDrops={}, commandRingDrops={}",
+        aFinal ? fmt::format(" final={}", apReason) : "",
+        online,
+        session.PlayerId,
+        session.SessionNonce,
+        session.ServerInstanceNonce,
+        session.ConnectionGeneration,
+        diagnostics.LifecycleEpoch,
+        diagnostics.EndpointState,
+        diagnostics.Ready,
+        diagnostics.ProducedEventCount,
+        diagnostics.ConsumedEventCount,
+        diagnostics.SubmittedCommandCount,
+        diagnostics.ExecutedCommandCount,
+        diagnostics.RejectedCommandCount,
+        diagnostics.StaleCommandCount,
+        diagnostics.DiscardedEventCount,
+        diagnostics.RejectedSubmissionCount,
+        diagnostics.EventRingDroppedPushCount,
+        diagnostics.CommandRingDroppedPushCount);
+
+    if (aFinal)
+        state.FinalSummaryWritten = true;
+}
+
+void UpdateBridgeHealthSummary()
+{
+    if (!World::Exists())
+        return;
+
+    auto& world = World::Get();
+    const auto online = world.GetTransport().IsOnline();
+    auto& state = s_bridgeHealthSummary;
+
+    if (!online)
+    {
+        if (state.WasOnline && !state.FinalSummaryWritten)
+            LogBridgeHealthSummary("disconnect", true);
+        state.WasOnline = false;
+        return;
+    }
+
+    state.WasOnline = true;
+    state.FinalSummaryWritten = false;
+    state.LastOnlineSession = {
+        world.GetTransport().GetLocalPlayerId(),
+        world.GetTransport().GetSessionId(),
+        world.GetTransport().GetServerInstanceNonce(),
+        world.GetTransport().GetConnectionGeneration(),
+    };
+    if (!world.ctx().at<VRLifecycleService>().IsReady())
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (state.HasPeriodicSummary && now - state.LastPeriodicSummary < kBridgeHealthSummaryInterval)
+        return;
+
+    LogBridgeHealthSummary(nullptr, false);
+    state.LastPeriodicSummary = now;
+    state.HasPeriodicSummary = true;
+}
+} // namespace
+#endif
+
 TiltedOnlineApp::TiltedOnlineApp()
 {
     // Set console code page to UTF-8 so console known how to interpret string data
@@ -163,6 +288,7 @@ bool TiltedOnlineApp::EndMain()
 {
 #if TP_SKYRIM_VR
     SkyrimTogetherVR::LogShutdownPhase("endmain.begin");
+    LogBridgeHealthSummary("shutdown", true);
 #endif
 
 #if TP_SKYRIM_VR
@@ -200,6 +326,7 @@ void TiltedOnlineApp::Update()
         if (!loggedPumpFailure.exchange(true, std::memory_order_relaxed))
             spdlog::error("SkyrimTogetherVR CommonLib gameplay command pump stopped: result={}", static_cast<std::uint32_t>(pumpResult));
     }
+    UpdateBridgeHealthSummary();
 #endif
 
 #if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY

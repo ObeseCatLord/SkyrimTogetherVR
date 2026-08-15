@@ -108,7 +108,6 @@ def main() -> int:
             (
                 'target("TPCrashHandlerProbe")',
                 '"TP_CRASH_HANDLER_TESTING=1"',
-                'add_includedirs("../../build")',
                 '"../client/CrashHandler.cpp"',
                 'add_deps("TPCrashHandlerProbe")',
                 'add_packages("spdlog")',
@@ -116,6 +115,12 @@ def main() -> int:
             ),
         )
     )
+
+    tests_xmake = (root / "Code" / "tests" / "xmake.lua").read_text(encoding="utf-8")
+    probe_target = re.search(r'^target\("TPCrashHandlerProbe"\)(?P<body>.*?)^end$', tests_xmake, re.MULTILINE | re.DOTALL)
+    probe_body = probe_target.group("body") if probe_target else ""
+    if not probe_target or "add_includedirs" not in probe_body or "../client" not in probe_body or "../../build" not in probe_body:
+        failures.append("Code/tests/xmake.lua: TPCrashHandlerProbe must include the client and generated build headers")
 
     crash_handler_text = (root / "Code" / "client" / "CrashHandler.cpp").read_text(encoding="utf-8")
     for forbidden in (

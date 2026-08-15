@@ -53,7 +53,15 @@ jobs:
       run: xmake run TPTests
 
     - name: Validate Linux launch scripts
-      run: bash -n Tools/SkyrimVR/linux/*.sh
+      run: bash -n Tools/SkyrimVR/linux/*.sh Tools/SkyrimVR/linux/tests/*.sh
+
+    - name: Test isolated Linux VR launch tooling
+      run: |
+        Tools/SkyrimVR/linux/manage-monado-instance.sh --self-test
+        Tools/SkyrimVR/linux/tests/test-monado-instance.sh
+        Tools/SkyrimVR/linux/tests/test-local-clients.sh
+        Tools/SkyrimVR/linux/tests/test-local-client-units.sh
+        Tools/SkyrimVR/linux/tests/test-launcher-runtime.sh
 
     - name: Run handoff installer self-test
       run: python3 Tools/SkyrimVR/install_local_agent_handoff.py --self-test

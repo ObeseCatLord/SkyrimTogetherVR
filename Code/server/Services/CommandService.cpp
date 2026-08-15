@@ -14,6 +14,15 @@
 namespace
 {
 Console::Setting bAnnounceServer{"LiveServices:bAnnounceServer", "Whether to list the server on the public server list", false};
+
+bool IsAdminSession(const GameServer* apGameServer, const Player* apPlayer) noexcept
+{
+    if (!apGameServer || !apPlayer)
+        return false;
+
+    const auto& adminSessions = apGameServer->GetAdminSessions();
+    return adminSessions.find(apPlayer->GetConnectionId()) != adminSessions.end();
+}
 }
 
 CommandService::CommandService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
@@ -25,25 +34,26 @@ CommandService::CommandService(World& aWorld, entt::dispatcher& aDispatcher) noe
 
 void CommandService::OnSetTimeCommand(const PacketEvent<SetTimeCommandRequest>& acMessage) const noexcept
 {
+    if (!acMessage.pPlayer)
+    {
+        spdlog::debug("[CommandService]: Rejected set-time request without a sender");
+        return;
+    }
+
     NotifySetTimeResult response{};
 
-    const auto cPlayerId = static_cast<uint32_t>(acMessage.Packet.PlayerId);
-
-    // Admin override: always allowed
-    for (const auto session : GameServer::Get()->GetAdminSessions())
+    // The packet PlayerId is client-controlled; authorization uses the sender connection.
+    if (IsAdminSession(GameServer::Get(), acMessage.pPlayer))
     {
-        if (PlayerManager::Get()->GetByConnectionId(session)->GetId() == cPlayerId)
-        {
-            const auto cHours = static_cast<int>(acMessage.Packet.Hours);
-            const auto cMinutes = static_cast<int>(acMessage.Packet.Minutes);
+        const auto cHours = static_cast<int>(acMessage.Packet.Hours);
+        const auto cMinutes = static_cast<int>(acMessage.Packet.Minutes);
 
-            m_world.GetCalendarService().SetTime(cHours, cMinutes, m_world.GetCalendarService().GetTimeScale());
+        const bool timeSetSuccessfully = m_world.GetCalendarService().SetTime(cHours, cMinutes, m_world.GetCalendarService().GetTimeScale());
+        response.Result = timeSetSuccessfully ? NotifySetTimeResult::SetTimeResult::kSuccess
+                                              : NotifySetTimeResult::SetTimeResult::kInvalidInput;
+        acMessage.pPlayer->Send(response);
 
-            response.Result = NotifySetTimeResult::SetTimeResult::kSuccess;
-            acMessage.pPlayer->Send(response);
-
-            return;
-        }
+        return;
     }
 
     // Party leader allowed on private servers only
@@ -53,25 +63,41 @@ void CommandService::OnSetTimeCommand(const PacketEvent<SetTimeCommandRequest>& 
         const auto cHours = static_cast<int>(acMessage.Packet.Hours);
         const auto cMinutes = static_cast<int>(acMessage.Packet.Minutes);
 
-        m_world.GetCalendarService().SetTime(cHours, cMinutes, m_world.GetCalendarService().GetTimeScale());
-
-        response.Result = NotifySetTimeResult::SetTimeResult::kSuccess;
+        const bool timeSetSuccessfully = m_world.GetCalendarService().SetTime(cHours, cMinutes, m_world.GetCalendarService().GetTimeScale());
+        response.Result = timeSetSuccessfully ? NotifySetTimeResult::SetTimeResult::kSuccess
+                                              : NotifySetTimeResult::SetTimeResult::kInvalidInput;
         acMessage.pPlayer->Send(response);
 
         return;
     }
 
     response.Result = NotifySetTimeResult::SetTimeResult::kNoPermission;
+    spdlog::debug("[CommandService]: Rejected unauthorized set-time request");
     acMessage.pPlayer->Send(response);
 }
 
 void CommandService::OnTeleportCommandRequest(const PacketEvent<TeleportCommandRequest>& acMessage) const noexcept
 {
+    if (!acMessage.pPlayer)
+    {
+        spdlog::debug("[CommandService]: Rejected teleport command without a sender");
+        return;
+    }
+
+    if (!IsAdminSession(GameServer::Get(), acMessage.pPlayer))
+    {
+        spdlog::debug("[CommandService]: Rejected teleport command from a non-admin sender");
+        return;
+    }
+
     Player* pTargetPlayer = nullptr;
     for (Player* pPlayer : m_world.GetPlayerManager())
     {
-        if (pPlayer->GetUsername() == acMessage.Packet.TargetPlayer)
+        if (pPlayer && pPlayer->GetUsername() == acMessage.Packet.TargetPlayer)
+        {
             pTargetPlayer = pPlayer;
+            break;
+        }
     }
 
     TeleportCommandResponse response{};

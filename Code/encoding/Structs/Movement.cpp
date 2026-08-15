@@ -1,7 +1,7 @@
 #include <Structs/Movement.h>
 #include <TiltedCore/Serialization.hpp>
+#include <bit>
 #include <cmath>
-#include <cstring>
 
 using TiltedPhoques::Serialization;
 
@@ -22,7 +22,7 @@ void Movement::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
     Position.Serialize(aWriter);
     Rotation.Serialize(aWriter);
     Variables.GenerateDiff(AnimationVariables{}, aWriter);
-    aWriter.WriteBits(*reinterpret_cast<const uint32_t*>(&Direction), 32);
+    aWriter.WriteBits(std::bit_cast<std::uint32_t>(Direction), 32);
 }
 
 void Movement::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -46,6 +46,6 @@ void Movement::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
         return;
     }
     const uint32_t tmp32 = tmp & 0xFFFFFFFF;
-    std::memcpy(&Direction, &tmp32, sizeof(Direction));
+    Direction = std::bit_cast<float>(tmp32);
     IsDecodedValid = std::isfinite(Direction);
 }

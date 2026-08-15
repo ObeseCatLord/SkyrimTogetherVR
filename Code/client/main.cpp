@@ -82,6 +82,7 @@ static bool InstallVrWinMainLifecycleHook() noexcept
 
 extern HICON g_SharedWindowIcon;
 extern void InstallVrMainLoopBringupHooks();
+extern bool IsVrMainDrawStartupActiveMode() noexcept;
 
 #if TP_SKYRIM_VR
 static void InstallVrBringupHooks()
@@ -248,19 +249,6 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
     if (!InstallVrWinMainLifecycleHook())
         return false;
 
-    if (!SkyrimTogetherVR::TickBridge::Initialize())
-    {
-        spdlog::critical("SkyrimTogetherVR could not initialize the required SKSEVR task endpoint");
-        return false;
-    }
-
-    if (!SkyrimTogetherVR::GameplayBridgeClient::Initialize())
-    {
-        SkyrimTogetherVR::TickBridge::Retire();
-        spdlog::critical("SkyrimTogetherVR could not initialize the required CommonLib gameplay endpoint");
-        return false;
-    }
-
     const auto vrCompatibilityStatus = BuildVRCompatibilityStatus(acGamePath, stubs::g_IsHiggsActive, stubs::g_IsPlanckActive);
     WriteVRCompatibilityStatusFile(acGamePath, vrCompatibilityStatus);
 
@@ -270,11 +258,28 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
     if (vrCompatibilityStatus.PlanckInstalled)
         spdlog::info("PLANCK detected; keeping SkyrimTogetherVR in PLANCK/HIGGS-compatible hook mode");
 
+    InstallVrBringupHooks();
+
+    if (IsVrMainDrawStartupActiveMode())
+    {
+        if (!SkyrimTogetherVR::TickBridge::Initialize())
+        {
+            spdlog::critical("SkyrimTogetherVR could not initialize the required SKSEVR task endpoint");
+            return false;
+        }
+
+        if (!SkyrimTogetherVR::GameplayBridgeClient::Initialize())
+        {
+            SkyrimTogetherVR::TickBridge::Retire();
+            spdlog::critical("SkyrimTogetherVR could not initialize the required CommonLib gameplay endpoint");
+            return false;
+        }
+    }
+
 #if TP_SKYRIM_VR_ENABLE_UNVALIDATED_HOOKS
     if (vrCompatibilityStatus.VRPhysicsCompatibilityModInstalled)
     {
         spdlog::warn("HIGGS or PLANCK is installed; refusing to install unvalidated SkyrimTogetherVR gameplay hooks");
-        InstallVrBringupHooks();
     }
     else
     {
@@ -282,7 +287,6 @@ bool RunTiltedInit(const std::filesystem::path& acGamePath, int aMajor, int aMin
     }
 #else
     spdlog::warn("SkyrimTogetherVR bring-up mode: skipping unvalidated Skyrim gameplay hooks");
-    InstallVrBringupHooks();
 #endif
 #else
     TiltedOnlineApp::InstallHooks2();
@@ -311,7 +315,8 @@ void RunTiltedApp()
 {
     if (!g_appInstance)
         return;
-    if (s_appStartAttempted.exchange(true, std::memory_order_acq_rel))
+    bool expected = false;
+    if (!s_appStartAttempted.compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire))
         return;
 
 #if TP_SKYRIM_VR
@@ -358,7 +363,11 @@ void RunTiltedEnd() noexcept
 
     try
     {
+#if TP_SKYRIM_VR
+        if (g_appInstance && s_appStartAttempted.load(std::memory_order_acquire))
+#else
         if (g_appInstance)
+#endif
             g_appInstance->EndMain();
     }
     catch (const std::exception& error)

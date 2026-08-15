@@ -2,12 +2,38 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
-## 2026-08-11 Current Literal-Parity Source Stage
+## 2026-08-15 Current Release Authority
 
-The only built evidence is the clean WinBoat audited baseline `82c7999a`.
-The current source tree contains the unbuilt literal desktop-parity and VR
-embodiment tranche. It is not yet a package, deployment, or runtime candidate.
-Do not infer current build or runtime proof from the historical sections below.
+The release remains a **connection/bootstrap alpha**. It is not gameplay-ready
+and must not be described as a gameplay alpha, beta, or parity release until
+matching two-client gameplay evidence exists.
+
+The only built evidence relevant to this worktree is historical: the clean
+WinBoat audited baseline `82c7999a` and the dated single-client connection
+records cited below. The current source worktree, including the current repair
+set, is unbuilt. It is not a package, deployment, readiness, loader, or runtime
+candidate. Source presence, static audit coverage, and historical build records
+are distinct from a successful build and runtime proof.
+
+The current unbuilt dependency source is upstream alandtse `CommonLibVR` `ng`
+6.3.1 at `108836139ee612651f6c6c4dc4c41e673dcde623`, merged into the project
+branch at `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. This supersedes the former
+6.1.1 / `612394bda3e2674da585831702308d571cf991b6` source description; it does
+not establish a current client build.
+
+The startup CRT-bypass, startup-readiness, PE-loader,
+`Movement`-`std::bit_cast`, and projectile-regression repairs are integrated
+source-only work in the current tree. Their build, package, loader, and runtime
+rows are pending; none may be treated as passed before a final build produces
+evidence. The complete local source-readiness suite currently passes all 30
+gates, which is audit evidence only.
+
+`code-review-remediation-20260815.md` is the concise authoritative disposition
+and gate record for this review. All subsequent material is retained as
+implementation history or dated evidence, not proof for the current source
+tree.
+
+## Historical 2026-08-11 Literal-Parity Source Stage
 
 Mapping ABI 22 and exact-match gameplay protocol revision 14 carry the current
 assignment, gameplay, body-format-3, sparse finger-joint, and bounded HIGGS
@@ -36,22 +62,23 @@ remote PLANCK physics are explicit public-API limitations rather than desktop
 gameplay omissions. Vivox is absent and disabled in both reviewable branches.
 
 The split Sol xhigh source review is complete and every verified source finding
-has been dispositioned. The remaining mandatory order is: candidate WinBoat
-build, commit/push only if it passes, clean `--skip-handoff` build, matching
-local/server deployment, Monado connection proof, then the two-client matrix.
-No handoff update is authorized in this stage. See
+has been dispositioned. The remaining mandatory order is: final integrated Sol
+review, candidate WinBoat build, commit/push only if it passes, clean build with
+an audited Linux/Windows handoff, matching local/server deployment, Monado
+connection proof, then the two-client matrix. The handoff update is authorized
+for that clean committed build. See
 `parity-safety-stage-20260802.md` and the parity checklist.
 
 ## Historical 2026-07-16 Full Gameplay Source Tranche
 
-The active gameplay target is no longer connection-only or observation-only.
-The mapped client translates original Skyrim Together protocol messages while
-the maintained alandtse CommonLib SKSEVR plugin owns validated Skyrim VR events,
-retained actor handles, object references, and game mutation. Historical stage
-notes below describe how the port reached this boundary; they are not the
-current feature gate.
+This dated source tranche recorded an intended gameplay target beyond
+connection-only and observation-only modes. The mapped client translated
+original Skyrim Together protocol messages while the then-maintained alandtse
+CommonLib SKSEVR plugin owned validated Skyrim VR events, retained actor
+handles, object references, and game mutation. These are historical source
+claims, not the current release feature gate.
 
-Current source includes canonical remote actor lifecycle and movement,
+The historical source tranche included canonical remote actor lifecycle and movement,
 animation graph snapshots, appearance, equipment and inventory,
 actor values, death/respawn, owned NPCs, objects, combat, projectiles, magic,
 quests, dialogue, packages, party/world state, HMD/hands/FBT pose, HIGGS object
@@ -655,6 +682,10 @@ Current result:
 
 ## Build Verification
 
+All results in this section are historical results at their stated revisions.
+They do not apply to the 2026-08-15 unbuilt source worktree or establish current
+loader/readiness/multi-client proof.
+
 ### Canonical avatar foundation hardening (2026-07-15)
 
 - Packed server entity ID `0` is now valid. The VR client stores local
@@ -708,7 +739,7 @@ git diff --check
 ~/.local/bin/xmake build -y SkyrimTogetherServer
 ```
 
-Current result:
+Historical result at the stated revision:
 
 - `SkyrimEncoding` builds with the VR pose, VR movement, VR equipment, VR activation, VR magic-effect, VR combat-hit, VR projectile intent, and VR grab-release protocol files.
 - `CommonLib` builds in the current Linux configuration.

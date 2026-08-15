@@ -1,3 +1,7 @@
+#if defined(TP_SKYRIM_VR_STARTUP_MODE_TEST)
+#include <atomic>
+#include <cstdint>
+#else
 #include <TiltedOnlinePCH.h>
 
 #include <algorithm>
@@ -10,29 +14,64 @@
 
 #include "TiltedOnlineApp.h"
 #include "VRTickBridge.h"
+#endif
 
 #ifndef TP_SKYRIM_VR
 #define TP_SKYRIM_VR 0
 #endif
 
+#if !defined(TP_SKYRIM_VR_STARTUP_MODE_TEST)
 struct Main;
+#endif
 
 #if TP_SKYRIM_VR
 
-extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
-extern void RunTiltedApp();
-
-enum class VrUpdateMode
+enum class VrUpdateMode : std::uint8_t
 {
     Off,
     Observe,
     Active,
 };
 
+namespace SkyrimTogetherVR::StartupMode
+{
+enum class MainDrawTransition
+{
+    None,
+    BeginMain,
+    AlreadyAttempted,
+    OwnerMismatch,
+};
+
+class MainDrawStartupGate
+{
+  public:
+    MainDrawTransition TryBegin(const VrUpdateMode aMode, const bool aOutermost, const std::uint32_t aThreadId) noexcept
+    {
+        if (aMode != VrUpdateMode::Active || !aOutermost || aThreadId == 0)
+            return MainDrawTransition::None;
+
+        auto expectedOwner = std::uint32_t{0};
+        if (!m_ownerThreadId.compare_exchange_strong(expectedOwner, aThreadId, std::memory_order_acq_rel) && expectedOwner != aThreadId)
+            return MainDrawTransition::OwnerMismatch;
+
+        return m_beginMainAttempted.exchange(true, std::memory_order_acq_rel) ? MainDrawTransition::AlreadyAttempted : MainDrawTransition::BeginMain;
+    }
+
+  private:
+    std::atomic_uint32_t m_ownerThreadId{0};
+    std::atomic_bool m_beginMainAttempted{false};
+};
+} // namespace SkyrimTogetherVR::StartupMode
+
+#if !defined(TP_SKYRIM_VR_STARTUP_MODE_TEST)
+
+extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
+extern void RunTiltedApp();
+
 TP_THIS_FUNCTION(TMainDraw, void, Main, std::uint32_t, bool);
 static TMainDraw* MainDraw = nullptr;
 static std::once_flag s_mainDrawLogOnce;
-static std::once_flag s_observerActivationOnce;
 static std::atomic_uint64_t s_mainDrawCallCount{0};
 static std::atomic_uint64_t s_mainDrawOwnerCallCount{0};
 static std::atomic_uint64_t s_mainDrawMismatchCallCount{0};
@@ -45,6 +84,7 @@ static std::atomic_uint32_t s_mainDrawMaximumDepth{0};
 static std::atomic_flag s_clientUpdateInProgress = ATOMIC_FLAG_INIT;
 static std::atomic_uint64_t s_clientUpdateCount{0};
 static VrUpdateMode s_updateMode{VrUpdateMode::Observe};
+static SkyrimTogetherVR::StartupMode::MainDrawStartupGate s_mainDrawStartupGate;
 
 template <class T>
 static void UpdateMaximum(std::atomic<T>& arMaximum, T aValue) noexcept
@@ -96,18 +136,6 @@ void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen
     const auto depthBeforeExit = s_mainDrawDepth.fetch_sub(1, std::memory_order_acq_rel);
     const bool outermost = entryDepth == 1 && depthBeforeExit == 1;
 
-    if (outermost)
-    {
-        if (s_updateMode == VrUpdateMode::Observe)
-        {
-            std::call_once(s_observerActivationOnce, []() { SkyrimTogetherVR::TickBridge::Activate(); });
-        }
-        else if (s_updateMode == VrUpdateMode::Active)
-        {
-            RunTiltedApp();
-        }
-    }
-
     const auto callCount = s_mainDrawCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto now = GetTickCount64();
     const auto previousTick = s_mainDrawLastTickMs.exchange(now, std::memory_order_relaxed);
@@ -115,16 +143,16 @@ void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen
     UpdateMaximum(s_mainDrawMaximumGapMs, gapMs);
 
     const auto threadId = GetCurrentThreadId();
-    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
+    const auto observedOwnerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
     std::call_once(
         s_mainDrawLogOnce,
-        [threadId, ownerThreadId, entryDepth]()
+        [threadId, observedOwnerThreadId, entryDepth]()
         {
             spdlog::info(
                 "SkyrimTogetherVR Main::Draw observer reached: mode={} thread={} owner={} depth={}",
                 GetVrUpdateModeName(),
                 threadId,
-                ownerThreadId,
+                observedOwnerThreadId,
                 entryDepth);
         });
 
@@ -136,7 +164,7 @@ void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen
             callCount,
             GetVrUpdateModeName(),
             threadId,
-            ownerThreadId,
+            observedOwnerThreadId,
             entryDepth,
             s_mainDrawMaximumDepth.load(std::memory_order_relaxed),
             gapMs,
@@ -152,6 +180,21 @@ void TP_MAKE_THISCALL(HookMainDraw, Main, std::uint32_t aUnk, bool aMainMenuOpen
     if (!outermost)
         return;
 
+    if (s_updateMode != VrUpdateMode::Active)
+        return;
+
+    const auto startupTransition = s_mainDrawStartupGate.TryBegin(s_updateMode, outermost, threadId);
+    if (startupTransition == SkyrimTogetherVR::StartupMode::MainDrawTransition::OwnerMismatch)
+    {
+        const auto count = s_mainDrawMismatchCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 2 || count % 6000 == 0)
+            spdlog::warn("SkyrimTogetherVR Main::Draw startup-owner mismatch: call={} thread={}", count, threadId);
+        return;
+    }
+    if (startupTransition == SkyrimTogetherVR::StartupMode::MainDrawTransition::BeginMain)
+        RunTiltedApp();
+
+    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
     if (ownerThreadId == 0)
     {
         const auto count = s_mainDrawUnavailableCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -224,6 +267,13 @@ void InstallVrMainLoopBringupHooks()
 
     InstallVrMainDrawObserver();
 }
+
+bool IsVrMainDrawStartupActiveMode() noexcept
+{
+    return s_updateMode == VrUpdateMode::Active;
+}
+
+#endif
 
 #else
 

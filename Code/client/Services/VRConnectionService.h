@@ -31,6 +31,9 @@ private:
         Connect,
         Disconnect,
         Chat,
+        SetTime,
+        TeleportToPlayer,
+        AdminTeleport,
         CreateParty,
         LeaveParty,
         InviteToParty,
@@ -45,9 +48,14 @@ private:
         std::string Endpoint;
         std::string Password;
         std::string Message;
+        std::string TargetPlayer;
         std::string Error;
         uint32_t PlayerId{};
+        uint8_t Hours{};
+        uint8_t Minutes{};
         bool HasPlayerId{false};
+        bool HasHours{false};
+        bool HasMinutes{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -60,11 +68,15 @@ private:
     Command ParseCommandFile(const std::string& acContents) const noexcept;
     static bool IsPartyTargetAction(CommandAction aAction) noexcept;
     void TryRunPendingCommand() noexcept;
-    void RunCommand(const Command& acCommand) noexcept;
+    [[nodiscard]] bool RunCommand(const Command& acCommand) noexcept;
     void QueueConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     void QueueDisconnect() noexcept;
-    void SendChat(const std::string& acMessage) noexcept;
-    void RunPartyCommand(const Command& acCommand) noexcept;
+    [[nodiscard]] bool SendChat(const std::string& acMessage) noexcept;
+    [[nodiscard]] bool SendSetTimeCommand(const Command& acCommand) noexcept;
+    [[nodiscard]] bool SendTeleportToPlayerCommand(const Command& acCommand) noexcept;
+    [[nodiscard]] bool SendAdminTeleportCommand(const Command& acCommand) noexcept;
+    [[nodiscard]] bool HasStableAuthenticatedTransport() const noexcept;
+    [[nodiscard]] bool RunPartyCommand(const Command& acCommand) noexcept;
     void ArchiveCommandFile(const char* apSuffix) noexcept;
     void SetStatus(std::string aState, std::string aError = {}) noexcept;
     void WriteStatusFile() noexcept;

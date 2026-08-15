@@ -20,14 +20,20 @@
 
 #include <BranchInfo.h>
 #include <Shellapi.h>
+#include <bcrypt.h>
 #include <client/ScriptExtender.h>
 #include <client/ShutdownDiagnostics.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <memory>
+#include <span>
 #include <thread>
+#include <vector>
 
 // These symbols are defined within the client code skyrimtogetherclient
 extern bool InstallStartHook();
@@ -42,6 +48,60 @@ HICON g_SharedWindowIcon = nullptr;
 namespace launcher
 {
 static LaunchContext* g_context = nullptr;
+
+namespace
+{
+bool IsExpectedGameExecutable(std::span<const uint8_t> aContents)
+{
+    if (aContents.size() != CurrentTarget.exeDiskSz)
+    {
+        SetLastError(ERROR_BAD_EXE_FORMAT);
+        return false;
+    }
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    bool result = false;
+
+    do
+    {
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+            break;
+
+        DWORD hashObjectSize = 0;
+        DWORD hashSize = 0;
+        DWORD bytesReturned = 0;
+        if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&hashObjectSize), sizeof(hashObjectSize), &bytesReturned, 0) < 0 ||
+            bytesReturned != sizeof(hashObjectSize) ||
+            BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashSize), sizeof(hashSize), &bytesReturned, 0) < 0 || bytesReturned != sizeof(hashSize) ||
+            hashSize != CurrentTarget.exeSha256.size() || aContents.size() > static_cast<size_t>(std::numeric_limits<ULONG>::max()))
+        {
+            break;
+        }
+
+        std::vector<uint8_t> hashObject(hashObjectSize);
+        std::array<uint8_t, 32> digest{};
+        if (BCryptCreateHash(algorithm, &hash, hashObject.data(), hashObjectSize, nullptr, 0, 0) < 0 ||
+            BCryptHashData(hash, const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(aContents.data())), static_cast<ULONG>(aContents.size()), 0) < 0 ||
+            BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0)
+        {
+            break;
+        }
+
+        result = std::equal(digest.begin(), digest.end(), CurrentTarget.exeSha256.begin());
+    } while (false);
+
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (algorithm)
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+
+    if (!result)
+        SetLastError(ERROR_BAD_EXE_FORMAT);
+
+    return result;
+}
+} // namespace
 
 #if TP_SKYRIM_VR
 static bool g_launchCompanionPanel = false;
@@ -122,8 +182,7 @@ bool EnvRequestsCompanionPanel()
     if (length == 0 || length >= _countof(value))
         return false;
 
-    return value[0] != L'\0' && value[0] != L'0' && value[0] != L'f' && value[0] != L'F' && value[0] != L'n' &&
-           value[0] != L'N' && value[0] != L'o' && value[0] != L'O';
+    return value[0] != L'\0' && value[0] != L'0' && value[0] != L'f' && value[0] != L'F' && value[0] != L'n' && value[0] != L'N' && value[0] != L'o' && value[0] != L'O';
 }
 
 bool LaunchCompanionPanel(const LaunchContext& acContext)
@@ -140,13 +199,7 @@ bool LaunchCompanionPanel(const LaunchContext& acContext)
             continue;
 
         const auto parameters = L"--game-path \"" + acContext.gamePath.wstring() + L"\"";
-        const auto result = ShellExecuteW(
-            nullptr,
-            L"open",
-            candidate.c_str(),
-            parameters.c_str(),
-            candidate.parent_path().c_str(),
-            SW_SHOWNORMAL);
+        const auto result = ShellExecuteW(nullptr, L"open", candidate.c_str(), parameters.c_str(), candidate.parent_path().c_str(), SW_SHOWNORMAL);
         if (reinterpret_cast<INT_PTR>(result) > 32)
             return true;
     }
@@ -229,8 +282,7 @@ int StartUp(int argc, char** argv)
         DIE_NOW(L"Failed to select game install.");
 
 #if TP_SKYRIM_VR
-    const bool shouldLaunchCompanion =
-        !g_disableCompanionPanel && (g_launchCompanionPanel || EnvRequestsCompanionPanel());
+    const bool shouldLaunchCompanion = !g_disableCompanionPanel && (g_launchCompanionPanel || EnvRequestsCompanionPanel());
     if (shouldLaunchCompanion)
     {
         if (!LaunchCompanionPanel(*LC) && g_companionPanelOnly)
@@ -298,9 +350,8 @@ bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)
     {
         wchar_t message[192]{};
         swprintf_s(
-            message, _countof(message), L"Unsupported Skyrim VR runtime %u.%u.%u.%u. Skyrim Together VR requires 1.4.15.0.",
-            static_cast<unsigned int>(aRuntimeVersion.Major), static_cast<unsigned int>(aRuntimeVersion.Minor),
-            static_cast<unsigned int>(aRuntimeVersion.Revision), static_cast<unsigned int>(aRuntimeVersion.Build));
+            message, _countof(message), L"Unsupported Skyrim VR runtime %u.%u.%u.%u. Skyrim Together VR requires 1.4.15.0.", static_cast<unsigned int>(aRuntimeVersion.Major),
+            static_cast<unsigned int>(aRuntimeVersion.Minor), static_cast<unsigned int>(aRuntimeVersion.Revision), static_cast<unsigned int>(aRuntimeVersion.Build));
         Die(message);
         return false;
     }
@@ -309,13 +360,16 @@ bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)
     if (content.empty())
         DIE_NOW(L"Failed to mount game executable");
 
-    LC.SetLoaded();
+    auto program = std::span<uint8_t>(reinterpret_cast<uint8_t*>(content.data()), content.size());
+    if (!IsExpectedGameExecutable(program))
+        DIE_NOW(L"Skyrim VR executable does not match the supported 1.4.15.0 build");
 
     ExeLoader loader(CurrentTarget.exeLoadSz);
-    if (!loader.Load(reinterpret_cast<uint8_t*>(content.data())))
+    if (!loader.Load(program))
         DIE_NOW(L"Fatal error while mapping executable");
 
     LC.gameMain = loader.GetEntryPoint();
+    LC.SetLoaded();
     return true;
 }
 
@@ -351,8 +405,7 @@ bool HandleArguments(int aArgc, char** aArgv, bool& aAskSelect)
             }
 
             const char* pMode = aArgv[++i];
-            if (std::strcmp(pMode, "off") != 0 && std::strcmp(pMode, "observe") != 0 &&
-                std::strcmp(pMode, "active") != 0)
+            if (std::strcmp(pMode, "off") != 0 && std::strcmp(pMode, "observe") != 0 && std::strcmp(pMode, "active") != 0)
             {
                 SetLastError(ERROR_BAD_ARGUMENTS);
                 Die(L"--vm-update-mode requires off, observe, or active", true);

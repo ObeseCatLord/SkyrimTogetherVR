@@ -1,119 +1,155 @@
 # Local Agent Complete Handoff
 
 This is a private, machine-local handoff. It contains third-party mod files,
-SKSEVR, installed-game overlay files, the patched XRizer runtime/source, and
-reference checkouts. Do **not** upload this archive to GitHub, Nexus, cloud
+SKSEVR, installed-game overlay files, a Linux XRizer runtime/source snapshot,
+and reference checkouts. Do **not** upload this archive to GitHub, Nexus, cloud
 storage, or a public issue.
 
-## What Is Authoritative
+## Authoritative Identity
 
-- `build/` holds the installable, audited gameplay package and its paired
-  Windows build evidence. Install the gameplay ZIP, not the older public alpha
-  runtime ZIP in `bundles/`; that public ZIP is release/history context only.
-- `LOCAL-MANIFEST.json` binds every handoff payload and records both the built
-  revision and the later source/documentation HEAD. The source HEAD may be
-  newer than the build; that is expected, not a reason to substitute artifacts.
-- The current pair is built revision `a4b90e01`
-  (`a4b90e0129197039f2a7f94170caf618c8ab8965`), network version
-  `stvr-v0.1.0-alpha.1-68-ga4b90e01`. Its matching server image is
-  `skyrim-together-vr-server:a4b90e01-arm64`.
+- `LOCAL-MANIFEST.json` is authoritative for the built source revision, exact
+  gameplay-package and build-evidence hashes, nested build-manifest identity,
+  and configured server endpoint. Do not infer identity from this document,
+  an archive filename, or an older public runtime ZIP.
+- `build/` contains the exact installable gameplay package and its paired
+  Windows build evidence. The installers verify the manifest records and the
+  package/evidence pair before writing target files.
 - `dependencies/current-game-overlay/` is a filtered compatibility overlay.
   It deliberately excludes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.*`
-  readout/control files: those are per-process/session state, not portable
-  proof. Package code and configuration remain supplied by the authoritative
-  gameplay package.
+  session readout/control files. Those files are per-process state, not
+  portable proof.
+- The Windows installer never copies `dependencies/xrizer-runtime/`, Linux
+  launch scripts, or the handoff's `openvr_api.dll` into a Windows game root.
+  Windows uses its existing SteamVR/OpenXR installation.
 
 The archive intentionally omits base-game BSA/ESM content, Steam, Proton,
 Monado, Docker, raw runtime logs, build trees, PDBs, and Git object databases.
 
-## Install a Second Legal Linux + Monado Client
+## Windows Client
 
-Extract the handoff ZIP normally, enter its single extracted root, and run the
-included installer. It requires a separate legal Skyrim VR 1.4.15 install and
-checks that its `SkyrimVR.exe` SHA-256 is
-`6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971` before
-writing anything. It never launches a game/server or deletes target data.
+Prerequisites: extract the archive normally, keep its single extracted root
+intact, use an existing legal Skyrim VR 1.4.15 installation, and run the
+commands from that root in Command Prompt or PowerShell. The installer requires
+the exact legal
+`SkyrimVR.exe` SHA-256
+`6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971`.
+It rejects a game root or target path containing a reparse point, so use a
+direct non-junction path for the target installation.
+
+Dry run is the default and makes no target changes:
+
+```bat
+cd /d C:\path\to\SkyrimTogetherVR-local-agent-complete-handoff-*
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR"
+```
+
+Use the explicit install switch only after the dry run passes. This installs
+the exact gameplay package and only portable `Data`/SKSEVR overlay data. It
+never replaces `SkyrimVR.exe`.
+
+```bat
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -Install
+```
+
+The optional profile operation copies only the bundled `Plugins.txt` and
+`loadorder.txt` to `%LOCALAPPDATA%\Skyrim VR`. It does not overwrite
+`SkyrimPrefs.ini`. First review it as a dry run, then enable it explicitly:
+
+```bat
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -EnableProfile
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -Install -EnableProfile
+```
+
+`INSTALL-SECOND-CLIENT-WINDOWS.bat` invokes the checked PowerShell installer
+with a process-scoped execution-policy bypass; it does not change the machine's
+persistent policy. The equivalent explicit PowerShell form is:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL-SECOND-CLIENT-WINDOWS.ps1 -GameDir 'D:\SteamLibrary\steamapps\common\SkyrimVR'
+```
+
+After installation, launch the packaged VR client from the game directory:
+
+```powershell
+Set-Location 'D:\SteamLibrary\steamapps\common\SkyrimVR'
+.\SkyrimTogetherVR.exe
+```
+
+Use the normal local SteamVR/OpenXR runtime. Do not copy Linux XRizer or
+OpenVR runtime files from this handoff to Windows.
+
+## Linux Client
+
+Prerequisites: extract the archive normally, retain the single extracted root,
+provide a separate legal Skyrim VR 1.4.15 install and its Steam app `611670`
+Proton prefix. The included Linux installer retains its existing exact
+`SkyrimVR.exe` SHA-256 gate and never launches a game or server.
 
 ```bash
 cd /path/to/SkyrimTogetherVR-local-agent-complete-handoff-*/
 python3 ./INSTALL-SECOND-CLIENT.py \
   --game-dir /path/to/second-steam-library/steamapps/common/SkyrimVR \
-  --compatdata /path/to/second-steam-library/steamapps/compatdata/611670
+  --compatdata /path/to/second-steam-library/steamapps/compatdata/611670 \
+  --dry-run
+
+python3 ./INSTALL-SECOND-CLIENT.py \
+  --game-dir /path/to/second-steam-library/steamapps/common/SkyrimVR \
+  --compatdata /path/to/second-steam-library/steamapps/compatdata/611670 \
+  --install
 ```
 
-Use `--dry-run` first to validate the legal executable, nested gameplay
-package/evidence pair, package manifest, and build-to-source ancestry without
-mutating either target. The installer then copies the filtered overlay without
-replacing the target `SkyrimVR.exe`, extracts `build/`'s gameplay package over
-it, restores the three direct-Proton profile files at their exact `pfx` paths,
-and marks the launcher helpers executable. It rejects traversal, duplicate, and
-symlink ZIP entries.
-
-The restored plugin/load order is exactly:
-
-1. `Skyrim.esm`
-2. `Update.esm`
-3. `Dawnguard.esm`
-4. `HearthFires.esm`
-5. `Dragonborn.esm`
-6. `SkyrimVR.esm`
-7. `higgs_vr.esp`
-8. `vrik.esp`
-9. `Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp`
-10. `SkyrimTogether.esp`
-
-Do not overlay multiple controller-binding alternatives. The direct overlay is
-the selected working configuration; the FUS folders are recovery/reference
-material only.
-
-## Monado and Launch Order
-
-Start or verify Monado using the helper carried in `source/`. Replace the
-profile name with the second machine's Envision profile UUID when it does not
-have the local `simulated-qwerty-fixed` profile:
+Without `--install`, the Linux command always performs validation only and does
+not change either target. An explicit install restores the three direct-Proton
+profile files, including `SkyrimPrefs.ini`; this differs from the optional
+Windows profile operation above. Start or verify Monado using the helper carried
+in `source/`, replacing the profile UUID when needed:
 
 ```bash
 ./source/Tools/SkyrimVR/linux/manage-monado-runtime.sh start simulated-qwerty-fixed
 ./source/Tools/SkyrimVR/linux/manage-monado-runtime.sh status
 ```
 
-For the first smoke test, launch offline first from the newly installed game
-directory. This disables only Skyrim Together files and preserves the VR
-compatibility stack.
+Launch an offline smoke test first from the installed game directory, then use
+the online launcher. Set the documented override variables when the second
+machine uses different Steam, Proton, XRizer, or compatdata locations.
 
 ```bash
 cd /path/to/second-steam-library/steamapps/common/SkyrimVR
 ./launch-skyrim-vr-offline.sh
-```
-
-For layouts other than the original machine, set the launch-script overrides
-before launching online: `STVR_STEAM_ROOT`, `STVR_STEAM_LIBRARY`,
-`STVR_COMPATDATA`, `STVR_WINEPREFIX`, `STVR_XRIZER_RUNTIME`, `STVR_PROTONPATH`,
-or `STVR_LAUNCHER`. The launchers derive the game directory from their own
-location, so invoke the copy installed in the desired game directory.
-
-```bash
-STVR_STEAM_LIBRARY=/path/to/second-steam-library \
-STVR_COMPATDATA=/path/to/second-steam-library/steamapps/compatdata/611670 \
-STVR_XRIZER_RUNTIME=/path/to/extracted-handoff/dependencies/xrizer-runtime \
-STVR_PROTONPATH=/path/to/GE-Proton10-34 \
 ./launch-skyrim-together-vr.sh
 ```
 
-Use endpoint `incidentalstoat.xyz:26099`. The server currently has no password;
-leave `STVR_PASSWORD` empty unless its configuration changes.
+## Server Match And Evidence
 
-## Two-Client Staged Checks
+Read the generated manifest before connection testing. Its `serverEndpoint`
+field is the currently configured endpoint for that handoff. At the time this
+guide was updated it may be `incidentalstoat.xyz:26099`, but that endpoint is
+operational configuration and can change. Both clients must use the same
+current endpoint and must be admitted by a server compatible with the exact
+manifest/package build identity; successful transport alone is not gameplay
+proof.
 
-1. With client two alone, complete the offline-first launch and confirm the
-   base VR/mod stack is healthy before enabling Skyrim Together.
-2. Start client one online, finalize its character with no blocking menu, and
-   confirm the expected `a4b90e01` admission at `incidentalstoat.xyz:26099`.
-3. Start client two online with the same endpoint. Confirm distinct player IDs,
-   current-cell readiness, and matching server admission before testing remote
-   movement, poses, HIGGS/PLANCK, or animation.
+On Linux, inspect the manifest and pass the selected endpoint to the launcher
+or staged helper:
 
-Connection success is not complete gameplay proof. Retain evidence for the
-interior/exterior transfer, stale-tick rejection, graph acknowledgement, and
-zero spatial/animation rejection or ring-drop counters as defined in
+```bash
+python3 -c 'import json; print(json.load(open("LOCAL-MANIFEST.json"))["serverEndpoint"])'
+```
+
+On Windows, inspect the same field before entering it in the packaged launcher:
+
+```powershell
+(Get-Content .\LOCAL-MANIFEST.json -Raw | ConvertFrom-Json).serverEndpoint
+```
+
+For each client, retain the installed package build manifest, `logs\tp_client.log`
+or its Proton equivalent, relevant SKSEVR logs, and
+`Data/SkyrimTogetherReborn` handoff files after the test. The packaged runtime
+evidence helpers are the preferred collection path when present:
+
+`CollectSkyrimTogetherVREvidence-Windows.bat` on Windows and
+`python3 source/Tools/SkyrimVR/collect_runtime_evidence.py --help` on Linux.
+Collect evidence only after both clients have matching admission, distinct
+player IDs, current-cell readiness, and the required movement/pose/gameplay
+checks. Follow the acceptance requirements in
 `source/Docs/SkyrimVR/original-gameplay-parity-checklist.md`.

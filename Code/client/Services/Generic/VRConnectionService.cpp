@@ -16,6 +16,9 @@
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Messages/SendChatMessageRequest.h>
+#include <Messages/SetTimeCommandRequest.h>
+#include <Messages/TeleportCommandRequest.h>
+#include <Messages/TeleportRequest.h>
 #include <Services/PartyService.h>
 #include <Services/TransportService.h>
 #include <Services/VRLifecycleService.h>
@@ -32,6 +35,8 @@ constexpr std::size_t kMaximumCommandBytes = 2 * 1024;
 constexpr std::size_t kMaximumEndpointBytes = 255;
 constexpr std::size_t kMaximumPasswordBytes = 256;
 constexpr std::size_t kMaximumChatBytes = 512;
+constexpr std::size_t kMaximumTeleportTargetBytes = 512;
+constexpr uint32_t kMaximumTeleportPlayerId = 0xffff;
 
 bool IsVrPlayerReadyForConnection(World& aWorld) noexcept
 {
@@ -99,7 +104,7 @@ bool IsValidPassword(const std::string_view acPassword) noexcept
     return acPassword.size() <= kMaximumPasswordBytes && !HasControlCharacter(acPassword);
 }
 
-bool ParsePlayerId(const std::string_view acValue, uint32_t& aOut) noexcept
+bool ParseUnsignedValue(const std::string_view acValue, uint32_t& aOut) noexcept
 {
     if (acValue.empty() || acValue.size() > 10)
         return false;
@@ -107,7 +112,27 @@ bool ParsePlayerId(const std::string_view acValue, uint32_t& aOut) noexcept
     const auto* begin = acValue.data();
     const auto* end = begin + acValue.size();
     const auto [position, error] = std::from_chars(begin, end, aOut);
-    return error == std::errc{} && position == end && aOut != 0;
+    return error == std::errc{} && position == end;
+}
+
+bool ParsePlayerId(const std::string_view acValue, uint32_t& aOut) noexcept
+{
+    return ParseUnsignedValue(acValue, aOut) && aOut != 0;
+}
+
+bool ParseTimeComponent(const std::string_view acValue, const uint32_t aMaximum, uint8_t& aOut) noexcept
+{
+    uint32_t value{};
+    if (!ParseUnsignedValue(acValue, value) || value > aMaximum)
+        return false;
+
+    aOut = static_cast<uint8_t>(value);
+    return true;
+}
+
+bool IsValidTeleportTarget(const std::string_view acTarget) noexcept
+{
+    return !acTarget.empty() && acTarget.size() <= kMaximumTeleportTargetBytes && !HasControlCharacter(acTarget);
 }
 
 }
@@ -364,8 +389,10 @@ void VRConnectionService::PollCommandFile() noexcept
         return;
     }
 
-    RunCommand(command);
-    ArchiveCommandFile(".processed");
+    if (RunCommand(command))
+        ArchiveCommandFile(".sent");
+    else
+        ArchiveCommandFile(".error");
 }
 
 VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::string& acContents) const noexcept
@@ -420,6 +447,12 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
                 command.Action = CommandAction::Disconnect;
             else if (lowerValue == "chat")
                 command.Action = CommandAction::Chat;
+            else if (lowerValue == "set_time")
+                command.Action = CommandAction::SetTime;
+            else if (lowerValue == "teleport_to_player")
+                command.Action = CommandAction::TeleportToPlayer;
+            else if (lowerValue == "admin_teleport")
+                command.Action = CommandAction::AdminTeleport;
             else if (lowerValue == "party_create")
                 command.Action = CommandAction::CreateParty;
             else if (lowerValue == "party_leave")
@@ -447,11 +480,27 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
         {
             command.Message = value;
         }
+        else if (key == "hours")
+        {
+            command.HasHours = ParseTimeComponent(value, 23, command.Hours);
+            if (!command.HasHours)
+                command.Error = "set-time command has invalid hours";
+        }
+        else if (key == "minutes")
+        {
+            command.HasMinutes = ParseTimeComponent(value, 59, command.Minutes);
+            if (!command.HasMinutes)
+                command.Error = "set-time command has invalid minutes";
+        }
         else if (key == "playerid" || key == "player_id" || key == "inviterid" || key == "inviter_id")
         {
             command.HasPlayerId = ParsePlayerId(value, command.PlayerId);
             if (!command.HasPlayerId)
-                command.Error = "party command has an invalid player id";
+                command.Error = "command contains an invalid player id";
+        }
+        else if (key == "targetplayer" || key == "target_player")
+        {
+            command.TargetPlayer = value;
         }
     }
 
@@ -466,6 +515,13 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
     else if (command.Action == CommandAction::Chat &&
              (command.Message.empty() || command.Message.size() > kMaximumChatBytes || HasControlCharacter(command.Message)))
         command.Error = "chat message is empty or too long";
+    else if (command.Action == CommandAction::SetTime && (!command.HasHours || !command.HasMinutes))
+        command.Error = "set-time command requires hours from 0 to 23 and minutes from 0 to 59";
+    else if (command.Action == CommandAction::TeleportToPlayer &&
+             (!command.HasPlayerId || command.PlayerId > kMaximumTeleportPlayerId))
+        command.Error = "teleport-to-player command requires a player id from 1 to 65535";
+    else if (command.Action == CommandAction::AdminTeleport && !IsValidTeleportTarget(command.TargetPlayer))
+        command.Error = "admin-teleport command requires a valid target player name";
     else if (IsPartyTargetAction(command.Action) && !command.HasPlayerId)
         command.Error = "party command is missing player id";
     else if (command.Action == CommandAction::None)
@@ -482,28 +538,35 @@ void VRConnectionService::TryRunPendingCommand() noexcept
     if (m_pendingCommand.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection(m_world))
         return;
 
-    RunCommand(m_pendingCommand);
+    const bool sent = RunCommand(m_pendingCommand);
     m_hasPendingCommand = false;
     m_pendingCommand = {};
-    ArchiveCommandFile(".processed");
+    ArchiveCommandFile(sent ? ".sent" : ".error");
 }
 
-void VRConnectionService::RunCommand(const Command& acCommand) noexcept
+bool VRConnectionService::RunCommand(const Command& acCommand) noexcept
 {
     m_commandQueuedThisUpdate = true;
 
     switch (acCommand.Action)
     {
-    case CommandAction::Connect: QueueConnect(acCommand.Endpoint, acCommand.Password); break;
-    case CommandAction::Disconnect: QueueDisconnect(); break;
-    case CommandAction::Chat: SendChat(acCommand.Message); break;
+    case CommandAction::Connect:
+        QueueConnect(acCommand.Endpoint, acCommand.Password);
+        return true;
+    case CommandAction::Disconnect:
+        QueueDisconnect();
+        return true;
+    case CommandAction::Chat: return SendChat(acCommand.Message);
+    case CommandAction::SetTime: return SendSetTimeCommand(acCommand);
+    case CommandAction::TeleportToPlayer: return SendTeleportToPlayerCommand(acCommand);
+    case CommandAction::AdminTeleport: return SendAdminTeleportCommand(acCommand);
     case CommandAction::CreateParty:
     case CommandAction::LeaveParty:
     case CommandAction::InviteToParty:
     case CommandAction::AcceptPartyInvite:
     case CommandAction::KickPartyMember:
-    case CommandAction::ChangePartyLeader: RunPartyCommand(acCommand); break;
-    default: break;
+    case CommandAction::ChangePartyLeader: return RunPartyCommand(acCommand);
+    default: return false;
     }
 }
 
@@ -569,26 +632,125 @@ void VRConnectionService::QueueDisconnect() noexcept
     m_world.GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
 }
 
-void VRConnectionService::SendChat(const std::string& acMessage) noexcept
+bool VRConnectionService::SendChat(const std::string& acMessage) noexcept
 {
     if (!m_transport.IsOnline() || acMessage.empty() || acMessage.size() > kMaximumChatBytes || HasControlCharacter(acMessage))
     {
+        SetStatus(m_transport.IsOnline() ? "error" : "offline", "chat command requires an online connection and a valid message");
         spdlog::warn("SkyrimTogetherVR chat command rejected because the client is offline or the message is invalid");
-        return;
+        return false;
     }
     SendChatMessageRequest request{};
     request.MessageType = ChatMessageType::kGlobalChat;
     request.ChatMessage = acMessage;
-    m_transport.Send(request);
+    if (!m_transport.Send(request))
+    {
+        SetStatus("error", "chat command was not accepted by the transport");
+        spdlog::warn("SkyrimTogetherVR chat command was not accepted by the transport");
+        return false;
+    }
+
+    SetStatus("online");
+    return true;
 }
 
-void VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
+bool VRConnectionService::HasStableAuthenticatedTransport() const noexcept
+{
+    return IsVrPlayerReadyForConnection(m_world) && m_transport.IsOnline() && m_transport.GetLocalPlayerId() != 0 &&
+           m_transport.GetSessionId() != 0 && m_transport.GetConnectionGeneration() != 0 &&
+           m_transport.GetServerInstanceNonce() != 0;
+}
+
+bool VRConnectionService::SendSetTimeCommand(const Command& acCommand) noexcept
+{
+    if (!HasStableAuthenticatedTransport())
+    {
+        SetStatus(m_transport.IsOnline() ? "waiting_for_gameplay" : "offline",
+                  "set-time command requires an authenticated transport and stable local player id");
+        spdlog::warn("SkyrimTogetherVR set-time command rejected because the authenticated transport identity is not stable");
+        return false;
+    }
+
+    const auto lifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
+    const auto senderId = m_transport.GetLocalPlayerId();
+    SetTimeCommandRequest request{};
+    request.Hours = acCommand.Hours;
+    request.Minutes = acCommand.Minutes;
+    request.PlayerId = senderId;
+
+    if (!IsVrPlayerReadyForConnection(m_world) || m_world.ctx().at<VRLifecycleService>().GetEpoch() != lifecycleEpoch ||
+        m_transport.GetLocalPlayerId() != senderId || !m_transport.Send(request))
+    {
+        SetStatus("error", "set-time command was not accepted by the transport");
+        spdlog::warn("SkyrimTogetherVR set-time command was not accepted by the transport");
+        return false;
+    }
+
+    SetStatus("online");
+    return true;
+}
+
+bool VRConnectionService::SendTeleportToPlayerCommand(const Command& acCommand) noexcept
+{
+    if (!HasStableAuthenticatedTransport())
+    {
+        SetStatus(m_transport.IsOnline() ? "waiting_for_gameplay" : "offline",
+                  "teleport-to-player command requires an authenticated transport and stable local player id");
+        spdlog::warn("SkyrimTogetherVR teleport-to-player command rejected because the authenticated transport identity is not stable");
+        return false;
+    }
+
+    const auto lifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
+    const auto senderId = m_transport.GetLocalPlayerId();
+    TeleportRequest request{};
+    request.PlayerId = static_cast<uint16_t>(acCommand.PlayerId);
+
+    if (!IsVrPlayerReadyForConnection(m_world) || m_world.ctx().at<VRLifecycleService>().GetEpoch() != lifecycleEpoch ||
+        m_transport.GetLocalPlayerId() != senderId || !m_transport.Send(request))
+    {
+        SetStatus("error", "teleport-to-player command was not accepted by the transport");
+        spdlog::warn("SkyrimTogetherVR teleport-to-player command was not accepted by the transport");
+        return false;
+    }
+
+    SetStatus("online");
+    return true;
+}
+
+bool VRConnectionService::SendAdminTeleportCommand(const Command& acCommand) noexcept
+{
+    if (!HasStableAuthenticatedTransport())
+    {
+        SetStatus(m_transport.IsOnline() ? "waiting_for_gameplay" : "offline",
+                  "admin-teleport command requires an authenticated transport and stable local player id");
+        spdlog::warn("SkyrimTogetherVR admin-teleport command rejected because the authenticated transport identity is not stable");
+        return false;
+    }
+
+    const auto lifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
+    const auto senderId = m_transport.GetLocalPlayerId();
+    TeleportCommandRequest request{};
+    request.TargetPlayer = acCommand.TargetPlayer;
+
+    if (!IsVrPlayerReadyForConnection(m_world) || m_world.ctx().at<VRLifecycleService>().GetEpoch() != lifecycleEpoch ||
+        m_transport.GetLocalPlayerId() != senderId || !m_transport.Send(request))
+    {
+        SetStatus("error", "admin-teleport command was not accepted by the transport");
+        spdlog::warn("SkyrimTogetherVR admin-teleport command was not accepted by the transport");
+        return false;
+    }
+
+    SetStatus("online");
+    return true;
+}
+
+bool VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
 {
     if (!m_transport.IsOnline())
     {
         SetStatus("offline", "party command requires an online connection");
         spdlog::warn("SkyrimTogetherVR party command rejected because the client is offline");
-        return;
+        return false;
     }
 
     auto& party = m_world.GetPartyService();
@@ -602,6 +764,8 @@ void VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
     case CommandAction::ChangePartyLeader: party.ChangePartyLeader(acCommand.PlayerId); break;
     default: break;
     }
+
+    return true;
 }
 
 void VRConnectionService::ArchiveCommandFile(const char* apSuffix) noexcept

@@ -1,12 +1,16 @@
 #include <catch2/catch.hpp>
 
 #include "../vr_common/VRGameplayBridge.h"
+#include "../vr_gameplay_bridge/QuestDialogueManager.h"
 #include <Structs/MovementOrdering.h>
 
 #include <atomic>
 #include <bit>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
+#include <string>
 #include <thread>
 
 namespace
@@ -46,13 +50,39 @@ CommandRecord MakeGameplayCommand(
     command.Payload.ApplyGameplayAction.Action = static_cast<std::uint16_t>(a_action);
     return command;
 }
+
+std::string ReadRepositorySource(const std::filesystem::path& a_relativePath)
+{
+    auto directory = std::filesystem::current_path();
+    while (true) {
+        const auto candidate = directory / a_relativePath;
+        if (std::filesystem::is_regular_file(candidate)) {
+            std::ifstream file(candidate, std::ios::binary);
+            return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        }
+
+        const auto parent = directory.parent_path();
+        if (parent == directory)
+            return {};
+        directory = parent;
+    }
+}
+
+std::size_t CountOccurrences(const std::string& a_text, const std::string& a_needle)
+{
+    std::size_t count{};
+    for (std::size_t offset{}; (offset = a_text.find(a_needle, offset)) != std::string::npos;
+         offset += a_needle.size())
+        ++count;
+    return count;
+}
 } // namespace
 
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
     REQUIRE(kMappingAbiVersion == 22);
-    REQUIRE(kCapabilityRevision == 30);
+    REQUIRE(kCapabilityRevision == 31);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
@@ -102,10 +132,16 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteSpatialTransfer));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteAnimationGraphSnapshot));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::QuestAndDialogue));
+    REQUIRE_FALSE(HasCapability(kInitialCapabilities, Capability::QuestMutation));
     // Exact action events stay protocol-defined but are not activated by the
     // VR bridge until ForceAction-equivalent replay is validated.
     REQUIRE_FALSE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::InventoryStackTransactions));
+    REQUIRE(static_cast<CapabilityMask>(Capability::QuestMutation) == (1ull << 23));
+    REQUIRE(CapabilityForDomain(GameplayDomain::Quest) == Capability::QuestMutation);
+    REQUIRE(CapabilityForDomain(GameplayDomain::Dialogue) == Capability::QuestAndDialogue);
+    REQUIRE(CapabilityForDomain(GameplayDomain::Party) == Capability::QuestAndDialogue);
     REQUIRE(IsActionInDomain(GameplayDomain::ActorState, GameplayAction::ArmLocalCapture));
     REQUIRE_FALSE(IsActionInDomain(GameplayDomain::Animation, GameplayAction::ArmLocalCapture));
     REQUIRE(IsActionInDomain(GameplayDomain::VrBodyPose, GameplayAction::VrPoseCommit));
@@ -162,6 +198,72 @@ TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-
     const auto wrongAction = MakeGameplayCommand(
         CommandKind::ApplyGameplayAction, GameplayDomain::Appearance, GameplayAction::SetTint);
     REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongAction));
+}
+
+TEST_CASE("VR quest synchronization is fail-closed", "[skyrim-vr][gameplay-bridge][quest]")
+{
+    using SkyrimTogetherVR::GameplayAdapter::QuestDialogueManager;
+
+    REQUIRE(QuestDialogueManager::QuestSynchronizationStatus() == CommandStatus::Unsupported);
+    REQUIRE_FALSE(IsSuccessfulCommandResult(QuestDialogueManager::QuestSynchronizationStatus(),
+                                            GameplayDomain::Quest, GameplayAction::SetQuestState));
+    REQUIRE_FALSE(IsSuccessfulCommandResult(QuestDialogueManager::QuestSynchronizationStatus(),
+                                            GameplayDomain::Quest, GameplayAction::SetQuestStage));
+}
+
+TEST_CASE("VR combat and projectile ownership source audit", "[skyrim-vr][gameplay-bridge][source-audit]")
+{
+    const auto projectileHooks = ReadRepositorySource("Code/vr_gameplay_bridge/ProjectileHooks.cpp");
+    const auto combatMagic = ReadRepositorySource("Code/vr_gameplay_bridge/CombatMagicManager.cpp");
+    const auto magicHooks = ReadRepositorySource("Code/vr_gameplay_bridge/MagicHooks.cpp");
+    const auto localGameplay = ReadRepositorySource("Code/client/Services/Generic/VRLocalGameplayService.cpp");
+    REQUIRE_FALSE(projectileHooks.empty());
+    REQUIRE_FALSE(combatMagic.empty());
+    REQUIRE_FALSE(magicHooks.empty());
+    REQUIRE_FALSE(localGameplay.empty());
+
+    const auto launchHook = projectileHooks.find("RE::ProjectileHandle* HookLaunch(");
+    const auto concentrationBypass = projectileHooks.find(
+        "a_data.spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration", launchHook);
+    const auto remoteShooter = projectileHooks.find("if (remoteShooter) {", launchHook);
+    const auto unallowedRemoteLaunch = projectileHooks.find("if (g_remoteLaunchAllowance == 0)", remoteShooter);
+    const auto suppressRemoteLaunch = projectileHooks.find("a_result->reset();", unallowedRemoteLaunch);
+    const auto allowRemoteLaunch = projectileHooks.find(
+        "return g_originalLaunch ? g_originalLaunch(a_result, a_data) : a_result;", suppressRemoteLaunch);
+    const auto preparePayload = projectileHooks.find("const bool publish = PreparePayload", launchHook);
+    REQUIRE(launchHook != std::string::npos);
+    REQUIRE(concentrationBypass != std::string::npos);
+    REQUIRE(remoteShooter != std::string::npos);
+    REQUIRE(unallowedRemoteLaunch != std::string::npos);
+    REQUIRE(suppressRemoteLaunch != std::string::npos);
+    REQUIRE(allowRemoteLaunch != std::string::npos);
+    REQUIRE(preparePayload != std::string::npos);
+    REQUIRE(concentrationBypass < preparePayload);
+    REQUIRE(remoteShooter < preparePayload);
+    REQUIRE(unallowedRemoteLaunch < suppressRemoteLaunch);
+    REQUIRE(suppressRemoteLaunch < allowRemoteLaunch);
+    REQUIRE(allowRemoteLaunch < preparePayload);
+    REQUIRE(CountOccurrences(projectileHooks, "endpoint.TryPushEvent(record);") == 1);
+
+    const auto remoteMagicScope = combatMagic.find("MagicHooks::ScopedRemoteMagicApplication suppressEcho");
+    const auto remoteCast = combatMagic.find("caster->CastSpellImmediate", remoteMagicScope);
+    const auto remoteLaunchScope = combatMagic.find("ProjectileHooks::ScopedRemoteLaunch allowRemoteLaunch");
+    const auto remoteLaunch = combatMagic.find("RE::Projectile::Launch(&handle, launch);", remoteLaunchScope);
+    REQUIRE(remoteMagicScope != std::string::npos);
+    REQUIRE(remoteCast != std::string::npos);
+    REQUIRE(remoteMagicScope < remoteCast);
+    REQUIRE(remoteLaunchScope != std::string::npos);
+    REQUIRE(remoteLaunch != std::string::npos);
+    REQUIRE(CountOccurrences(combatMagic, "RE::Projectile::Launch(&handle, launch);") == 1);
+    REQUIRE(combatMagic.find("GetCastingType()") == std::string::npos);
+    REQUIRE(magicHooks.find("g_remoteMagicApplicationDepth == 0 && a_doCast && a_caster && actor") != std::string::npos);
+
+    const auto localTargetRejection = localGameplay.find("IsUnsupportedLocalGameplayAction(domain, action)");
+    const auto targetConsumer = combatMagic.find(
+        "return action == GameplayAction::SetCombatTarget ? CommandStatus::Unsupported : CommandStatus::Malformed;");
+    REQUIRE(localTargetRejection != std::string::npos);
+    REQUIRE(targetConsumer != std::string::npos);
+    REQUIRE(combatMagic.find("ExecuteCombatTarget") == std::string::npos);
 }
 
 TEST_CASE("VR gameplay bridge admits only deferred appearance text shapes", "[skyrim-vr][gameplay-bridge]")

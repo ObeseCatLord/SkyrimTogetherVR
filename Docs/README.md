@@ -9,6 +9,7 @@ Start with these documents:
 - [`connection-only-mode.md`](SkyrimVR/connection-only-mode.md): staged targets and capability boundaries.
 - [`vr-pose-replication.md`](SkyrimVR/vr-pose-replication.md): pose/VRIK relay and current CommonLib embodiment scope.
 - [`linux-monado-prerelease-guide.md`](SkyrimVR/linux-monado-prerelease-guide.md): Linux and Monado install/test workflow.
+- [`linux-local-multi-client.md`](SkyrimVR/linux-local-multi-client.md): isolated same-host simulated Monado clients with owned transient cgroups.
 - [`server-deployment.md`](SkyrimVR/server-deployment.md): dedicated-server deployment and the existing Foundry service.
 - [`final-handoff-checklist.md`](SkyrimVR/final-handoff-checklist.md): build, install, and two-client acceptance checklist.
 - [`original-gameplay-parity-checklist.md`](SkyrimVR/original-gameplay-parity-checklist.md): living source/build/runtime matrix for parity with the original branch.

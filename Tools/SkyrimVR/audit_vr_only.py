@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 
@@ -98,7 +99,6 @@ REQUIRED_TOKENS = {
         "g_mappedTlsTemplate",
         "g_mappedTlsTemplateSize",
         "g_mappedTlsTemplateSize > GetMappedTlsSlotCapacity()",
-        "if (!LoadExceptionTable(ntHeader))",
         "if (!RtlAddFunctionTable",
     ),
     "Code/immersive_launcher/loader/TlsMemory.cpp": (
@@ -232,10 +232,21 @@ def main() -> int:
     version_query = launcher_text.find("if (!QueryFileVersion(LC.exePath.c_str(), aRuntimeVersion))", load_program)
     runtime_gate = launcher_text.find("if (!aRuntimeVersion.IsSupported())", load_program)
     executable_read = launcher_text.find("TiltedPhoques::LoadFile(LC.exePath)", load_program)
-    mapped_state = launcher_text.find("LC.SetLoaded();", load_program)
     manual_map = launcher_text.find("loader.Load(", load_program)
-    if not (0 <= load_program < version_query < runtime_gate < executable_read < mapped_state < manual_map):
+    if not (0 <= load_program < version_query < runtime_gate < executable_read < manual_map):
         failures.append("immersive launcher must query and reject unsupported runtimes before reading or manually mapping SkyrimVR.exe")
+    elif "return false;" not in launcher_text[runtime_gate:executable_read]:
+        failures.append("immersive launcher must return after rejecting an unsupported SkyrimVR runtime")
+
+    loader_text = read_text(root, "Code/immersive_launcher/loader/ExeLoader.cpp")
+    import_resolution = loader_text.find("if (!LoadImports(ntHeader))")
+    unwind_tls = re.search(
+        r"if\s*\(\s*!LoadExceptionTable\(ntHeader\)\s*\|\|\s*!LoadTLS\(ntHeader,\s*sourceNtHeader\)\s*\)",
+        loader_text,
+    )
+    replace_headers = loader_text.find("std::memcpy(sourceNtHeader, ntHeader, headerCopySize);")
+    if not (0 <= import_resolution < (unwind_tls.start() if unwind_tls else -1) < replace_headers):
+        failures.append("immersive loader must fail closed when unwind or TLS registration fails before replacing target headers")
 
     print(f"Audited VR-only files: {len(set(REQUIRED_TOKENS) | set(FORBIDDEN_TOKENS))}")
     print(f"VR-only audit failures: {len(failures)}")

@@ -79,9 +79,9 @@ template <class T>
 
     switch (domain) {
     case GameplayDomain::Combat:
-        return action == GameplayAction::MeleeHit || action == GameplayAction::SetCombatTarget ?
-                   CommandStatus::Success :
-                   CommandStatus::Malformed;
+        if (action == GameplayAction::MeleeHit)
+            return CommandStatus::Success;
+        return action == GameplayAction::SetCombatTarget ? CommandStatus::Unsupported : CommandStatus::Malformed;
     case GameplayDomain::Projectile:
         return action == GameplayAction::LaunchProjectile ? CommandStatus::Success : CommandStatus::Malformed;
     case GameplayDomain::Magic:
@@ -132,13 +132,6 @@ template <class T>
                    a_payload.ValueB == 0 && a_payload.ScalarB == 0.0f && a_payload.ScalarC == 0.0f &&
                    a_payload.ScalarD == 0.0f && a_payload.ScalarA >= 0.0f &&
                    HasOnlyFlags(a_payload.ActionFlags, kMeleeHitPlanckAlreadyApplied) ?
-                   CommandStatus::Success :
-                   CommandStatus::Malformed;
-    case GameplayAction::SetCombatTarget:
-        return a_payload.LocalFormIdB == 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
-                   a_payload.ValueA == 0 && a_payload.ValueB == 0 && a_payload.ScalarA == 0.0f &&
-                   a_payload.ScalarB == 0.0f && a_payload.ScalarC == 0.0f && a_payload.ScalarD == 0.0f &&
-                   a_payload.ActionFlags == 0 ?
                    CommandStatus::Success :
                    CommandStatus::Malformed;
     case GameplayAction::LaunchProjectile:
@@ -209,31 +202,6 @@ template <class T>
     target->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -a_payload.ScalarA);
     (void)a_source;
     return CommandStatus::Success;
-}
-
-[[nodiscard]] CommandStatus ExecuteCombatTarget(const CommandRecord& a_command, RE::Actor& a_actor) noexcept
-{
-    const auto& a_payload = a_command.Payload.ApplyGameplayAction;
-    if (a_payload.LocalFormIdB != 0 || a_payload.LocalFormIdC != 0 || a_payload.LocalFormIdD != 0 ||
-        a_payload.ValueA != 0 || a_payload.ValueB != 0 || a_payload.ScalarA != 0.0f || a_payload.ScalarB != 0.0f ||
-        a_payload.ScalarC != 0.0f || a_payload.ScalarD != 0.0f || a_payload.ActionFlags != 0)
-        return CommandStatus::Malformed;
-
-    if (a_payload.LocalFormIdA == 0 && a_payload.SecondaryHandle.Value == 0) {
-        a_actor.StopCombat();
-        return CommandStatus::Success;
-    }
-
-    RE::NiPointer<RE::Actor> target;
-    if (a_payload.SecondaryHandle.Value != 0) {
-        const auto status = AvatarManager::Get().ResolveActorByHandle(
-            a_command.Header.Identity, a_payload.SecondaryHandle, target);
-        if (status != CommandStatus::Success)
-            return status;
-    } else {
-        target.reset(ResolveLocalForm<RE::Actor>(a_payload.LocalFormIdA));
-    }
-    return target && a_actor.StartCombat(target.get()) ? CommandStatus::Success : CommandStatus::MissingForm;
 }
 
 [[nodiscard]] CommandStatus ExecuteCastSpell(const CommandRecord& a_command, RE::Actor& a_actor) noexcept
@@ -402,7 +370,7 @@ CommandStatus ExecuteCombatMagicAction(const CommandRecord& a_command) noexcept
         case GameplayAction::MeleeHit:
             return ExecuteMeleeHit(payload, *actor);
         case GameplayAction::SetCombatTarget:
-            return ExecuteCombatTarget(a_command, *actor);
+            return CommandStatus::Unsupported;
         case GameplayAction::LaunchProjectile:
             return CommandStatus::Unsupported;
         case GameplayAction::CastSpell:

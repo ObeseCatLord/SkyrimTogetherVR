@@ -19,7 +19,8 @@ struct NotifySetTimeResult final : ServerMessage
     enum class SetTimeResult : uint8_t
     {
         kSuccess,
-        kNoPermission
+        kNoPermission,
+        kInvalidInput
     };
 
     SetTimeResult Result{};

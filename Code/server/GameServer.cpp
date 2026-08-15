@@ -869,19 +869,6 @@ void GameServer::SendToPartyInRange(const ServerMessage& acServerMessage, const 
     }
 }
 
-static String PrettyPrintModList(const Vector<Mods::Entry>& acMods)
-{
-    String text;
-    for (size_t i = 0; i < acMods.size(); i++)
-    {
-        text += acMods[i].Filename;
-        if (i != (acMods.size() - 1))
-            text += ", ";
-    }
-
-    return text;
-}
-
 bool GameServer::ValidateAuthParams(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest)
 {
     return false;
@@ -1013,10 +1000,10 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
 
             if (modsToRemove.ModList.size() > 0)
             {
-                String text = PrettyPrintModList(modsToRemove.ModList);
-                // "ModPolicy: refusing connection {:x} because essential mods are missing: {}"
-                // for future reference ^
-                spdlog::info("ModPolicy: refusing connection {:x} because the following mods are installed on the client: {}", aConnectionId, text.c_str());
+                spdlog::info(
+                    "ModPolicy: refusing connection {:x}; {} required mods differ",
+                    aConnectionId,
+                    modsToRemove.ModList.size());
 
                 serverResponse.UserMods.ModList = std::move(modsToRemove.ModList);
                 sendKick(RT::kModsMismatch);
@@ -1073,12 +1060,22 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
         serverResponse.PlayerId = pPlayer->GetId();
         serverResponse.ConnectionGeneration = connectionGeneration;
 
-        auto modList = PrettyPrintModList(acRequest->UserMods.ModList);
-        spdlog::info("New player '{}' [{:x}] connected with {} mods\n\t: {}", pPlayer->GetUsername().c_str(), aConnectionId, acRequest->UserMods.ModList.size(), modList.c_str());
-
         serverResponse.Settings = GetSettings();
 
         serverResponse.Type = AuthenticationResponse::ResponseType::kAccepted;
+        spdlog::info(
+            "STVR auth accepted: playerId={}, connectionId={:x}, protocolRevision={}, requestedCapabilities={:#x}, "
+            "negotiatedCapabilities={:#x}, serverInstanceNonce={}, clientSessionNonce={}, connectionAttempt={}, "
+            "connectionGeneration={}",
+            serverResponse.PlayerId,
+            aConnectionId,
+            acRequest->GameplayProtocolRevision,
+            acRequest->GameplayCapabilities,
+            serverResponse.NegotiatedCapabilities,
+            m_serverInstanceNonce,
+            acRequest->ClientSessionNonce,
+            acRequest->ConnectionAttempt,
+            connectionGeneration);
         Send(aConnectionId, serverResponse);
 
         uint32_t startId = 0;

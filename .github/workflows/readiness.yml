@@ -1,0 +1,105 @@
+name: SkyrimTogetherVR Source Readiness
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-readiness:
+    name: Complete source-readiness suite
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install audit dependency
+        run: python -m pip install --disable-pip-version-check pefile==2024.8.26
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: "3.0.9"
+
+      - name: Provision pinned audit references
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs_root="${GITHUB_WORKSPACE}/../_refs"
+          mkdir -p "$refs_root"
+
+          checkout_reference() {
+            local name="$1"
+            local url="$2"
+            local revision="$3"
+            local destination="$refs_root/$name"
+            git init -q "$destination"
+            git -C "$destination" remote add origin "$url"
+            git -C "$destination" fetch -q --depth=1 origin "$revision"
+            git -C "$destination" checkout -q --detach FETCH_HEAD
+          }
+
+          checkout_reference higgs https://github.com/adamhynek/higgs.git 93bf67b1bc4c4a11a20ccaef0d5012781d0d7eee
+          checkout_reference activeragdoll https://github.com/adamhynek/activeragdoll.git d10cf3cc4f0efb340eb6fa664623328397de5e6a
+          checkout_reference skyrim_vr_address_library https://github.com/alandtse/skyrim_vr_address_library.git bc038ac5cb941fdfd0584757bbeb00d09e8e505a
+
+          REF_ROOT="$refs_root" python - <<'PY'
+          import csv
+          import os
+          from pathlib import Path
+
+          refs_root = Path(os.environ["REF_ROOT"])
+          database = refs_root / "skyrim_vr_address_library" / "database.csv"
+          release = refs_root / "VRAddressLibraryRelease" / "SKSE" / "Plugins" / "version-1-4-15-0.csv"
+          release.parent.mkdir(parents=True, exist_ok=True)
+
+          entries = {}
+          with database.open(newline="", encoding="utf-8-sig") as stream:
+              for row in csv.DictReader(stream):
+                  value = row["vr"]
+                  if value and int(row["status"]) >= 2:
+                      entries[int(row["id"])] = value[4:].lower()
+
+          if len(entries) != 14005:
+              raise SystemExit(f"unexpected VR address entry count: {len(entries)}")
+
+          with release.open("w", newline="", encoding="utf-8") as stream:
+              writer = csv.writer(stream, lineterminator="\n")
+              writer.writerow(("id", "offset"))
+              writer.writerow((len(entries), "0.230.0"))
+              writer.writerows(sorted(entries.items()))
+          PY
+
+      - name: Run exact-HEAD source-readiness suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python Tools/SkyrimVR/audit_vr_readiness.py --self-test
+          python Tools/SkyrimVR/audit_vr_readiness.py --source-only --check-committed-reports
+
+      - name: Run all focused Python tests
+        shell: bash
+        run: python -m unittest discover -s Tools/SkyrimVR/tests -p 'test_*.py' -v
+
+      - name: Reject readiness side effects
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ -n "$status" ]]; then
+            printf 'Readiness generated tracked or untracked changes:\n%s\n' "$status"
+            exit 1
+          fi

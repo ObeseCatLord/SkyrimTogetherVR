@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import stat
@@ -15,6 +16,8 @@ import sys
 import tempfile
 import zipfile
 
+
+sys.dont_write_bytecode = True
 
 SKYRIM_VR_1_4_15_SHA256 = "6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971"
 PROFILE_PATHS = {
@@ -105,13 +108,82 @@ def manifest_record_map(manifest: dict[str, object]) -> dict[str, dict[str, obje
         raise ValueError("LOCAL-MANIFEST.json has no records list")
     result: dict[str, dict[str, object]] = {}
     for record in records:
-        if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+        if not isinstance(record, dict) or set(record) != {"path", "size", "sha256"}:
             raise ValueError("LOCAL-MANIFEST.json has a malformed record")
         path = record["path"]
+        size = record["size"]
+        digest = record["sha256"]
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise ValueError("LOCAL-MANIFEST.json has a malformed record")
         if path in result:
             raise ValueError(f"LOCAL-MANIFEST.json duplicates a record: {path}")
         result[path] = record
     return result
+
+
+def extracted_regular_files(root: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Return handoff files while refusing links and non-regular payloads."""
+
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"handoff root is not a regular directory: {root}")
+    files: dict[str, pathlib.Path] = {}
+
+    def visit(directory: pathlib.Path) -> None:
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as error:
+            raise ValueError(f"could not inspect handoff directory: {directory}: {error}") from error
+        for entry in entries:
+            path = pathlib.Path(entry.path)
+            if entry.is_symlink():
+                raise ValueError(f"handoff contains symbolic link: {path}")
+            if entry.is_dir(follow_symlinks=False):
+                visit(path)
+            elif entry.is_file(follow_symlinks=False):
+                relative = path.relative_to(root).as_posix()
+                files[f"{root.name}/{relative}"] = path
+            else:
+                raise ValueError(f"handoff contains non-regular payload: {path}")
+
+    visit(root)
+    return files
+
+
+def verify_handoff_payload(
+    root: pathlib.Path,
+    records: dict[str, dict[str, object]],
+) -> None:
+    """Require the manifest record set to exactly cover verified handoff files."""
+
+    files = extracted_regular_files(root)
+    manifest_path = f"{root.name}/LOCAL-MANIFEST.json"
+    if manifest_path not in files:
+        raise FileNotFoundError(f"missing LOCAL-MANIFEST.json: {root / 'LOCAL-MANIFEST.json'}")
+    payload_files = {path: file for path, file in files.items() if path != manifest_path}
+    expected = set(records)
+    actual = set(payload_files)
+    if expected != actual:
+        missing = sorted(actual - expected)
+        extra = sorted(expected - actual)
+        detail = []
+        if missing:
+            detail.append(f"missing records: {', '.join(missing[:3])}")
+        if extra:
+            detail.append(f"unexpected records: {', '.join(extra[:3])}")
+        raise ValueError("LOCAL-MANIFEST.json record set does not match handoff payload (" + "; ".join(detail) + ")")
+    for path, source in payload_files.items():
+        record = records[path]
+        if source.stat().st_size != record["size"] or sha256(source) != record["sha256"]:
+            raise ValueError(f"handoff payload does not match LOCAL-MANIFEST.json: {path}")
 
 
 def verified_artifact(
@@ -157,6 +229,8 @@ def verify_source_ancestry(root: pathlib.Path, build_revision: str, source_head:
 def safe_target_path(root: pathlib.Path, relative: pathlib.PurePosixPath) -> pathlib.Path:
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise ValueError(f"unsafe install path: {relative}")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"unsafe install root: {root}")
     destination = root.joinpath(*relative.parts)
     current = root
     for part in relative.parts[:-1]:
@@ -260,6 +334,17 @@ def self_test() -> int:
             else:
                 raise AssertionError("unsafe ZIP traversal was accepted")
         with zipfile.ZipFile(path, "w") as archive:
+            link = zipfile.ZipInfo("package/link")
+            link.external_attr = 0o120777 << 16
+            archive.writestr(link, "target")
+        with zipfile.ZipFile(path) as archive:
+            try:
+                safe_zip_members(archive)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("unsafe ZIP symlink was accepted")
+        with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("package/ok.txt", "ok")
         with zipfile.ZipFile(path) as archive:
             assert list(safe_zip_members(archive)) == ["package/ok.txt"]
@@ -267,6 +352,71 @@ def self_test() -> int:
         game_dir.mkdir()
         assert extract_gameplay_package(path, game_dir, dry_run=True) == 1
         assert not (game_dir / "ok.txt").exists(), "dry-run wrote a package file"
+        overlay = pathlib.Path(temp_dir) / "handoff" / "dependencies/current-game-overlay"
+        (overlay / "Data/SKSE").mkdir(parents=True)
+        (overlay / "SkyrimVR.exe").write_bytes(b"preserve")
+        (overlay / "Data/SKSE/Plugins.txt").write_text("portable", encoding="ascii")
+        handoff_root = overlay.parents[1]
+        copied, skipped = install_overlay(handoff_root, game_dir, dry_run=True)
+        assert (copied, skipped) == (1, 1)
+        assert not (game_dir / "Data/SKSE/Plugins.txt").exists(), "dry-run wrote an overlay file"
+        manifest = {
+            "gameplayPackage": {
+                "name": "payload.zip",
+                "sha256": "0" * 64,
+            },
+            "records": [
+                {
+                    "path": "handoff/build/payload.zip",
+                    "size": 1,
+                    "sha256": "0" * 64,
+                }
+            ]
+        }
+        payload = handoff_root / "build/payload.zip"
+        payload.parent.mkdir()
+        payload.write_bytes(b"x")
+        try:
+            verified_artifact(
+                handoff_root,
+                manifest,
+                manifest_record_map(manifest),
+                "gameplayPackage",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("mismatched handoff artifact metadata was accepted")
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("package/SkyrimVR.exe", "forbidden")
+        try:
+            extract_gameplay_package(path, game_dir, dry_run=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("gameplay package replacing SkyrimVR.exe was accepted")
+
+        payload_root = pathlib.Path(temp_dir) / "verified-handoff"
+        payload_root.mkdir()
+        payload_file = payload_root / "payload.txt"
+        payload_file.write_text("verified", encoding="ascii")
+        payload_record = {
+            "path": f"{payload_root.name}/payload.txt",
+            "size": payload_file.stat().st_size,
+            "sha256": sha256(payload_file),
+        }
+        (payload_root / "LOCAL-MANIFEST.json").write_text(
+            json.dumps({"schema": "skyrim_together_vr_local_agent_handoff_v1", "localOnly": True, "records": [payload_record]}),
+            encoding="utf-8",
+        )
+        verify_handoff_payload(payload_root, manifest_record_map(load_manifest(payload_root)))
+        payload_file.write_text("corrupt", encoding="ascii")
+        try:
+            verify_handoff_payload(payload_root, manifest_record_map(load_manifest(payload_root)))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("corrupted handoff payload was accepted")
     print("installer self-test passed")
     return 0
 
@@ -275,7 +425,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-dir", type=pathlib.Path, help="second legal Skyrim VR game directory")
     parser.add_argument("--compatdata", type=pathlib.Path, help="second Steam app 611670 compatdata directory")
-    parser.add_argument("--dry-run", action="store_true", help="validate and print the installation plan without changing either target")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--install", "--apply", dest="install", action="store_true", help="write the validated handoff into both targets")
+    mode.add_argument("--dry-run", action="store_true", help="compatibility alias for the default validation-only mode")
     parser.add_argument("--self-test", action="store_true", help="run focused ZIP path-safety checks")
     return parser.parse_args()
 
@@ -287,10 +439,10 @@ def main() -> int:
     if args.game_dir is None or args.compatdata is None:
         raise ValueError("--game-dir and --compatdata are required for installation")
     root = pathlib.Path(__file__).resolve().parent
-    game_dir = args.game_dir.expanduser().resolve()
-    compatdata = args.compatdata.expanduser().resolve()
-    if not game_dir.is_dir() or not compatdata.is_dir():
-        raise ValueError("--game-dir and --compatdata must name existing directories")
+    game_dir = args.game_dir.expanduser().absolute()
+    compatdata = args.compatdata.expanduser().absolute()
+    if game_dir.is_symlink() or compatdata.is_symlink() or not game_dir.is_dir() or not compatdata.is_dir():
+        raise ValueError("--game-dir and --compatdata must name existing non-symlink directories")
     game_exe = game_dir / "SkyrimVR.exe"
     if not game_exe.is_file() or game_exe.is_symlink():
         raise ValueError(f"--game-dir does not contain a regular SkyrimVR.exe: {game_exe}")
@@ -299,6 +451,7 @@ def main() -> int:
 
     manifest = load_manifest(root)
     records = manifest_record_map(manifest)
+    verify_handoff_payload(root, records)
     package = verified_artifact(root, manifest, records, "gameplayPackage")
     evidence = verified_artifact(root, manifest, records, "buildEvidence")
     build_revision = manifest.get("buildSourceRevision")
@@ -313,11 +466,12 @@ def main() -> int:
             raise ValueError(f"{key} metadata does not match the paired gameplay artifacts")
     verify_source_ancestry(root, build_revision, source_head)
 
-    overlay_count, _ = install_overlay(root, game_dir, dry_run=args.dry_run)
-    package_count = extract_gameplay_package(package, game_dir, dry_run=args.dry_run)
-    profile_count = restore_profiles(root, compatdata, dry_run=args.dry_run)
-    launcher_count = mark_launchers_executable(game_dir, dry_run=args.dry_run)
-    action = "validated (dry run; no target files changed)" if args.dry_run else "installed"
+    dry_run = not args.install
+    overlay_count, _ = install_overlay(root, game_dir, dry_run=dry_run)
+    package_count = extract_gameplay_package(package, game_dir, dry_run=dry_run)
+    profile_count = restore_profiles(root, compatdata, dry_run=dry_run)
+    launcher_count = mark_launchers_executable(game_dir, dry_run=dry_run)
+    action = "validated (dry run; no target files changed)" if dry_run else "installed"
     print(
         f"{action}: {overlay_count} overlay files, {package_count} gameplay files, "
         f"{profile_count} Proton profile files, {launcher_count} launchers; "

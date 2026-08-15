@@ -19,7 +19,7 @@ namespace SkyrimTogetherVR::GameplayBridge
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
 inline constexpr std::uint16_t kMappingAbiVersion = 22;
-inline constexpr std::uint32_t kCapabilityRevision = 30;
+inline constexpr std::uint32_t kCapabilityRevision = 31;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -132,6 +132,7 @@ enum class Capability : std::uint64_t
     ExactAnimationActions = 1ull << 20,
     AssignmentBootstrap = 1ull << 21,
     InventoryStackTransactions = 1ull << 22,
+    QuestMutation = 1ull << 23,
 };
 
 using CapabilityMask = std::uint64_t;
@@ -575,6 +576,7 @@ inline constexpr std::uint32_t kVrikJointCommitMask = (1u << kVrikJointRotationC
     case GameplayDomain::Magic:
         return Capability::CombatAndMagic;
     case GameplayDomain::Quest:
+        return Capability::QuestMutation;
     case GameplayDomain::Dialogue:
     case GameplayDomain::Party:
         return Capability::QuestAndDialogue;

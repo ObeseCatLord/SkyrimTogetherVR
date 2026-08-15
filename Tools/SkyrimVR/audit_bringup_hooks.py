@@ -151,7 +151,10 @@ REQUIRED_TOKENS = {
         "SkyrimTogetherVR Main::Draw cadence:",
         "SkyrimTogetherVR VR update-owner runtime mode: {}",
         "RunTiltedApp();",
-        "std::call_once(s_observerActivationOnce, []() { SkyrimTogetherVR::TickBridge::Activate(); });",
+        "MainDrawStartupGate",
+        "s_mainDrawStartupGate.TryBegin(s_updateMode, outermost, threadId)",
+        "MainDrawTransition::OwnerMismatch",
+        "MainDrawTransition::BeginMain",
         "SkyrimTogetherVR::TickBridge::TryConsumeUpdatePermit(sequence)",
         "s_clientUpdateInProgress.test_and_set(std::memory_order_acquire)",
         "SkyrimTogetherVR::TickBridge::RecordOwnerHeartbeat()",
@@ -159,6 +162,13 @@ REQUIRED_TOKENS = {
         "static void InstallVrMainDrawObserver()",
         "TP_HOOK(&MainDraw, HookMainDraw);",
         "void InstallVrMainLoopBringupHooks()",
+    ),
+    "Code/tests/vr_startup_mode.cpp": (
+        "TP_SKYRIM_VR_STARTUP_MODE_TEST",
+        "VR startup modes only transition BeginMain from an active outermost draw",
+        "VR startup transition is single-owner and does not retry a failed first attempt",
+        "MainDrawTransition::OwnerMismatch",
+        "MainDrawTransition::AlreadyAttempted",
     ),
     "Code/client/Services/Generic/VRLifecycleService.cpp": (
         'constexpr char kStatusFileName[] = "SkyrimTogetherVR.lifecycle"',
@@ -391,7 +401,11 @@ def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
         "VrUpdateMode::Active",
         "TiltedPhoques::ThisCall(MainDraw, apThis, aUnk, aMainMenuOpen);",
         "RunTiltedApp();",
-        "s_observerActivationOnce",
+        "MainDrawStartupGate",
+        "s_mainDrawStartupGate.TryBegin(s_updateMode, outermost, threadId)",
+        "MainDrawTransition::OwnerMismatch",
+        "MainDrawTransition::BeginMain",
+        "if (s_updateMode != VrUpdateMode::Active)",
         "s_clientUpdateInProgress.test_and_set",
         "beforeConsume.Ready",
         "beforeUpdate.Ready",
@@ -402,7 +416,6 @@ def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
     for forbidden_token in (
         "TP_THIS_FUNCTION(TVrVmUpdate, int",
         "int TP_MAKE_THISCALL(HookVrVmUpdate",
-        "compare_exchange_strong",
         "s_vmUpdateOwnerFault",
         "VMContext",
         "inactive",
@@ -420,6 +433,26 @@ def audit_vr_update_owner(root: pathlib.Path) -> list[str]:
     ):
         if forbidden_token in vr_block:
             failures.append(f"Code/client/SkyrimVM64.cpp: opaque VR observer block must not contain `{forbidden_token}`")
+
+    active_guard = vr_block.find("if (s_updateMode != VrUpdateMode::Active)")
+    startup_gate = vr_block.find("s_mainDrawStartupGate.TryBegin(s_updateMode, outermost, threadId)")
+    owner_mismatch = vr_block.find("MainDrawTransition::OwnerMismatch", startup_gate)
+    begin_main = vr_block.find("MainDrawTransition::BeginMain", owner_mismatch)
+    run_main = vr_block.find("RunTiltedApp();", begin_main)
+    if not (0 <= active_guard < startup_gate < owner_mismatch < begin_main < run_main):
+        failures.append(
+            "Code/client/SkyrimVM64.cpp: active-mode startup must gate RunTiltedApp behind owner and one-shot transitions"
+        )
+
+    for required_token in (
+        "aMode != VrUpdateMode::Active || !aOutermost || aThreadId == 0",
+        "m_ownerThreadId.compare_exchange_strong",
+        "expectedOwner != aThreadId",
+        "m_beginMainAttempted.exchange(true, std::memory_order_acq_rel)",
+        "MainDrawTransition::AlreadyAttempted : MainDrawTransition::BeginMain",
+    ):
+        if required_token not in vr_block:
+            failures.append(f"Code/client/SkyrimVM64.cpp: startup gate must contain `{required_token}`")
 
     tick_bridge_path = root / "Code" / "client" / "VRTickBridge.cpp"
     tick_bridge_text = tick_bridge_path.read_text(encoding="utf-8", errors="replace") if tick_bridge_path.exists() else ""

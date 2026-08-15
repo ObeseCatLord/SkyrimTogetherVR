@@ -92,6 +92,16 @@ constexpr std::uint64_t kPlayerLevelSendCoalesceKey = kAppearanceSendCoalesceKey
     return aValue == 0 || aValue == 1;
 }
 
+[[nodiscard]] bool IsUnsupportedLocalGameplayAction(
+    const GameplayBridge::GameplayDomain aDomain,
+    const GameplayBridge::GameplayAction aAction) noexcept
+{
+    // SetCombatTarget has no original wire message or server relay. Reject it
+    // before acknowledgement so bridge capture cannot imply replication.
+    return aDomain == GameplayBridge::GameplayDomain::Combat &&
+           aAction == GameplayBridge::GameplayAction::SetCombatTarget;
+}
+
 [[nodiscard]] bool RequiresMappedLocalPlayerForm(
     const GameplayBridge::GameplayDomain aDomain,
     const GameplayBridge::GameplayAction aAction) noexcept
@@ -2032,6 +2042,8 @@ bool VRLocalGameplayService::AcceptAction(const GameplayBridge::EventRecord& acR
         !GameplayBridge::IsActionInDomain(domain, action) || !std::isfinite(payload.ScalarA) ||
         !std::isfinite(payload.ScalarB) || !std::isfinite(payload.ScalarC) || !std::isfinite(payload.ScalarD) ||
         payload.Reserved0 != 0 || !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)))
+        return false;
+    if (IsUnsupportedLocalGameplayAction(domain, action))
         return false;
 
     const bool objectSnapshot = domain == GameplayBridge::GameplayDomain::Object &&

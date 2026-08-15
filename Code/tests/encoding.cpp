@@ -4,6 +4,7 @@
 #include <TiltedCore/Serialization.hpp>
 
 #include <array>
+#include <bit>
 #include <optional>
 
 #include <glm/vec2.hpp>
@@ -18,6 +19,7 @@
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/NotifyEquipmentChanges.h>
 #include <Messages/NotifyOwnershipTransfer.h>
+#include <Messages/NotifySetTimeResult.h>
 #include <Messages/RequestEquipmentChanges.h>
 #include <Messages/RequestOwnershipClaim.h>
 #include <Messages/ServerMessageFactory.h>
@@ -30,6 +32,7 @@
 #include <Structs/VRHiggsState.h>
 #include <Structs/VRInteractionValidation.h>
 #include <Structs/VRMagicEffectEvent.h>
+#include <Structs/Movement.h>
 #include <Structs/VRMovementUpdate.h>
 #include <Structs/VRPoseUpdate.h>
 #include <Structs/VRProjectileEvent.h>
@@ -450,6 +453,25 @@ TEST_CASE("Encoding factory", "[encoding.factory]")
 
         auto pRequest = CastUnique<PartyAcceptInviteRequest>(std::move(pMessage));
         REQUIRE(pRequest->InviterId == request.InviterId);
+    }
+
+    {
+        NotifySetTimeResult response;
+        response.Result = NotifySetTimeResult::SetTimeResult::kInvalidInput;
+
+        Buffer::Writer writer(&buff);
+        response.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        const ServerMessageFactory factory;
+        auto pMessage = factory.Extract(reader);
+
+        REQUIRE(pMessage);
+        REQUIRE(pMessage->GetOpcode() == response.GetOpcode());
+
+        auto pResponse = CastUnique<NotifySetTimeResult>(std::move(pMessage));
+        REQUIRE(pResponse->Result == NotifySetTimeResult::SetTimeResult::kInvalidInput);
     }
 
     {
@@ -1485,6 +1507,23 @@ TEST_CASE("Static structures", "[encoding.static]")
             }
         }
     }
+}
+
+TEST_CASE("Movement preserves the direction float bit pattern", "[encoding.movement]")
+{
+    Movement sent{};
+    sent.Direction = std::bit_cast<float>(std::uint32_t{0x80000000});
+
+    Buffer buffer(256);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+
+    Movement received{};
+    Buffer::Reader reader(&buffer);
+    received.Deserialize(reader);
+
+    REQUIRE(received.IsDecodedValid);
+    REQUIRE(std::bit_cast<std::uint32_t>(received.Direction) == 0x80000000);
 }
 
 TEST_CASE("Differential structures", "[encoding.differential]")

@@ -23,6 +23,20 @@ capability or expanding the supported test matrix, and `MAJOR` for an
 intentional protocol or packaging break that requires coordinated deployment.
 Prerelease counters are monotonic within the same base version.
 
+## Current Classification
+
+As of 2026-08-15, the only permitted release classification is
+**connection/bootstrap alpha**. The current repair source is unbuilt, so it
+cannot be tagged or described as a tested gameplay prerelease. Historical clean
+builds and single-client connection/bootstrap runs remain evidence only for
+their recorded revisions.
+
+Promotion beyond this classification requires a final Windows candidate build,
+a clean build of the committed revision with retained package/evidence audits,
+matching client/server deployment, and successful Windows/Linux two-client
+gameplay evidence. Loader, startup readiness, and single-client connection
+results do not satisfy the two-client requirement.
+
 Every release records both the tagged source revision and the source revision
 that produced the packaged binaries. They can differ when documentation and
 packaging are finalized after the Windows build. Server revisions are recorded

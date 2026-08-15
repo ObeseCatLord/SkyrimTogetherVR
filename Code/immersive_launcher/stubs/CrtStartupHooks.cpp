@@ -1,22 +1,32 @@
-
-#include "launcher.h"
 #include <FunctionHook.hpp>
+
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+#if !TP_SKYRIM_VR
+#include "launcher.h"
 #include <mutex>
-#include <TiltedCore/Initializer.hpp>
 
 static std::once_flag s_initGuard;
+#endif
+
 static uint16_t(WINAPI* Real_crtGetShowWindowMode)() = nullptr;
 static int(WINAPI* Real_ismbbled)(uint32_t) = nullptr;
 
 void TP_GetStartupInfoW(LPSTARTUPINFOW apInfo) noexcept
 {
+#if !TP_SKYRIM_VR
     std::call_once(s_initGuard, []() { launcher::InitClient(); });
+#endif
     GetStartupInfoW(apInfo);
 }
 
 int TP_ismbblead(uint32_t c)
 {
+#if !TP_SKYRIM_VR
     std::call_once(s_initGuard, []() { launcher::InitClient(); });
+#endif
     return Real_ismbbled(c);
 }
 

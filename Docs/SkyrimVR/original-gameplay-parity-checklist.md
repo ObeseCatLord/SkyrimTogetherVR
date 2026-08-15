@@ -1,6 +1,6 @@
 # Skyrim Together VR Gameplay Parity Checklist
 
-Updated: 2026-08-11
+Updated: 2026-08-15
 
 ## Status Rules
 
@@ -13,8 +13,15 @@ The target is original `original-skyrim-together` gameplay on Skyrim VR
   unit, package, and evidence audits on Windows.
 - `[x] Runtime` means two Skyrim VR clients visibly proved the behavior against
   the matching dedicated server revision.
+- `[~] Source pending` means a repair is designed or partially implemented but
+  not yet integrated; build and runtime are necessarily pending.
 - A diagnostic relay is not gameplay parity. It may supplement, but cannot
   replace, the original canonical message that owns mutation.
+
+**Current release classification:** connection/bootstrap alpha only. Until the
+matching two-client gameplay matrix supplies runtime evidence, no source row,
+historical build, single-client connection result, loader/readiness audit, or
+diagnostic relay can promote this release to gameplay-ready status.
 
 Baseline revision `82c7999a` passed a clean WinBoat audited build. It is
 historical evidence only. The current literal-parity source tree is dirty and
@@ -22,8 +29,9 @@ has not been built, package-audited, deployed, or runtime-tested. Every
 current-stage build and runtime gate is pending; no runtime checkbox below is
 evidence for this source tree.
 
-`Docs/SkyrimVR/parity-safety-stage-20260802.md` is the current-stage record;
-despite the date in its filename, its contents are maintained for this stage.
+`Docs/SkyrimVR/code-review-remediation-20260815.md` is the current authority
+for the review disposition and gates. `parity-safety-stage-20260802.md` remains
+dated historical context, not current build or runtime proof.
 
 Current runtime record: `a4b90e01` passed the Windows gameplay/package/evidence
 audits and one Linux/Monado single-client connection/bootstrap run; this does
@@ -32,11 +40,12 @@ not check off the two-client gameplay runtime items below. See
 
 ## Native Boundary
 
-- [x] Source: maintained alandtse `CommonLibVR` `ng` 6.1.1 is pinned at upstream
-  `5ae93ea9059aae23990ad7f2cbf3a2624d85c117`, with the project VR-only
-  source-build commit `612394bda3e2674da585831702308d571cf991b6` on top.
+- [x] Source: the current unbuilt CommonLib source is alandtse `CommonLibVR`
+  `ng` 6.3.1 at upstream `108836139ee612651f6c6c4dc4c41e673dcde623`, merged
+  into the project branch by `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. The
+  former 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` pin is historical.
   The dependency remains pinned by repository, commit, runtime, SKSEVR,
-  executable hash, and Address Library hash.
+  executable hash, and Address Library hash; this source row is not build proof.
 - [x] Source: the mapped client owns networking and canonical entities; the
   CommonLib SKSEVR plugin exclusively owns game pointers, retained handles,
   events, and engine mutation; the server owns authority and interest routing.
@@ -173,8 +182,9 @@ not check off the two-client gameplay runtime items below. See
 
 - [x] Source: health change remains the canonical damage channel; raw VR and
   PLANCK hit observations never apply a second damage mutation.
-- [x] Source: combat target start/stop, actor-value updates, and PvP policy are
-  validated and replayed through retained remote actor identity.
+- [x] Source: actor-value updates and the supported PvP policy are validated
+  through retained remote actor identity. `SetCombatTarget` is deliberately
+  unsupported and fail-closed; it must not be counted as complete or replayed.
 - [x] Source: complete projectile launch data is captured from the native launch
   hook, translated to the original request, and recreated through CommonLib.
 - [x] Source: spell cast, interrupt, target effect, add/remove spell, source,
@@ -189,12 +199,20 @@ not check off the two-client gameplay runtime items below. See
 
 ### Quests, Dialogue, Party, And World State
 
-- [x] Source: quest start/stop/stage policy, suppression, party gating, and
-  original quest requests.
+- [x] Source: quest synchronization is intentionally disabled and fail-closed.
+  The bridge maps the `Quest` domain to the unadvertised `QuestMutation`
+  capability and returns `Unsupported`; it does not start, stop, or set quest
+  stages. This is an explicit safety boundary, not completed quest parity.
+- [x] Source: dialogue and party/waypoint handling remain separately available
+  in the bridge; disabling `QuestMutation` does not disable those domains.
 - [x] Source: dialogue voice, subtitle metadata/text, player dialogue, chat,
   packages, waypoints, teleport/admin responses, and bounded retries.
 - [x] Source: server calendar, time, timescale, weather, difficulty, greetings,
   and world-encounter settings apply and restore on lifecycle reset.
+- [x] Source: VR command-file producers for `set_time`,
+  `teleport_to_player`, and `admin_teleport` validate their inputs and require
+  a stable authenticated transport before sending the original requests. They
+  are current source-only work and remain unbuilt.
 - [x] Source: connect/disconnect, party state, player list, command-file control,
   and VR companion controls do not require the desktop D3D overlay.
 - [x] Source: literal tracked-branch voice parity is preserved. Both current and
@@ -297,19 +315,26 @@ not check off the two-client gameplay runtime items below. See
 - [x] Source: every static native staging owner, including final equipment,
   clears state on explicit epoch retirement and native lifecycle transition.
 - [x] Source: the WinBoat candidate-build helper creates a disposable proof
-  revision before any persistent commit. It does not update a handoff artifact;
-  no handoff update is authorized for the current stage.
+  revision before any persistent commit. It does not update a handoff artifact.
+  The subsequent clean committed build is authorized to generate and audit the
+  private Linux/Windows handoff archive.
 - [x] Source: host and WinBoat cleanup locks prevent cleanup during a build;
   scheduled disk-pressure cleanup removes only reproducible project output and
   bounded caches while preserving source, games, current handoffs, and evidence.
+- [x] Source: startup CRT ownership, startup readiness, PE-loader hardening,
+  `Movement` `std::bit_cast`, projectile regression, sender-derived server
+  authorization, bounded two-client diagnostics, and cross-platform handoff
+  installers are integrated with focused tests. Treat each as source-only until
+  the final candidate and clean builds succeed; loader, readiness, handoff, and
+  multi-client runtime status remain pending.
 - [ ] Review: run a new Sol max/xhigh architecture, ABI, concurrency, lifecycle,
   protocol, crash-surface, and original-branch parity review for this dirty
   source stage and disposition every finding before building.
 - [ ] Build: run the current source through the WinBoat candidate build and its
   compile, unit/static, package, and evidence audits.
 - [ ] Deploy: after a passing candidate, commit/push only that buildable source,
-  run a clean `--skip-handoff` build, then install and deploy its exact package
-  revision with one and only one server container.
+  run a clean build with handoff generation, then install and deploy its exact
+  package revision with one and only one server container.
 - [ ] Runtime: complete the two-client domain matrix on Windows and Linux
   Proton/UMU with Monado, including Index bindings and controller navigation.
 - [ ] Compatibility: validate HIGGS, PLANCK, VRIK, SkyrimVR-FBT, Realm of
@@ -320,10 +345,13 @@ not check off the two-client gameplay runtime items below. See
 
 ## Next Stage Order
 
-1. Run and disposition the final Sol max/xhigh source review.
-2. Run the reviewed source through the WinBoat candidate build.
+1. Finish the final Sol review of the integrated source repairs and disposition
+   any verified blocker.
+2. Run the final reviewed source through the WinBoat candidate build.
 3. Commit and push only if that candidate passes.
-4. Run a clean `--skip-handoff` build of the committed revision.
+4. Run a clean build of the committed revision with handoff generation and
+   retain its package, evidence, loader, readiness, and handoff-audit results.
 5. Deploy matching local client and dedicated-server revisions.
-6. Prove a Monado connection, then execute the Windows/Linux two-client
-   gameplay matrix.
+6. Prove a fresh single-client connection/bootstrap run, then execute and retain
+   the Windows/Linux two-client gameplay matrix. Only that evidence can remove
+   the connection/bootstrap-alpha restriction.

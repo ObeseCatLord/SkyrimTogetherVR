@@ -95,7 +95,7 @@ REQUIRED_TOKENS = {
         "post-VRIK/post-HIGGS",
         "bodyCapture.successCount",
         "local.body.valid=1",
-        "relayed, validated again, cached",
+        "relayed, validated again, and applied only",
         "not redistributed",
     ),
     "Docs/SkyrimVR/windows-build.md": (

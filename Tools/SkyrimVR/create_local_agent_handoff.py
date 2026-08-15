@@ -296,6 +296,14 @@ def main() -> int:
                 repo / "Tools/SkyrimVR/install_local_agent_handoff.py",
                 f"{root}/INSTALL-SECOND-CLIENT.py",
             )
+            writer.add(
+                repo / "Tools/SkyrimVR/install_local_agent_handoff_windows.ps1",
+                f"{root}/INSTALL-SECOND-CLIENT-WINDOWS.ps1",
+            )
+            writer.add(
+                repo / "Tools/SkyrimVR/install_local_agent_handoff_windows.bat",
+                f"{root}/INSTALL-SECOND-CLIENT-WINDOWS.bat",
+            )
 
             tracked = run_git(repo, "ls-files", "--cached", "--recurse-submodules", "-z")
             for rel in sorted(item for item in tracked.split("\0") if item):

@@ -64,7 +64,8 @@ REQUIRED_TOKENS = {
         "bodyCapture.successCount",
         "local.body.valid=1",
         "not redistributed",
-        "actor-specific post-animation",
+        "CommonLib",
+        "post-VRIK/post-HIGGS",
     ),
     "Docs/SkyrimVR/fbt-networking-senior-disposition-20260714.md": (
         "Sol Max",
