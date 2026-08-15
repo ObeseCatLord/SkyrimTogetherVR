@@ -8,30 +8,28 @@ The release remains a **connection/bootstrap alpha**. It is not gameplay-ready
 and must not be described as a gameplay alpha, beta, or parity release until
 matching two-client gameplay evidence exists.
 
-The only built evidence relevant to this worktree is historical: the clean
-WinBoat audited baseline `82c7999a` and the dated single-client connection
-records cited below. The current source worktree, including the current repair
-set, is unbuilt. It is not a package, deployment, readiness, loader, or runtime
-candidate. Source presence, static audit coverage, and historical build records
-are distinct from a successful build and runtime proof.
+Commit `0fd7a319` passed the disposable WinBoat candidate and clean detached
+WinBoat gameplay builds. Its 503-file package, build evidence, and private
+Linux/Windows handoff audits report zero failures. It has not been installed,
+deployed, or runtime-tested, so this build does not establish loader,
+single-client lifecycle, or two-client gameplay proof.
 
-The current unbuilt dependency source is upstream alandtse `CommonLibVR` `ng`
+The built dependency source is upstream alandtse `CommonLibVR` `ng`
 6.3.1 at `108836139ee612651f6c6c4dc4c41e673dcde623`, merged into the project
 branch at `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. This supersedes the former
-6.1.1 / `612394bda3e2674da585831702308d571cf991b6` source description; it does
-not establish a current client build.
+6.1.1 / `612394bda3e2674da585831702308d571cf991b6` source description.
 
 The startup CRT-bypass, startup-readiness, PE-loader,
 `Movement`-`std::bit_cast`, and projectile-regression repairs are integrated
-source-only work in the current tree. Their build, package, loader, and runtime
-rows are pending; none may be treated as passed before a final build produces
-evidence. The complete local source-readiness suite currently passes all 30
-gates, which is audit evidence only.
+and compiled in `0fd7a319`. Build and package rows pass; loader and runtime rows
+remain pending. The complete local source-readiness suite passes all 30 gates,
+which is audit evidence only.
 
 `code-review-remediation-20260815.md` is the concise authoritative disposition
 and gate record for this review. All subsequent material is retained as
 implementation history or dated evidence, not proof for the current source
-tree.
+tree. Exact artifacts and checks are recorded in
+`windows-gameplay-build-result-20260815-0fd7a319.md`.
 
 ## Historical 2026-08-11 Literal-Parity Source Stage
 
@@ -682,8 +680,8 @@ Current result:
 
 ## Build Verification
 
-All results in this section are historical results at their stated revisions.
-They do not apply to the 2026-08-15 unbuilt source worktree or establish current
+Except for the current result linked above, results in this section are
+historical at their stated revisions and do not establish current
 loader/readiness/multi-client proof.
 
 ### Canonical avatar foundation hardening (2026-07-15)

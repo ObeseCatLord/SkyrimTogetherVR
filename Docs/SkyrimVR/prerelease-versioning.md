@@ -26,16 +26,16 @@ Prerelease counters are monotonic within the same base version.
 ## Current Classification
 
 As of 2026-08-15, the only permitted release classification is
-**connection/bootstrap alpha**. The current repair source is unbuilt, so it
-cannot be tagged or described as a tested gameplay prerelease. Historical clean
-builds and single-client connection/bootstrap runs remain evidence only for
-their recorded revisions.
+**connection/bootstrap alpha**. Repair commit `0fd7a319` passed the candidate,
+clean Windows gameplay build, package/evidence, and cross-platform handoff
+audits. It cannot be described as a tested gameplay prerelease because it has
+not passed current deployment or runtime gates. Historical single-client
+connection/bootstrap runs remain evidence only for their recorded revisions.
 
-Promotion beyond this classification requires a final Windows candidate build,
-a clean build of the committed revision with retained package/evidence audits,
-matching client/server deployment, and successful Windows/Linux two-client
-gameplay evidence. Loader, startup readiness, and single-client connection
-results do not satisfy the two-client requirement.
+Promotion beyond this classification requires matching client/server
+deployment and successful Windows/Linux two-client gameplay evidence. Loader,
+startup readiness, build success, and single-client connection results do not
+satisfy the two-client requirement.
 
 Every release records both the tagged source revision and the source revision
 that produced the packaged binaries. They can differ when documentation and

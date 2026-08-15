@@ -14,6 +14,7 @@ Start with these documents:
 - [`final-handoff-checklist.md`](SkyrimVR/final-handoff-checklist.md): build, install, and two-client acceptance checklist.
 - [`original-gameplay-parity-checklist.md`](SkyrimVR/original-gameplay-parity-checklist.md): living source/build/runtime matrix for parity with the original branch.
 - [`local-agent-complete-handoff.md`](SkyrimVR/local-agent-complete-handoff.md): private all-dependencies handoff layout and local-machine test instructions.
+- [`windows-gameplay-build-result-20260815-0fd7a319.md`](SkyrimVR/windows-gameplay-build-result-20260815-0fd7a319.md): exact clean Windows build, package, evidence, and handoff result for the current candidate.
 
 Files with dated `senior-brief`, `senior-disposition`, `review`, or `result` names
 are engineering records. They preserve the state and decisions at that date and

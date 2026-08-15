@@ -6,22 +6,21 @@ This mode is for bringing up the client transport/session path before actor and 
 
 ## 2026-08-15 Release Scope And Evidence
 
-This is the supported release scope: **connection/bootstrap alpha**. The
-current repair worktree is unbuilt, and its source changes are not package,
-loader, readiness, deployment, or runtime evidence. Historical one-client
-connection records do not prove multi-client gameplay. The expected log
-breadcrumbs and audit commands below are acceptance requirements, not claims
-that the current source tree has passed them.
+This is the supported release scope: **connection/bootstrap alpha**. Commit
+`0fd7a319` passed candidate and clean Windows gameplay builds plus package,
+evidence, and handoff audits. It has not passed target installation, loader, or
+runtime gates. Historical one-client connection records do not prove
+multi-client gameplay. The expected log breadcrumbs and audit commands below
+remain runtime acceptance requirements.
 
 The default target remains fail-closed for gameplay mutation. In the broader
 gameplay-bridge source, quest synchronization is separately disabled by an
 unadvertised `QuestMutation` capability and returns `Unsupported`; dialogue and
 party domains remain separate source paths. `SetCombatTarget` is likewise
 unsupported and fail-closed. VR command-file producers for set-time and
-teleport are source-only and unbuilt. Startup CRT-bypass, readiness, PE-loader,
-`Movement` `std::bit_cast`, and projectile-regression repairs are still
-source-only, with any in-flight agent changes recorded as pending until the
-final build.
+teleport, startup CRT ownership, readiness, PE-loader hardening, `Movement`
+`std::bit_cast`, and projectile ownership regression coverage compiled in the
+`0fd7a319` gameplay package. Their runtime behavior remains unproven.
 
 The default target enables only transport, mod mapping, connection handoff,
 discovery, and network-only player cell synchronization. Pose, movement,

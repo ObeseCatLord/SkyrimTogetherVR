@@ -4,9 +4,11 @@
 
 The release is a **connection/bootstrap alpha** only. No claim of
 gameplay-ready, gameplay-alpha, beta, parity, loader-readiness, or multi-client
-success is authorized for the current source tree. The current worktree is
-unbuilt; historical build and single-client connection evidence apply only to
-their recorded revisions.
+success is authorized for the current source tree. Commit `0fd7a319` passed the
+candidate and clean Windows gameplay builds, package/evidence audits, and
+cross-platform handoff audit. It has not been deployed or runtime-tested;
+historical single-client connection evidence applies only to its recorded
+revision.
 
 Source, build, and runtime are separate states:
 
@@ -21,34 +23,27 @@ Source, build, and runtime are separate states:
 
 | Item | Current source disposition | Build | Runtime |
 | --- | --- | --- | --- |
-| CommonLib | Current unbuilt source is alandtse `CommonLibVR` `ng` 6.3.1 `108836139ee612651f6c6c4dc4c41e673dcde623`, merged by project commit `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. Former 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` provenance is historical. | Pending | Pending |
-| Quest synchronization | Intentionally disabled and fail-closed. `QuestMutation` exists but is unadvertised; quest commands return `Unsupported`. Dialogue and party remain separate source domains. | Pending | Pending; not quest-parity proof |
-| `SetCombatTarget` | Unsupported and fail-closed. It is not complete combat synchronization. | Pending | Pending; excluded from complete claims |
-| VR set-time and teleport producers | Command-file producers for set-time, teleport-to-player, and admin teleport are implemented with validation and stable-transport checks. | Pending | Pending |
-| Startup CRT bypass | Integrated source makes VR CRT hooks forwarding-only and gives active outermost `Main::Draw` sole startup ownership. | Pending final build | Pending |
-| Startup readiness | The complete 30-gate source-readiness suite passes locally. CI runs it from temporary report paths, executes every focused Python test, and rejects authoritative report drift or checkout side effects. This is source/audit evidence, not package or runtime evidence. | Pending final build | Pending |
-| PE loader | Integrated source validates exact size/SHA-256 and bounded PE structures before mapping; focused fixtures exist. | Pending final build | Pending |
-| `Movement` `std::bit_cast` | Integrated source uses `std::bit_cast` and preserves the serialized float bit pattern in a unit test. | Pending final build | Pending |
-| Projectile regression | Integrated source preserves cast/projectile ownership and adds a focused no-echo source regression. | Pending final build | Pending |
-| Server command authorization | Set-time derives identity from the sender connection, ordinary teleport requires distinct players in the same nonempty party, and admin teleport checks the sender before target lookup. Focused authorization tests pass. | Pending final build | Pending |
-| Two-client diagnostics | Authentication milestones correlate player, connection, protocol, capabilities, nonces, and generation without passwords, addresses, or mod-list dumps. Bridge health is emitted once per 30 seconds while ready and once on final disconnect/shutdown. | Pending final build | Pending two-client capture |
-| Linux/Windows handoff | Dry-run-by-default installers validate the exact legal executable and the complete handoff/package/evidence identity. Windows PowerShell 5.1 and Linux self-tests pass; no installed game was modified by those tests. | Pending clean build and generated archive | Pending target-machine install |
-| Multi-client gameplay | No current source assertion substitutes for this gate. | Requires final package | Pending two-client matrix |
+| CommonLib | Current source is alandtse `CommonLibVR` `ng` 6.3.1 `108836139ee612651f6c6c4dc4c41e673dcde623`, merged by published project commit `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. Former 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` provenance is historical. | Passed at `0fd7a319` | Pending |
+| Quest synchronization | Intentionally disabled and fail-closed. `QuestMutation` exists but is unadvertised; quest commands return `Unsupported`. Dialogue and party remain separate source domains. | Passed at `0fd7a319` | Pending; not quest-parity proof |
+| `SetCombatTarget` | Unsupported and fail-closed. It is not complete combat synchronization. | Passed at `0fd7a319` | Pending; excluded from complete claims |
+| VR set-time and teleport producers | Command-file producers for set-time, teleport-to-player, and admin teleport are implemented with validation and stable-transport checks. | Passed at `0fd7a319` | Pending |
+| Startup CRT bypass | Integrated source makes VR CRT hooks forwarding-only and gives active outermost `Main::Draw` sole startup ownership. | Passed at `0fd7a319` | Pending |
+| Startup readiness | The complete 30-gate source-readiness suite passes locally. CI runs it from temporary report paths, executes every focused Python test, and rejects authoritative report drift or checkout side effects. This is source/audit evidence, not runtime evidence. | Passed at `0fd7a319` | Pending |
+| PE loader | Integrated source validates exact size/SHA-256 and bounded PE structures before mapping; focused malformed/truncated fixtures pass. | Passed at `0fd7a319` | Pending |
+| `Movement` `std::bit_cast` | Integrated source uses `std::bit_cast` and preserves the serialized float bit pattern in a unit test. | Passed at `0fd7a319` | Pending |
+| Projectile regression | Integrated source preserves cast/projectile ownership and adds a focused no-echo source regression. | Passed at `0fd7a319` | Pending |
+| Server command authorization | Set-time derives identity from the sender connection, ordinary teleport requires distinct players in the same nonempty party, and admin teleport checks the sender before target lookup. Focused authorization tests pass. | Passed at `0fd7a319` | Pending |
+| Two-client diagnostics | Authentication milestones correlate player, connection, protocol, capabilities, nonces, and generation without passwords, addresses, or mod-list dumps. Bridge health is emitted at most once per 30 seconds while ready and once on final disconnect/shutdown. | Passed at `0fd7a319` | Pending two-client capture |
+| Linux/Windows handoff | Dry-run-by-default installers validate the exact legal executable and the complete handoff/package/evidence identity. Windows PowerShell 5.1 and Linux self-tests pass; no installed game was modified by those tests. | Audited archive generated | Pending target-machine install |
+| Multi-client gameplay | No current source or build assertion substitutes for this gate. | Package built at `0fd7a319` | Pending two-client matrix |
 
 ## Exact Next Gates
 
-1. Complete the final senior review of the integrated source and resolve every
-   accepted blocker.
-2. Run the WinBoat candidate build for the
-   exact worktree revision.
-3. Commit and push only after that candidate passes.
-4. Run the clean build of the committed revision with handoff generation;
-   retain the package, build evidence, package audit, loader result, readiness
-   result, and audited handoff archive.
-5. Deploy that exact client package with the matching dedicated-server revision.
-6. Capture a fresh single-client connection/bootstrap result. This confirms only
+1. Deploy exact client package `0fd7a319` with the matching dedicated-server
+   revision and pass target prerequisite/readiness checks.
+2. Capture a fresh single-client connection/bootstrap result. This confirms only
    the alpha scope; it does not prove gameplay.
-7. Run and retain the Windows/Linux two-client gameplay matrix, including remote
+3. Run and retain the Windows/Linux two-client gameplay matrix, including remote
    presence and the declared gameplay lanes. Only successful matching evidence
    can remove the connection/bootstrap-alpha restriction.
 
@@ -69,5 +64,6 @@ proof for this source tree.
 | Authorization tests were source-only | Adapted. Encoding tests and the server build run natively, and focused source contracts cover authorization branches. Full behavior tests require linking the server/world/global-service graph and remain a test gap; runtime claims remain pending. |
 
 The final senior pass found no P0. Its P1 source blockers are resolved; the
-Windows candidate, publication, clean build, install, and runtime gates below
-remain mandatory.
+Windows candidate, CommonLib publication, and clean build gates passed at
+`0fd7a319`; install and runtime gates remain mandatory. See
+`windows-gameplay-build-result-20260815-0fd7a319.md`.

@@ -23,11 +23,10 @@ matching two-client gameplay matrix supplies runtime evidence, no source row,
 historical build, single-client connection result, loader/readiness audit, or
 diagnostic relay can promote this release to gameplay-ready status.
 
-Baseline revision `82c7999a` passed a clean WinBoat audited build. It is
-historical evidence only. The current literal-parity source tree is dirty and
-has not been built, package-audited, deployed, or runtime-tested. Every
-current-stage build and runtime gate is pending; no runtime checkbox below is
-evidence for this source tree.
+Commit `0fd7a319` passed the candidate and clean WinBoat gameplay builds,
+Windows tests, package/evidence audits, and private Linux/Windows handoff audit.
+It has not been deployed or runtime-tested. Build checkboxes below apply only
+to that exact revision; no runtime checkbox below is evidence for it.
 
 `Docs/SkyrimVR/code-review-remediation-20260815.md` is the current authority
 for the review disposition and gates. `parity-safety-stage-20260802.md` remains
@@ -40,12 +39,12 @@ not check off the two-client gameplay runtime items below. See
 
 ## Native Boundary
 
-- [x] Source: the current unbuilt CommonLib source is alandtse `CommonLibVR`
+- [x] Source: the built CommonLib source is alandtse `CommonLibVR`
   `ng` 6.3.1 at upstream `108836139ee612651f6c6c4dc4c41e673dcde623`, merged
   into the project branch by `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. The
   former 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` pin is historical.
   The dependency remains pinned by repository, commit, runtime, SKSEVR,
-  executable hash, and Address Library hash; this source row is not build proof.
+  executable hash, and Address Library hash.
 - [x] Source: the mapped client owns networking and canonical entities; the
   CommonLib SKSEVR plugin exclusively owns game pointers, retained handles,
   events, and engine mutation; the server owns authority and interest routing.
@@ -70,8 +69,8 @@ not check off the two-client gameplay runtime items below. See
   rebases retained events, and direct VRGrab does not throttle discrete edges.
 - [x] Source: generated CommonLib aliases and curated VR overrides are
   collision-aware and fail closed on unverified addresses or prologues.
-- [ ] Build: verify mapping ABI 22, capability behavior, and the curated
-  address overlay in the current WinBoat candidate package.
+- [x] Build: `0fd7a319` compiled and audited mapping ABI 22, capability
+  behavior, and the curated address overlay in candidate and clean packages.
 - [ ] Runtime: prove clean attach, owner-thread pumping, disconnect, reconnect,
   load, new game, and shutdown without stale commands or leaked references.
 
@@ -98,8 +97,8 @@ not check off the two-client gameplay runtime items below. See
   Upstream's outbound producer is compiled out by `OBJECT_ANIM_SYNC=0`; its
   desktop Address Library IDs are registration code in VR, so no guessed hook
   is installed.
-- [ ] Build: compile and audit the fail-closed exact-action boundary plus the
-  movement, graph, and package paths.
+- [x] Build: `0fd7a319` compiled and audited the fail-closed exact-action
+  boundary plus the movement, graph, and package paths.
 - [ ] Runtime: two clients prove spawn, move, stop, turn, cell transfer,
   animation, package, leave, and reconnect without jitter, echo, or duplicates.
 
@@ -132,8 +131,8 @@ not check off the two-client gameplay runtime items below. See
   before owner inventory mutation. It is session/generation-bound and gated by
   the negotiated VR capability so legacy delta fanout starts from the real
   pre-mutation state. Pure diff tests are written but unrun.
-- [ ] Build: compile and audit the degraded appearance and mixed-client
-  equipment paths, including the new pure diff tests.
+- [x] Build: `0fd7a319` compiled and audited the degraded appearance and
+  mixed-client equipment paths, including the pure diff tests.
 - [ ] Runtime: prove convergence after equip, pickup/drop, container transfer,
   reconnect, cell change, death, and save/load.
 
@@ -159,7 +158,7 @@ not check off the two-client gameplay runtime items below. See
   `FadeOutGame` target and prologue, failing closed when unavailable. Death and
   respawn also capture and restore essential/no-bleedout state around the
   canonical resurrection flow.
-- [ ] Build: compile and audit actor-state/death/respawn paths.
+- [x] Build: `0fd7a319` compiled and audited actor-state/death/respawn paths.
 - [ ] Runtime: prove damage, death, gold loss, respawn, simultaneous deaths,
   mount, disconnect during respawn, and reconnect convergence.
 
@@ -174,7 +173,8 @@ not check off the two-client gameplay runtime items below. See
   cannot leave an unrecoverable partial commit.
 - [x] Source: transient incoming text and commands use bounded retry queues with
   nonce, generation, and epoch validation.
-- [ ] Build: compile and audit object assignment and transaction publication.
+- [x] Build: `0fd7a319` compiled and audited object assignment and transaction
+  publication.
 - [ ] Runtime: prove concurrent activation, lock, container, cell reload, and
   disconnect recovery with zero destructive partial snapshots.
 
@@ -193,7 +193,8 @@ not check off the two-client gameplay runtime items below. See
   prologue and suppresses authoritative remote replay echo.
 - [x] Source: HIGGS/PLANCK diagnostics are deduplicated from canonical
   inventory, actor-value, projectile, and magic mutations.
-- [ ] Build: compile and audit combat/projectile/magic hooks and address pins.
+- [x] Build: `0fd7a319` compiled and audited combat/projectile/magic hooks and
+  address pins.
 - [ ] Runtime: prove melee, bow, spell, concentration, shout, healing, hostile
   effect, death, and respawn under latency without duplicate damage/effects.
 
@@ -212,7 +213,7 @@ not check off the two-client gameplay runtime items below. See
 - [x] Source: VR command-file producers for `set_time`,
   `teleport_to_player`, and `admin_teleport` validate their inputs and require
   a stable authenticated transport before sending the original requests. They
-  are current source-only work and remain unbuilt.
+  compiled in the `0fd7a319` gameplay package.
 - [x] Source: connect/disconnect, party state, player list, command-file control,
   and VR companion controls do not require the desktop D3D overlay.
 - [x] Source: literal tracked-branch voice parity is preserved. Both current and
@@ -220,7 +221,8 @@ not check off the two-client gameplay runtime items below. See
   contains only an optional `Services/Vivox` build hook while the proprietary,
   gitignored SDK/source is absent. Shipping voice remains a separate product and
   licensing task, not missing behavior from the reviewable desktop source branch.
-- [ ] Build: compile and audit quest/dialogue/party/world-state paths.
+- [x] Build: `0fd7a319` compiled and audited the fail-closed quest lane and the
+  dialogue/party/world-state paths.
 - [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
   weather, server restart, save/load, and reconnect behavior.
 
@@ -324,17 +326,17 @@ not check off the two-client gameplay runtime items below. See
 - [x] Source: startup CRT ownership, startup readiness, PE-loader hardening,
   `Movement` `std::bit_cast`, projectile regression, sender-derived server
   authorization, bounded two-client diagnostics, and cross-platform handoff
-  installers are integrated with focused tests. Treat each as source-only until
-  the final candidate and clean builds succeed; loader, readiness, handoff, and
+  installers are integrated with focused tests. Candidate and clean build,
+  readiness, package/evidence, and handoff audits pass at `0fd7a319`; loader and
   multi-client runtime status remain pending.
-- [ ] Review: run a new Sol max/xhigh architecture, ABI, concurrency, lifecycle,
-  protocol, crash-surface, and original-branch parity review for this dirty
-  source stage and disposition every finding before building.
-- [ ] Build: run the current source through the WinBoat candidate build and its
-  compile, unit/static, package, and evidence audits.
-- [ ] Deploy: after a passing candidate, commit/push only that buildable source,
-  run a clean build with handoff generation, then install and deploy its exact
-  package revision with one and only one server container.
+- [x] Review: the Sol max/xhigh architecture, ABI, concurrency, lifecycle,
+  protocol, crash-surface, and original-branch parity review found no remaining
+  P0; accepted P1 source blockers were resolved before building.
+- [x] Build: `0fd7a319` passed the WinBoat candidate and clean builds plus
+  compile, unit/static, package, evidence, and handoff audits.
+- [ ] Deploy: install exact package `0fd7a319`, pass target prerequisite and
+  readiness checks, and deploy its matching server revision with one and only
+  one server container.
 - [ ] Runtime: complete the two-client domain matrix on Windows and Linux
   Proton/UMU with Monado, including Index bindings and controller navigation.
 - [ ] Compatibility: validate HIGGS, PLANCK, VRIK, SkyrimVR-FBT, Realm of
@@ -345,13 +347,8 @@ not check off the two-client gameplay runtime items below. See
 
 ## Next Stage Order
 
-1. Finish the final Sol review of the integrated source repairs and disposition
-   any verified blocker.
-2. Run the final reviewed source through the WinBoat candidate build.
-3. Commit and push only if that candidate passes.
-4. Run a clean build of the committed revision with handoff generation and
-   retain its package, evidence, loader, readiness, and handoff-audit results.
-5. Deploy matching local client and dedicated-server revisions.
-6. Prove a fresh single-client connection/bootstrap run, then execute and retain
+1. Deploy matching `0fd7a319` client and dedicated-server revisions and pass
+   target prerequisite/readiness checks.
+2. Prove a fresh single-client connection/bootstrap run, then execute and retain
    the Windows/Linux two-client gameplay matrix. Only that evidence can remove
    the connection/bootstrap-alpha restriction.
