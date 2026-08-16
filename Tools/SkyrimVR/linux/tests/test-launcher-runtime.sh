@@ -98,6 +98,12 @@ auto_proton="$(env -u PROTONPATH -u STVR_PROTONPATH \
 printf -v escaped_library_proton '%q' "$library_proton/proton"
 grep -Fq "$escaped_library_proton run" <<<"$auto_proton"
 
+offline_auto_proton="$(env -u PROTONPATH -u STVR_PROTONPATH \
+  STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
+  STVR_STEAM_ROOT="$steam" STVR_STEAM_LIBRARY="$TMPDIR_LOCAL/library" \
+  XDG_RUNTIME_DIR="$host_runtime" "$TOOLS_DIR/launch-skyrim-vr-offline.sh")"
+grep -Fq "$escaped_library_proton run" <<<"$offline_auto_proton"
+
 if env "${common_env[@]}" STVR_MONADO_IPC_SOCKET="$TMPDIR_LOCAL/wrong/monado_comp_ipc" \
   "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>&1; then
   printf 'launcher accepted a socket outside its selected Monado runtime\n' >&2

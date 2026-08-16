@@ -26,14 +26,18 @@ find_steam_root() {
 }
 
 find_proton_dir() {
-  local root="$1"
+  local root="$1" library="$2"
   local candidate
   if [ -n "${STVR_PROTONPATH:-}" ]; then
+    [ -x "$STVR_PROTONPATH/proton" ] || die "STVR_PROTONPATH has no executable proton script"
     printf '%s\n' "$STVR_PROTONPATH"
     return 0
   fi
   local search_root
-  for search_root in "$root/compatibilitytools.d" "$root/steamapps/common"; do
+  for search_root in \
+    "$root/compatibilitytools.d" \
+    "$root/steamapps/common" \
+    "$library/steamapps/common"; do
     while IFS= read -r candidate; do
       if [ -x "$candidate/proton" ]; then
         printf '%s\n' "$candidate"
@@ -74,7 +78,7 @@ STEAM_ROOT="$(find_steam_root)" || die "could not find Steam; set STVR_STEAM_ROO
 STEAM_LIBRARY="${STVR_STEAM_LIBRARY:-$(readlink -f -- "$GAME_DIR/../../..")}"
 COMPATDATA="${STVR_COMPATDATA:-$STEAM_LIBRARY/steamapps/compatdata/$APPID}"
 WINEPREFIX_DIR="${STVR_WINEPREFIX:-$COMPATDATA/pfx}"
-PROTON_DIR="$(find_proton_dir "$STEAM_ROOT")" || die "could not find Proton; set STVR_PROTONPATH"
+PROTON_DIR="$(find_proton_dir "$STEAM_ROOT" "$STEAM_LIBRARY")" || die "could not find Proton; set STVR_PROTONPATH"
 LOADER="${SKYRIMVR_LAUNCHER:-$GAME_DIR/sksevr_loader.exe}"
 [ -f "$LOADER" ] || die "missing SKSEVR loader: $LOADER"
 
