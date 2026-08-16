@@ -94,30 +94,29 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:a4b90e01-arm64`.
+- Image tag: `skyrim-together-vr-server:0fd7a319-arm64`.
 - Image ID:
-  `sha256:2055ddf7e05527378e1e901a0948db6cd21b369c37f77796db265f193277244f`.
+  `sha256:b15c222a43164a13eafd2fe54e01af93f7c7782216ab8f9761b9b1cd0318894f`.
 - Runtime executable SHA-256:
-  `a45f474ee0d4509cd307c389b0aff5a742c6b0043dca7cab0a8ae51edcf0744b`.
+  `8fc8824ccfce714076e27b67cf68bdcbf593fd361c9c56d174b6ee36c0ce6974`.
 - Runtime core SHA-256:
-  `2ea02772fb7324eb39730ee0c8178976af292d8519fe5663b8f413e32590870f`.
-- Server deployment revision: `a4b90e01`; the matching client build is
-  `a4b90e0129197039f2a7f94170caf618c8ab8965` and reports
-  `stvr-v0.1.0-alpha.1-68-ga4b90e01`.
+  `08b9ffdebf061eb9cceff763c1cc8ffa55168d54434825c60923b0d7206ed774`.
+- Server deployment revision: `0fd7a319`; the matching client build is
+  `0fd7a319a9f2b74588551e0c13dbcac462f91f0e` and reports
+  `stvr-v0.1.0-alpha.1-75-g0fd7a319`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `a4b90e01` network version. The current
-deployment has one container and zero restarts. A fresh Linux/Monado gameplay
-client reached RealmLorkhan, authenticated as player 1, synchronized its
-interior cell, and completed avatar bootstrap with the server admitting Skyrim
-VR Player with 10 mods. See
-`runtime-connection-result-20260811-a4b90e01.md`. This is single-client
-connection/bootstrap proof; it does not claim two-client remote-avatar or
-deliberate per-lane gameplay replication. Rebuild and redeploy whenever shared
-message definitions, encoding, or server code changes.
+The client and server use the exact `0fd7a319` source revision. The current
+deployment has one container and zero restarts, listens on UDP port 26099, and
+retains the existing persistent config, Data, and log mounts. The earlier
+`a4b90e01` Linux/Monado single-client bootstrap result remains documented in
+`runtime-connection-result-20260811-a4b90e01.md`, but it is not runtime proof
+for this newer deployment. Run fresh one-client and two-client tests before
+making gameplay-parity claims. Rebuild and redeploy whenever shared message
+definitions, encoding, or server code changes.
 
 The existing test server currently has an empty `sPassword`. If a password is
 configured later, keep it outside the repository and handoff and obtain it
