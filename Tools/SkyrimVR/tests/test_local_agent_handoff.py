@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,28 @@ def load_module(name: str, path: pathlib.Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def transaction_fixture(installer, root: pathlib.Path, order: tuple[str, ...] = ("existing", "created")):
+    game = root / "game"
+    compatdata = root / "compatdata"
+    sources = root / "sources"
+    game.mkdir()
+    compatdata.mkdir()
+    sources.mkdir()
+    targets: dict[str, pathlib.Path] = {}
+    operations = []
+    for name in order:
+        target = game / f"{name}.txt"
+        source = sources / f"{name}.txt"
+        source.write_text(f"installed-{name}\n", encoding="ascii")
+        source.chmod(0o600 if name.startswith("existing") else 0o644)
+        if name.startswith("existing"):
+            target.write_text(f"original-{name}\n", encoding="ascii")
+            target.chmod(0o640)
+        targets[name] = target
+        operations.append(installer.operation_for_file("game", pathlib.PurePosixPath(target.name), source))
+    return game, compatdata, operations, targets
 
 
 class LocalAgentHandoffTests(unittest.TestCase):
@@ -99,10 +122,189 @@ class LocalAgentHandoffTests(unittest.TestCase):
             source = root / "source"
             target = root / "target"
             source.write_text("payload", encoding="ascii")
-            installer.copy_file(source, target, dry_run=True)
+            operation = installer.operation_for_file("game", pathlib.PurePosixPath("target"), source)
             self.assertFalse(target.exists())
-            installer.copy_file(source, target, dry_run=False)
+            installer.write_operation(operation, target)
             self.assertEqual(target.read_text(encoding="ascii"), "payload")
+
+    def test_linux_transaction_recovers_unpublished_state_and_partial_backups(self) -> None:
+        installer = load_module("install_local_agent_handoff_prepare_recovery", INSTALLER)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            game, compatdata, operations, targets = transaction_fixture(installer, root, ("existing-a", "existing-b"))
+            with mock.patch.object(installer, "atomic_json", side_effect=RuntimeError("crash before state publish")):
+                with self.assertRaises(RuntimeError):
+                    installer.install_transaction(operations, game, compatdata, "handoff")
+            self.assertFalse((installer.state_directory(game) / installer.STATE_FILE_NAME).exists())
+            self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+            installer.uninstall_transaction(game, compatdata, force=False)
+            self.assertEqual(targets["existing-a"].read_text(encoding="ascii"), "original-existing-a\n")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            game, compatdata, operations, targets = transaction_fixture(installer, root, ("existing-a", "existing-b"))
+            real_backup = installer.atomic_backup
+            calls = 0
+
+            def crash_on_second_backup(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("crash during backup preparation")
+                return real_backup(*args, **kwargs)
+
+            with mock.patch.object(installer, "atomic_backup", side_effect=crash_on_second_backup):
+                with self.assertRaises(RuntimeError):
+                    installer.install_transaction(operations, game, compatdata, "handoff")
+            self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+            installer.uninstall_transaction(game, compatdata, force=False)
+            self.assertEqual(targets["existing-b"].read_text(encoding="ascii"), "original-existing-b\n")
+
+    def test_linux_transaction_reconciles_install_and_uninstall_state_lag(self) -> None:
+        installer = load_module("install_local_agent_handoff_state_lag", INSTALLER)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            game, compatdata, operations, targets = transaction_fixture(installer, root)
+            real_atomic_json = installer.atomic_json
+            crashed = False
+
+            def crash_after_install_replace(path, state):
+                nonlocal crashed
+                if not crashed and any(record["applied"] for record in state["records"]):
+                    crashed = True
+                    raise RuntimeError("crash after install replacement")
+                return real_atomic_json(path, state)
+
+            with mock.patch.object(installer, "atomic_json", side_effect=crash_after_install_replace):
+                with self.assertRaises(RuntimeError):
+                    installer.install_transaction(operations, game, compatdata, "handoff")
+            self.assertEqual(targets["existing"].read_text(encoding="ascii"), "installed-existing\n")
+            self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+
+            for crash_name in ("existing", "created"):
+                if not installer.state_directory(game).exists():
+                    installer.install_transaction(operations, game, compatdata, "handoff")
+                real_atomic_json = installer.atomic_json
+                crashed = False
+
+                def crash_after_uninstall_mutation(path, state, crash_name=crash_name):
+                    nonlocal crashed
+                    matching = next(record for record in state["records"] if record["path"] == f"{crash_name}.txt")
+                    if not crashed and matching["uninstalled"]:
+                        crashed = True
+                        raise RuntimeError("crash after uninstall mutation")
+                    return real_atomic_json(path, state)
+
+                with mock.patch.object(installer, "atomic_json", side_effect=crash_after_uninstall_mutation):
+                    with self.assertRaises(RuntimeError):
+                        installer.uninstall_transaction(game, compatdata, force=False)
+                installer.uninstall_transaction(game, compatdata, force=False)
+                self.assertEqual(targets["existing"].read_text(encoding="ascii"), "original-existing\n")
+                self.assertFalse(targets["created"].exists())
+
+    def test_linux_uninstall_resumes_interrupted_state_cleanup(self) -> None:
+        installer = load_module("install_local_agent_handoff_cleanup_recovery", INSTALLER)
+        for crash_after in ("backup", "directory"):
+            with self.subTest(crash_after=crash_after), tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                game, compatdata, operations, targets = transaction_fixture(installer, root)
+                installer.install_transaction(operations, game, compatdata, "handoff")
+                real_cleanup = installer.cleanup_state
+
+                def interrupted_cleanup(state_dir, records, *, partial_backups=False):
+                    backups = state_dir / "backups"
+                    for entry in list(backups.iterdir()):
+                        entry.unlink()
+                    if crash_after == "directory":
+                        backups.rmdir()
+                    raise RuntimeError("crash during state cleanup")
+
+                with mock.patch.object(installer, "cleanup_state", side_effect=interrupted_cleanup):
+                    with self.assertRaises(RuntimeError):
+                        installer.uninstall_transaction(game, compatdata, force=False)
+                self.assertEqual(targets["existing"].read_text(encoding="ascii"), "original-existing\n")
+                self.assertFalse(targets["created"].exists())
+                self.assertEqual(installer.uninstall_transaction(game, compatdata, force=False), 0)
+                self.assertFalse(installer.state_directory(game).exists())
+
+    def test_linux_install_revalidates_targets_immediately_before_replace(self) -> None:
+        installer = load_module("install_local_agent_handoff_install_toctou", INSTALLER)
+        for raced_name in ("existing", "created"):
+            with self.subTest(raced_name=raced_name), tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                game, compatdata, operations, targets = transaction_fixture(installer, root)
+                real_write = installer.write_operation
+
+                def racing_write(operation, destination, **kwargs):
+                    if destination == targets[raced_name]:
+                        destination.write_text("concurrent-change\n", encoding="ascii")
+                        destination.chmod(0o666)
+                    return real_write(operation, destination, **kwargs)
+
+                with mock.patch.object(installer, "write_operation", side_effect=racing_write):
+                    with self.assertRaisesRegex(ValueError, "changed immediately before install replacement"):
+                        installer.install_transaction(operations, game, compatdata, "handoff")
+                self.assertEqual(targets[raced_name].read_text(encoding="ascii"), "concurrent-change\n")
+
+    def test_linux_uninstall_revalidates_targets_immediately_before_mutation(self) -> None:
+        installer = load_module("install_local_agent_handoff_uninstall_toctou", INSTALLER)
+        for raced_name in ("existing", "created"):
+            with self.subTest(raced_name=raced_name), tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                game, compatdata, operations, targets = transaction_fixture(installer, root)
+                installer.install_transaction(operations, game, compatdata, "handoff")
+                if raced_name == "existing":
+                    real_write = installer.write_operation
+
+                    def racing_restore(operation, destination, **kwargs):
+                        if destination == targets["existing"]:
+                            destination.write_text("concurrent-uninstall-change\n", encoding="ascii")
+                            destination.chmod(0o666)
+                        return real_write(operation, destination, **kwargs)
+
+                    patcher = mock.patch.object(installer, "write_operation", side_effect=racing_restore)
+                else:
+                    real_remove = installer.remove_created_target
+
+                    def racing_remove(destination, **kwargs):
+                        destination.write_text("concurrent-uninstall-change\n", encoding="ascii")
+                        destination.chmod(0o666)
+                        return real_remove(destination, **kwargs)
+
+                    patcher = mock.patch.object(installer, "remove_created_target", side_effect=racing_remove)
+                with patcher:
+                    with self.assertRaisesRegex(ValueError, "changed immediately before non-force uninstall"):
+                        installer.uninstall_transaction(game, compatdata, force=False)
+                self.assertEqual(targets[raced_name].read_text(encoding="ascii"), "concurrent-uninstall-change\n")
+
+    def test_linux_idempotency_requires_modes_backups_and_clean_state(self) -> None:
+        installer = load_module("install_local_agent_handoff_idempotency", INSTALLER)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            game, compatdata, operations, targets = transaction_fixture(installer, root)
+            installer.install_transaction(operations, game, compatdata, "handoff")
+            targets["created"].chmod(0o600)
+            with self.assertRaises(ValueError):
+                installer.install_transaction(operations, game, compatdata, "handoff")
+            targets["created"].chmod(0o644)
+
+            state_dir = installer.state_directory(game)
+            state = installer.load_state(state_dir)
+            record = next(record for record in state["records"] if record["path"] == "existing.txt")
+            backup = state_dir / "backups" / record["backup"]
+            original_bytes = backup.read_bytes()
+            original_mode = stat.S_IMODE(backup.stat().st_mode)
+            backup.write_bytes(b"corrupt")
+            with self.assertRaises(ValueError):
+                installer.install_transaction(operations, game, compatdata, "handoff")
+            backup.write_bytes(original_bytes)
+            backup.chmod(original_mode ^ stat.S_IXUSR)
+            with self.assertRaises(ValueError):
+                installer.install_transaction(operations, game, compatdata, "handoff")
+            backup.chmod(original_mode)
+            (state_dir / "unexpected").write_text("foreign", encoding="ascii")
+            with self.assertRaises(ValueError):
+                installer.install_transaction(operations, game, compatdata, "handoff")
 
     def test_linux_installer_requires_exact_verified_handoff_record_set(self) -> None:
         installer = load_module("install_local_agent_handoff_payload", INSTALLER)

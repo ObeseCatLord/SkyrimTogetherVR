@@ -40,9 +40,6 @@ ROOT_GAME_FILES = (
     "sksevr_1_4_15.dll",
     "sksevr_steam_loader.dll",
     "openvr_api.dll",
-    "launch-skyrim-together-vr.sh",
-    "launch-skyrim-vr-offline.sh",
-    "stvr-xrizer-input-compat.sh",
     "SkyrimTogetherVR_BuildManifest.json",
 )
 

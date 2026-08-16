@@ -15,6 +15,29 @@ require_file() {
   [ -f "$1" ] || die "missing required file: $1"
 }
 
+default_launcher() {
+  local manifest="$GAME_DIR/SkyrimTogetherVR_BuildManifest.json"
+  local package_flavor=""
+
+  if [ -f "$manifest" ]; then
+    package_flavor="$(sed -nE 's/.*"packageFlavor"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$manifest" | head -n 1)"
+  fi
+  case "$package_flavor" in
+    gameplay)
+      printf '%s\n' "$GAME_DIR/SkyrimTogetherVRGameplay.exe"
+      ;;
+    avatar-sync)
+      printf '%s\n' "$GAME_DIR/SkyrimTogetherVRAvatarSync.exe"
+      ;;
+    default|'')
+      printf '%s\n' "$GAME_DIR/SkyrimTogetherVR.exe"
+      ;;
+    *)
+      die "unsupported SkyrimTogetherVR package flavor in manifest: $package_flavor"
+      ;;
+  esac
+}
+
 find_steam_root() {
   local candidate
   if [ -n "${STVR_STEAM_ROOT:-}" ]; then
@@ -34,7 +57,7 @@ find_steam_root() {
 }
 
 find_proton_dir() {
-  local root="$1"
+  local root="$1" library="$2"
   local candidate
   if [ -n "${STVR_PROTONPATH:-}" ]; then
     [ -x "$STVR_PROTONPATH/proton" ] || die "STVR_PROTONPATH has no executable proton script"
@@ -43,7 +66,10 @@ find_proton_dir() {
   fi
 
   local search_root
-  for search_root in "$root/compatibilitytools.d" "$root/steamapps/common"; do
+  for search_root in \
+    "$root/compatibilitytools.d" \
+    "$root/steamapps/common" \
+    "$library/steamapps/common"; do
     while IFS= read -r candidate; do
       if [ -x "$candidate/proton" ]; then
         printf '%s\n' "$candidate"
@@ -87,12 +113,15 @@ enable_plugin() {
 }
 
 STEAM_ROOT="$(find_steam_root)" || die "could not find Steam; set STVR_STEAM_ROOT"
-STEAM_LIBRARY="${STVR_STEAM_LIBRARY:-$(readlink -f -- "$GAME_DIR/../../..")}"
+STEAM_LIBRARY="${STVR_STEAM_LIBRARY:-$(
+  readlink -f -- "$GAME_DIR/../../.."
+)}"
 COMPATDATA="${STVR_COMPATDATA:-$STEAM_LIBRARY/steamapps/compatdata/$APPID}"
 WINEPREFIX_DIR="${STVR_WINEPREFIX:-$COMPATDATA/pfx}"
-PROTON_DIR="$(find_proton_dir "$STEAM_ROOT")" || die "could not find Proton; set STVR_PROTONPATH"
+PROTON_DIR="$(find_proton_dir "$STEAM_ROOT" "$STEAM_LIBRARY")" || die "could not find Proton; set STVR_PROTONPATH"
 
-LAUNCHER="${STVR_LAUNCHER:-$GAME_DIR/SkyrimTogetherVR.exe}"
+LAUNCHER="${STVR_LAUNCHER:-}"
+[ -n "$LAUNCHER" ] || LAUNCHER="$(default_launcher)"
 GAME_EXE="${STVR_GAME_EXE:-$GAME_DIR/SkyrimVR.exe}"
 require_file "$LAUNCHER"
 require_file "$GAME_EXE"

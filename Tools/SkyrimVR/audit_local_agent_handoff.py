@@ -27,6 +27,9 @@ REQUIRED_PATHS = (
     "source/Docs/SkyrimVR/local-agent-complete-handoff.md",
     "source/Tools/SkyrimVR/install_local_agent_handoff_windows.ps1",
     "source/Tools/SkyrimVR/install_local_agent_handoff_windows.bat",
+    "source/Tools/SkyrimVR/linux/launch-skyrim-together-vr.sh",
+    "source/Tools/SkyrimVR/linux/launch-skyrim-vr-offline.sh",
+    "source/Tools/SkyrimVR/linux/stvr-xrizer-input-compat.sh",
     "dependencies/current-game-overlay/SkyrimVR.exe",
     "dependencies/current-game-overlay/sksevr_loader.exe",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/devbench.dll",
@@ -42,6 +45,18 @@ REQUIRED_PATHS = (
     "review-notes/REVIEW-AGENT-HANDOFF.md",
     "review-notes/REVIEW-FRIEND-SUMMARY.md",
     "review-notes/deep-research-report-1.md",
+)
+
+MACHINE_LOCAL_OVERLAY_PATHS = (
+    "dependencies/current-game-overlay/launch-skyrim-together-vr.sh",
+    "dependencies/current-game-overlay/launch-skyrim-vr-offline.sh",
+    "dependencies/current-game-overlay/stvr-xrizer-input-compat.sh",
+)
+
+PORTABLE_LAUNCHER_PATHS = (
+    "source/Tools/SkyrimVR/linux/launch-skyrim-together-vr.sh",
+    "source/Tools/SkyrimVR/linux/launch-skyrim-vr-offline.sh",
+    "source/Tools/SkyrimVR/linux/stvr-xrizer-input-compat.sh",
 )
 
 REQUIRED_PREFIXES = (
@@ -150,6 +165,20 @@ def main() -> int:
         for prefix in REQUIRED_PREFIXES:
             if not any(name.startswith(prefix) for name in relative_names):
                 failures.append(f"missing required payload prefix: {prefix}")
+        for forbidden in MACHINE_LOCAL_OVERLAY_PATHS:
+            if forbidden in relative_names:
+                failures.append(f"machine-local launcher present in compatibility overlay: {forbidden}")
+        for launcher in PORTABLE_LAUNCHER_PATHS:
+            archive_name = f"{root}/{launcher}"
+            if launcher not in relative_names:
+                continue
+            try:
+                launcher_text = archive.read(archive_name).decode("utf-8")
+            except UnicodeDecodeError:
+                failures.append(f"portable launcher is not UTF-8 text: {launcher}")
+                continue
+            if "/home/" in launcher_text:
+                failures.append(f"portable launcher contains producer-machine home path: {launcher}")
         stale_handoff = sorted(
             name
             for name in relative_names

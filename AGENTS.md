@@ -101,6 +101,11 @@ afterward. The handoff generator requires the same clean committed worktree and
 includes the current checklist/documentation without raw Codex/session telemetry
 or unredacted runtime logs.
 
+After an updated local-agent handoff passes its archive audit and ZIP integrity
+check, copy the ZIP and its SHA-256 sidecar to `foundry:~/videos/`. Verify the
+remote SHA-256 before reporting the handoff complete. This is the standing
+private handoff location; do not publish the local-only archive to GitHub.
+
 When handoff updates are not authorized, `--skip-handoff` is required. It still
 performs the full Windows build/audit, SCP import, deterministic gameplay package,
 and package/evidence validation, but does not create, overwrite, regenerate,

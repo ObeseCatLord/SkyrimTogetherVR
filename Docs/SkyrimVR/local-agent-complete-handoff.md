@@ -72,7 +72,7 @@ After installation, launch the packaged VR client from the game directory:
 
 ```powershell
 Set-Location 'D:\SteamLibrary\steamapps\common\SkyrimVR'
-.\SkyrimTogetherVR.exe
+.\SkyrimTogetherVRGameplay.exe
 ```
 
 Use the normal local SteamVR/OpenXR runtime. Do not copy Linux XRizer or
@@ -101,8 +101,46 @@ python3 ./INSTALL-SECOND-CLIENT.py \
 Without `--install`, the Linux command always performs validation only and does
 not change either target. An explicit install restores the three direct-Proton
 profile files, including `SkyrimPrefs.ini`; this differs from the optional
-Windows profile operation above. Start or verify Monado using the helper carried
-in `source/`, replacing the profile UUID when needed:
+Windows profile operation above.
+
+The refreshed installer saves every overwritten file and records every newly
+created file under `.stvr-local-agent-handoff-state` in the target game
+directory. Repeating the same install is idempotent. To uninstall, pass the
+same target paths:
+
+```bash
+python3 ./INSTALL-SECOND-CLIENT.py \
+  --game-dir /path/to/second-steam-library/steamapps/common/SkyrimVR \
+  --compatdata /path/to/second-steam-library/steamapps/compatdata/611670 \
+  --uninstall
+```
+
+Uninstall removes only unchanged files created by that transaction and
+restores its verified backups. It refuses to overwrite or remove files changed
+after installation. `--uninstall --force` deliberately discards those later
+changes and should be used only after reviewing the reported paths.
+
+Handoffs produced before this transaction support cannot be completely
+reversed safely because they did not preserve overwritten files. For an older
+handoff that installed launchers containing `/home/obesecatlord`, extract the
+refreshed handoff and replace only the three launchers with its canonical
+copies:
+
+```bash
+HANDOFF=/path/to/refreshed-handoff-root
+GAME_DIR=/path/to/steam-library/steamapps/common/SkyrimVR
+install -m 0755 "$HANDOFF/source/Tools/SkyrimVR/linux/launch-skyrim-together-vr.sh" "$GAME_DIR/"
+install -m 0755 "$HANDOFF/source/Tools/SkyrimVR/linux/launch-skyrim-vr-offline.sh" "$GAME_DIR/"
+install -m 0755 "$HANDOFF/source/Tools/SkyrimVR/linux/stvr-xrizer-input-compat.sh" "$GAME_DIR/"
+STVR_GAME_DIR="$GAME_DIR" STVR_DRY_RUN=1 "$GAME_DIR/launch-skyrim-together-vr.sh"
+```
+
+Set `STVR_STEAM_ROOT`, `STVR_STEAM_LIBRARY`, `STVR_COMPATDATA`, or
+`STVR_PROTONPATH` only when automatic discovery does not match that machine.
+Do not use the old handoff's launcher copies for this repair.
+
+Start or verify Monado using the helper carried in `source/`, replacing the
+profile UUID when needed:
 
 ```bash
 ./source/Tools/SkyrimVR/linux/manage-monado-runtime.sh start simulated-qwerty-fixed
