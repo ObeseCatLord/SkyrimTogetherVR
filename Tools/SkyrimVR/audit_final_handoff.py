@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import tempfile
@@ -264,6 +265,21 @@ def checklist(pass_all: bool = True) -> dict[str, object]:
     }
 
 
+def write_runtime_evidence_entry(
+    archive: zipfile.ZipFile,
+    manifest: dict[str, object],
+    archive_name: str,
+    payload: bytes,
+) -> None:
+    archive.writestr(archive_name, payload)
+    for file_record in manifest["files"]:
+        if file_record["archiveName"] == archive_name:
+            file_record["size"] = len(payload)
+            file_record["sha256"] = hashlib.sha256(payload).hexdigest()
+            return
+    raise ValueError(f"runtime evidence manifest has no file record for {archive_name}")
+
+
 def create_runtime_evidence_zip(
     path: pathlib.Path,
     *,
@@ -314,7 +330,6 @@ def create_runtime_evidence_zip(
                 "archiveName": "package/SkyrimTogetherVR_BuildManifest.json",
                 "required": True,
                 "exists": True,
-                "size": 1,
             },
             {
                 "category": "client-log",
@@ -322,18 +337,22 @@ def create_runtime_evidence_zip(
                 "archiveName": "logs/tp_client.log",
                 "required": True,
                 "exists": True,
-                "size": 1,
             },
         ],
     }
     runtime_checklist = checklist(pass_all=True)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n")
-        archive.writestr("package/SkyrimTogetherVR_BuildManifest.json", json.dumps(package_manifest, indent=2) + "\n")
+        write_runtime_evidence_entry(
+            archive,
+            runtime_manifest,
+            "package/SkyrimTogetherVR_BuildManifest.json",
+            (json.dumps(package_manifest, indent=2) + "\n").encode("utf-8"),
+        )
         archive.writestr("runtime_audit.txt", "Runtime handoff audit failures: 0\n")
         archive.writestr("runtime_checklist.json", json.dumps(runtime_checklist, indent=2, sort_keys=True) + "\n")
         archive.writestr("runtime_checklist.txt", "SkyrimTogetherVR runtime checklist\n")
-        archive.writestr("logs/tp_client.log", "self-test\n")
+        write_runtime_evidence_entry(archive, runtime_manifest, "logs/tp_client.log", b"self-test\n")
+        archive.writestr("manifest.json", json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n")
     return path
 
 
