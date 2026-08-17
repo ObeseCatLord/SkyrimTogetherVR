@@ -6,10 +6,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import hashlib
 import io
 import json
 import os
 import pathlib
+import platform
+import sys
 import tempfile
 import zipfile
 
@@ -108,6 +111,8 @@ def build_collection_args(**overrides: object) -> argparse.Namespace:
         "out": None,
         "skse_log_root": None,
         "extra_file": [],
+        "crash_evidence": False,
+        "include_crash_dumps": False,
         "skip_log": False,
         "no_audit": False,
         "require_connected": False,
@@ -159,7 +164,22 @@ def repo_root() -> pathlib.Path:
 
 
 def default_game_path() -> pathlib.Path:
-    return vr_paths.default_skyrim_vr_path()
+    configured = vr_paths.env_path(vr_paths.SKYRIM_VR_ENV_VARS)
+    if configured is not None:
+        return configured
+
+    home = pathlib.Path.home()
+    candidates = (
+        pathlib.Path.cwd(),
+        home / ".local/share/Steam/steamapps/common/SkyrimVR",
+        home / ".steam/steam/steamapps/common/SkyrimVR",
+        home / "SteamLibrary/steamapps/common/SkyrimVR",
+        home / "FasterGames/SteamLibrary/steamapps/common/SkyrimVR",
+    )
+    for candidate in candidates:
+        if (candidate / "SkyrimVR.exe").is_file() or (candidate / BUILD_MANIFEST_NAME).is_file():
+            return candidate
+    return pathlib.Path.cwd()
 
 
 def default_output_dir() -> pathlib.Path:
@@ -211,8 +231,31 @@ def add_file(
     }
     if source.exists() and source.is_file():
         record["size"] = source.stat().st_size
+        record["sha256"] = sha256_file(source)
         zf.write(source, archive_name)
     files.append(record)
+
+
+def add_generated_file(
+    zf: zipfile.ZipFile,
+    payload: bytes,
+    archive_name: str,
+    files: list[dict[str, object]],
+    *,
+    category: str,
+) -> None:
+    zf.writestr(archive_name, payload)
+    files.append(
+        {
+            "category": category,
+            "source": "generated",
+            "archiveName": archive_name,
+            "required": False,
+            "exists": True,
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    )
 
 
 def get_bool(values: dict[str, str], key: str) -> bool:
@@ -1204,7 +1247,15 @@ def skse_log_candidates(args: argparse.Namespace) -> list[pathlib.Path]:
     roots = []
     if args.skse_log_root:
         roots.append(args.skse_log_root.expanduser().resolve())
-    roots.append(args.game_path.expanduser().resolve())
+    game_path = args.game_path.expanduser().resolve()
+    roots.append(game_path)
+    roots.append(
+        game_path.parent.parent
+        / "compatdata"
+        / "611670"
+        / "pfx"
+        / GAMEPLAY_BRIDGE_LOG_RELATIVE.parent
+    )
     roots.append(pathlib.Path.home() / WINDOWS_MY_GAMES_RELATIVE)
     user_profile = os.environ.get("USERPROFILE")
     if user_profile:
@@ -1235,7 +1286,7 @@ def gameplay_bridge_log_candidates(args: argparse.Namespace) -> list[pathlib.Pat
         (
             game_path / "Data" / "SKSE" / "Plugins",
             game_path / GAMEPLAY_BRIDGE_LOG_RELATIVE.parent,
-            game_path.parent.parent.parent
+            game_path.parent.parent
             / "compatdata"
             / "611670"
             / "pfx"
@@ -1255,6 +1306,175 @@ def gameplay_bridge_log_candidates(args: argparse.Namespace) -> list[pathlib.Pat
             seen.add(candidate)
             candidates.append(candidate)
     return candidates
+
+
+def rotated_client_log_candidates(log_path: pathlib.Path) -> list[pathlib.Path]:
+    if not log_path.parent.is_dir():
+        return []
+    candidates = [
+        candidate.resolve()
+        for candidate in log_path.parent.glob(f"{log_path.stem}*{log_path.suffix}")
+        if candidate.is_file() and candidate.resolve() != log_path.resolve()
+    ]
+    return sorted(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
+
+
+def stvr_bridge_log_candidates(args: argparse.Namespace) -> list[pathlib.Path]:
+    game_path = args.game_path.expanduser().resolve()
+    roots = [game_path / "Data" / "SKSE" / "Plugins"]
+    if args.skse_log_root:
+        roots.append(args.skse_log_root.expanduser().resolve())
+
+    candidates: list[pathlib.Path] = []
+    seen: set[pathlib.Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for candidate in sorted(root.glob("SkyrimTogetherVR*.log")):
+            resolved = candidate.resolve()
+            if candidate.is_file() and resolved not in seen:
+                seen.add(resolved)
+                candidates.append(resolved)
+    return candidates
+
+
+def crash_dump_candidates(game_path: pathlib.Path) -> list[pathlib.Path]:
+    candidates = [candidate.resolve() for candidate in game_path.glob("crash_*.dmp") if candidate.is_file()]
+    return sorted(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)[:5]
+
+
+def diagnostic_log_candidates(game_path: pathlib.Path) -> list[pathlib.Path]:
+    searches = (
+        (game_path / "logs", ("stvr-*.log", "steam-611670.log")),
+        (pathlib.Path.home(), ("stvr-*-launch.log", "stvr-launch-*.log", "steam-611670.log")),
+    )
+    candidates: list[pathlib.Path] = []
+    seen: set[pathlib.Path] = set()
+    for root, patterns in searches:
+        if not root.is_dir():
+            continue
+        for pattern in patterns:
+            for candidate in root.glob(pattern):
+                resolved = candidate.resolve()
+                if candidate.is_file() and resolved not in seen:
+                    seen.add(resolved)
+                    candidates.append(resolved)
+    return sorted(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)[:8]
+
+
+def client_log_candidates(game_path: pathlib.Path) -> list[pathlib.Path]:
+    return [
+        game_path / DEFAULT_LOG_RELATIVE,
+        game_path / "Data" / "SKSE" / "Plugins" / DEFAULT_LOG_RELATIVE.name,
+        game_path / DEFAULT_LOG_RELATIVE.name,
+    ]
+
+
+def resolve_client_log(args: argparse.Namespace) -> pathlib.Path:
+    if args.log:
+        return args.log.expanduser().resolve()
+    candidates = client_log_candidates(args.game_path.expanduser().resolve())
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return candidates[0].resolve()
+
+
+def additional_runtime_log_candidates(args: argparse.Namespace) -> list[pathlib.Path]:
+    game_path = args.game_path.expanduser().resolve()
+    roots = [
+        game_path / "logs",
+        game_path / "Data" / "SKSE" / "Plugins",
+    ]
+    roots.extend({candidate.parent for candidate in skse_log_candidates(args)})
+
+    candidates: list[pathlib.Path] = []
+    seen: set[pathlib.Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for pattern in ("*.log", "*.log.*"):
+            for candidate in root.glob(pattern):
+                resolved = candidate.resolve()
+                if candidate.is_file() and resolved not in seen:
+                    seen.add(resolved)
+                    candidates.append(resolved)
+    return sorted(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
+
+
+def runtime_config_candidates(game_path: pathlib.Path) -> list[pathlib.Path]:
+    steamapps = game_path.parent.parent
+    prefix = steamapps / "compatdata" / "611670" / "pfx" / "drive_c" / "users" / "steamuser"
+    my_games = prefix / "Documents" / "My Games" / "Skyrim VR"
+    local_data = prefix / "AppData" / "Local" / "Skyrim VR"
+    candidates = [
+        my_games / "Skyrim.ini",
+        my_games / "SkyrimPrefs.ini",
+        my_games / "SkyrimCustom.ini",
+        local_data / "plugins.txt",
+        local_data / "loadorder.txt",
+        game_path / "Data" / "SKSE" / "skse.ini",
+        game_path / "Data" / "SKSE" / "Plugins.txt",
+    ]
+    return [candidate.resolve() for candidate in candidates if candidate.is_file()]
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def runtime_inventory(game_path: pathlib.Path) -> dict[str, object]:
+    files: list[pathlib.Path] = []
+    for name in (
+        "SkyrimVR.exe",
+        "sksevr_loader.exe",
+        "sksevr_1_4_15.dll",
+        "SkyrimTogetherVR.exe",
+        "SkyrimTogetherVRAvatarSync.exe",
+        "SkyrimTogetherVRGameplay.exe",
+        BUILD_MANIFEST_NAME,
+        "openvr_api.dll",
+        "openvr_api.orig.dll",
+        "openvr_api.orig",
+        "openvr_api.xrizer.dll",
+    ):
+        candidate = game_path / name
+        if candidate.is_file():
+            files.append(candidate)
+    plugin_root = game_path / "Data" / "SKSE" / "Plugins"
+    if plugin_root.is_dir():
+        files.extend(sorted(candidate for candidate in plugin_root.glob("*.dll") if candidate.is_file()))
+        files.extend(
+            candidate
+            for candidate in (
+                plugin_root / "version-1-4-15-0.csv",
+                plugin_root / "SkyrimTogetherVR_AE_to_SE.csv",
+                plugin_root / "SkyrimTogetherVR_AddressOverrides.csv",
+            )
+            if candidate.is_file()
+        )
+
+    records = []
+    for path in files:
+        stat_result = path.stat()
+        records.append(
+            {
+                "path": path.relative_to(game_path).as_posix(),
+                "size": stat_result.st_size,
+                "mtimeNs": stat_result.st_mtime_ns,
+                "sha256": sha256_file(path),
+            }
+        )
+    return {
+        "schema": "skyrim_together_vr_runtime_inventory_v1",
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "files": records,
+    }
 
 
 def resolve_gameplay_bridge_log(args: argparse.Namespace) -> pathlib.Path:
@@ -1306,9 +1526,11 @@ def write_runtime_audit(
 
 def collect(args: argparse.Namespace) -> pathlib.Path:
     game_path = args.game_path.expanduser().resolve()
+    if not game_path.is_dir():
+        raise FileNotFoundError(f"Skyrim VR game directory does not exist: {game_path}")
     args.game_path = game_path
     handoff_dir = resolve_handoff_dir(args)
-    log_path = args.log.expanduser().resolve() if args.log else game_path / DEFAULT_LOG_RELATIVE
+    log_path = resolve_client_log(args)
     gameplay_bridge_log_path = resolve_gameplay_bridge_log(args)
     build_manifest_path = game_path / BUILD_MANIFEST_NAME
     build_manifest_ok, build_manifest_detail, build_manifest = validate_build_manifest_file(
@@ -1319,6 +1541,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     avatar_runtime_checks = args.avatar_sync or args.gameplay
     output_path = resolve_output_path(args.out)
     collected_files: list[dict[str, object]] = []
+    crash_evidence = args.crash_evidence or args.include_crash_dumps
     manifest: dict[str, object] = {
         "schema": "skyrim_together_vr_runtime_evidence_v1",
         "createdUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1330,6 +1553,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         "packageBuildManifest": build_manifest,
         "avatarSyncAudit": avatar_runtime_checks,
         "gameplayAudit": args.gameplay,
+        "crashEvidence": crash_evidence,
         "requiredConnected": args.require_connected,
         "requiredVrik": args.require_vrik,
         "requiredHiggs": args.require_higgs,
@@ -1391,6 +1615,16 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
             required=not args.skip_log,
         )
 
+        for index, candidate in enumerate(rotated_client_log_candidates(log_path), start=1):
+            add_file(
+                zf,
+                candidate,
+                f"logs/rotated/{index:02d}-{candidate.name}",
+                collected_files,
+                category="rotated-client-log",
+                required=False,
+            )
+
         add_file(
             zf,
             gameplay_bridge_log_path,
@@ -1421,6 +1655,26 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
                 required=False,
             )
 
+        known_handoff_paths = {
+            (handoff_dir / file_name).resolve()
+            for file_name in (*vr_handoff.READOUT_FILES.values(), *HANDOFF_EXTRA_FILES)
+        }
+        if handoff_dir.is_dir():
+            extra_handoff_index = 0
+            for candidate in sorted(handoff_dir.glob("SkyrimTogetherVR.*")):
+                resolved = candidate.resolve()
+                if not candidate.is_file() or resolved in known_handoff_paths:
+                    continue
+                extra_handoff_index += 1
+                add_file(
+                    zf,
+                    resolved,
+                    f"handoff/additional/{extra_handoff_index:02d}-{candidate.name}",
+                    collected_files,
+                    category="handoff-additional",
+                    required=False,
+                )
+
         for index, candidate in enumerate(skse_log_candidates(args), start=1):
             add_file(
                 zf,
@@ -1429,6 +1683,85 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
                 collected_files,
                 category="skse-log",
                 required=False,
+            )
+
+        gameplay_bridge_resolved = gameplay_bridge_log_path.resolve()
+        bridge_index = 0
+        for candidate in stvr_bridge_log_candidates(args):
+            if candidate == gameplay_bridge_resolved:
+                continue
+            bridge_index += 1
+            add_file(
+                zf,
+                candidate,
+                f"logs/bridges/{bridge_index:02d}-{candidate.name}",
+                collected_files,
+                category="stvr-bridge-log",
+                required=False,
+            )
+
+        if args.crash_evidence:
+            already_collected = {
+                pathlib.Path(str(record["source"])).resolve()
+                for record in collected_files
+                if record.get("exists") and record.get("source")
+            }
+            additional_log_index = 0
+            for candidate in additional_runtime_log_candidates(args):
+                if candidate in already_collected:
+                    continue
+                additional_log_index += 1
+                add_file(
+                    zf,
+                    candidate,
+                    f"logs/additional/{additional_log_index:03d}-{candidate.name}",
+                    collected_files,
+                    category="runtime-log-additional",
+                    required=False,
+                )
+                already_collected.add(candidate)
+
+            for index, candidate in enumerate(diagnostic_log_candidates(game_path), start=1):
+                if candidate in already_collected:
+                    continue
+                add_file(
+                    zf,
+                    candidate,
+                    f"logs/launcher/{index:02d}-{candidate.name}",
+                    collected_files,
+                    category="launcher-runtime-log",
+                    required=False,
+                )
+                already_collected.add(candidate)
+
+            for index, candidate in enumerate(runtime_config_candidates(game_path), start=1):
+                add_file(
+                    zf,
+                    candidate,
+                    f"config/{index:02d}-{candidate.name}",
+                    collected_files,
+                    category="runtime-config",
+                    required=False,
+                )
+
+        if crash_evidence:
+            for index, candidate in enumerate(crash_dump_candidates(game_path), start=1):
+                add_file(
+                    zf,
+                    candidate,
+                    f"crash-dumps/{index:02d}-{candidate.name}",
+                    collected_files,
+                    category="crash-dump",
+                    required=False,
+                )
+
+            inventory_payload = (json.dumps(runtime_inventory(game_path), indent=2, sort_keys=True) + "\n").encode("utf-8")
+            add_generated_file(
+                zf,
+                inventory_payload,
+                "system/runtime_inventory.json",
+                collected_files,
+                category="runtime-inventory",
             )
 
         for extra_file in args.extra_file:
@@ -1468,12 +1801,34 @@ def command_self_test(_: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="stvr-evidence-test-") as temp:
         root = pathlib.Path(temp)
-        game = root / "SkyrimVR"
+        missing_args = build_collection_args(
+            game_path=root / "missing" / "SkyrimVR",
+            out=root / "missing-evidence.zip",
+            skip_log=True,
+            no_audit=True,
+        )
+        try:
+            collect(missing_args)
+        except FileNotFoundError:
+            pass
+        else:
+            print("Evidence collector self-test accepted a nonexistent game path.")
+            return 1
+
+        game = root / "steamapps" / "common" / "SkyrimVR"
         handoff = game / "Data" / "SkyrimTogetherReborn"
         log = game / DEFAULT_LOG_RELATIVE
         gameplay_bridge_log = root / "gameplay-bridge" / GAMEPLAY_BRIDGE_LOG_NAME
         out_dir = root / "out"
         handoff.mkdir(parents=True)
+        alternate_log = game / "Data" / "SKSE" / "Plugins" / DEFAULT_LOG_RELATIVE.name
+        alternate_log.parent.mkdir(parents=True)
+        alternate_log.write_text("alternate client log\n", encoding="utf-8")
+        alternate_args = build_collection_args(game_path=game)
+        if resolve_client_log(alternate_args) != alternate_log.resolve():
+            print("Evidence collector self-test did not discover the alternate SKSE plugin client log.")
+            return 1
+        alternate_log.unlink()
         log.parent.mkdir(parents=True)
         log.write_text(
             "\n".join(audit_runtime_handoff.LOG_BREADCRUMBS)
@@ -1481,6 +1836,41 @@ def command_self_test(_: argparse.Namespace) -> int:
             + "\nSkyrimTogetherVR Main::Draw client update completed: count=1 sequence=1 thread=42\n",
             encoding="utf-8",
         )
+        rotated_log = log.parent / "tp_client.1.log"
+        rotated_log.write_text("previous client startup\n", encoding="utf-8")
+        launcher_log = log.parent / "stvr-launch-fixture.log"
+        launcher_log.write_text("umu launch fixture\n", encoding="utf-8")
+        crash_dump = game / "crash_UTC_2026-01-01_00-00-00.dmp"
+        crash_dump.write_bytes(b"test minidump")
+        tick_bridge_log = game / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVRTickBridge.log"
+        tick_bridge_log.parent.mkdir(parents=True, exist_ok=True)
+        tick_bridge_log.write_text("task_run sequence=1\n", encoding="utf-8")
+        extra_handoff_log = handoff / "SkyrimTogetherVR.debug"
+        extra_handoff_log.write_text("debug handoff fixture\n", encoding="utf-8")
+        inferred_skse_root = (
+            game.parent.parent
+            / "compatdata"
+            / "611670"
+            / "pfx"
+            / GAMEPLAY_BRIDGE_LOG_RELATIVE.parent
+        )
+        inferred_skse_root.mkdir(parents=True, exist_ok=True)
+        (inferred_skse_root / "sksevr.log").write_text("init complete\n", encoding="utf-8")
+        (inferred_skse_root / "VRIK.log").write_text("VRIK fixture\n", encoding="utf-8")
+        local_data = (
+            game.parent.parent
+            / "compatdata"
+            / "611670"
+            / "pfx"
+            / "drive_c"
+            / "users"
+            / "steamuser"
+            / "AppData"
+            / "Local"
+            / "Skyrim VR"
+        )
+        local_data.mkdir(parents=True)
+        (local_data / "plugins.txt").write_text("*SkyrimTogetherReborn.esp\n", encoding="utf-8")
         gameplay_bridge_log.parent.mkdir(parents=True)
         gameplay_bridge_log.write_text(
             "[info] validated loader runtime=skyrimvr\n",
@@ -1758,6 +2148,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             out=out_dir,
             skse_log_root=None,
             extra_file=[],
+            crash_evidence=True,
+            include_crash_dumps=False,
             skip_log=False,
             no_audit=False,
             require_connected=True,
@@ -1789,7 +2181,13 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "runtime_checklist.txt",
                 f"package/{BUILD_MANIFEST_NAME}",
                 "logs/tp_client.log",
+                "logs/rotated/01-tp_client.1.log",
                 f"logs/{GAMEPLAY_BRIDGE_LOG_NAME}",
+                "logs/bridges/01-SkyrimTogetherVRTickBridge.log",
+                "crash-dumps/01-crash_UTC_2026-01-01_00-00-00.dmp",
+                "system/runtime_inventory.json",
+                "skse/04-sksevr.log",
+                "config/01-plugins.txt",
                 "handoff/SkyrimTogetherVR.status",
                 "handoff/SkyrimTogetherVR.lifecycle",
                 "handoff/SkyrimTogetherVR.pose",
@@ -1803,12 +2201,24 @@ def command_self_test(_: argparse.Namespace) -> int:
             if missing:
                 print(f"Evidence collector self-test missing archive entries: {', '.join(missing)}")
                 return 1
+            if not any(name.endswith("-VRIK.log") and name.startswith("logs/additional/") for name in names):
+                print("Evidence collector self-test did not include an additional SKSE plugin log.")
+                return 1
+            if not any(name.endswith("-stvr-launch-fixture.log") for name in names):
+                print("Evidence collector self-test did not include a launcher log.")
+                return 1
+            if not any(name.endswith("-SkyrimTogetherVR.debug") for name in names):
+                print("Evidence collector self-test did not include an additional handoff artifact.")
+                return 1
             manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
             if manifest.get("runtimeAuditExitCode") != 0:
                 print(f"Evidence collector self-test runtime audit failed: {manifest.get('runtimeAuditExitCode')}")
                 return 1
             if manifest.get("packageBuildManifest", {}).get("schema") != BUILD_MANIFEST_SCHEMA:
                 print("Evidence collector self-test did not embed package build manifest metadata.")
+                return 1
+            if manifest.get("crashEvidence") is not True:
+                print("Evidence collector self-test did not mark crash evidence collection.")
                 return 1
             checklist = json.loads(zf.read("runtime_checklist.json").decode("utf-8"))
             checklist_summary = checklist.get("summary", {})
@@ -2022,6 +2432,16 @@ def main() -> int:
     parser.add_argument("--out", type=pathlib.Path, help="output zip path or output directory")
     parser.add_argument("--skse-log-root", type=pathlib.Path, help="directory containing sksevr.log files")
     parser.add_argument("--extra-file", type=pathlib.Path, action="append", default=[], help="extra file to include in the evidence zip")
+    parser.add_argument(
+        "--crash-evidence",
+        action="store_true",
+        help="collect all available post-crash logs, minidumps, and a hashed runtime DLL inventory",
+    )
+    parser.add_argument(
+        "--include-crash-dumps",
+        action="store_true",
+        help="include the five newest crash_*.dmp files from the game directory (may contain process memory)",
+    )
     parser.add_argument("--skip-log", action="store_true", help="do not require tp_client.log in the embedded runtime audit")
     parser.add_argument("--no-audit", action="store_true", help="collect files without embedding runtime_audit.txt")
     parser.add_argument("--require-connected", action="store_true", help="embedded audit requires online connection status")
@@ -2081,8 +2501,12 @@ def main() -> int:
     if args.self_test:
         return command_self_test(args)
 
+    if args.crash_evidence:
+        args.include_crash_dumps = True
     archive = collect(args)
     print("SkyrimTogetherVR runtime evidence collection does not launch Skyrim or mutate the game install.")
+    if args.crash_evidence or args.include_crash_dumps:
+        print("Warning: included minidumps may contain process memory and should be handled as sensitive data.")
     print(f"Evidence archive: {archive}")
     return 0
 

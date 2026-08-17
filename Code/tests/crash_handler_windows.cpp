@@ -78,7 +78,7 @@ int RunCrashHandlerProbe()
 }
 } // namespace
 
-TEST_CASE("Frame-handled access violations do not reach the STVR top-level filter")
+TEST_CASE("Process exception routing preserves control-flow notifications and frame handlers")
 {
     REQUIRE(RunCrashHandlerProbe() == 0);
 }
@@ -91,6 +91,25 @@ TEST_CASE("Crash handler installs outermost and preserves the existing filter")
     CrashHandler::ResetForTesting();
     CrashHandler handler;
     handler.Install();
+
+    const auto displacedFilter = SetUnhandledExceptionFilter(&PriorExecuteHandler);
+    REQUIRE(displacedFilter == CrashHandler::GetTopLevelFilterForTesting());
+
+    SyntheticException exception;
+    REQUIRE(CrashHandler::InvokeForTesting(&exception.Pointers) == EXCEPTION_CONTINUE_SEARCH);
+    REQUIRE(s_priorCalls.load(std::memory_order_relaxed) == 1);
+}
+
+TEST_CASE("Duplicate crash-handler installs preserve the original filter chain")
+{
+    s_priorCalls.store(0, std::memory_order_relaxed);
+    const auto originalFilter = SetUnhandledExceptionFilter(&PriorContinueSearch);
+    ProcessFilterRestore restore{originalFilter};
+    CrashHandler::ResetForTesting();
+    CrashHandler firstHandler;
+    CrashHandler secondHandler;
+    firstHandler.Install();
+    secondHandler.Install();
 
     const auto displacedFilter = SetUnhandledExceptionFilter(&PriorExecuteHandler);
     REQUIRE(displacedFilter == CrashHandler::GetTopLevelFilterForTesting());
@@ -136,6 +155,39 @@ TEST_CASE("Crash handler propagates prior filter dispositions")
     }
 
     REQUIRE(spdlog::default_logger() == logger);
+}
+
+TEST_CASE("Continuable MSVC thread-name notifications bypass crash capture")
+{
+    SyntheticException exception;
+    exception.Record.ExceptionCode = 0x406D1388;
+    s_priorCalls.store(0, std::memory_order_relaxed);
+    CrashHandler::ResetForTesting(&PriorExecuteHandler);
+
+    REQUIRE(CrashHandler::InvokeForTesting(&exception.Pointers) == EXCEPTION_CONTINUE_EXECUTION);
+    REQUIRE(CrashHandler::GetInvocationCountForTesting() == 0);
+    REQUIRE(CrashHandler::GetIgnoredNotificationCountForTesting() == 1);
+    REQUIRE(s_priorCalls.load(std::memory_order_relaxed) == 0);
+
+    SyntheticException realException;
+    REQUIRE(CrashHandler::InvokeForTesting(&realException.Pointers) == EXCEPTION_EXECUTE_HANDLER);
+    REQUIRE(CrashHandler::GetInvocationCountForTesting() == 1);
+    REQUIRE(s_priorCalls.load(std::memory_order_relaxed) == 1);
+}
+
+TEST_CASE("Noncontinuable MSVC thread-name exception follows crash handling")
+{
+    SyntheticException exception;
+    exception.Record.ExceptionCode = 0x406D1388;
+    exception.Record.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    s_priorCalls.store(0, std::memory_order_relaxed);
+    CrashHandler::ResetForTesting(&PriorExecuteHandler);
+
+    REQUIRE(CrashHandler::InvokeForTesting(&exception.Pointers) == EXCEPTION_EXECUTE_HANDLER);
+    REQUIRE(CrashHandler::GetInvocationCountForTesting() == 1);
+    REQUIRE(CrashHandler::GetIgnoredNotificationCountForTesting() == 0);
+    REQUIRE(s_priorCalls.load(std::memory_order_relaxed) == 1);
+    REQUIRE(CrashHandler::InvokeForTesting(&exception.Pointers) == EXCEPTION_CONTINUE_SEARCH);
 }
 
 TEST_CASE("Recursive crash-handler entry does not recurse or deadlock")

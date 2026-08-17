@@ -22,9 +22,11 @@ using time_point = std::chrono::system_clock::time_point;
 namespace
 {
 constexpr std::size_t kRetainedCrashDumpCount = 5;
+constexpr DWORD kMsVcThreadNameException = 0x406D1388;
 
 #if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
 std::atomic_uint32_t s_crashHandlerInvocations{};
+std::atomic_uint32_t s_ignoredThreadNameNotifications{};
 #endif
 
 std::string SerializeTimePoint(const time_point& time, const std::string& format)
@@ -130,7 +132,8 @@ void WriteCrashDump(PEXCEPTION_POINTERS apExceptionInfo) noexcept
 }
 } // namespace
 
-LPTOP_LEVEL_EXCEPTION_FILTER CrashHandler::s_pPreviousUnhandledFilter = nullptr;
+std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> CrashHandler::s_pPreviousUnhandledFilter{nullptr};
+std::atomic_bool CrashHandler::s_filterInstalled{false};
 std::atomic_flag CrashHandler::s_handlingCrash = ATOMIC_FLAG_INIT;
 
 CrashHandler::CrashHandler() = default;
@@ -142,14 +145,30 @@ void CrashHandler::Install() noexcept
     if (m_installed)
         return;
 
-    s_pPreviousUnhandledFilter = SetUnhandledExceptionFilter(&CrashHandler::TopLevelCrashHandler);
-    if (s_pPreviousUnhandledFilter == &CrashHandler::TopLevelCrashHandler)
-        s_pPreviousUnhandledFilter = nullptr;
+    bool expected = false;
+    if (s_filterInstalled.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    {
+        const auto previousFilter = SetUnhandledExceptionFilter(&CrashHandler::TopLevelCrashHandler);
+        s_pPreviousUnhandledFilter.store(
+            previousFilter == &CrashHandler::TopLevelCrashHandler ? nullptr : previousFilter, std::memory_order_release);
+    }
     m_installed = true;
 }
 
 LONG WINAPI CrashHandler::TopLevelCrashHandler(PEXCEPTION_POINTERS apExceptionInfo) noexcept
 {
+    const auto* exceptionRecord = apExceptionInfo ? apExceptionInfo->ExceptionRecord : nullptr;
+    // MSVC uses this exception as an out-of-band thread naming notification.
+    // It is nonfatal and must not arm crash capture when it escapes an IAT hook.
+    if (exceptionRecord && exceptionRecord->ExceptionCode == kMsVcThreadNameException &&
+        (exceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE) == 0)
+    {
+#if defined(TP_CRASH_HANDLER_TESTING) && TP_CRASH_HANDLER_TESTING
+        s_ignoredThreadNameNotifications.fetch_add(1, std::memory_order_relaxed);
+#endif
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     if (s_handlingCrash.test_and_set(std::memory_order_acquire))
         return EXCEPTION_CONTINUE_SEARCH;
 
@@ -158,9 +177,10 @@ LONG WINAPI CrashHandler::TopLevelCrashHandler(PEXCEPTION_POINTERS apExceptionIn
 #endif
 
     LONG disposition = EXCEPTION_CONTINUE_SEARCH;
-    if (s_pPreviousUnhandledFilter)
+    const auto previousFilter = s_pPreviousUnhandledFilter.load(std::memory_order_acquire);
+    if (previousFilter)
     {
-        disposition = s_pPreviousUnhandledFilter(apExceptionInfo);
+        disposition = previousFilter(apExceptionInfo);
         if (disposition == EXCEPTION_CONTINUE_EXECUTION)
         {
             s_handlingCrash.clear(std::memory_order_release);
@@ -215,14 +235,21 @@ LONG CrashHandler::InvokeForTesting(PEXCEPTION_POINTERS apExceptionInfo) noexcep
 
 void CrashHandler::ResetForTesting(LPTOP_LEVEL_EXCEPTION_FILTER apPreviousFilter) noexcept
 {
-    s_pPreviousUnhandledFilter = apPreviousFilter;
+    s_pPreviousUnhandledFilter.store(apPreviousFilter, std::memory_order_release);
+    s_filterInstalled.store(false, std::memory_order_release);
     s_handlingCrash.clear(std::memory_order_release);
     s_crashHandlerInvocations.store(0, std::memory_order_relaxed);
+    s_ignoredThreadNameNotifications.store(0, std::memory_order_relaxed);
 }
 
 std::uint32_t CrashHandler::GetInvocationCountForTesting() noexcept
 {
     return s_crashHandlerInvocations.load(std::memory_order_relaxed);
+}
+
+std::uint32_t CrashHandler::GetIgnoredNotificationCountForTesting() noexcept
+{
+    return s_ignoredThreadNameNotifications.load(std::memory_order_relaxed);
 }
 
 LPTOP_LEVEL_EXCEPTION_FILTER CrashHandler::GetTopLevelFilterForTesting() noexcept

@@ -25,7 +25,12 @@ def main() -> int:
             (
                 "CrashHandler::TopLevelCrashHandler",
                 "SetUnhandledExceptionFilter(&CrashHandler::TopLevelCrashHandler)",
-                "s_pPreviousUnhandledFilter(apExceptionInfo)",
+                "s_filterInstalled.compare_exchange_strong",
+                "s_pPreviousUnhandledFilter.load(std::memory_order_acquire)",
+                "kMsVcThreadNameException",
+                "EXCEPTION_NONCONTINUABLE",
+                "s_ignoredThreadNameNotifications.fetch_add",
+                "previousFilter(apExceptionInfo)",
                 "CaptureCrashContext(apExceptionInfo)",
                 "TopLevelCrashHandler: access type=",
                 "TopLevelCrashHandler: stack return=",
@@ -43,6 +48,17 @@ def main() -> int:
                 "dumpWritten = MiniDumpWriteDump",
                 "coredump write failed",
                 "(IS_MASTER) && (!defined(TP_SKYRIM_VR) || TP_SKYRIM_VR != 1)",
+            ),
+        )
+    )
+    failures.extend(
+        require_tokens(
+            root,
+            root / "Code" / "client" / "CrashHandler.h",
+            (
+                "std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER>",
+                "std::atomic_bool s_filterInstalled",
+                "GetIgnoredNotificationCountForTesting",
             ),
         )
     )
@@ -78,10 +94,15 @@ def main() -> int:
             root,
             root / "Code" / "tests" / "crash_handler_windows.cpp",
             (
-                'TEST_CASE("Frame-handled access violations do not reach the STVR top-level filter")',
+                'TEST_CASE("Process exception routing preserves control-flow notifications and frame handlers")',
                 'TEST_CASE("Crash handler installs outermost and preserves the existing filter")',
+                'TEST_CASE("Duplicate crash-handler installs preserve the original filter chain")',
                 'TEST_CASE("Crash handler propagates prior filter dispositions")',
+                'TEST_CASE("Continuable MSVC thread-name notifications bypass crash capture")',
+                'TEST_CASE("Noncontinuable MSVC thread-name exception follows crash handling")',
                 'TEST_CASE("Recursive crash-handler entry does not recurse or deadlock")',
+                "EXCEPTION_NONCONTINUABLE",
+                "GetIgnoredNotificationCountForTesting() == 1",
                 "EXCEPTION_CONTINUE_EXECUTION",
                 "EXCEPTION_EXECUTE_HANDLER",
                 "EXCEPTION_CONTINUE_SEARCH",
@@ -97,7 +118,13 @@ def main() -> int:
             (
                 "RaiseFrameHandledAccessViolation()",
                 "CrashHandler::GetInvocationCountForTesting()",
-                "return invocationCount == 0 ? 0 : 1",
+                "CrashHandler::GetIgnoredNotificationCountForTesting()",
+                "struct THREADNAME_INFO",
+                "#pragma pack(push, 8)",
+                "sizeof(threadNameInfo) / sizeof(ULONG_PTR)",
+                "notificationInvocationCount == 0",
+                "frameHandledInvocationCount == 0",
+                "return ignoredNotificationCount == 1 && notificationInvocationCount == 0 && frameHandledInvocationCount == 0 ? 0 : 1",
             ),
         )
     )
@@ -135,7 +162,7 @@ def main() -> int:
     filter_start = crash_handler_text.find("LONG WINAPI CrashHandler::TopLevelCrashHandler")
     filter_end = crash_handler_text.find("LONG CrashHandler::InvokeForTesting", filter_start)
     filter_body = crash_handler_text[filter_start:filter_end] if filter_start >= 0 and filter_end >= 0 else ""
-    previous_filter_index = filter_body.find("s_pPreviousUnhandledFilter(apExceptionInfo)")
+    previous_filter_index = filter_body.find("previousFilter(apExceptionInfo)")
     dump_index = filter_body.find("WriteCrashDump(apExceptionInfo)")
     if previous_filter_index < 0 or dump_index < 0 or previous_filter_index >= dump_index:
         failures.append("Code/client/CrashHandler.cpp: prior top-level filter must get first refusal before STVR writes a dump")
@@ -144,6 +171,20 @@ def main() -> int:
         failures.append("Code/client/CrashHandler.cpp: top-level callback must not mutate the process-wide filter during dispatch")
     if filter_body.count("s_handlingCrash.clear(std::memory_order_release)") != 1:
         failures.append("Code/client/CrashHandler.cpp: terminal capture guard must only re-arm on prior CONTINUE_EXECUTION")
+
+    ignored_notification = re.search(
+        r"if \(exceptionRecord && exceptionRecord->ExceptionCode == kMsVcThreadNameException &&\s*"
+        r"\(exceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE\) == 0\)\s*\{(?P<body>.*?)"
+        r"return EXCEPTION_CONTINUE_EXECUTION;",
+        filter_body,
+        re.DOTALL,
+    )
+    if not ignored_notification:
+        failures.append("Code/client/CrashHandler.cpp: only continuable MSVC thread-name notifications may resume execution")
+    else:
+        ignored_body = ignored_notification.group("body")
+        if "spdlog::" in ignored_body or "s_handlingCrash" in ignored_body:
+            failures.append("Code/client/CrashHandler.cpp: ignored thread-name notifications must not log or arm crash capture")
 
     app_text = (root / "Code" / "client" / "TiltedOnlineApp.cpp").read_text(encoding="utf-8")
     logger_index = app_text.find("set_default_logger(logger);")

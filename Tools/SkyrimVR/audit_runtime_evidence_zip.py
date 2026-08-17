@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import tempfile
@@ -328,8 +329,32 @@ def audit_archive(
                 archive_name = str(file_record.get("archiveName", ""))
                 if file_record.get("exists") and archive_name and archive_name not in names:
                     failures.append(f"manifest says collected file is missing from zip: {archive_name}")
+                    continue
+                if not file_record.get("exists") or not archive_name or archive_name not in names:
+                    continue
+                payload = zf.read(archive_name)
+                expected_size = file_record.get("size")
+                if expected_size != len(payload):
+                    failures.append(
+                        f"collected file size mismatch for {archive_name}: manifest={expected_size} zip={len(payload)}"
+                    )
+                expected_sha256 = str(file_record.get("sha256", ""))
+                actual_sha256 = hashlib.sha256(payload).hexdigest()
+                if expected_sha256 != actual_sha256:
+                    failures.append(f"collected file SHA-256 mismatch for {archive_name}")
         else:
             failures.append("manifest files field is not a list")
+
+        if bool(manifest.get("crashEvidence")):
+            inventory_name = "system/runtime_inventory.json"
+            if inventory_name not in names:
+                failures.append(f"crash-evidence archive is missing {inventory_name}")
+            else:
+                inventory = load_json(zf, inventory_name, failures)
+                if inventory.get("schema") != "skyrim_together_vr_runtime_inventory_v1":
+                    failures.append(f"unexpected runtime inventory schema: {inventory.get('schema')!r}")
+                if not isinstance(inventory.get("files"), list):
+                    failures.append("runtime inventory has no files list")
 
         print(f"Evidence archive: {path}")
         print(f"Archive entries: {len(names)}")
@@ -628,6 +653,8 @@ def command_self_test() -> int:
             out=out_dir,
             skse_log_root=None,
             extra_file=[],
+            crash_evidence=True,
+            include_crash_dumps=False,
             skip_log=False,
             no_audit=False,
             require_connected=True,
@@ -693,6 +720,38 @@ def command_self_test() -> int:
         )
         if relaxed_result != 0:
             print("Evidence zip audit self-test expected manifest-driven strict validation to pass without CLI flags.")
+            return 1
+
+        missing_inventory_archive = out_dir / "missing-inventory-runtime-evidence.zip"
+        with zipfile.ZipFile(archive) as source_zip, zipfile.ZipFile(
+            missing_inventory_archive,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as weakened_zip:
+            for name in source_zip.namelist():
+                if name != "system/runtime_inventory.json":
+                    weakened_zip.writestr(name, source_zip.read(name))
+        missing_inventory_result = audit_archive(
+            missing_inventory_archive,
+            require_avatar_sync=False,
+            require_gameplay=False,
+            require_remote_player=False,
+            require_weapon_pose=False,
+            require_magic_pose=False,
+            require_projectile_pose=False,
+            require_movement_relay=False,
+            require_equipment_relay=False,
+            require_activation_relay=False,
+            require_magic_relay=False,
+            require_combat_relay=False,
+            require_projectile_relay=False,
+            require_grab_relay=False,
+            require_higgs_relay=False,
+            require_saveload_observer=False,
+            allow_failed_checks=False,
+        )
+        if missing_inventory_result == 0:
+            print("Evidence zip audit self-test did not reject crash evidence without a runtime inventory.")
             return 1
 
         weakened_archive = out_dir / "weakened-runtime-evidence.zip"

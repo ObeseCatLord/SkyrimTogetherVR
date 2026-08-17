@@ -8,7 +8,8 @@
 
 class CrashHandler
 {
-    static LPTOP_LEVEL_EXCEPTION_FILTER s_pPreviousUnhandledFilter;
+    static std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> s_pPreviousUnhandledFilter;
+    static std::atomic_bool s_filterInstalled;
     static std::atomic_flag s_handlingCrash;
 
     bool m_installed{};
@@ -26,6 +27,7 @@ class CrashHandler
     static LONG InvokeForTesting(PEXCEPTION_POINTERS apExceptionInfo) noexcept;
     static void ResetForTesting(LPTOP_LEVEL_EXCEPTION_FILTER apPreviousFilter = nullptr) noexcept;
     static std::uint32_t GetInvocationCountForTesting() noexcept;
+    static std::uint32_t GetIgnoredNotificationCountForTesting() noexcept;
     static LPTOP_LEVEL_EXCEPTION_FILTER GetTopLevelFilterForTesting() noexcept;
 #endif
 };

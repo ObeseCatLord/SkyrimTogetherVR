@@ -183,7 +183,24 @@ On Windows, inspect the same field before entering it in the packaged launcher:
 For each client, retain the installed package build manifest, `logs\tp_client.log`
 or its Proton equivalent, relevant SKSEVR logs, and
 `Data/SkyrimTogetherReborn` handoff files after the test. The packaged runtime
-evidence helpers are the preferred collection path when present:
+evidence collector rejects a nonexistent `--game-path`. Its crash mode collects
+client logs from every supported install location, rotations, all available
+SKSE/plugin logs, `SkyrimTogetherVR*.log` bridge logs, common UMU/Proton
+launcher logs, all handoff artifacts, load-order and INI snapshots, the five
+newest `crash_*.dmp` files, and a SHA-256 runtime DLL/address inventory. From
+the extracted handoff, the post-run Linux command is:
+
+```bash
+python3 source/Tools/SkyrimVR/collect_runtime_evidence.py \
+  --crash-evidence \
+  --out "$HOME/stvr-crash-evidence.zip" \
+  --no-audit
+```
+
+The collector discovers a conventional Steam installation automatically; set
+`SKYRIMVR_PATH` only when Skyrim VR is installed elsewhere. Minidumps may
+contain process memory and must be handled as sensitive local evidence.
+Evidence helpers are the preferred collection path when present:
 
 `CollectSkyrimTogetherVREvidence-Windows.bat` on Windows and
 `python3 source/Tools/SkyrimVR/collect_runtime_evidence.py --help` on Linux.
