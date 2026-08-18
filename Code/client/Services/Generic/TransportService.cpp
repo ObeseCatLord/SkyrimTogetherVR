@@ -290,6 +290,7 @@ void TransportService::CompleteGameplayRetirement() noexcept
         SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(0, 0);
         m_serverInstanceNonce = 0;
         m_connectionGeneration = 0;
+        m_acceptedServerVersion.clear();
         m_negotiatedGameplayCapabilities = 0;
         m_gameplayIdentityClearPending = false;
         ClearGameplayRetirementState();
@@ -652,6 +653,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_serverInstanceNonce = 0;
     m_connectionGeneration = 0;
 #endif
+    m_acceptedServerVersion.clear();
     m_negotiatedGameplayCapabilities = 0;
 
     spdlog::warn("Disconnected from server {}", static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
@@ -693,6 +695,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         const auto expectedNegotiatedCapabilities =
             acMessage.ServerCapabilities & m_requestedGameplayCapabilities;
         const bool validProtocol =
+            acMessage.Version == BUILD_COMMIT &&
             acMessage.GameplayProtocolRevision == SkyrimTogether::Protocol::kGameplayProtocolRevision &&
             (acMessage.ServerCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) == SkyrimTogether::Protocol::kCoreCapabilities &&
             acMessage.NegotiatedCapabilities == expectedNegotiatedCapabilities &&
@@ -703,7 +706,10 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         if (!validProtocol)
         {
             spdlog::error(
-                "Rejected invalid authentication acceptance: revision={}, serverCapabilities={:#x}, negotiatedCapabilities={:#x}, serverNonce={}, connectionGeneration={}, sessionMatch={}, attemptMatch={}",
+                "Rejected invalid authentication acceptance: clientVersion={}, serverVersion={}, versionMatch={}, revision={}, serverCapabilities={:#x}, negotiatedCapabilities={:#x}, serverNonce={}, connectionGeneration={}, sessionMatch={}, attemptMatch={}",
+                BUILD_COMMIT,
+                acMessage.Version,
+                acMessage.Version == BUILD_COMMIT,
                 acMessage.GameplayProtocolRevision,
                 acMessage.ServerCapabilities,
                 acMessage.NegotiatedCapabilities,
@@ -754,6 +760,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         m_localPlayerId = acMessage.PlayerId;
         m_connectionGeneration = acMessage.ConnectionGeneration;
         m_serverInstanceNonce = acMessage.ServerInstanceNonce;
+        m_acceptedServerVersion = acMessage.Version;
         m_negotiatedGameplayCapabilities = acMessage.NegotiatedCapabilities;
 #if TP_SKYRIM_VR
         SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(
@@ -763,10 +770,12 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         if (authenticationMilestoneChanged)
         {
             spdlog::info(
-                "STVR auth accepted: playerId={}, protocolRevision={}, requestedCapabilities={:#x}, "
+                "STVR auth accepted: playerId={}, clientVersion={}, serverVersion={}, protocolRevision={}, requestedCapabilities={:#x}, "
                 "negotiatedCapabilities={:#x}, serverInstanceNonce={}, connectionGeneration={}, "
                 "clientSessionNonce={}, connectionAttempt={}",
                 m_localPlayerId,
+                BUILD_COMMIT,
+                m_acceptedServerVersion,
                 acMessage.GameplayProtocolRevision,
                 m_requestedGameplayCapabilities,
                 m_negotiatedGameplayCapabilities,

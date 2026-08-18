@@ -24,6 +24,25 @@ write_elf64_x86_64() {
   # PT_LOAD entry spanning the complete 120-byte file.
   printf '%s' 'f0VMRgIBAQAAAAAAAAAAAAMAPgABAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAABAAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAAAAAAAAAB4AAAAAAAAAAAQAAAAAAAA' | base64 -d > "$1"
 }
+write_build_manifest_fixture() {
+  cat > "$1" <<'EOF'
+{
+  "schema": "skyrim_together_vr_build_package_v2",
+  "platform": "windows",
+  "arch": "x64",
+  "packageFlavor": "gameplay",
+  "buildVersion": "stvr-launcher-fixture",
+  "networkVersion": "stvr-launcher-fixture",
+  "sourceRevision": "0123456789abcdef0123456789abcdef01234567",
+  "sourceProvenance": {
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "sourceTreeSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "dirty": false,
+    "dirtyApproved": false
+  }
+}
+EOF
+}
 mkdir -p "$game" "$compat/pfx" "$steam" "$proton" "$library_proton" "$runtime" \
   "$game/Data" \
   "$monado/lib" "$monado/share/openxr/1" "$host_runtime/pulse" \
@@ -44,12 +63,12 @@ write_elf64_x86_64 "$steamvr/bin/linux64/vrclient.so"
 touch "$steamvr/bin/linux64/vrserver"
 touch "$game_without_opencomposite/SkyrimVR.exe" "$game_without_opencomposite/SkyrimTogetherVRGameplay.exe" \
   "$game_without_opencomposite/sksevr_loader.exe"
-printf '%s\n' '{"packageFlavor":"gameplay"}' > "$game/SkyrimTogetherVR_BuildManifest.json"
-printf '%s\n' '{"packageFlavor":"gameplay"}' > "$game_without_opencomposite/SkyrimTogetherVR_BuildManifest.json"
+write_build_manifest_fixture "$game/SkyrimTogetherVR_BuildManifest.json"
+write_build_manifest_fixture "$game_without_opencomposite/SkyrimTogetherVR_BuildManifest.json"
 printf '%s\n' '{"version":1,"runtime":[]}' > "$game/.stvr-openvr/openvrpaths.vrpath"
 printf '%s\n' '{"version":1,"runtime":[]}' > "$game_without_opencomposite/.stvr-openvr/openvrpaths.vrpath"
 touch "$monado/lib/libopenxr_monado.so" "$monado/lib/libmonado.so"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$proton/proton"
+printf '%s\n' '#!/usr/bin/env bash' '[ -z "${STVR_FAKE_PROTON_READY:-}" ] || : > "$STVR_FAKE_PROTON_READY"' '[ "${STVR_FAKE_PROTON_SLEEP:-0}" = 0 ] || sleep "$STVR_FAKE_PROTON_SLEEP"' 'exit 0' > "$proton/proton"
 chmod +x "$proton/proton"
 cp "$proton/proton" "$library_proton/proton"
 cat > "$monado/share/openxr/1/openxr_monado.json" <<'EOF'
@@ -85,7 +104,13 @@ common_env=(
   PIPEWIRE_REMOTE=pipewire-0
   HOME="$home"
   XDG_CONFIG_HOME="$config"
+  STVR_TEST_SKIP_MONADO_CHECK=1
 )
+
+# Dry runs must not create a profile or the long-lived game-root lock.
+env "${common_env[@]}" STVR_FORCE_PROTON=1 "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null
+[ ! -e "$game/.stvr-launch.lock" ]
+[ ! -e "$compat/pfx/drive_c/users/steamuser/AppData/Local/Skyrim VR/Plugins.txt" ]
 
 read_xrizer_keyboard_text() {
   env -u STVR_XRIZER_KEYBOARD_TEXT \
@@ -142,6 +167,128 @@ grep -Fq "Pressure vessel RW: $runtime:$host_runtime/wayland-test:$host_runtime/
 grep -Fq "Pressure vessel RO: $game/.stvr-openvr/xrizer:$game/.stvr-openvr:$monado" <<<"$online"
 grep -Fq 'Server: incidentalstoat.xyz:26099' <<<"$online"
 grep -Fq "$game/SkyrimTogetherVRGameplay.exe" <<<"$online"
+
+# packageFlavor is parsed as JSON, not by matching a lookalike inside a string.
+cat > "$game/SkyrimTogetherVR_BuildManifest.json" <<'EOF'
+{
+  "schema": "skyrim_together_vr_build_package_v2",
+  "platform": "windows",
+  "arch": "x64",
+  "packageFlavor": "gameplay",
+  "note": "\"packageFlavor\":\"avatar-sync\"",
+  "buildVersion": "stvr-launcher-fixture",
+  "networkVersion": "stvr-launcher-fixture",
+  "sourceRevision": "0123456789abcdef0123456789abcdef01234567",
+  "sourceProvenance": {
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "sourceTreeSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "dirty": false,
+    "dirtyApproved": false
+  }
+}
+EOF
+structured_manifest_output="$(env "${common_env[@]}" STVR_FORCE_PROTON=1 "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
+grep -Fq "$game/SkyrimTogetherVRGameplay.exe" <<<"$structured_manifest_output"
+
+for manifest_case in schema platform arch package_flavor empty_version long_version invalid_version \
+  sentinel_version network_version source_revision source_provenance provenance_revision \
+  source_tree_hash dirty dirty_approved; do
+  python3 - "$game/SkyrimTogetherVR_BuildManifest.json" "$manifest_case" <<'PY'
+import json
+import sys
+
+manifest = {
+    "schema": "skyrim_together_vr_build_package_v2",
+    "platform": "windows",
+    "arch": "x64",
+    "packageFlavor": "gameplay",
+    "buildVersion": "stvr-launcher-fixture",
+    "networkVersion": "stvr-launcher-fixture",
+    "sourceRevision": "0123456789abcdef0123456789abcdef01234567",
+    "sourceProvenance": {
+        "revision": "0123456789abcdef0123456789abcdef01234567",
+        "sourceTreeSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "dirty": False,
+        "dirtyApproved": False,
+    },
+}
+case = sys.argv[2]
+if case == "schema":
+    manifest["schema"] = "skyrim_together_vr_build_package_v1"
+elif case == "platform":
+    manifest["platform"] = "linux"
+elif case == "arch":
+    manifest["arch"] = "arm64"
+elif case == "package_flavor":
+    manifest["packageFlavor"] = "experimental"
+elif case == "empty_version":
+    manifest["buildVersion"] = manifest["networkVersion"] = ""
+elif case == "long_version":
+    manifest["buildVersion"] = manifest["networkVersion"] = "v" * 129
+elif case == "invalid_version":
+    manifest["buildVersion"] = manifest["networkVersion"] = "valid\x1fversion"
+elif case == "sentinel_version":
+    manifest["buildVersion"] = manifest["networkVersion"] = "UnKnOwN-fixture"
+elif case == "network_version":
+    manifest["networkVersion"] = "different-version"
+elif case == "source_revision":
+    manifest["sourceRevision"] = "not-a-revision"
+elif case == "source_provenance":
+    manifest["sourceProvenance"] = None
+elif case == "provenance_revision":
+    manifest["sourceProvenance"]["revision"] = "f" * 40
+elif case == "source_tree_hash":
+    manifest["sourceProvenance"]["sourceTreeSha256"] = "f" * 63
+elif case == "dirty":
+    manifest["sourceProvenance"]["dirty"] = True
+elif case == "dirty_approved":
+    manifest["sourceProvenance"]["dirtyApproved"] = True
+else:
+    raise SystemExit(f"unknown manifest case: {case}")
+
+with open(sys.argv[1], "w", encoding="utf-8") as destination:
+    json.dump(manifest, destination)
+PY
+  if env "${common_env[@]}" STVR_FORCE_PROTON=1 "$TOOLS_DIR/launch-skyrim-together-vr.sh" \
+    >"$TMPDIR_LOCAL/manifest-$manifest_case.out" 2>"$TMPDIR_LOCAL/manifest-$manifest_case.err"; then
+    printf 'launcher accepted invalid build manifest case: %s\n' "$manifest_case" >&2
+    exit 1
+  fi
+  grep -Fq 'invalid SkyrimTogetherVR build manifest' "$TMPDIR_LOCAL/manifest-$manifest_case.err"
+done
+if env "${common_env[@]}" STVR_FORCE_PROTON=1 STVR_LAUNCHER="$game/SkyrimTogetherVRGameplay.exe" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>&1; then
+  printf 'custom launcher bypassed invalid build manifest admission\n' >&2
+  exit 1
+fi
+write_build_manifest_fixture "$game/SkyrimTogetherVR_BuildManifest.json"
+
+custom_launcher="$TMPDIR_LOCAL/custom-launcher.exe"
+custom_game="$TMPDIR_LOCAL/custom-game.exe"
+custom_proton="$TMPDIR_LOCAL/custom-proton"
+ln -s "$game/SkyrimTogetherVRGameplay.exe" "$custom_launcher"
+ln -s "$game/SkyrimVR.exe" "$custom_game"
+ln -s "$proton/proton" "$custom_proton"
+canonical_paths_output="$(env "${common_env[@]}" STVR_FORCE_PROTON=1 STVR_LAUNCHER="$custom_launcher" \
+  STVR_GAME_EXE="$custom_game" STVR_PROTON="$custom_proton" "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
+grep -Fq "$game/SkyrimTogetherVRGameplay.exe" <<<"$canonical_paths_output"
+grep -Fq "Windows game path: Z:${game//\//\\}" <<<"$canonical_paths_output"
+grep -Fq "$proton/proton run" <<<"$canonical_paths_output"
+nonexecutable_proton="$TMPDIR_LOCAL/nonexecutable-proton"
+touch "$nonexecutable_proton"
+if env "${common_env[@]}" STVR_FORCE_PROTON=1 STVR_PROTON="$nonexecutable_proton" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>&1; then
+  printf 'launcher accepted a non-executable direct Proton path\n' >&2
+  exit 1
+fi
+nonce='0123456789abcdef0123456789abcdef'
+nonce_output="$(env "${common_env[@]}" STVR_LAUNCH_NONCE="$nonce" "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
+grep -Fq "Launch nonce: $nonce" <<<"$nonce_output"
+grep -Fq "Windows game path: Z:${game//\//\\}" <<<"$nonce_output"
+if env "${common_env[@]}" STVR_LAUNCH_NONCE=not-a-nonce "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>&1; then
+  printf 'launcher accepted an invalid launch nonce\n' >&2
+  exit 1
+fi
 
 default_online="$(env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
   -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
@@ -254,6 +401,14 @@ fake_bin="$TMPDIR_LOCAL/fake-bin"
 mkdir -p "$fake_bin"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$fake_bin/umu-run"
 chmod +x "$fake_bin/umu-run"
+real_mktemp="$(command -v mktemp)"
+plugin_mktemp_log="$TMPDIR_LOCAL/plugin-mktemp.log"
+cat > "$fake_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STVR_MKTEMP_LOG"
+exec "$STVR_REAL_MKTEMP" "$@"
+EOF
+chmod +x "$fake_bin/mktemp"
 umu="$(env PATH="$fake_bin:$PATH" "${common_env[@]}" "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
 grep -Fq 'Mode: umu-run' <<<"$umu"
 grep -Fq 'GAMEID: umu-611670' <<<"$umu"
@@ -296,9 +451,10 @@ env PATH="$fake_bin:$PATH" STVR_REAL_READELF="$real_readelf" "${common_env[@]}" 
 
 profile_dir="$compat/pfx/drive_c/users/steamuser/AppData/Local/Skyrim VR"
 mkdir -p "$profile_dir"
-printf '%s\n' '*Unrelated.esp' '*SkyrimTogether.esp' > "$profile_dir/Plugins.txt"
-printf '%s\n' 'Unrelated.esp' 'SkyrimTogether.esp' > "$profile_dir/loadorder.txt"
-env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
+printf '*Unrelated.esp\r\n*SkyrimTogether.esp\r\n' > "$profile_dir/Plugins.txt"
+printf 'Unrelated.esp\r\nSkyrimTogether.esp\r\n' > "$profile_dir/loadorder.txt"
+env PATH="$fake_bin:$PATH" STVR_MKTEMP_LOG="$plugin_mktemp_log" STVR_REAL_MKTEMP="$real_mktemp" STVR_REAL_READELF="$real_readelf" \
+  "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
   "$TOOLS_DIR/launch-skyrim-together-vr.sh"
 cat > "$TMPDIR_LOCAL/expected-plugins.txt" <<'EOF'
 *Unrelated.esp
@@ -328,6 +484,80 @@ SkyrimTogether.esp
 EOF
 cmp "$TMPDIR_LOCAL/expected-plugins.txt" "$profile_dir/Plugins.txt"
 cmp "$TMPDIR_LOCAL/expected-loadorder.txt" "$profile_dir/loadorder.txt"
+grep -Fqx "$profile_dir/Plugins.txt.tmp.XXXXXX" "$plugin_mktemp_log"
+grep -Fqx "$profile_dir/loadorder.txt.tmp.XXXXXX" "$plugin_mktemp_log"
+if compgen -G "$profile_dir/*.tmp.*" >/dev/null; then
+  printf 'launcher left plugin-order temporary files behind\n' >&2
+  exit 1
+fi
+
+# The selected XRizer/Monado route runs the non-mutating manager canary before
+# Proton. Tests deliberately opt out only through the explicit test-only flag.
+if env "${common_env[@]}" STVR_TEST_SKIP_MONADO_CHECK=0 STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >"$TMPDIR_LOCAL/monado-check.out" 2>"$TMPDIR_LOCAL/monado-check.err"; then
+  printf 'launcher accepted an unavailable Monado runtime without its canary\n' >&2
+  exit 1
+fi
+grep -Fq 'Monado runtime listener is not ready' "$TMPDIR_LOCAL/monado-check.err"
+
+# Required release plugins may not be silently omitted from a handoff launch.
+rm -f -- "$game/Data/vrik.esp"
+if env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>"$TMPDIR_LOCAL/missing-plugin.err"; then
+  printf 'launcher accepted a missing required handoff plugin\n' >&2
+  exit 1
+fi
+grep -Fq 'missing required handoff plugin file' "$TMPDIR_LOCAL/missing-plugin.err"
+missing_plugin_compat="$TMPDIR_LOCAL/missing-plugin-compat"
+if env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 STVR_COMPATDATA="$missing_plugin_compat" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null 2>&1; then
+  printf 'launcher accepted a missing required handoff plugin for a fresh profile\n' >&2
+  exit 1
+fi
+[ ! -e "$missing_plugin_compat/pfx/drive_c/users/steamuser/AppData/Local/Skyrim VR/Plugins.txt" ]
+touch "$game/Data/vrik.esp"
+
+# Real launches contend only with the exact canonical game root. Dry runs do
+# not acquire the long-lived lock, and a cloned root remains independently usable.
+lock_ready="$TMPDIR_LOCAL/lock-owner-ready"
+env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 STVR_FAKE_PROTON_SLEEP=2 STVR_FAKE_PROTON_READY="$lock_ready" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >"$TMPDIR_LOCAL/lock-owner.out" 2>"$TMPDIR_LOCAL/lock-owner.err" &
+lock_owner=$!
+for _ in {1..100}; do
+  [ -e "$lock_ready" ] && break
+  sleep 0.02
+done
+[ -e "$lock_ready" ] || {
+  printf 'lock owner did not reach its Proton stub\n' >&2
+  exit 1
+}
+contender_compat="$TMPDIR_LOCAL/contender-compat"
+contender_profile="$contender_compat/pfx/drive_c/users/steamuser/AppData/Local/Skyrim VR"
+mkdir -p "$contender_profile" "$game/Data/SKSE/Plugins/stvr-disabled"
+printf '*ContenderOnly.esp\r\n' > "$contender_profile/Plugins.txt"
+printf 'ContenderOnly.esp\r\n' > "$contender_profile/loadorder.txt"
+touch "$game/Data/SKSE/Plugins/stvr-disabled/SkyrimTogetherVR-contender.dll"
+if env "${common_env[@]}" STVR_COMPATDATA="$contender_compat" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >"$TMPDIR_LOCAL/lock-contender.out" 2>"$TMPDIR_LOCAL/lock-contender.err"; then
+  printf 'launcher allowed a concurrent launch for one game root\n' >&2
+  exit 1
+fi
+grep -Fq "another launch already owns game root: $game" "$TMPDIR_LOCAL/lock-contender.err"
+if grep -Fq '.stvr-launch.lock' "$TMPDIR_LOCAL/lock-contender.err"; then
+  printf 'launcher lock failure exposed an internal lock path\n' >&2
+  exit 1
+fi
+printf '*ContenderOnly.esp\r\n' | cmp - "$contender_profile/Plugins.txt"
+printf 'ContenderOnly.esp\r\n' | cmp - "$contender_profile/loadorder.txt"
+[ -f "$game/Data/SKSE/Plugins/stvr-disabled/SkyrimTogetherVR-contender.dll" ]
+env "${common_env[@]}" STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null
+clone_game="$TMPDIR_LOCAL/library/steamapps/common/SkyrimVR-clone"
+clone_compat="$TMPDIR_LOCAL/library/steamapps/compatdata/611670-clone"
+cp -a -- "$game" "$clone_game"
+mkdir -p "$clone_compat/pfx"
+env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$clone_game" STVR_COMPATDATA="$clone_compat" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null
+wait "$lock_owner"
 
 auto_proton="$(env -u PROTONPATH -u STVR_PROTONPATH \
   STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \

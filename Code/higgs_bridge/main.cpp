@@ -676,71 +676,60 @@ HiggsSnapshot CopyLatestSnapshot(bool& aAvailable)
 void WriteBridgeFile(const std::uint32_t aSequence)
 {
     const auto path = GetHandoffPath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
+    SkyrimTogetherVR::Handoff::WriteFileAtomically(
+        path,
+        [aSequence](std::ofstream& file)
+        {
+            auto* const pHiggs = g_higgs.load(std::memory_order_acquire);
+            bool snapshotAvailable = false;
+            const auto snapshot = CopyLatestSnapshot(snapshotAvailable);
 
-    const auto tempPath = path.string() + ".tmp";
-    std::ofstream file(tempPath, std::ios::trunc);
-    if (!file)
-        return;
+            file << "bridge.loaded=1\n";
+            file << "bridge.sequence=" << aSequence << "\n";
+            file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
+            file << "higgs.detected=" << (IsHiggsInstalled() || pHiggs ? "1" : "0") << "\n";
+            file << "higgs.interfaceAvailable=" << (pHiggs ? "1" : "0") << "\n";
+            file << "higgs.callbacksRegistered=" << (g_callbacksRegistered.load(std::memory_order_acquire) ? "1" : "0") << "\n";
+            file << "higgs.eventSequence=" << g_eventSequence.load(std::memory_order_acquire) << "\n";
+            file << "higgs.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
+            file << "higgs.snapshotSequence=" << snapshot.Sequence << "\n";
+            file << "bodyCapture.endpointFaulted=" << (g_endpointFaulted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
+            file << "bodyCapture.attemptCount=" << g_bodyCaptureAttemptCount.load(std::memory_order_acquire) << "\n";
+            file << "bodyCapture.successCount=" << g_bodyCaptureSuccessCount.load(std::memory_order_acquire) << "\n";
+            file << "bodyCapture.lastResult=" << g_bodyCaptureLastResult.load(std::memory_order_acquire) << "\n";
 
-    auto* const pHiggs = g_higgs.load(std::memory_order_acquire);
-    bool snapshotAvailable = false;
-    const auto snapshot = CopyLatestSnapshot(snapshotAvailable);
+            if (snapshotAvailable)
+            {
+                file << "higgs.buildNumber=" << snapshot.BuildNumber << "\n";
+                file << "higgs.twoHanding=" << (snapshot.TwoHanding ? "1" : "0") << "\n";
+                WriteHandState(file, "left", &snapshot.Left);
+                WriteHandState(file, "right", &snapshot.Right);
+            }
+            else
+            {
+                file << "higgs.buildNumber=0\n";
+                file << "higgs.twoHanding=0\n";
+                WriteHandState(file, "left", nullptr);
+                WriteHandState(file, "right", nullptr);
+            }
 
-    file << "bridge.loaded=1\n";
-    file << "bridge.sequence=" << aSequence << "\n";
-    file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
-    file << "higgs.detected=" << (IsHiggsInstalled() || pHiggs ? "1" : "0") << "\n";
-    file << "higgs.interfaceAvailable=" << (pHiggs ? "1" : "0") << "\n";
-    file << "higgs.callbacksRegistered=" << (g_callbacksRegistered.load(std::memory_order_acquire) ? "1" : "0") << "\n";
-    file << "higgs.eventSequence=" << g_eventSequence.load(std::memory_order_acquire) << "\n";
-    file << "higgs.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
-    file << "higgs.snapshotSequence=" << snapshot.Sequence << "\n";
-    file << "bodyCapture.endpointFaulted=" << (g_endpointFaulted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
-    file << "bodyCapture.attemptCount=" << g_bodyCaptureAttemptCount.load(std::memory_order_acquire) << "\n";
-    file << "bodyCapture.successCount=" << g_bodyCaptureSuccessCount.load(std::memory_order_acquire) << "\n";
-    file << "bodyCapture.lastResult=" << g_bodyCaptureLastResult.load(std::memory_order_acquire) << "\n";
-
-    if (snapshotAvailable)
-    {
-        file << "higgs.buildNumber=" << snapshot.BuildNumber << "\n";
-        file << "higgs.twoHanding=" << (snapshot.TwoHanding ? "1" : "0") << "\n";
-        WriteHandState(file, "left", &snapshot.Left);
-        WriteHandState(file, "right", &snapshot.Right);
-    }
-    else
-    {
-        file << "higgs.buildNumber=0\n";
-        file << "higgs.twoHanding=0\n";
-        WriteHandState(file, "left", nullptr);
-        WriteHandState(file, "right", nullptr);
-    }
-
-    const auto events = CopyRecentEvents();
-    file << "recentEventCount=" << events.size() << "\n";
-    std::size_t index = 0;
-    for (const auto& event : events)
-    {
-        const auto prefix = std::string("recentEvent.") + std::to_string(index);
-        file << prefix << ".sequence=" << event.Sequence << "\n";
-        file << prefix << ".type=" << event.Type << "\n";
-        file << prefix << ".hasHand=" << (event.HasHand ? "1" : "0") << "\n";
-        file << prefix << ".hand=" << (event.IsLeft ? "left" : "right") << "\n";
-        file << prefix << ".objectAddress=" << event.ObjectAddress << "\n";
-        file << prefix << ".formId=" << event.FormId << "\n";
-        file << prefix << ".mass=" << event.Mass << "\n";
-        file << prefix << ".separatingVelocity=" << event.SeparatingVelocity << "\n";
-        ++index;
-    }
-
-    file.close();
-    std::filesystem::rename(tempPath, path, ec);
-    if (ec)
-    {
-        std::filesystem::remove(path, ec);
-        std::filesystem::rename(tempPath, path, ec);
-    }
+            const auto events = CopyRecentEvents();
+            file << "recentEventCount=" << events.size() << "\n";
+            std::size_t index = 0;
+            for (const auto& event : events)
+            {
+                const auto prefix = std::string("recentEvent.") + std::to_string(index);
+                file << prefix << ".sequence=" << event.Sequence << "\n";
+                file << prefix << ".type=" << event.Type << "\n";
+                file << prefix << ".hasHand=" << (event.HasHand ? "1" : "0") << "\n";
+                file << prefix << ".hand=" << (event.IsLeft ? "left" : "right") << "\n";
+                file << prefix << ".objectAddress=" << event.ObjectAddress << "\n";
+                file << prefix << ".formId=" << event.FormId << "\n";
+                file << prefix << ".mass=" << event.Mass << "\n";
+                file << prefix << ".separatingVelocity=" << event.SeparatingVelocity << "\n";
+                ++index;
+            }
+        });
 }
 
 bool ClaimHandoffPublishSlot(const bool aForce) noexcept

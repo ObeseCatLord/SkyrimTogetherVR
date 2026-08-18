@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -45,6 +46,10 @@ READOUT_FILES = {
     "saveload": "SkyrimTogetherVR.saveload",
 }
 
+GAMEPLAY_PROTOCOL_REVISION = 14
+RUNTIME_IDENTITY_READOUTS = ("status", "lifecycle", "playercell", "avatar")
+RUNTIME_ROOT_IDENTITY_FIELDS = ("gamePath", "gameRoot", "gameRootPath", "rootPath")
+
 SUMMARY_FIELDS = {
     "status": ("state", "online", "playerId", "sessionId", "connectionGeneration", "error"),
     "lifecycle": ("state", "ready", "epoch", "ownerThreadId", "stableTickCount", "playerFormId", "playerBaseFormId", "playerCellFormId", "reason"),
@@ -83,17 +88,26 @@ def resolve_handoff_dir(args: argparse.Namespace) -> pathlib.Path:
 
 
 def read_key_value_file(path: pathlib.Path) -> dict[str, str]:
-    values: dict[str, str] = {}
     if not path.exists():
-        return values
+        return {}
 
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    return parse_key_value_text(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def parse_key_value_text(contents: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+
+    for line in contents.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+def parse_key_value_bytes(contents: bytes) -> dict[str, str]:
+    return parse_key_value_text(contents.decode("utf-8", errors="replace"))
 
 
 def write_atomic(path: pathlib.Path, contents: str) -> None:
@@ -192,6 +206,185 @@ def read_readouts(handoff_dir: pathlib.Path) -> dict[str, dict[str, str]]:
     return {
         name: read_key_value_file(handoff_dir / file_name)
         for name, file_name in READOUT_FILES.items()
+    }
+
+
+def readout_mtimes_ns(handoff_dir: pathlib.Path) -> dict[str, int | None]:
+    """Return readout modification times without treating missing files as current."""
+    result: dict[str, int | None] = {}
+    for name, file_name in READOUT_FILES.items():
+        path = handoff_dir / file_name
+        try:
+            result[name] = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            result[name] = None
+    return result
+
+
+def capture_readout_snapshots(
+    handoff_dir: pathlib.Path,
+    names: tuple[str, ...] = RUNTIME_IDENTITY_READOUTS,
+) -> dict[str, dict[str, object]]:
+    """Capture readout bytes and metadata once for evidence admission.
+
+    Each payload is read through one open descriptor and is subsequently the
+    only source used for both identity validation and archive inclusion.
+    """
+    snapshots: dict[str, dict[str, object]] = {}
+    for name in names:
+        path = handoff_dir / READOUT_FILES[name]
+        record: dict[str, object] = {"path": path, "exists": False, "values": {}}
+        try:
+            with path.open("rb") as source:
+                stat_result = os.fstat(source.fileno())
+                payload = source.read()
+        except FileNotFoundError:
+            snapshots[name] = record
+            continue
+        record.update(
+            {
+                "exists": True,
+                "bytes": payload,
+                "size": len(payload),
+                "mtimeNs": stat_result.st_mtime_ns,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "values": parse_key_value_bytes(payload),
+            }
+        )
+        snapshots[name] = record
+    return snapshots
+
+
+def _nonzero_int(values: dict[str, str], key: str) -> int:
+    try:
+        value = int(values.get(key, "").strip(), 0)
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
+
+def _same_root(readout_root: str, game_path: pathlib.Path) -> bool:
+    """Compare declared roots without exposing either host path in diagnostics."""
+    try:
+        candidate = readout_root.strip()
+        # Proton exposes the Linux filesystem as Wine's Z: drive. Native
+        # readouts therefore use Z:\\home\\... while the host collector receives
+        # /home/.... Normalize that exact mapping without guessing at C: or
+        # other prefix-specific drive mappings.
+        wine_match = re.fullmatch(r"[zZ]:[\\/](.*)", candidate)
+        if wine_match:
+            candidate = "/" + wine_match.group(1).replace("\\", "/")
+        return pathlib.Path(candidate).expanduser().resolve(strict=False) == game_path.resolve(strict=False)
+    except (OSError, ValueError):
+        return False
+
+
+def evaluate_runtime_identity(
+    readouts: dict[str, dict[str, str]],
+    handoff_dir: pathlib.Path,
+    game_path: pathlib.Path,
+    *,
+    max_age_seconds: float,
+    run_start_marker: pathlib.Path | None = None,
+    now_ns: int | None = None,
+    readout_metadata: dict[str, dict[str, object]] | None = None,
+    expected_network_version: str | None = None,
+) -> dict[str, object]:
+    """Validate that live gameplay readouts describe one fresh local process.
+
+    Reasons intentionally identify only readout names and fields, never host paths.
+    """
+    reasons: list[str] = []
+    mtimes = (
+        {
+            name: metadata.get("mtimeNs") if metadata.get("present", metadata.get("exists")) else None
+            for name, metadata in readout_metadata.items()
+        }
+        if readout_metadata is not None
+        else readout_mtimes_ns(handoff_dir)
+    )
+    if max_age_seconds <= 0:
+        reasons.append("max readout age must be positive")
+    if now_ns is None:
+        now_ns = time.time_ns()
+    marker_mtime_ns: int | None = None
+    if run_start_marker is not None:
+        try:
+            marker_mtime_ns = run_start_marker.stat().st_mtime_ns
+        except FileNotFoundError:
+            reasons.append("run-start marker is missing")
+
+    nonces: dict[str, str] = {}
+    process_ids: dict[str, int] = {}
+    for name in RUNTIME_IDENTITY_READOUTS:
+        values = readouts.get(name, {})
+        nonce = values.get("launchNonce", "")
+        if not re.fullmatch(r"[0-9A-Fa-f]{32}", nonce):
+            reasons.append(f"{name} launchNonce is missing or not 32 hex characters")
+        else:
+            nonces[name] = nonce
+        process_id = _nonzero_int(values, "processId")
+        if not process_id:
+            reasons.append(f"{name} processId is missing or zero")
+        else:
+            process_ids[name] = process_id
+
+        declared_game_path = values.get("gamePath", "").strip()
+        if not declared_game_path:
+            reasons.append(f"{name} gamePath is missing")
+        elif not _same_root(declared_game_path, game_path):
+            reasons.append(f"{name} gamePath does not match requested game root")
+
+        mtime_ns = mtimes.get(name)
+        if mtime_ns is None:
+            reasons.append(f"{name} readout is missing")
+        else:
+            age_seconds = (now_ns - mtime_ns) / 1_000_000_000
+            if age_seconds < -1 or age_seconds > max_age_seconds:
+                reasons.append(f"{name} readout is stale or clock-skewed")
+            if marker_mtime_ns is not None and mtime_ns < marker_mtime_ns:
+                reasons.append(f"{name} readout predates run-start marker")
+
+    if len(set(nonces.values())) > 1:
+        reasons.append("launchNonce differs across gameplay readouts")
+    if len(set(process_ids.values())) > 1:
+        reasons.append("processId differs across gameplay readouts")
+
+    status = readouts.get("status", {})
+    client_version = status.get("clientVersion", "").strip()
+    server_version = status.get("serverVersion", "").strip()
+    if not client_version or not server_version or client_version != server_version:
+        reasons.append("status clientVersion/serverVersion are missing or differ")
+    if expected_network_version is not None and client_version != expected_network_version:
+        reasons.append("status clientVersion does not match package networkVersion")
+    if _nonzero_int(status, "gameplayProtocolRevision") != GAMEPLAY_PROTOCOL_REVISION:
+        reasons.append(f"status gameplayProtocolRevision is not {GAMEPLAY_PROTOCOL_REVISION}")
+    for field in ("serverInstanceNonce", "sessionId", "connectionGeneration"):
+        if not _nonzero_int(status, field):
+            reasons.append(f"status {field} is missing or zero")
+    if status.get("online", "").strip().lower() not in {"1", "true", "yes"}:
+        reasons.append("status online is not enabled")
+
+    for name, values in readouts.items():
+        for field in RUNTIME_ROOT_IDENTITY_FIELDS:
+            if name in RUNTIME_IDENTITY_READOUTS and field == "gamePath":
+                continue
+            declared_root = values.get(field, "").strip()
+            if declared_root and not _same_root(declared_root, game_path):
+                reasons.append(f"{name} {field} does not match requested game root")
+
+    return {
+        "schema": "skyrim_together_vr_runtime_identity_v1",
+        "ok": not reasons,
+        "maxReadoutAgeSeconds": max_age_seconds,
+        "evaluatedAtNs": now_ns,
+        "runStartMarkerSupplied": run_start_marker is not None,
+        "runStartMarkerMtimeNs": marker_mtime_ns,
+        "readouts": {
+            name: {"mtimeNs": mtimes.get(name), "present": mtimes.get(name) is not None}
+            for name in RUNTIME_IDENTITY_READOUTS
+        },
+        "reasons": reasons,
     }
 
 

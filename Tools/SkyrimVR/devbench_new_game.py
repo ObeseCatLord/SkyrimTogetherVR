@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -41,6 +42,27 @@ GAMEPLAY_BRIDGE_LOG_RELATIVE_PATH = pathlib.Path(
     "drive_c/users/steamuser/Documents/My Games/Skyrim VR/SKSE/SkyrimTogetherVRGameplayBridge.log"
 )
 GAMEPLAY_BRIDGE_STARTUP_MARKER = "validated loader runtime="
+LAUNCH_NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+RELEASE_ACTIVE_PLUGIN_ORDER = (
+    "Skyrim.esm",
+    "Update.esm",
+    "Dawnguard.esm",
+    "HearthFires.esm",
+    "Dragonborn.esm",
+    "SkyrimVR.esm",
+    "higgs_vr.esp",
+    "vrik.esp",
+    "Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp",
+    "SkyrimTogether.esp",
+)
+# The release lane intentionally runs only the handoff-owned content.  A
+# different active set is not a release-admission candidate, even if it works.
+REJECT_UNEXPECTED_RELEASE_PLUGINS = True
+USABLE_STABLE_MENU_BLOCKERS = frozenset(
+    {"Main Menu", "RaceSex Menu", "Loading Menu", "Fader Menu", "MessageBoxMenu"}
+)
+USABLE_STABLE_MENU_MINIMUM_INTERVAL = 1.0
+USABLE_STABLE_MENU_POLL_INTERVAL = 0.25
 
 GAME_PROCESS: subprocess.Popen | None = None
 
@@ -71,6 +93,12 @@ def normalize_messagebox_text(value: object) -> str:
 
 
 class AutomationError(RuntimeError):
+    pass
+
+
+class TerminalAutomationError(AutomationError):
+    """A readout proves admission cannot succeed during this launch."""
+
     pass
 
 
@@ -110,6 +138,8 @@ def wait_until(
             last = poll()
             if predicate(last):
                 return last
+        except TerminalAutomationError:
+            raise
         except AutomationError:
             pass
         time.sleep(0.25)
@@ -460,6 +490,73 @@ def drain_stale_realm_lorkhan_fader(
     )
 
 
+def usable_stable_menu_state(state: dict) -> bool:
+    """Accept only a post-load HUD state with no modal or transition menu."""
+    return (
+        "HUD Menu" in state.get("openMenus", [])
+        and state.get("messageBoxOpen") is False
+        and not USABLE_STABLE_MENU_BLOCKERS.intersection(state.get("openMenus", []))
+    )
+
+
+def wait_for_usable_stable_menu(
+    *,
+    state_reader: Callable[[], dict],
+    fader_closer: Callable[[], object],
+    timeout: float,
+    wait_for_state: Callable[..., dict] = wait_until,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict:
+    """Close a stale HUD/Fader pair, then require a sustained usable-menu interval."""
+    drain_stale_realm_lorkhan_fader(
+        state_reader=state_reader,
+        fader_closer=fader_closer,
+        timeout=timeout,
+        wait_for_close=wait_for_state,
+    )
+    first = wait_for_state(
+        "USABLE_STABLE menu state",
+        timeout,
+        state_reader,
+        usable_stable_menu_state,
+    )
+    stable_since = monotonic()
+    stability_deadline = stable_since + timeout
+
+    while True:
+        elapsed = monotonic() - stable_since
+        if elapsed >= USABLE_STABLE_MENU_MINIMUM_INTERVAL:
+            return first
+        remaining = stability_deadline - monotonic()
+        if remaining <= 0:
+            raise AutomationError("timed out waiting for a sustained USABLE_STABLE menu state")
+        sleep(
+            min(
+                USABLE_STABLE_MENU_POLL_INTERVAL,
+                USABLE_STABLE_MENU_MINIMUM_INTERVAL - elapsed,
+                remaining,
+            )
+        )
+        current = state_reader()
+        if usable_stable_menu_state(current):
+            first = current
+            continue
+
+        # An observed modal or loading transition invalidates the preceding
+        # interval.  Wait for a fresh usable state, then begin a new interval.
+        remaining = stability_deadline - monotonic()
+        if remaining <= 0:
+            raise AutomationError("timed out waiting for a sustained USABLE_STABLE menu state")
+        first = wait_for_state(
+            "USABLE_STABLE menu state after transition",
+            remaining,
+            state_reader,
+            usable_stable_menu_state,
+        )
+        stable_since = monotonic()
+
+
 def accept_new_game_confirmation(args: argparse.Namespace) -> dict:
     """Reach RaceSex without firing a blind controller pulse during loading."""
     deadline = time.monotonic() + args.timeout
@@ -642,6 +739,39 @@ def status_is_zero(values: dict[str, str], key: str) -> bool:
     return key in values and status_int(values, key) == 0
 
 
+def bounded_status_error(values: dict[str, str]) -> str:
+    """Return the bridge's bounded diagnostic without echoing an unbounded readout."""
+    detail = values.get("error", "")
+    if not isinstance(detail, str):
+        return "invalid error field"
+    detail = " ".join(detail.split())
+    return detail[:256] or "unspecified error"
+
+
+def raise_for_nonce_bound_status_error(values: dict[str, str], launch_nonce: str) -> None:
+    if values.get("launchNonce") == launch_nonce and values.get("state") == "error":
+        raise TerminalAutomationError(
+            "Skyrim Together connection entered state=error: " + bounded_status_error(values)
+        )
+
+
+def online_status_ready(values: dict[str, str], session_id: str, baseline_generation: int,
+                        launch_nonce: str) -> bool:
+    raise_for_nonce_bound_status_error(values, launch_nonce)
+    return (
+        values.get("state") == "online"
+        and values.get("online") == "1"
+        and values.get("playerId") not in {None, "", "0"}
+        and values.get("sessionId") == session_id
+        and values.get("launchNonce") == launch_nonce
+        and values.get("clientVersion") not in {None, ""}
+        and values.get("serverVersion") == values.get("clientVersion")
+        and values.get("gameplayProtocolRevision") == "14"
+        and status_int(values, "serverInstanceNonce") != 0
+        and status_int(values, "connectionGeneration") > baseline_generation
+    )
+
+
 def file_prefix_sha256(path: pathlib.Path, byte_count: int) -> str:
     digest = hashlib.sha256()
     remaining = byte_count
@@ -748,7 +878,8 @@ def new_gameplay_bridge_critical_entries(
 
 
 def avatar_assignment_ready(
-    avatar: dict[str, str], online_status: dict[str, str], lifecycle_epoch: str
+    avatar: dict[str, str], online_status: dict[str, str], lifecycle_epoch: str,
+    launch_nonce: str = "",
 ) -> bool:
     player_id = status_int(online_status, "playerId")
     zero_required = (
@@ -775,8 +906,44 @@ def avatar_assignment_ready(
         and avatar.get("assignmentBootstrapGate") == "bootstrap_ready"
         and avatar.get("assignmentBootstrapReady") == "1"
         and avatar.get("assignmentBootstrapFailure") == "none"
+        and (not launch_nonce or avatar.get("launchNonce") == launch_nonce)
         and all(status_is_zero(avatar, key) for key in zero_required)
     )
+
+
+def engine_active_plugin_order(mods: dict) -> tuple[str, ...]:
+    """Return DevBench's engine-reported active ordered plugin set.
+
+    DevBench's ``mods`` inspection is expected to be an ordered active list.
+    If it starts supplying an explicit ``active`` field, reject any inactive
+    entry rather than silently treating it as loaded content.
+    """
+    entries = mods.get("plugins")
+    if not isinstance(entries, list):
+        raise AutomationError(f"DevBench did not report an active plugin list: {mods}")
+    names: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise AutomationError(f"DevBench reported an invalid plugin entry: {entry!r}")
+        if "active" in entry and entry["active"] is not True:
+            raise AutomationError(f"DevBench reported an inactive plugin in its active list: {entry}")
+        names.append(entry["name"])
+    return tuple(names)
+
+
+def require_release_active_plugin_order(mods: dict) -> tuple[str, ...]:
+    actual = engine_active_plugin_order(mods)
+    light_plugins = mods.get("lightPlugins")
+    if not isinstance(light_plugins, list):
+        raise AutomationError(f"DevBench did not report the active light-plugin list: {mods}")
+    if actual != RELEASE_ACTIVE_PLUGIN_ORDER or light_plugins:
+        policy = "unexpected plugins are rejected" if REJECT_UNEXPECTED_RELEASE_PLUGINS else "subset policy"
+        raise AutomationError(
+            "engine-reported active plugin order does not match the isolated release lane "
+            f"({policy}): expected={RELEASE_ACTIVE_PLUGIN_ORDER}; actual={actual}; "
+            f"lightPluginCount={len(light_plugins)}"
+        )
+    return actual
 
 
 def avatar_lifecycle_epoch(lifecycle: dict[str, str]) -> str:
@@ -791,6 +958,7 @@ def verify_avatar_assignment_stability(
     avatar_path: pathlib.Path,
     online_status: dict[str, str],
     lifecycle_epoch: str,
+    launch_nonce: str,
     tick_bridge_log_path: pathlib.Path,
     tick_bridge_log_start_offset: int,
     gameplay_bridge_log_path: pathlib.Path | None,
@@ -815,7 +983,7 @@ def verify_avatar_assignment_stability(
             )
         on_wait()
         last_avatar = read_status(avatar_path)
-        if not avatar_assignment_ready(last_avatar, online_status, lifecycle_epoch):
+        if not avatar_assignment_ready(last_avatar, online_status, lifecycle_epoch, launch_nonce):
             raise AutomationError(
                 "local avatar assignment became invalid during stability verification: "
                 f"{last_avatar}"
@@ -979,6 +1147,10 @@ def main() -> int:
     if args.connect and args.vm_update_mode != "active":
         raise AutomationError("--connect requires --vm-update-mode active after the observer gate has passed")
 
+    launch_nonce = secrets.token_hex(16) if args.connect else ""
+    if launch_nonce and not LAUNCH_NONCE_PATTERN.fullmatch(launch_nonce):
+        raise AutomationError("generated launch nonce is invalid")
+
     handoff_dir = args.skyrim_vr / "Data" / "SkyrimTogetherReborn"
     command_path = handoff_dir / "SkyrimTogetherVR.command"
     status_path = handoff_dir / "SkyrimTogetherVR.status"
@@ -1020,6 +1192,8 @@ def main() -> int:
         launch_env["STVR_FORCE_PROTON"] = "1"
         launch_env["STVR_VM_UPDATE_MODE"] = args.vm_update_mode
         launch_env["STVR_XRIZER_INPUT_COMMAND"] = str(args.xrizer_input_command)
+        if launch_nonce:
+            launch_env["STVR_LAUNCH_NONCE"] = launch_nonce
         if not args.load_save:
             launch_env["STVR_XRIZER_KEYBOARD_TEXT"] = args.character_name
         log_path = args.skyrim_vr / "stvr-devbench-launch.log"
@@ -1134,9 +1308,7 @@ def main() -> int:
         on_wait=lambda: handle_blocking_message_box(args.url, "finalization"),
     )
     mods = post_tool(args.url, "inspect", {"kind": "mods"})
-    names = [entry.get("name") for entry in mods.get("plugins", [])]
-    if "SkyrimTogether.esp" not in names:
-        raise AutomationError(f"SkyrimTogether.esp is not active: {names}")
+    require_release_active_plugin_order(mods)
     player = post_tool(args.url, "inspect", {"kind": "player"})
     if not player.get("name") or not player.get("race"):
         raise AutomationError(f"player finalization is incomplete: {player}")
@@ -1151,6 +1323,7 @@ def main() -> int:
             lambda: read_status(lifecycle_path),
             lambda value: value.get("state") == "ready"
             and value.get("ready") == "1"
+            and (not launch_nonce or value.get("launchNonce") == launch_nonce)
             and value.get("epoch") not in {None, "", "0"}
             and value.get("ownerThreadId") not in {None, "", "0"}
             and value.get("playerFormId") not in {None, "", "0"}
@@ -1166,7 +1339,8 @@ def main() -> int:
             lambda: read_status(player_cell_path),
             lambda value: value.get("ready") == "1"
             and value.get("playerFormId") not in {None, "", "0"}
-            and value.get("lifecycleEpoch") == lifecycle.get("epoch"),
+            and value.get("lifecycleEpoch") == lifecycle.get("epoch")
+            and (not launch_nonce or value.get("launchNonce") == launch_nonce),
             on_wait=lambda: handle_blocking_message_box(args.url, "finalization"),
         )
         if player_cell_path.stat().st_mtime_ns < run_started_ns:
@@ -1194,11 +1368,12 @@ def main() -> int:
 
     print(f"Realm of Lorkhan ready at {scene.get('position')}")
     print(f"Player finalized: {player.get('name')} ({player.get('race')})")
-    print("SkyrimTogether.esp is active")
+    print("Release active plugin order is verified")
 
     if args.connect:
         def maintain_connection_cadence() -> None:
             handle_blocking_message_box(args.url, "connect_wait")
+            raise_for_nonce_bound_status_error(read_status(status_path), launch_nonce)
 
         existing_sequences = successful_task_sequences(
             tick_bridge_log_path, tick_bridge_log_start_offset
@@ -1230,17 +1405,18 @@ def main() -> int:
 
         handoff_dir.mkdir(parents=True, exist_ok=True)
         pending_path = command_path.with_suffix(".command.tmp")
-        pending_path.write_text(f"action=connect\nendpoint={args.connect}\npassword=\n", encoding="utf-8")
+        pending_path.write_text(
+            f"action=connect\nendpoint={args.connect}\npassword=\nlaunchNonce={launch_nonce}\n",
+            encoding="utf-8",
+        )
         pending_path.replace(command_path)
         status = wait_until(
             "Skyrim Together online status",
             args.timeout,
             lambda: read_status(status_path),
-            lambda value: value.get("state") == "online"
-            and value.get("online") == "1"
-            and value.get("playerId") not in {None, "", "0"}
-            and value.get("sessionId") == session_id
-            and status_int(value, "connectionGeneration") > baseline_generation,
+            lambda value: online_status_ready(
+                value, session_id, baseline_generation, launch_nonce
+            ),
             on_wait=maintain_connection_cadence,
         )
         if status_path.stat().st_mtime_ns < run_started_ns:
@@ -1250,6 +1426,7 @@ def main() -> int:
                 value.get("ready") == "1"
                 and value.get("online") == "1"
                 and value.get("sessionId") == session_id
+                and value.get("launchNonce") == launch_nonce
                 and value.get("localPlayerId") == status.get("playerId")
                 and value.get("connectionGeneration") == status.get("connectionGeneration")
                 and value.get("lastCell.connectionGeneration") == status.get("connectionGeneration")
@@ -1287,7 +1464,9 @@ def main() -> int:
             "Skyrim Together local avatar assignment",
             args.timeout,
             lambda: read_status(avatar_path),
-            lambda value: avatar_assignment_ready(value, status, avatar_lifecycle_epoch(lifecycle)),
+            lambda value: avatar_assignment_ready(
+                value, status, avatar_lifecycle_epoch(lifecycle), launch_nonce
+            ),
             on_wait=maintain_connection_cadence,
         )
         try:
@@ -1302,6 +1481,7 @@ def main() -> int:
             avatar_path,
             status,
             avatar_lifecycle_epoch(lifecycle),
+            launch_nonce,
             tick_bridge_log_path,
             tick_bridge_log_start_offset,
             gameplay_bridge_log_path,
@@ -1329,6 +1509,14 @@ def main() -> int:
             f"cadence={stability_sequences[0]},{stability_sequences[1]}",
             flush=True,
         )
+        usable_menu = wait_for_usable_stable_menu(
+            state_reader=lambda: menu_state(args.url),
+            fader_closer=lambda: post_tool(
+                args.url, "menu", {"action": "close", "name": "Fader Menu"}
+            ),
+            timeout=10.0,
+        )
+        print(f"USABLE_STABLE menu gate passed: {usable_menu.get('openMenus', [])}", flush=True)
     return 0
 
 

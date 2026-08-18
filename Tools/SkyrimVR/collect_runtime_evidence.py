@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import sys
 import tempfile
 import zipfile
@@ -112,6 +113,7 @@ GAMEPLAY_BOOTSTRAP_REQUIRED_CHECK_IDS = frozenset(
         "local_avatar_bootstrap",
         "local_vrik_api",
         "higgs_bridge",
+        "runtime_identity",
     )
 )
 
@@ -150,6 +152,8 @@ def build_collection_args(**overrides: object) -> argparse.Namespace:
         "avatar_sync": False,
         "gameplay": False,
         "gameplay_bootstrap": False,
+        "max_readout_age_seconds": 30.0,
+        "run_start_marker": None,
     }
     unknown = sorted(set(overrides) - set(values))
     if unknown:
@@ -252,9 +256,44 @@ def add_file(
         "exists": source.exists(),
     }
     if source.exists() and source.is_file():
-        record["size"] = source.stat().st_size
+        stat_result = source.stat()
+        record["size"] = stat_result.st_size
+        record["mtimeNs"] = stat_result.st_mtime_ns
         record["sha256"] = sha256_file(source)
         zf.write(source, archive_name)
+    files.append(record)
+
+
+def add_snapshot(
+    zf: zipfile.ZipFile,
+    snapshot: dict[str, object],
+    archive_name: str,
+    files: list[dict[str, object]],
+    *,
+    category: str,
+    required: bool,
+) -> None:
+    """Add a sealed readout snapshot without rereading its live source."""
+    source = snapshot["path"]
+    record: dict[str, object] = {
+        "category": category,
+        "source": str(source),
+        "archiveName": archive_name,
+        "required": required,
+        "exists": bool(snapshot.get("exists")),
+    }
+    if record["exists"]:
+        payload = snapshot["bytes"]
+        if not isinstance(payload, bytes):
+            raise TypeError("readout snapshot payload must be bytes")
+        record.update(
+            {
+                "size": snapshot["size"],
+                "mtimeNs": snapshot["mtimeNs"],
+                "sha256": snapshot["sha256"],
+            }
+        )
+        zf.writestr(archive_name, payload)
     files.append(record)
 
 
@@ -484,6 +523,36 @@ def validate_build_manifest_data(
     if manifest.get("companionPanel") is not True:
         errors.append("companionPanel is not true")
 
+    build_version = manifest.get("buildVersion")
+    network_version = manifest.get("networkVersion")
+    network_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
+    if (
+        not isinstance(build_version, str)
+        or not network_pattern.fullmatch(build_version)
+        or build_version.casefold() in {"none", "unavailable"}
+        or build_version.casefold().startswith("unknown-")
+    ):
+        errors.append(f"buildVersion={build_version!r} is invalid")
+    if network_version != build_version:
+        errors.append("networkVersion does not match buildVersion")
+
+    source_revision = manifest.get("sourceRevision")
+    source_provenance = manifest.get("sourceProvenance")
+    if not isinstance(source_revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
+        errors.append(f"sourceRevision={source_revision!r} is invalid")
+    if not isinstance(source_provenance, dict):
+        errors.append("sourceProvenance is not an object")
+    else:
+        if source_provenance.get("revision") != source_revision:
+            errors.append("sourceProvenance.revision does not match sourceRevision")
+        source_tree_sha256 = source_provenance.get("sourceTreeSha256")
+        if not isinstance(source_tree_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", source_tree_sha256):
+            errors.append("sourceProvenance.sourceTreeSha256 is invalid")
+        if source_provenance.get("dirty") is not False:
+            errors.append("sourceProvenance is dirty")
+        if source_provenance.get("dirtyApproved") is not False:
+            errors.append("sourceProvenance dirtyApproved is not false")
+
     targets = manifest.get("targets")
     if not isinstance(targets, list):
         errors.append("targets is not a list")
@@ -593,6 +662,8 @@ def build_runtime_checklist(
     require_higgs_relay: bool,
     require_saveload_observer: bool,
     require_gameplay_bootstrap: bool,
+    runtime_identity: dict[str, object] | None = None,
+    require_live_identity: bool = False,
 ) -> dict[str, object]:
     checks: list[dict[str, str]] = []
     status = readouts.get("status", {})
@@ -614,6 +685,22 @@ def build_runtime_checklist(
     saveload = readouts.get("saveload", {})
     remoteplayers = readouts.get("remoteplayers", {})
     avatar = readouts.get("avatar", {})
+
+    identity_ok = bool(runtime_identity and runtime_identity.get("ok"))
+    identity_reasons = (
+        runtime_identity.get("reasons", []) if isinstance(runtime_identity, dict) else ["identity evaluation unavailable"]
+    )
+    identity_detail = "trusted" if identity_ok else "; ".join(map(str, identity_reasons))
+    add_conditional_check(
+        checks,
+        "runtime_identity",
+        "8,9",
+        "fresh same-process gameplay runtime identity",
+        identity_ok,
+        identity_detail,
+        required=require_live_identity,
+        not_required_detail="untrusted for live admission: " + identity_detail,
+    )
 
     log_ok, log_detail = log_breadcrumb_detail(
         log_path,
@@ -1666,6 +1753,9 @@ def write_runtime_audit(
         require_higgs_relay=args.require_higgs_relay,
         require_saveload_observer=args.require_saveload_observer,
         avatar_sync=args.avatar_sync or args.gameplay,
+        gameplay=args.gameplay,
+        max_readout_age_seconds=args.max_readout_age_seconds,
+        run_start_marker=args.run_start_marker,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -1694,6 +1784,55 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     output_path = resolve_output_path(args.out)
     collected_files: list[dict[str, object]] = []
     crash_evidence = args.crash_evidence or args.include_crash_dumps
+    live_admission = args.gameplay_bootstrap or args.require_connected
+    sealed_readout_names = (
+        tuple(vr_handoff.READOUT_FILES)
+        if live_admission
+        else vr_handoff.RUNTIME_IDENTITY_READOUTS
+    )
+    readout_snapshots = vr_handoff.capture_readout_snapshots(handoff_dir, sealed_readout_names)
+    readouts = (
+        {
+            name: snapshot["values"]
+            for name, snapshot in readout_snapshots.items()
+            if isinstance(snapshot.get("values"), dict)
+        }
+        if live_admission
+        else vr_handoff.read_readouts(handoff_dir)
+    )
+    for name in vr_handoff.RUNTIME_IDENTITY_READOUTS:
+        snapshot = readout_snapshots[name]
+        values = snapshot.get("values")
+        if isinstance(values, dict):
+            readouts[name] = values
+    identity_metadata = {
+        name: {
+            "mtimeNs": snapshot.get("mtimeNs"),
+            "present": bool(snapshot.get("exists")),
+        }
+        for name, snapshot in readout_snapshots.items()
+        if name in vr_handoff.RUNTIME_IDENTITY_READOUTS
+    }
+    expected_network_version = (
+        build_manifest.get("networkVersion")
+        if build_manifest_ok and isinstance(build_manifest.get("networkVersion"), str)
+        else None
+    )
+    runtime_identity = vr_handoff.evaluate_runtime_identity(
+        readouts,
+        handoff_dir,
+        game_path,
+        max_age_seconds=args.max_readout_age_seconds,
+        run_start_marker=args.run_start_marker,
+        readout_metadata=identity_metadata,
+        expected_network_version=expected_network_version,
+    )
+    if live_admission and expected_network_version is None:
+        runtime_identity["ok"] = False
+        reasons = runtime_identity.get("reasons")
+        if isinstance(reasons, list):
+            reasons.append("validated package networkVersion is unavailable")
+    runtime_trust = "trusted" if live_admission and bool(runtime_identity["ok"]) else "untrusted"
     manifest: dict[str, object] = {
         "schema": "skyrim_together_vr_runtime_evidence_v1",
         "createdUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1724,8 +1863,10 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         "requiredHiggsRelay": args.require_higgs_relay,
         "requiredSaveloadObserver": args.require_saveload_observer,
         "requiredGameplayBootstrap": args.gameplay_bootstrap,
+        "runtimeIdentity": runtime_identity,
+        "runtimeEvidenceTrust": runtime_trust,
+        "liveAdmissionRequested": live_admission,
     }
-    readouts = vr_handoff.read_readouts(handoff_dir)
     runtime_checklist = build_runtime_checklist(
         readouts,
         log_path,
@@ -1749,6 +1890,8 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         require_higgs_relay=args.require_higgs_relay,
         require_saveload_observer=args.require_saveload_observer,
         require_gameplay_bootstrap=args.gameplay_bootstrap,
+        runtime_identity=runtime_identity,
+        require_live_identity=live_admission,
     )
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1794,14 +1937,25 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
                 required = name in GAMEPLAY_BOOTSTRAP_REQUIRED_READOUTS
             else:
                 required = name != "avatar" or local_avatar_evidence
-            add_file(
-                zf,
-                handoff_dir / file_name,
-                f"handoff/{file_name}",
-                collected_files,
-                category="handoff",
-                required=required,
-            )
+            archive_name = f"handoff/{file_name}"
+            if name in readout_snapshots:
+                add_snapshot(
+                    zf,
+                    readout_snapshots[name],
+                    archive_name,
+                    collected_files,
+                    category="handoff",
+                    required=required,
+                )
+            else:
+                add_file(
+                    zf,
+                    handoff_dir / file_name,
+                    archive_name,
+                    collected_files,
+                    category="handoff",
+                    required=required,
+                )
 
         for file_name in HANDOFF_EXTRA_FILES:
             add_file(
@@ -1949,6 +2103,16 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     return output_path
 
 
+def live_admission_failed(archive: pathlib.Path) -> bool:
+    """Return whether a preserved archive failed an explicitly requested admission."""
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    except (FileNotFoundError, KeyError, OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return bool(manifest.get("liveAdmissionRequested")) and manifest.get("runtimeEvidenceTrust") != "trusted"
+
+
 def command_self_test(_: argparse.Namespace) -> int:
     argument_failures = collection_args_self_test()
     if argument_failures:
@@ -2053,11 +2217,18 @@ def command_self_test(_: argparse.Namespace) -> int:
         def write(name: str, contents: str) -> None:
             (handoff / vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
-        write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
+        write(
+            "status",
+            "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\n"
+            "serverInstanceNonce=99\ngamePath={}\n".format(game),
+        )
         write(
             "lifecycle",
             "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
-            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
         write(
             "pose",
@@ -2131,7 +2302,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             "lastCell.cell.serverBaseId=100\n"
             "lastCell.worldSpace.serverModId=1\n"
             "lastCell.worldSpace.serverBaseId=60\n"
-            "lastCell.currentCoords=4,-3\n",
+            "lastCell.currentCoords=4,-3\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
         write(
             "activation",
@@ -2277,7 +2449,8 @@ def command_self_test(_: argparse.Namespace) -> int:
             "rejectedCommandCount=0\neventRingDropCount=0\ncommandRingDropCount=0\ninvalidTransformCount=0\nremoteMovementAcceptedCount=1\n"
             "staleMovementRejectedCount=1\nspatialTransferSubmittedCount=1\nspatialTransferSucceededCount=1\nspatialTransferRejectedCount=0\n"
             "animationSnapshotSubmittedCount=1\nanimationSnapshotAppliedCount=1\n"
-            "animationSnapshotRejectedCount=0\nsameSpaceCount=2\n",
+            "animationSnapshotRejectedCount=0\nsameSpaceCount=2\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
         (handoff / vr_handoff.CONFIG_FILE).write_text("endpoint=127.0.0.1:10578\n", encoding="utf-8")
         build_manifest = {
@@ -2294,6 +2467,15 @@ def command_self_test(_: argparse.Namespace) -> int:
             "packageRoot": str(game),
             "stagedGameFiles": True,
             "companionPanel": True,
+            "buildVersion": "fixture",
+            "networkVersion": "fixture",
+            "sourceRevision": "0" * 40,
+            "sourceProvenance": {
+                "revision": "0" * 40,
+                "sourceTreeSha256": "1" * 64,
+                "dirty": False,
+                "dirtyApproved": False,
+            },
             "generatedAtUtc": "2026-01-01T00:00:00.0000000Z",
         }
         (game / BUILD_MANIFEST_NAME).write_text(json.dumps(build_manifest, indent=2), encoding="utf-8")
@@ -2621,6 +2803,17 @@ def main() -> int:
     parser.add_argument("--require-higgs-relay", action="store_true", help="runtime checklist requires HIGGS relay evidence")
     parser.add_argument("--require-saveload-observer", action="store_true", help="runtime checklist requires save/load observer evidence")
     parser.add_argument("--require-gameplay-relays", action="store_true", help="runtime checklist requires all staged gameplay relay evidence")
+    parser.add_argument(
+        "--max-readout-age-seconds",
+        type=float,
+        default=30.0,
+        help="maximum age for identity readouts used by live gameplay admission (default: 30)",
+    )
+    parser.add_argument(
+        "--run-start-marker",
+        type=pathlib.Path,
+        help="optional marker file; live identity readouts must not predate its mtime",
+    )
     parser.add_argument("--avatar-sync", action="store_true", help="embedded audit requires explicit avatar-sync runtime data")
     parser.add_argument("--gameplay", action="store_true", help="embedded audit validates the full gameplay package manifest and avatar/relay runtime data")
     parser.add_argument(
@@ -2676,6 +2869,9 @@ def main() -> int:
     if args.crash_evidence or args.include_crash_dumps:
         print("Warning: included minidumps may contain process memory and should be handled as sensitive data.")
     print(f"Evidence archive: {archive}")
+    if live_admission_failed(archive):
+        print("Live runtime admission failed; the evidence archive was preserved for diagnostics.")
+        return 1
     return 0
 
 

@@ -528,46 +528,45 @@ void PlayerService::WriteVrPlayerCellStatusFile() noexcept
     if (m_vrPlayerCellStatusPath.empty())
         return;
 
-    std::error_code ec;
-    std::filesystem::create_directories(m_vrPlayerCellStatusPath.parent_path(), ec);
-
-    std::ofstream file(m_vrPlayerCellStatusPath, std::ios::trunc);
-    if (!file)
-        return;
-
     const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
     const bool ready = lifecycle.IsReady();
 
-    file << "ready=" << (ready ? "1" : "0") << "\n";
-    file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
-    file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
-    file << "sessionId=" << m_transport.GetSessionId() << "\n";
-    file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
-    file << "playerFormId=" << lifecycle.GetPlayerFormId() << "\n";
-    file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
-    file << "currentLevel=" << m_cachedVrLevel << "\n";
-    file << "cachedLevel=" << m_cachedVrLevel << "\n";
-    file << "lastLevelSent=" << m_lastVrLevelSent << "\n";
-    file << "gridCellRequestCount=" << m_vrGridCellRequestCount << "\n";
-    file << "exteriorCellRequestCount=" << m_vrExteriorCellRequestCount << "\n";
-    file << "interiorCellRequestCount=" << m_vrInteriorCellRequestCount << "\n";
-    file << "levelRequestCount=" << m_vrLevelRequestCount << "\n";
-    file << "offlineSkippedRequestCount=" << m_vrOfflineSkippedRequestCount << "\n";
-    file << "worldSpaceTranslationFailureCount=" << m_vrWorldSpaceTranslationFailureCount << "\n";
-    file << "lastGrid.valid=" << (m_hasVrGridCellRequest ? "1" : "0") << "\n";
-    WriteGameId(file, "lastGrid.worldSpace", m_lastVrGridWorldSpace);
-    WriteGameId(file, "lastGrid.playerCell", m_lastVrGridPlayerCell);
-    WriteGridCoords(file, "lastGrid.center", m_lastVrGridCenterCoords);
-    file << "lastGrid.cellCount=" << m_lastVrGridCellCount << "\n";
-    file << "lastGrid.connectionGeneration=" << m_lastVrGridConnectionGeneration << "\n";
-    file << "lastCell.valid=" << (m_hasVrCellRequest ? "1" : "0") << "\n";
-    file << "lastCell.exterior=" << (m_lastVrCellWasExterior ? "1" : "0") << "\n";
-    file << "lastCell.connectionGeneration=" << m_lastVrCellConnectionGeneration << "\n";
-    WriteGameId(file, "lastCell.cell", m_lastVrCell);
-    WriteGameId(file, "lastCell.worldSpace", m_lastVrCellWorldSpace);
-    WriteGridCoords(file, "lastCell.currentCoords", m_lastVrCellCurrentCoords);
+    const auto published = SkyrimTogetherVR::Handoff::WriteFileAtomically(
+        m_vrPlayerCellStatusPath,
+        [this, &lifecycle, ready](std::ofstream& file)
+        {
+            SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
+            file << "ready=" << (ready ? "1" : "0") << "\n";
+            file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
+            file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
+            file << "sessionId=" << m_transport.GetSessionId() << "\n";
+            file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
+            file << "playerFormId=" << lifecycle.GetPlayerFormId() << "\n";
+            file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
+            file << "currentLevel=" << m_cachedVrLevel << "\n";
+            file << "cachedLevel=" << m_cachedVrLevel << "\n";
+            file << "lastLevelSent=" << m_lastVrLevelSent << "\n";
+            file << "gridCellRequestCount=" << m_vrGridCellRequestCount << "\n";
+            file << "exteriorCellRequestCount=" << m_vrExteriorCellRequestCount << "\n";
+            file << "interiorCellRequestCount=" << m_vrInteriorCellRequestCount << "\n";
+            file << "levelRequestCount=" << m_vrLevelRequestCount << "\n";
+            file << "offlineSkippedRequestCount=" << m_vrOfflineSkippedRequestCount << "\n";
+            file << "worldSpaceTranslationFailureCount=" << m_vrWorldSpaceTranslationFailureCount << "\n";
+            file << "lastGrid.valid=" << (m_hasVrGridCellRequest ? "1" : "0") << "\n";
+            WriteGameId(file, "lastGrid.worldSpace", m_lastVrGridWorldSpace);
+            WriteGameId(file, "lastGrid.playerCell", m_lastVrGridPlayerCell);
+            WriteGridCoords(file, "lastGrid.center", m_lastVrGridCenterCoords);
+            file << "lastGrid.cellCount=" << m_lastVrGridCellCount << "\n";
+            file << "lastGrid.connectionGeneration=" << m_lastVrGridConnectionGeneration << "\n";
+            file << "lastCell.valid=" << (m_hasVrCellRequest ? "1" : "0") << "\n";
+            file << "lastCell.exterior=" << (m_lastVrCellWasExterior ? "1" : "0") << "\n";
+            file << "lastCell.connectionGeneration=" << m_lastVrCellConnectionGeneration << "\n";
+            WriteGameId(file, "lastCell.cell", m_lastVrCell);
+            WriteGameId(file, "lastCell.worldSpace", m_lastVrCellWorldSpace);
+            WriteGridCoords(file, "lastCell.currentCoords", m_lastVrCellCurrentCoords);
+        });
 
-    m_vrPlayerCellStatusDirty = false;
+    m_vrPlayerCellStatusDirty = !published;
 }
 
 void PlayerService::RunBeastFormDetection() const noexcept

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import tempfile
 import zipfile
 
@@ -71,6 +72,7 @@ REQUIRED_SOURCE_TEXT_TOKENS = {
         "Invoke-PapyrusCompile",
         "papyrusCompiled",
         "packageFlavor = $packageFlavor",
+        "networkVersion = $buildVersion",
         "Copied SkyrimTogetherVR package snapshot to $packageSnapshotDir",
     ),
     "source/Tools/SkyrimVR/audit_built_package.py": (
@@ -236,14 +238,28 @@ def package_manifest_errors(manifest: dict[str, object], *, mode: str) -> list[s
         errors.append("companionPanel is not true")
 
     build_version = manifest.get("buildVersion")
-    if (
-        not isinstance(build_version, str)
-        or not build_version.strip()
-        or build_version.casefold() == "none"
-        or build_version.casefold().startswith("unknown-")
-        or any(character.isspace() for character in build_version)
-    ):
+    if not audit_built_package.is_valid_network_version(build_version):
         errors.append(f"buildVersion={build_version!r} is invalid")
+    network_version = manifest.get("networkVersion")
+    if not audit_built_package.is_valid_network_version(network_version):
+        errors.append(f"networkVersion={network_version!r} is invalid")
+    elif network_version != build_version:
+        errors.append("networkVersion does not match buildVersion")
+
+    source_revision = manifest.get("sourceRevision")
+    source_provenance = manifest.get("sourceProvenance")
+    if not isinstance(source_revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
+        errors.append(f"sourceRevision={source_revision!r} is invalid")
+    if not isinstance(source_provenance, dict):
+        errors.append("sourceProvenance is not an object")
+    else:
+        revision = source_provenance.get("revision")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+            errors.append(f"sourceProvenance.revision={revision!r} is invalid")
+        elif source_revision != revision:
+            errors.append("sourceRevision does not match sourceProvenance.revision")
+        if source_provenance.get("dirty") is not False:
+            errors.append("sourceProvenance records a dirty or unavailable source tree")
 
     targets = manifest.get("targets")
     target_set = {str(target) for target in targets} if isinstance(targets, list) else set()

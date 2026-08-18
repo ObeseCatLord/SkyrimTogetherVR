@@ -43,6 +43,7 @@ EOF
 cat > "$fake_bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "${STVR_FAIL_SYSTEMCTL:-0}" != 1 ] || exit 99
 case " $* " in
   *' show '*) printf 'not-found\n' ;;
   *' is-active '*) exit 3 ;;
@@ -101,6 +102,15 @@ common_env=(
 env "${common_env[@]}" "$MANAGER" start simulated-qwerty-fixed >/dev/null
 grep -Fq -- '--unit=stvr-monado-runtime ' "$state/systemd-run.log"
 env "${common_env[@]}" "$MANAGER" status | grep -Fq 'Runtime: ready'
+
+# check is an admission-only listener/OpenXR canary: it must not query or
+# mutate systemd state.
+before_check="$(wc -l < "$state/systemd-run.log")"
+env "${common_env[@]}" STVR_FAIL_SYSTEMCTL=1 "$MANAGER" check | grep -Fq 'Runtime check: ready'
+[ "$(wc -l < "$state/systemd-run.log")" = "$before_check" ] || {
+  printf 'manager check mutated systemd runtime state\n' >&2
+  exit 1
+}
 
 # A socket listener alone is insufficient: compositor startup errors reported
 # by the canary must fail closed without unlinking a live, potentially

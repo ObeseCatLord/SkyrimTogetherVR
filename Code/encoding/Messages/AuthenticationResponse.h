@@ -30,7 +30,8 @@ struct AuthenticationResponse final : ServerMessage
 
     bool operator==(const AuthenticationResponse& achRhs) const noexcept
     {
-        return GetOpcode() == achRhs.GetOpcode() && Type == achRhs.Type && UserMods == achRhs.UserMods && Settings == achRhs.Settings && PlayerId == achRhs.PlayerId &&
+        return GetOpcode() == achRhs.GetOpcode() && Type == achRhs.Type && SKSEActive == achRhs.SKSEActive && MO2Active == achRhs.MO2Active && Version == achRhs.Version &&
+               UserMods == achRhs.UserMods && Settings == achRhs.Settings && PlayerId == achRhs.PlayerId &&
                GameplayProtocolRevision == achRhs.GameplayProtocolRevision && ServerCapabilities == achRhs.ServerCapabilities && NegotiatedCapabilities == achRhs.NegotiatedCapabilities &&
                ServerInstanceNonce == achRhs.ServerInstanceNonce && ConnectionGeneration == achRhs.ConnectionGeneration &&
                ClientSessionNonce == achRhs.ClientSessionNonce && ConnectionAttempt == achRhs.ConnectionAttempt;

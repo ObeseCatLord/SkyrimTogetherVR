@@ -151,6 +151,7 @@ SCRIPT_TOKENS = (
     'Join-Path "packages" $packageFlavor',
     "packageFlavor = $packageFlavor",
     "buildVersion = $buildVersion",
+    "networkVersion = $buildVersion",
     "packageSnapshotRoot = $packageSnapshotDir",
     "SkyrimTogetherVR_BuildManifest.json",
     "$packageManifest | ConvertTo-Json -Depth 5",

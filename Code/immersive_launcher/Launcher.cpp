@@ -24,14 +24,17 @@
 #include <client/ScriptExtender.h>
 #include <client/ShutdownDiagnostics.h>
 #include <spdlog/spdlog.h>
+#include <vr_common/VRHandoffPath.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cwctype>
 #include <future>
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -48,9 +51,175 @@ HICON g_SharedWindowIcon = nullptr;
 namespace launcher
 {
 static LaunchContext* g_context = nullptr;
+static HANDLE g_sameGameRootLaunchMutex = nullptr;
 
 namespace
 {
+constexpr wchar_t kLaunchNonceEnvironmentName[] = L"STVR_LAUNCH_NONCE";
+constexpr wchar_t kGamePathEnvironmentName[] = L"STVR_GAME_PATH";
+
+std::filesystem::path CanonicalizeLaunchPath(const std::filesystem::path& acPath)
+{
+    std::error_code ec;
+    auto canonicalPath = std::filesystem::weakly_canonical(acPath, ec);
+    if (!ec)
+        return canonicalPath.lexically_normal();
+
+    ec.clear();
+    canonicalPath = std::filesystem::absolute(acPath, ec);
+    return ec ? std::filesystem::path{} : canonicalPath.lexically_normal();
+}
+
+bool AcquireSameGameRootLaunchGuard(const LaunchContext& acContext)
+{
+    if (g_sameGameRootLaunchMutex)
+        return true;
+
+    const auto canonicalGamePath = CanonicalizeLaunchPath(acContext.gamePath);
+    if (canonicalGamePath.empty())
+    {
+        spdlog::error("SkyrimTogetherVR launch guard could not canonicalize the selected game path");
+        return false;
+    }
+
+    auto identity = canonicalGamePath.wstring();
+    std::transform(identity.begin(), identity.end(), identity.begin(), [](const wchar_t character) {
+        return static_cast<wchar_t>(std::towlower(character));
+    });
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::array<std::uint8_t, 32> digest{};
+    bool hashed = false;
+    do
+    {
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+            break;
+
+        DWORD hashObjectSize = 0;
+        DWORD hashSize = 0;
+        DWORD bytesReturned = 0;
+        if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&hashObjectSize), sizeof(hashObjectSize), &bytesReturned, 0) < 0 ||
+            bytesReturned != sizeof(hashObjectSize) ||
+            BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashSize), sizeof(hashSize), &bytesReturned, 0) < 0 ||
+            bytesReturned != sizeof(hashSize) || hashSize != digest.size() ||
+            identity.size() > static_cast<std::size_t>(std::numeric_limits<ULONG>::max() / sizeof(wchar_t)))
+        {
+            break;
+        }
+
+        std::vector<std::uint8_t> hashObject(hashObjectSize);
+        const auto identityBytes = static_cast<ULONG>(identity.size() * sizeof(wchar_t));
+        if (BCryptCreateHash(algorithm, &hash, hashObject.data(), hashObjectSize, nullptr, 0, 0) < 0 ||
+            BCryptHashData(hash, reinterpret_cast<PUCHAR>(identity.data()), identityBytes, 0) < 0 ||
+            BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0)
+        {
+            break;
+        }
+
+        hashed = true;
+    } while (false);
+
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (algorithm)
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (!hashed)
+    {
+        spdlog::error("SkyrimTogetherVR launch guard could not derive a same-game-root mutex name");
+        return false;
+    }
+
+    constexpr wchar_t hexDigits[] = L"0123456789abcdef";
+    std::wstring mutexName = L"Global\\SkyrimTogetherVR.Launch.";
+    mutexName.reserve(mutexName.size() + digest.size() * 2);
+    for (const auto byte : digest)
+    {
+        mutexName.push_back(hexDigits[byte >> 4]);
+        mutexName.push_back(hexDigits[byte & 0x0f]);
+    }
+
+    const auto mutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
+    if (!mutex)
+    {
+        spdlog::error("SkyrimTogetherVR launch guard could not create its same-game-root mutex (error {})", GetLastError());
+        return false;
+    }
+
+    if (GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        CloseHandle(mutex);
+        spdlog::error("SkyrimTogetherVR is already running for this game root; close that client before launching another one");
+        return false;
+    }
+
+    g_sameGameRootLaunchMutex = mutex;
+    return true;
+}
+
+bool SetLaunchIdentityEnvironment(const std::filesystem::path& acGamePath)
+{
+    wchar_t suppliedNonce[SkyrimTogetherVR::Handoff::kLaunchNonceHexLength + 1]{};
+    SetLastError(ERROR_SUCCESS);
+    const auto suppliedLength = GetEnvironmentVariableW(
+        kLaunchNonceEnvironmentName, suppliedNonce, static_cast<DWORD>(std::size(suppliedNonce)));
+    if (suppliedLength >= std::size(suppliedNonce))
+    {
+        spdlog::error("SkyrimTogetherVR launch identity rejected: STVR_LAUNCH_NONCE must be exactly 32 hexadecimal characters");
+        return false;
+    }
+
+    std::string launchNonce;
+    if (suppliedLength != 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND)
+    {
+        std::string supplied;
+        supplied.reserve(suppliedLength);
+        for (DWORD index = 0; index < suppliedLength; ++index)
+        {
+            if (suppliedNonce[index] > 0x7f)
+            {
+                spdlog::error("SkyrimTogetherVR launch identity rejected: STVR_LAUNCH_NONCE must be ASCII hexadecimal");
+                return false;
+            }
+            supplied.push_back(static_cast<char>(suppliedNonce[index]));
+        }
+
+        if (!SkyrimTogetherVR::Handoff::NormalizeLaunchNonce(supplied, launchNonce))
+        {
+            spdlog::error("SkyrimTogetherVR launch identity rejected: STVR_LAUNCH_NONCE must be exactly 32 hexadecimal characters");
+            return false;
+        }
+    }
+    else
+    {
+        std::array<std::uint8_t, 16> randomBytes{};
+        if (BCryptGenRandom(nullptr, randomBytes.data(), static_cast<ULONG>(randomBytes.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+        {
+            spdlog::error("SkyrimTogetherVR launch identity could not generate a 128-bit nonce");
+            return false;
+        }
+
+        constexpr char hexDigits[] = "0123456789abcdef";
+        launchNonce.reserve(SkyrimTogetherVR::Handoff::kLaunchNonceHexLength);
+        for (const auto byte : randomBytes)
+        {
+            launchNonce.push_back(hexDigits[byte >> 4]);
+            launchNonce.push_back(hexDigits[byte & 0x0f]);
+        }
+    }
+
+    const std::wstring wideNonce(launchNonce.begin(), launchNonce.end());
+    if (!SetEnvironmentVariableW(kLaunchNonceEnvironmentName, wideNonce.c_str()) ||
+        !SetEnvironmentVariableW(kGamePathEnvironmentName, acGamePath.c_str()))
+    {
+        spdlog::error("SkyrimTogetherVR launch identity could not update the child process environment (error {})", GetLastError());
+        return false;
+    }
+
+    spdlog::info("STVR launch identity: nonce={}, processId={}, gamePath={}", launchNonce, GetCurrentProcessId(), acGamePath.string());
+    return true;
+}
+
 bool IsExpectedGameExecutable(std::span<const uint8_t> aContents)
 {
     if (aContents.size() != CurrentTarget.exeDiskSz)
@@ -280,6 +449,15 @@ int StartUp(int argc, char** argv)
 
     if (!oobe::SelectInstall(askSelect))
         DIE_NOW(L"Failed to select game install.");
+
+    if (!AcquireSameGameRootLaunchGuard(*LC))
+        DIE_NOW(L"SkyrimTogetherVR is already running for this game root, or its launch guard could not be initialized.");
+
+    // Publish a stable per-launch identity before any companion process or PE
+    // mapping can inherit the environment. Mapped TLS/import initialization is
+    // part of LoadProgram below.
+    if (!SetLaunchIdentityEnvironment(LC->gamePath))
+        DIE_NOW(L"SkyrimTogetherVR launch identity is invalid. STVR_LAUNCH_NONCE must be exactly 32 hexadecimal characters.");
 
 #if TP_SKYRIM_VR
     const bool shouldLaunchCompanion = !g_disableCompanionPanel && (g_launchCompanionPanel || EnvRequestsCompanionPanel());

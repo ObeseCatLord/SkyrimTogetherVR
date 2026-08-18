@@ -701,19 +701,19 @@ def audit_handoff_files(
     results: list[tuple[str, bool, str]],
     handoff_dir: pathlib.Path,
 ) -> dict[str, dict[str, str]]:
-    add_check(results, "handoff directory", handoff_dir.exists(), str(handoff_dir))
+    add_check(results, "handoff directory", handoff_dir.exists(), "present" if handoff_dir.exists() else "missing")
     readouts = vr_handoff.read_readouts(handoff_dir)
 
     for name in sorted(required_handoff_files(args)):
         path = handoff_dir / vr_handoff.READOUT_FILES[name]
-        add_check(results, f"{name} file", path.exists(), str(path))
+        add_check(results, f"{name} file", path.exists(), "present" if path.exists() else "missing")
 
     return readouts
 
 
 def audit_avatar_file(results: list[tuple[str, bool, str]], handoff_dir: pathlib.Path) -> None:
     path = handoff_dir / vr_handoff.READOUT_FILES["avatar"]
-    add_check(results, "avatar file", path.exists(), str(path))
+    add_check(results, "avatar file", path.exists(), "present" if path.exists() else "missing")
 
 
 def audit_default_runtime(
@@ -1267,12 +1267,27 @@ def run_audit(args: argparse.Namespace) -> int:
     log_path = resolve_log_path(args)
 
     print("SkyrimTogetherVR runtime handoff audit does not launch Skyrim or mutate the game install.")
-    print(f"Game path: {args.game_path.expanduser().resolve()}")
-    print(f"Handoff directory: {handoff_dir}")
-    print(f"Client log: {log_path}")
+    print("Game path: <requested>")
+    print("Handoff directory: <derived>")
+    print("Client log: <configured>")
 
     audit_log(results, log_path, skip_log=args.skip_log)
     readouts = audit_handoff_files(args, results, handoff_dir)
+    live_identity_required = args.require_connected or getattr(args, "gameplay", False)
+    identity = vr_handoff.evaluate_runtime_identity(
+        readouts,
+        handoff_dir,
+        args.game_path.expanduser().resolve(),
+        max_age_seconds=getattr(args, "max_readout_age_seconds", 30.0),
+        run_start_marker=getattr(args, "run_start_marker", None),
+    )
+    if live_identity_required:
+        add_check(
+            results,
+            "runtime identity",
+            bool(identity["ok"]),
+            "trusted" if identity["ok"] else "; ".join(map(str, identity["reasons"])),
+        )
     if args.avatar_sync:
         audit_avatar_file(results, handoff_dir)
     audit_default_runtime(args, results, readouts)
@@ -1542,6 +1557,19 @@ def command_self_test(_: argparse.Namespace) -> int:
             "animationSnapshotSubmittedCount=1\nanimationSnapshotAppliedCount=1\n"
             "animationSnapshotRejectedCount=0\nsameSpaceCount=2\n",
         )
+        identity_suffixes = {
+            "status": (
+                "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\nserverInstanceNonce=99\n"
+                f"gamePath={game}\n"
+            ),
+            "lifecycle": f"launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={game}\n",
+            "playercell": f"launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={game}\n",
+            "avatar": f"launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={game}\n",
+        }
+        for name, suffix in identity_suffixes.items():
+            path = handoff / vr_handoff.READOUT_FILES[name]
+            path.write_text(path.read_text(encoding="utf-8") + suffix, encoding="utf-8")
 
         args = argparse.Namespace(
             game_path=game,
@@ -1566,6 +1594,9 @@ def command_self_test(_: argparse.Namespace) -> int:
             require_higgs_relay=True,
             require_saveload_observer=True,
             avatar_sync=True,
+            gameplay=False,
+            max_readout_age_seconds=30.0,
+            run_start_marker=None,
         )
         broad_result = run_audit(args)
         if broad_result:
@@ -1647,6 +1678,8 @@ def main() -> int:
     parser.add_argument("--require-higgs-relay", action="store_true", help="require HIGGS relay evidence")
     parser.add_argument("--require-saveload-observer", action="store_true", help="require save/load observer evidence")
     parser.add_argument("--require-gameplay-relays", action="store_true", help="require all staged gameplay relay evidence")
+    parser.add_argument("--max-readout-age-seconds", type=float, default=30.0, help="maximum age for live identity readouts (default: 30)")
+    parser.add_argument("--run-start-marker", type=pathlib.Path, help="optional marker file that live readouts must not predate")
     parser.add_argument("--avatar-sync", action="store_true", help="require explicit avatar-sync runtime handoff data")
     parser.add_argument("--gameplay", action="store_true", help="require full gameplay runtime handoff data")
     parser.add_argument("--self-test", action="store_true", help="run a temp-directory runtime audit fixture")

@@ -625,129 +625,117 @@ void VRPoseService::PruneRemotePoses(double aDelta) noexcept
 
 void VRPoseService::WritePoseStatusFile()
 {
-    std::error_code ec;
-    std::filesystem::create_directories(m_handoffDir, ec);
+    const auto published = SkyrimTogetherVR::Handoff::WriteFileAtomically(
+        m_poseStatusPath,
+        [this](std::ofstream& file)
+        {
+            file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
+            file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
+            file << "localPoseAvailable=" << (m_hasSnapshot ? "1" : "0") << "\n";
+            file << "localSequence=" << m_sequence << "\n";
+            file << "remotePoseCount=" << m_remotePoses.size() << "\n";
+            file << "local.body.formatVersion=" << m_localBodyPose.FormatVersion << "\n";
+            file << "local.body.valid=" << (m_localBodyPose.Valid ? "1" : "0") << "\n";
+            file << "local.body.captureSequence=" << m_localBodyPose.CaptureSequence << "\n";
+            file << "local.body.rootGeneration=" << m_localBodyPose.RootGeneration << "\n";
+            file << "local.body.joints.formatVersion=" << m_localBodyPose.Joints.FormatVersion << "\n";
+            file << "local.body.joints.valid=" << (m_localBodyPose.Joints.Valid ? "1" : "0") << "\n";
+            file << "local.body.joints.captureSequence=" << m_localBodyPose.Joints.CaptureSequence << "\n";
+            file << "local.body.joints.rootGeneration=" << m_localBodyPose.Joints.RootGeneration << "\n";
+            file << "local.body.joints.nodeMask=" << m_localBodyPose.Joints.NodeMask << "\n";
+            WriteNode(file, "local.body.pelvis", m_localBodyPose.Pelvis);
+            WriteNode(file, "local.body.spine0", m_localBodyPose.Spine0);
+            WriteNode(file, "local.body.spine1", m_localBodyPose.Spine1);
+            WriteNode(file, "local.body.spine2", m_localBodyPose.Spine2);
+            WriteNode(file, "local.body.neck", m_localBodyPose.Neck);
+            WriteNode(file, "local.body.leftClavicle", m_localBodyPose.LeftClavicle);
+            WriteNode(file, "local.body.leftUpperArm", m_localBodyPose.LeftUpperArm);
+            WriteNode(file, "local.body.leftForearm", m_localBodyPose.LeftForearm);
+            WriteNode(file, "local.body.rightClavicle", m_localBodyPose.RightClavicle);
+            WriteNode(file, "local.body.rightUpperArm", m_localBodyPose.RightUpperArm);
+            WriteNode(file, "local.body.rightForearm", m_localBodyPose.RightForearm);
+            WriteNode(file, "local.body.leftThigh", m_localBodyPose.LeftThigh);
+            WriteNode(file, "local.body.leftCalf", m_localBodyPose.LeftCalf);
+            WriteNode(file, "local.body.leftFoot", m_localBodyPose.LeftFoot);
+            WriteNode(file, "local.body.rightThigh", m_localBodyPose.RightThigh);
+            WriteNode(file, "local.body.rightCalf", m_localBodyPose.RightCalf);
+            WriteNode(file, "local.body.rightFoot", m_localBodyPose.RightFoot);
+            WriteVrikData(file, "local.vrik", m_localVrik);
 
-    const auto tempPath = m_poseStatusPath.string() + ".tmp";
-    std::ofstream file(tempPath, std::ios::trunc);
-    if (!file)
-        return;
+            if (m_hasSnapshot)
+            {
+                WriteSnapshotNode(file, "local.hmd", m_lastSnapshot.Hmd);
+                WriteSnapshotNode(file, "local.leftHand", m_lastSnapshot.LeftHand);
+                WriteSnapshotNode(file, "local.rightHand", m_lastSnapshot.RightHand);
+                WriteSnapshotNode(file, "local.spellOrigin", m_lastSnapshot.SpellOrigin);
+                WriteSnapshotNode(file, "local.spellDestination", m_lastSnapshot.SpellDestination);
+                WriteSnapshotNode(file, "local.arrowOrigin", m_lastSnapshot.ArrowOrigin);
+                WriteSnapshotNode(file, "local.arrowDestination", m_lastSnapshot.ArrowDestination);
+                WriteSnapshotNode(file, "local.bowAim", m_lastSnapshot.BowAim);
+                WriteSnapshotNode(file, "local.bowRotation", m_lastSnapshot.BowRotation);
+                WriteSnapshotNode(file, "local.leftWeaponOffset", m_lastSnapshot.LeftWeaponOffset);
+                WriteSnapshotNode(file, "local.rightWeaponOffset", m_lastSnapshot.RightWeaponOffset);
+                WriteSnapshotNode(file, "local.primaryMagicOffset", m_lastSnapshot.PrimaryMagicOffset);
+                WriteSnapshotNode(file, "local.primaryMagicAim", m_lastSnapshot.PrimaryMagicAim);
+                WriteSnapshotNode(file, "local.secondaryMagicOffset", m_lastSnapshot.SecondaryMagicOffset);
+                WriteSnapshotNode(file, "local.secondaryMagicAim", m_lastSnapshot.SecondaryMagicAim);
+            }
 
-    file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
-    file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
-    file << "localPoseAvailable=" << (m_hasSnapshot ? "1" : "0") << "\n";
-    file << "localSequence=" << m_sequence << "\n";
-    file << "remotePoseCount=" << m_remotePoses.size() << "\n";
-    file << "local.body.formatVersion=" << m_localBodyPose.FormatVersion << "\n";
-    file << "local.body.valid=" << (m_localBodyPose.Valid ? "1" : "0") << "\n";
-    file << "local.body.captureSequence=" << m_localBodyPose.CaptureSequence << "\n";
-    file << "local.body.rootGeneration=" << m_localBodyPose.RootGeneration << "\n";
-    file << "local.body.joints.formatVersion=" << m_localBodyPose.Joints.FormatVersion << "\n";
-    file << "local.body.joints.valid=" << (m_localBodyPose.Joints.Valid ? "1" : "0") << "\n";
-    file << "local.body.joints.captureSequence=" << m_localBodyPose.Joints.CaptureSequence << "\n";
-    file << "local.body.joints.rootGeneration=" << m_localBodyPose.Joints.RootGeneration << "\n";
-    file << "local.body.joints.nodeMask=" << m_localBodyPose.Joints.NodeMask << "\n";
-    WriteNode(file, "local.body.pelvis", m_localBodyPose.Pelvis);
-    WriteNode(file, "local.body.spine0", m_localBodyPose.Spine0);
-    WriteNode(file, "local.body.spine1", m_localBodyPose.Spine1);
-    WriteNode(file, "local.body.spine2", m_localBodyPose.Spine2);
-    WriteNode(file, "local.body.neck", m_localBodyPose.Neck);
-    WriteNode(file, "local.body.leftClavicle", m_localBodyPose.LeftClavicle);
-    WriteNode(file, "local.body.leftUpperArm", m_localBodyPose.LeftUpperArm);
-    WriteNode(file, "local.body.leftForearm", m_localBodyPose.LeftForearm);
-    WriteNode(file, "local.body.rightClavicle", m_localBodyPose.RightClavicle);
-    WriteNode(file, "local.body.rightUpperArm", m_localBodyPose.RightUpperArm);
-    WriteNode(file, "local.body.rightForearm", m_localBodyPose.RightForearm);
-    WriteNode(file, "local.body.leftThigh", m_localBodyPose.LeftThigh);
-    WriteNode(file, "local.body.leftCalf", m_localBodyPose.LeftCalf);
-    WriteNode(file, "local.body.leftFoot", m_localBodyPose.LeftFoot);
-    WriteNode(file, "local.body.rightThigh", m_localBodyPose.RightThigh);
-    WriteNode(file, "local.body.rightCalf", m_localBodyPose.RightCalf);
-    WriteNode(file, "local.body.rightFoot", m_localBodyPose.RightFoot);
-    WriteVrikData(file, "local.vrik", m_localVrik);
+            for (const auto& [playerId, pose] : m_remotePoses)
+            {
+                const auto ageIt = m_remotePoseAges.find(playerId);
+                const auto age = ageIt != m_remotePoseAges.end() ? ageIt->second : 0.0;
 
-    if (m_hasSnapshot)
-    {
-        WriteSnapshotNode(file, "local.hmd", m_lastSnapshot.Hmd);
-        WriteSnapshotNode(file, "local.leftHand", m_lastSnapshot.LeftHand);
-        WriteSnapshotNode(file, "local.rightHand", m_lastSnapshot.RightHand);
-        WriteSnapshotNode(file, "local.spellOrigin", m_lastSnapshot.SpellOrigin);
-        WriteSnapshotNode(file, "local.spellDestination", m_lastSnapshot.SpellDestination);
-        WriteSnapshotNode(file, "local.arrowOrigin", m_lastSnapshot.ArrowOrigin);
-        WriteSnapshotNode(file, "local.arrowDestination", m_lastSnapshot.ArrowDestination);
-        WriteSnapshotNode(file, "local.bowAim", m_lastSnapshot.BowAim);
-        WriteSnapshotNode(file, "local.bowRotation", m_lastSnapshot.BowRotation);
-        WriteSnapshotNode(file, "local.leftWeaponOffset", m_lastSnapshot.LeftWeaponOffset);
-        WriteSnapshotNode(file, "local.rightWeaponOffset", m_lastSnapshot.RightWeaponOffset);
-        WriteSnapshotNode(file, "local.primaryMagicOffset", m_lastSnapshot.PrimaryMagicOffset);
-        WriteSnapshotNode(file, "local.primaryMagicAim", m_lastSnapshot.PrimaryMagicAim);
-        WriteSnapshotNode(file, "local.secondaryMagicOffset", m_lastSnapshot.SecondaryMagicOffset);
-        WriteSnapshotNode(file, "local.secondaryMagicAim", m_lastSnapshot.SecondaryMagicAim);
-    }
+                file << "remote." << playerId << ".sequence=" << pose.Sequence << "\n";
+                file << "remote." << playerId << ".ageSeconds=" << age << "\n";
 
-    for (const auto& [playerId, pose] : m_remotePoses)
-    {
-        const auto ageIt = m_remotePoseAges.find(playerId);
-        const auto age = ageIt != m_remotePoseAges.end() ? ageIt->second : 0.0;
+                const auto prefix = std::string("remote.") + std::to_string(playerId);
+                WriteNode(file, (prefix + ".hmd").c_str(), pose.Hmd);
+                WriteNode(file, (prefix + ".leftHand").c_str(), pose.LeftHand);
+                WriteNode(file, (prefix + ".rightHand").c_str(), pose.RightHand);
+                WriteNode(file, (prefix + ".spellOrigin").c_str(), pose.SpellOrigin);
+                WriteNode(file, (prefix + ".spellDestination").c_str(), pose.SpellDestination);
+                WriteNode(file, (prefix + ".arrowOrigin").c_str(), pose.ArrowOrigin);
+                WriteNode(file, (prefix + ".arrowDestination").c_str(), pose.ArrowDestination);
+                WriteNode(file, (prefix + ".bowAim").c_str(), pose.BowAim);
+                WriteNode(file, (prefix + ".bowRotation").c_str(), pose.BowRotation);
+                WriteNode(file, (prefix + ".leftWeaponOffset").c_str(), pose.LeftWeaponOffset);
+                WriteNode(file, (prefix + ".rightWeaponOffset").c_str(), pose.RightWeaponOffset);
+                WriteNode(file, (prefix + ".primaryMagicOffset").c_str(), pose.PrimaryMagicOffset);
+                WriteNode(file, (prefix + ".primaryMagicAim").c_str(), pose.PrimaryMagicAim);
+                WriteNode(file, (prefix + ".secondaryMagicOffset").c_str(), pose.SecondaryMagicOffset);
+                WriteNode(file, (prefix + ".secondaryMagicAim").c_str(), pose.SecondaryMagicAim);
+                file << prefix << ".body.formatVersion=" << pose.Body.FormatVersion << "\n";
+                file << prefix << ".body.valid=" << (pose.Body.Valid ? "1" : "0") << "\n";
+                file << prefix << ".body.captureSequence=" << pose.Body.CaptureSequence << "\n";
+                file << prefix << ".body.rootGeneration=" << pose.Body.RootGeneration << "\n";
+                file << prefix << ".body.joints.formatVersion=" << pose.Body.Joints.FormatVersion << "\n";
+                file << prefix << ".body.joints.valid=" << (pose.Body.Joints.Valid ? "1" : "0") << "\n";
+                file << prefix << ".body.joints.captureSequence=" << pose.Body.Joints.CaptureSequence << "\n";
+                file << prefix << ".body.joints.rootGeneration=" << pose.Body.Joints.RootGeneration << "\n";
+                file << prefix << ".body.joints.nodeMask=" << pose.Body.Joints.NodeMask << "\n";
+                WriteNode(file, (prefix + ".body.pelvis").c_str(), pose.Body.Pelvis);
+                WriteNode(file, (prefix + ".body.spine0").c_str(), pose.Body.Spine0);
+                WriteNode(file, (prefix + ".body.spine1").c_str(), pose.Body.Spine1);
+                WriteNode(file, (prefix + ".body.spine2").c_str(), pose.Body.Spine2);
+                WriteNode(file, (prefix + ".body.neck").c_str(), pose.Body.Neck);
+                WriteNode(file, (prefix + ".body.leftClavicle").c_str(), pose.Body.LeftClavicle);
+                WriteNode(file, (prefix + ".body.leftUpperArm").c_str(), pose.Body.LeftUpperArm);
+                WriteNode(file, (prefix + ".body.leftForearm").c_str(), pose.Body.LeftForearm);
+                WriteNode(file, (prefix + ".body.rightClavicle").c_str(), pose.Body.RightClavicle);
+                WriteNode(file, (prefix + ".body.rightUpperArm").c_str(), pose.Body.RightUpperArm);
+                WriteNode(file, (prefix + ".body.rightForearm").c_str(), pose.Body.RightForearm);
+                WriteNode(file, (prefix + ".body.leftThigh").c_str(), pose.Body.LeftThigh);
+                WriteNode(file, (prefix + ".body.leftCalf").c_str(), pose.Body.LeftCalf);
+                WriteNode(file, (prefix + ".body.leftFoot").c_str(), pose.Body.LeftFoot);
+                WriteNode(file, (prefix + ".body.rightThigh").c_str(), pose.Body.RightThigh);
+                WriteNode(file, (prefix + ".body.rightCalf").c_str(), pose.Body.RightCalf);
+                WriteNode(file, (prefix + ".body.rightFoot").c_str(), pose.Body.RightFoot);
+                WriteVrikData(file, (prefix + ".vrik").c_str(), pose.Vrik);
+            }
+        });
 
-        file << "remote." << playerId << ".sequence=" << pose.Sequence << "\n";
-        file << "remote." << playerId << ".ageSeconds=" << age << "\n";
-
-        const auto prefix = std::string("remote.") + std::to_string(playerId);
-        WriteNode(file, (prefix + ".hmd").c_str(), pose.Hmd);
-        WriteNode(file, (prefix + ".leftHand").c_str(), pose.LeftHand);
-        WriteNode(file, (prefix + ".rightHand").c_str(), pose.RightHand);
-        WriteNode(file, (prefix + ".spellOrigin").c_str(), pose.SpellOrigin);
-        WriteNode(file, (prefix + ".spellDestination").c_str(), pose.SpellDestination);
-        WriteNode(file, (prefix + ".arrowOrigin").c_str(), pose.ArrowOrigin);
-        WriteNode(file, (prefix + ".arrowDestination").c_str(), pose.ArrowDestination);
-        WriteNode(file, (prefix + ".bowAim").c_str(), pose.BowAim);
-        WriteNode(file, (prefix + ".bowRotation").c_str(), pose.BowRotation);
-        WriteNode(file, (prefix + ".leftWeaponOffset").c_str(), pose.LeftWeaponOffset);
-        WriteNode(file, (prefix + ".rightWeaponOffset").c_str(), pose.RightWeaponOffset);
-        WriteNode(file, (prefix + ".primaryMagicOffset").c_str(), pose.PrimaryMagicOffset);
-        WriteNode(file, (prefix + ".primaryMagicAim").c_str(), pose.PrimaryMagicAim);
-        WriteNode(file, (prefix + ".secondaryMagicOffset").c_str(), pose.SecondaryMagicOffset);
-        WriteNode(file, (prefix + ".secondaryMagicAim").c_str(), pose.SecondaryMagicAim);
-        file << prefix << ".body.formatVersion=" << pose.Body.FormatVersion << "\n";
-        file << prefix << ".body.valid=" << (pose.Body.Valid ? "1" : "0") << "\n";
-        file << prefix << ".body.captureSequence=" << pose.Body.CaptureSequence << "\n";
-        file << prefix << ".body.rootGeneration=" << pose.Body.RootGeneration << "\n";
-        file << prefix << ".body.joints.formatVersion=" << pose.Body.Joints.FormatVersion << "\n";
-        file << prefix << ".body.joints.valid=" << (pose.Body.Joints.Valid ? "1" : "0") << "\n";
-        file << prefix << ".body.joints.captureSequence=" << pose.Body.Joints.CaptureSequence << "\n";
-        file << prefix << ".body.joints.rootGeneration=" << pose.Body.Joints.RootGeneration << "\n";
-        file << prefix << ".body.joints.nodeMask=" << pose.Body.Joints.NodeMask << "\n";
-        WriteNode(file, (prefix + ".body.pelvis").c_str(), pose.Body.Pelvis);
-        WriteNode(file, (prefix + ".body.spine0").c_str(), pose.Body.Spine0);
-        WriteNode(file, (prefix + ".body.spine1").c_str(), pose.Body.Spine1);
-        WriteNode(file, (prefix + ".body.spine2").c_str(), pose.Body.Spine2);
-        WriteNode(file, (prefix + ".body.neck").c_str(), pose.Body.Neck);
-        WriteNode(file, (prefix + ".body.leftClavicle").c_str(), pose.Body.LeftClavicle);
-        WriteNode(file, (prefix + ".body.leftUpperArm").c_str(), pose.Body.LeftUpperArm);
-        WriteNode(file, (prefix + ".body.leftForearm").c_str(), pose.Body.LeftForearm);
-        WriteNode(file, (prefix + ".body.rightClavicle").c_str(), pose.Body.RightClavicle);
-        WriteNode(file, (prefix + ".body.rightUpperArm").c_str(), pose.Body.RightUpperArm);
-        WriteNode(file, (prefix + ".body.rightForearm").c_str(), pose.Body.RightForearm);
-        WriteNode(file, (prefix + ".body.leftThigh").c_str(), pose.Body.LeftThigh);
-        WriteNode(file, (prefix + ".body.leftCalf").c_str(), pose.Body.LeftCalf);
-        WriteNode(file, (prefix + ".body.leftFoot").c_str(), pose.Body.LeftFoot);
-        WriteNode(file, (prefix + ".body.rightThigh").c_str(), pose.Body.RightThigh);
-        WriteNode(file, (prefix + ".body.rightCalf").c_str(), pose.Body.RightCalf);
-        WriteNode(file, (prefix + ".body.rightFoot").c_str(), pose.Body.RightFoot);
-        WriteVrikData(file, (prefix + ".vrik").c_str(), pose.Vrik);
-    }
-
-    file.close();
-    std::filesystem::rename(tempPath, m_poseStatusPath, ec);
-    if (ec)
-    {
-        std::filesystem::remove(m_poseStatusPath, ec);
-        std::filesystem::rename(tempPath, m_poseStatusPath, ec);
-    }
-
-    if (!ec)
-        m_poseStatusDirty = false;
+    m_poseStatusDirty = !published;
 }
 
 void VRPoseService::LogSnapshot() const

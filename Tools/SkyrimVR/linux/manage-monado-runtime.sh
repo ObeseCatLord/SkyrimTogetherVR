@@ -210,6 +210,20 @@ print_status() {
   return 1
 }
 
+check_runtime() {
+  command -v ss >/dev/null 2>&1 || die "ss is not installed"
+  command -v timeout >/dev/null 2>&1 || die "timeout is not installed"
+  command -v python3 >/dev/null 2>&1 || die "python3 is not installed for the OpenXR readiness canary"
+  if runtime_ready; then
+    printf 'Runtime check: ready\n'
+    return 0
+  fi
+  if [ -S "$SOCKET" ]; then
+    die "Monado runtime listener or OpenXR canary is not ready at $SOCKET${OPENXR_CANARY_FAILURE:+: $OPENXR_CANARY_FAILURE}"
+  fi
+  die "Monado runtime listener is not ready at $SOCKET"
+}
+
 start_runtime() {
   local deadline
   command -v envision >/dev/null 2>&1 || die "envision is not installed"
@@ -263,11 +277,14 @@ case "$COMMAND" in
   status)
     print_status
     ;;
+  check)
+    check_runtime
+    ;;
   stop)
     stop_managed_runtime
     printf 'Managed Monado runtime stopped.\n'
     ;;
   *)
-    die "usage: $0 {start|restart|status|stop} [envision-profile-uuid]"
+    die "usage: $0 {start|restart|status|check|stop} [envision-profile-uuid]"
     ;;
 esac

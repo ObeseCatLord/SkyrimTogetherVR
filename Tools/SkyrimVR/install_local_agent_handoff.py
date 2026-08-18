@@ -30,6 +30,7 @@ LAUNCHERS = (
     "launch-skyrim-together-vr.sh",
     "launch-skyrim-vr-offline.sh",
     "stvr-xrizer-input-compat.sh",
+    "manage-monado-runtime.sh",
 )
 STATE_DIR_NAME = ".stvr-local-agent-handoff-state"
 STATE_FILE_NAME = "state.json"
@@ -1182,7 +1183,7 @@ def self_test() -> int:
         user_openvr_api.write_bytes(b"user-opencomposite-runtime")
         user_openvr_api.chmod(0o640)
         operations, counts = planned_operations(handoff_root, package)
-        assert counts == (4, 2, 3, 3, 4)
+        assert counts == (5, 2, 3, 4, 4)
         assert not (game_dir / "Data/gameplay.txt").exists(), "dry-run planning mutated game files"
         assert install_transaction(operations, game_dir, compatdata, "self-test")
         for name in LAUNCHERS:

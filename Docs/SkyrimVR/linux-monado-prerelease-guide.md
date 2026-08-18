@@ -176,12 +176,15 @@ STVR_OPENCOMPOSITE_RUNTIME="/path/to/opencomposite-runtime" \
 
 ## Launch and Connect
 
-Start Monado first and verify its socket:
+Start Monado first and run the listener plus OpenXR system canary:
 
 ```bash
-pgrep -af 'monado-service|envision'
-test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/monado_comp_ipc"
+./manage-monado-runtime.sh check
 ```
+
+The Together launcher runs this non-mutating check automatically when XRizer
+or OpenComposite is using Monado. A socket file by itself is not readiness
+proof.
 
 The public test endpoint is the default:
 

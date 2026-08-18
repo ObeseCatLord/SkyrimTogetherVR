@@ -50,6 +50,7 @@ REQUIRED_CHECK_IDS = (
     "higgs_relay",
     "saveload_observer",
     "avatar_sync_actor_targets",
+    "runtime_identity",
 )
 
 
@@ -74,6 +75,7 @@ MANIFEST_FLAG_REQUIRED_CHECKS = (
 )
 
 GAMEPLAY_BOOTSTRAP_CHECKS = (
+    ("runtime_identity", "fresh same-process runtime identity"),
     ("connection_status", "connection status"),
     ("live_lifecycle", "live lifecycle readiness"),
     ("live_player_cell", "live player-cell readiness"),
@@ -163,6 +165,77 @@ def require_manifest_requested_checks(
             require_check_pass(checks_by_id, check_id, f"manifest gameplay-bootstrap {label}", failures)
 
 
+def audit_archived_runtime_identity(
+    zf: zipfile.ZipFile,
+    names: set[str],
+    manifest: dict[str, object],
+    runtime_identity: dict[str, object],
+    expected_network_version: str | None,
+    failures: list[str],
+) -> None:
+    """Revalidate archived identity fields and collection-time freshness metadata."""
+    handoff_names = {
+        name: f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES[name]}"
+        for name in collect_runtime_evidence.vr_handoff.RUNTIME_IDENTITY_READOUTS
+    }
+    missing = [archive_name for archive_name in handoff_names.values() if archive_name not in names]
+    if missing:
+        failures.append("identity readout missing from archive")
+        return
+    game_path_value = manifest.get("gamePath")
+    if not isinstance(game_path_value, str) or not game_path_value:
+        failures.append("manifest gamePath is unavailable for archived identity validation")
+        return
+
+    readout_metadata = runtime_identity.get("readouts")
+    evaluated_at_ns = runtime_identity.get("evaluatedAtNs")
+    max_age_seconds = runtime_identity.get("maxReadoutAgeSeconds")
+    marker_mtime_ns = runtime_identity.get("runStartMarkerMtimeNs")
+    if not isinstance(readout_metadata, dict) or not isinstance(evaluated_at_ns, int) or not isinstance(max_age_seconds, (int, float)):
+        failures.append("runtime identity freshness metadata is incomplete")
+        return
+    archived_readouts = {
+        name: collect_runtime_evidence.vr_handoff.parse_key_value_bytes(zf.read(archive_name))
+        for name, archive_name in handoff_names.items()
+    }
+    evaluated = collect_runtime_evidence.vr_handoff.evaluate_runtime_identity(
+        archived_readouts,
+        pathlib.Path("."),
+        pathlib.Path(game_path_value),
+        max_age_seconds=float(max_age_seconds),
+        now_ns=evaluated_at_ns,
+        readout_metadata=readout_metadata,
+        expected_network_version=expected_network_version,
+    )
+    if not evaluated["ok"]:
+        failures.append("archived runtime identity fields are invalid: " + "; ".join(map(str, evaluated["reasons"])))
+
+    manifest_files = manifest.get("files")
+    if not isinstance(manifest_files, list):
+        failures.append("manifest files field is not a list for identity validation")
+        return
+    files_by_name = {
+        str(record.get("archiveName")): record
+        for record in manifest_files
+        if isinstance(record, dict)
+    }
+    oldest_allowed_ns = evaluated_at_ns - int(float(max_age_seconds) * 1_000_000_000)
+    for name, archive_name in handoff_names.items():
+        metadata = readout_metadata.get(name)
+        record = files_by_name.get(archive_name)
+        if not isinstance(metadata, dict) or not isinstance(record, dict):
+            failures.append(f"runtime identity metadata is missing for {name}")
+            continue
+        mtime_ns = metadata.get("mtimeNs")
+        if not isinstance(mtime_ns, int) or record.get("mtimeNs") != mtime_ns:
+            failures.append(f"runtime identity mtime does not match collected {name} readout")
+            continue
+        if mtime_ns < oldest_allowed_ns or mtime_ns > evaluated_at_ns + 1_000_000_000:
+            failures.append(f"collected {name} identity readout was not fresh")
+        if isinstance(marker_mtime_ns, int) and mtime_ns < marker_mtime_ns:
+            failures.append(f"collected {name} identity readout predates run-start marker")
+
+
 def audit_archive(
     path: pathlib.Path,
     *,
@@ -239,6 +312,8 @@ def audit_archive(
         if require_gameplay_bootstrap and not manifest_gameplay_bootstrap:
             failures.append("archive was not collected with --gameplay-bootstrap")
 
+        package_manifest_ok = False
+        expected_network_version: str | None = None
         if package_manifest:
             package_manifest_ok, package_manifest_detail = collect_runtime_evidence.validate_build_manifest_data(
                 package_manifest,
@@ -247,6 +322,10 @@ def audit_archive(
             )
             if not package_manifest_ok:
                 failures.append("package build manifest validation failed: " + package_manifest_detail)
+            else:
+                network_version = package_manifest.get("networkVersion")
+                if isinstance(network_version, str):
+                    expected_network_version = network_version
             embedded_package_manifest = manifest.get("packageBuildManifest")
             if isinstance(embedded_package_manifest, dict):
                 embedded_ok, embedded_detail = collect_runtime_evidence.validate_build_manifest_data(
@@ -256,8 +335,51 @@ def audit_archive(
                 )
                 if not embedded_ok:
                     failures.append("embedded package build manifest validation failed: " + embedded_detail)
+                archived_manifest_canonical = json.dumps(
+                    package_manifest,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                embedded_manifest_canonical = json.dumps(
+                    embedded_package_manifest,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                if embedded_manifest_canonical != archived_manifest_canonical:
+                    failures.append(
+                        "archived package build manifest does not exactly match manifest.json packageBuildManifest"
+                    )
             else:
                 failures.append("manifest.json packageBuildManifest field is not an object")
+
+        runtime_identity = manifest.get("runtimeIdentity")
+        runtime_trust = manifest.get("runtimeEvidenceTrust")
+        live_admission_requested = bool(manifest.get("liveAdmissionRequested"))
+        if not isinstance(runtime_identity, dict):
+            failures.append("manifest runtimeIdentity field is not an object")
+        elif runtime_identity.get("schema") != "skyrim_together_vr_runtime_identity_v1":
+            failures.append("unexpected runtime identity schema")
+        elif live_admission_requested:
+            if expected_network_version is None:
+                failures.append("validated package networkVersion is unavailable for archived identity validation")
+            audit_archived_runtime_identity(
+                zf,
+                names,
+                manifest,
+                runtime_identity,
+                expected_network_version,
+                failures,
+            )
+        if runtime_trust not in {"trusted", "untrusted"}:
+            failures.append("manifest runtimeEvidenceTrust is missing or invalid")
+        if live_admission_requested and runtime_trust != "trusted":
+            failures.append("live admission archive is not trusted")
+        elif not live_admission_requested and runtime_trust != "untrusted":
+            failures.append("generic or crash evidence archive must be untrusted for live admission")
+        elif runtime_trust == "untrusted":
+            warnings.append("archive is untrusted for live admission; retained for generic/crash diagnostics only")
 
         checks = checklist.get("checks", [])
         if not isinstance(checks, list):
@@ -304,6 +426,8 @@ def audit_archive(
             failures.append("manifest/runtime checklist summary is not present in both JSON records")
 
         require_manifest_requested_checks(manifest, checks_by_id, failures)
+        if live_admission_requested:
+            require_check_pass(checks_by_id, "runtime_identity", "manifest live runtime identity", failures)
 
         avatar_check = checks_by_id.get("avatar_sync_actor_targets", {})
         if require_avatar_sync and avatar_check.get("status") != collect_runtime_evidence.CHECK_PASS:
@@ -436,11 +560,18 @@ def command_self_test() -> int:
         def write(name: str, contents: str) -> None:
             (handoff / collect_runtime_evidence.vr_handoff.READOUT_FILES[name]).write_text(contents, encoding="utf-8")
 
-        write("status", "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n")
+        write(
+            "status",
+            "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\n"
+            "serverInstanceNonce=99\ngamePath={}\n".format(game),
+        )
         write(
             "lifecycle",
             "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
-            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
+            "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
         write(
             "pose",
@@ -514,7 +645,8 @@ def command_self_test() -> int:
             "lastCell.cell.serverBaseId=100\n"
             "lastCell.worldSpace.serverModId=1\n"
             "lastCell.worldSpace.serverBaseId=60\n"
-            "lastCell.currentCoords=4,-3\n",
+            "lastCell.currentCoords=4,-3\n"
+            "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
         write(
             "activation",
@@ -649,7 +781,7 @@ def command_self_test() -> int:
             "remotePlayer.7.avatarValidationReady=1\nremotePlayer.7.avatarValidationBlocker=ready\n"
             "remotePlayer.7.higgsAvatarValidationReady=1\nremotePlayer.7.higgsAvatarValidationBlocker=ready\n",
         )
-        write("avatar", "ready=1\nactorTargetsEnabled=1\nactorSkeletonWritesEnabled=0\nsameSpaceCount=1\nhmdCopiedCount=0\nleftHandCopiedCount=0\nrightHandCopiedCount=0\nvrikDetectedCount=1\nvrikInterfaceAvailableCount=1\ninvalidVrikCount=0\ninvalidTransformCount=0\ninvalidMovementCount=0\n")
+        write("avatar", "ready=1\nactorTargetsEnabled=1\nactorSkeletonWritesEnabled=0\nsameSpaceCount=1\nhmdCopiedCount=0\nleftHandCopiedCount=0\nrightHandCopiedCount=0\nvrikDetectedCount=1\nvrikInterfaceAvailableCount=1\ninvalidVrikCount=0\ninvalidTransformCount=0\ninvalidMovementCount=0\nlaunchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game))
         build_manifest = {
             "schema": collect_runtime_evidence.BUILD_MANIFEST_SCHEMA,
             "mode": "releasedbg",
@@ -664,6 +796,15 @@ def command_self_test() -> int:
             "packageRoot": str(game),
             "stagedGameFiles": True,
             "companionPanel": True,
+            "buildVersion": "fixture",
+            "networkVersion": "fixture",
+            "sourceRevision": "0" * 40,
+            "sourceProvenance": {
+                "revision": "0" * 40,
+                "sourceTreeSha256": "1" * 64,
+                "dirty": False,
+                "dirtyApproved": False,
+            },
             "generatedAtUtc": "2026-01-01T00:00:00.0000000Z",
         }
         (game / collect_runtime_evidence.BUILD_MANIFEST_NAME).write_text(

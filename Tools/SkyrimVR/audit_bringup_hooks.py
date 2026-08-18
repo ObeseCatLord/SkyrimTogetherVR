@@ -88,6 +88,66 @@ FORBIDDEN_VR_TARGET_OPTIONS = (
 )
 
 REQUIRED_TOKENS = {
+    "Code/immersive_launcher/Launcher.cpp": (
+        "AcquireSameGameRootLaunchGuard",
+        "Global\\\\SkyrimTogetherVR.Launch.",
+        "ERROR_ALREADY_EXISTS",
+        "SetLaunchIdentityEnvironment",
+        "STVR_LAUNCH_NONCE",
+        "BCryptGenRandom",
+        "STVR launch identity:",
+    ),
+    "Code/vr_common/VRHandoffPath.h": (
+        "NormalizeLaunchNonce",
+        "GetLaunchNonce",
+        "WriteLaunchIdentity",
+        "WriteFileAtomically",
+        "MoveFileExW",
+        "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH",
+        "file.flush()",
+        "file.close()",
+        "launchNonce=",
+        "processId=",
+        "gamePath=",
+    ),
+    "Code/client/Services/Generic/VRConnectionService.cpp": (
+        'key == "launchnonce"',
+        "command launchNonce does not match the current launch",
+        'file << "clientVersion=" << BUILD_COMMIT',
+        'file << "serverVersion=" << m_transport.GetAcceptedServerVersion()',
+        'file << "gameplayProtocolRevision="',
+        'file << "serverInstanceNonce="',
+        "Handoff::WriteLaunchIdentity(file)",
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/client/Services/Generic/VRLifecycleService.cpp": (
+        "Handoff::WriteLaunchIdentity(file)",
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/client/Services/Generic/PlayerService.cpp": (
+        "Handoff::WriteLaunchIdentity(file)",
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/client/Services/Generic/VRAvatarService.cpp": (
+        "Handoff::WriteLaunchIdentity(file)",
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/client/Services/Generic/VRPoseService.cpp": (
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/higgs_bridge/main.cpp": (
+        "Handoff::WriteFileAtomically",
+    ),
+    "Code/client/Services/TransportService.h": (
+        "GetAcceptedServerVersion",
+        "m_acceptedServerVersion",
+    ),
+    "Code/client/Services/Generic/TransportService.cpp": (
+        "acMessage.Version == BUILD_COMMIT",
+        "m_acceptedServerVersion = acMessage.Version;",
+        "m_acceptedServerVersion.clear();",
+        "clientVersion={}, serverVersion={}",
+    ),
     "Code/client/xmake.lua": (
         'add_defines("TP_SKYRIM_VR=1")',
         'add_defines("TP_SKYRIM_VR_ENABLE_BRINGUP_HOOKS=1")',
@@ -283,6 +343,12 @@ FORBIDDEN_TOKENS = {
         "Fader Menu",
         "fader_menu",
     ),
+    "Code/client/Services/Generic/VRPoseService.cpp": (
+        "std::filesystem::remove(m_poseStatusPath",
+    ),
+    "Code/higgs_bridge/main.cpp": (
+        "std::filesystem::remove(path",
+    ),
 }
 
 
@@ -378,6 +444,32 @@ def audit_vr_target_configs(root: pathlib.Path) -> list[str]:
     avatar_config = configs.get("SkyrimTogetherVRClientAvatarSync", {})
     if avatar_config.get("remote_avatar_actor_targets") and not avatar_config.get("remote_avatar_sync"):
         failures.append("Code/client/xmake.lua: avatar actor targets require remote_avatar_sync=true")
+
+    return failures
+
+
+def audit_same_game_root_launch_guard(root: pathlib.Path) -> list[str]:
+    path = root / "Code" / "immersive_launcher" / "Launcher.cpp"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    guard_start = text.find("bool AcquireSameGameRootLaunchGuard(const LaunchContext& acContext)")
+    guard_end = text.find("\nbool SetLaunchIdentityEnvironment", guard_start)
+    guard = text[guard_start:guard_end] if guard_start >= 0 and guard_end >= 0 else ""
+    failures: list[str] = []
+
+    for token in (
+        "const auto canonicalGamePath = CanonicalizeLaunchPath(acContext.gamePath);",
+        "if (canonicalGamePath.empty())",
+        "auto identity = canonicalGamePath.wstring();",
+        "std::towlower(character)",
+        "BCRYPT_SHA256_ALGORITHM",
+        "BCryptHashData",
+    ):
+        if token not in guard:
+            failures.append(f"Code/immersive_launcher/Launcher.cpp: same-game-root launch guard missing `{token}`")
+
+    for token in ("canonicalExePath", "CanonicalizeLaunchPath(acContext.exePath)", "acContext.exePath"):
+        if token in guard:
+            failures.append(f"Code/immersive_launcher/Launcher.cpp: same-game-root launch guard must not use `{token}`")
 
     return failures
 
@@ -586,6 +678,8 @@ def main():
     failures = []
     structural_failures = audit_vr_target_configs(root)
     failures.extend(structural_failures)
+    launch_guard_failures = audit_same_game_root_launch_guard(root)
+    failures.extend(launch_guard_failures)
     observer_failures = audit_vr_update_owner(root)
     failures.extend(observer_failures)
     vm_address_failures = audit_vr_owner_addresses(root)
@@ -609,6 +703,7 @@ def main():
 
     print(f"Audited bring-up files: {len(REQUIRED_TOKENS)}")
     print(f"VR target config failures: {len(structural_failures)}")
+    print(f"Same-game-root launch guard failures: {len(launch_guard_failures)}")
     print(f"VR update-owner failures: {len(observer_failures)}")
     print(f"VR owner address failures: {len(vm_address_failures)}")
     print(f"CommonLib ABI contract failures: {len(commonlib_abi_failures)}")

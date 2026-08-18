@@ -10,6 +10,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from unittest import mock
@@ -34,6 +35,31 @@ ARCHIVE_AUDIT = load_module("stvr_audit_runtime_evidence_zip", TOOLS / "audit_ru
 
 
 class RuntimeEvidenceScopeTests(unittest.TestCase):
+    @staticmethod
+    def package_manifest(*, gameplay: bool = False) -> dict[str, object]:
+        return {
+            "schema": COLLECT.BUILD_MANIFEST_SCHEMA,
+            "mode": "releasedbg",
+            "platform": "windows",
+            "arch": "x64",
+            "avatarSync": False,
+            "gameplay": gameplay,
+            "packageFlavor": "gameplay" if gameplay else "default",
+            "targets": list(COLLECT.GAMEPLAY_EXPECTED_MANIFEST_TARGETS if gameplay else COLLECT.DEFAULT_EXPECTED_MANIFEST_TARGETS),
+            "copiedArtifacts": list(COLLECT.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS if gameplay else COLLECT.DEFAULT_EXPECTED_RUNTIME_ARTIFACTS),
+            "stagedGameFiles": True,
+            "companionPanel": True,
+            "buildVersion": "fixture",
+            "networkVersion": "fixture",
+            "sourceRevision": "0" * 40,
+            "sourceProvenance": {
+                "revision": "0" * 40,
+                "sourceTreeSha256": "1" * 64,
+                "dirty": False,
+                "dirtyApproved": False,
+            },
+        }
+
     def test_collector_gameplay_bootstrap_propagates_only_local_requirements(self) -> None:
         with mock.patch.object(COLLECT, "collect", return_value=pathlib.Path("fixture.zip")) as collect:
             with mock.patch.object(sys, "argv", ["collect_runtime_evidence.py", "--gameplay-bootstrap"]):
@@ -92,19 +118,8 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         self.assertTrue(COLLECT.local_avatar_bootstrap_detail(avatar)[0])
 
     def test_collector_gameplay_identity_rejects_non_gameplay_flavor(self) -> None:
-        manifest = {
-            "schema": COLLECT.BUILD_MANIFEST_SCHEMA,
-            "mode": "releasedbg",
-            "platform": "windows",
-            "arch": "x64",
-            "avatarSync": False,
-            "gameplay": True,
-            "packageFlavor": "avatar-sync",
-            "targets": list(COLLECT.GAMEPLAY_EXPECTED_MANIFEST_TARGETS),
-            "copiedArtifacts": list(COLLECT.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS),
-            "stagedGameFiles": True,
-            "companionPanel": True,
-        }
+        manifest = self.package_manifest(gameplay=True)
+        manifest["packageFlavor"] = "avatar-sync"
         ok, detail = COLLECT.validate_build_manifest_data(manifest, avatar_sync=False, gameplay=True)
         self.assertFalse(ok)
         self.assertIn("packageFlavor='avatar-sync' expected='gameplay'", detail)
@@ -126,6 +141,79 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         self.assertFalse(kwargs["require_movement_relay"])
         self.assertFalse(kwargs["require_higgs_relay"])
 
+    def test_generic_and_crash_only_collections_are_untrusted(self) -> None:
+        for crash_evidence in (False, True):
+            with self.subTest(crash_evidence=crash_evidence), tempfile.TemporaryDirectory(prefix="stvr-untrusted-evidence-") as temp:
+                root = pathlib.Path(temp)
+                game = root / "SkyrimVR"
+                handoff = game / "Data" / "SkyrimTogetherReborn"
+                handoff.mkdir(parents=True)
+                (game / COLLECT.BUILD_MANIFEST_NAME).write_text(
+                    json.dumps(self.package_manifest()), encoding="utf-8"
+                )
+                args = COLLECT.build_collection_args(
+                    game_path=game,
+                    handoff_dir=handoff,
+                    out=root / "evidence.zip",
+                    crash_evidence=crash_evidence,
+                    no_audit=True,
+                )
+                trusted_identity = {"schema": "skyrim_together_vr_runtime_identity_v1", "ok": True, "reasons": []}
+                with mock.patch.object(COLLECT.vr_handoff, "evaluate_runtime_identity", return_value=trusted_identity):
+                    archive = COLLECT.collect(args)
+                with zipfile.ZipFile(archive) as zf:
+                    manifest = json.loads(zf.read("manifest.json"))
+                self.assertFalse(manifest["liveAdmissionRequested"])
+                self.assertEqual(manifest["runtimeEvidenceTrust"], "untrusted")
+
+    def test_failed_live_admission_returns_nonzero_and_preserves_archive(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stvr-live-admission-cli-") as temp:
+            archive = pathlib.Path(temp) / "failed.zip"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr(
+                    "manifest.json",
+                    json.dumps({"liveAdmissionRequested": True, "runtimeEvidenceTrust": "untrusted"}),
+                )
+            with mock.patch.object(COLLECT, "collect", return_value=archive):
+                with mock.patch.object(sys, "argv", ["collect_runtime_evidence.py", "--require-connected"]):
+                    self.assertEqual(COLLECT.main(), 1)
+            self.assertTrue(archive.is_file())
+
+    def test_offline_identity_audit_rejects_package_network_version_mismatch(self) -> None:
+        now_ns = time.time_ns()
+        identity_readouts = {
+            "status": (
+                "online=1\nlaunchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=14\n"
+                "serverInstanceNonce=1\nsessionId=1\nconnectionGeneration=1\ngamePath=/fixture\n"
+            ),
+            "lifecycle": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
+            "playercell": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
+            "avatar": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
+        }
+        with tempfile.TemporaryDirectory(prefix="stvr-offline-network-version-") as temp:
+            archive = pathlib.Path(temp) / "evidence.zip"
+            with zipfile.ZipFile(archive, "w") as zf:
+                for name, contents in identity_readouts.items():
+                    zf.writestr(f"handoff/{COLLECT.vr_handoff.READOUT_FILES[name]}", contents)
+                failures: list[str] = []
+                ARCHIVE_AUDIT.audit_archived_runtime_identity(
+                    zf,
+                    set(zf.namelist()),
+                    {"gamePath": "/fixture", "files": []},
+                    {
+                        "maxReadoutAgeSeconds": 30,
+                        "evaluatedAtNs": now_ns,
+                        "readouts": {
+                            name: {"mtimeNs": now_ns, "present": True}
+                            for name in COLLECT.vr_handoff.RUNTIME_IDENTITY_READOUTS
+                        },
+                    },
+                    "fixture",
+                    failures,
+                )
+        self.assertIn("status clientVersion does not match package networkVersion", "\n".join(failures))
+
     def test_sparse_one_client_gameplay_bootstrap_collects_and_audits(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stvr-sparse-bootstrap-") as temp:
             root = pathlib.Path(temp)
@@ -146,14 +234,30 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 "copiedArtifacts": list(COLLECT.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS),
                 "stagedGameFiles": True,
                 "companionPanel": True,
+                "buildVersion": "fixture",
+                "networkVersion": "fixture",
+                "sourceRevision": "0" * 40,
+                "sourceProvenance": {
+                    "revision": "0" * 40,
+                    "sourceTreeSha256": "1" * 64,
+                    "dirty": False,
+                    "dirtyApproved": False,
+                },
             }
             (game / COLLECT.BUILD_MANIFEST_NAME).write_text(json.dumps(package_manifest), encoding="utf-8")
 
             readouts = {
-                "status": "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n",
+                "status": (
+                    "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
+                    "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\n"
+                    "serverInstanceNonce=99\ngamePath={}\n".format(game)
+                ),
                 "lifecycle": (
                     "state=ready\nready=1\nepoch=3\nownerThreadId=1\nstableTickCount=4\n"
                     "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n"
+                    "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                    "gamePath={}\n".format(game)
                 ),
                 "pose": (
                     "localPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\n"
@@ -164,6 +268,8 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                     "actorTargetsEnabled=1\nanimationGraphEnabled=1\nlocalAnimationGraphReady=1\n"
                     "localSnapshotReady=1\nlocalServerAssigned=1\nactorSkeletonWritesEnabled=0\n"
                     "cleanupRequired=0\nvisualPolicy=player_template_fallback\nlifecycleEpoch=3\nlocalServerId=7\n"
+                    "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                    "gamePath={}\n".format(game)
                 ),
                 "playercell": (
                     "ready=1\nonline=1\nlocalPlayerId=4\nsessionId=123\nconnectionGeneration=1\n"
@@ -176,6 +282,8 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                     "lastCell.valid=1\nlastCell.exterior=1\nlastCell.connectionGeneration=1\n"
                     "lastCell.currentCoords=0,0\nlastCell.cell.serverModId=1\nlastCell.cell.serverBaseId=100\n"
                     "lastCell.worldSpace.serverModId=1\nlastCell.worldSpace.serverBaseId=60\n"
+                    "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
+                    "gamePath={}\n".format(game)
                 ),
                 "higgs": "bridge.loaded=1\nbridge.sequence=4\nhiggs.detected=1\nhiggs.interfaceAvailable=1\n",
                 # Present full-lane artifacts remain collectible but are not required to pass.
@@ -195,7 +303,16 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 require_higgs=True,
                 gameplay_bootstrap=True,
             )
-            archive = COLLECT.collect(args)
+            original_capture = COLLECT.vr_handoff.capture_readout_snapshots
+
+            def capture_then_mutate(directory: pathlib.Path, names: tuple[str, ...]):
+                snapshots = original_capture(directory, names)
+                (handoff / COLLECT.vr_handoff.READOUT_FILES["pose"]).write_text("localPoseAvailable=0\n", encoding="utf-8")
+                (handoff / COLLECT.vr_handoff.READOUT_FILES["higgs"]).write_text("bridge.loaded=0\n", encoding="utf-8")
+                return snapshots
+
+            with mock.patch.object(COLLECT.vr_handoff, "capture_readout_snapshots", side_effect=capture_then_mutate):
+                archive = COLLECT.collect(args)
 
             with zipfile.ZipFile(archive) as zf:
                 manifest = json.loads(zf.read("manifest.json"))
@@ -219,6 +336,8 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                     self.assertFalse(files[archive_name]["exists"])
                     self.assertFalse(files[archive_name]["required"])
                 self.assertNotIn(f"logs/{COLLECT.GAMEPLAY_BRIDGE_LOG_NAME}", zf.namelist())
+                self.assertIn("localPoseAvailable=1", zf.read(f"handoff/{COLLECT.vr_handoff.READOUT_FILES['pose']}").decode("utf-8"))
+                self.assertIn("bridge.loaded=1", zf.read(f"handoff/{COLLECT.vr_handoff.READOUT_FILES['higgs']}").decode("utf-8"))
                 bridge_record = files[f"logs/{COLLECT.GAMEPLAY_BRIDGE_LOG_NAME}"]
                 self.assertFalse(bridge_record["exists"])
                 self.assertFalse(bridge_record["required"])
@@ -262,6 +381,15 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 "copiedArtifacts": list(COLLECT.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS),
                 "stagedGameFiles": True,
                 "companionPanel": True,
+                "buildVersion": "fixture",
+                "networkVersion": "fixture",
+                "sourceRevision": "0" * 40,
+                "sourceProvenance": {
+                    "revision": "0" * 40,
+                    "sourceTreeSha256": "1" * 64,
+                    "dirty": False,
+                    "dirtyApproved": False,
+                },
             }
             check_ids = set(ARCHIVE_AUDIT.REQUIRED_CHECK_IDS)
             check_ids.update(check_id for check_id, _ in ARCHIVE_AUDIT.GAMEPLAY_BOOTSTRAP_CHECKS)
@@ -314,6 +442,88 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 )
             self.assertEqual(result, 1)
             self.assertIn("packageFlavor='avatar-sync' expected='gameplay'", output.getvalue())
+
+    def test_archive_rejects_individually_valid_package_manifest_tamper(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stvr-package-manifest-tamper-") as temp:
+            archive = pathlib.Path(temp) / "tampered-package-manifest.zip"
+            package_manifest = self.package_manifest(gameplay=True)
+            embedded_package_manifest = json.loads(json.dumps(package_manifest))
+            embedded_package_manifest["sourceRevision"] = "2" * 40
+            embedded_package_manifest["sourceProvenance"]["revision"] = "2" * 40
+            self.assertTrue(COLLECT.validate_build_manifest_data(package_manifest, avatar_sync=False, gameplay=True)[0])
+            self.assertTrue(
+                COLLECT.validate_build_manifest_data(
+                    embedded_package_manifest,
+                    avatar_sync=False,
+                    gameplay=True,
+                )[0]
+            )
+
+            checks = [
+                {"id": check_id, "status": COLLECT.CHECK_PASS, "detail": "fixture"}
+                for check_id in ARCHIVE_AUDIT.REQUIRED_CHECK_IDS
+            ]
+            checklist = {
+                "schema": "skyrim_together_vr_runtime_checklist_v1",
+                "summary": {
+                    COLLECT.CHECK_PASS: len(checks),
+                    COLLECT.CHECK_FAIL: 0,
+                    COLLECT.CHECK_NOT_REQUIRED: 0,
+                },
+                "checks": checks,
+            }
+            manifest = {
+                "schema": "skyrim_together_vr_runtime_evidence_v1",
+                "runtimeAuditExitCode": 0,
+                "missingRequired": [],
+                "avatarSyncAudit": False,
+                "gameplayAudit": True,
+                "gameplayBootstrapAudit": False,
+                "packageBuildManifest": embedded_package_manifest,
+                "runtimeChecklist": checklist["summary"],
+                "runtimeIdentity": {
+                    "schema": "skyrim_together_vr_runtime_identity_v1",
+                    "ok": False,
+                    "reasons": ["not requested"],
+                },
+                "runtimeEvidenceTrust": "untrusted",
+                "liveAdmissionRequested": False,
+                "files": [],
+            }
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("manifest.json", json.dumps(manifest))
+                zf.writestr(f"package/{COLLECT.BUILD_MANIFEST_NAME}", json.dumps(package_manifest))
+                zf.writestr("runtime_checklist.json", json.dumps(checklist))
+                zf.writestr("runtime_checklist.txt", "fixture\n")
+                zf.writestr("runtime_audit.txt", "fixture\n")
+                zf.writestr("logs/tp_client.log", "fixture\n")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = ARCHIVE_AUDIT.audit_archive(
+                    archive,
+                    require_avatar_sync=False,
+                    require_gameplay=False,
+                    require_remote_player=False,
+                    require_weapon_pose=False,
+                    require_magic_pose=False,
+                    require_projectile_pose=False,
+                    require_movement_relay=False,
+                    require_equipment_relay=False,
+                    require_activation_relay=False,
+                    require_magic_relay=False,
+                    require_combat_relay=False,
+                    require_projectile_relay=False,
+                    require_grab_relay=False,
+                    require_higgs_relay=False,
+                    require_saveload_observer=False,
+                    allow_failed_checks=True,
+                )
+            self.assertEqual(result, 1)
+            self.assertIn(
+                "archived package build manifest does not exactly match manifest.json packageBuildManifest",
+                output.getvalue(),
+            )
 
 
 if __name__ == "__main__":

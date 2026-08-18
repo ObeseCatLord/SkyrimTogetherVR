@@ -175,6 +175,7 @@ VR_PREREQUISITE_FILES = {
 X64_MACHINE = 0x8664
 MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
 FIXTURE_BUILD_VERSION = "stvr-fixture-1-g00000000"
+NETWORK_VERSION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 IMAGE_DIRECTORY_ENTRY_IMPORT = 1
 IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT = 13
 IMAGE_DELAYLOAD_ATTRIBUTE_RVA = 1
@@ -763,6 +764,15 @@ def package_mode_name(avatar_sync=False, dll_only=False, gameplay=False):
     return "avatar-sync" if avatar_sync else "default"
 
 
+def is_valid_network_version(value):
+    return (
+        isinstance(value, str)
+        and bool(NETWORK_VERSION_PATTERN.fullmatch(value))
+        and value.casefold() not in {"none", "unavailable"}
+        and not value.casefold().startswith("unknown-")
+    )
+
+
 def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gameplay=False):
     manifest = load_build_manifest(package, failures)
     if not manifest:
@@ -798,13 +808,7 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
         failures.append("build manifest says companion panel helpers were not packaged")
 
     build_version = manifest.get("buildVersion")
-    if (
-        not isinstance(build_version, str)
-        or not build_version.strip()
-        or build_version.casefold() == "none"
-        or build_version.casefold().startswith("unknown-")
-        or any(character.isspace() for character in build_version)
-    ):
+    if not is_valid_network_version(build_version):
         failures.append(f"build manifest buildVersion is missing or invalid: {build_version!r}")
     elif not dll_only:
         launcher_files = launcher_runtime_files(
@@ -818,6 +822,12 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
                 failures.append(
                     f"launcher does not contain manifest buildVersion {build_version!r}: {relative_file}"
                 )
+
+    network_version = manifest.get("networkVersion")
+    if not is_valid_network_version(network_version):
+        failures.append(f"build manifest networkVersion is missing or invalid: {network_version!r}")
+    elif network_version != build_version:
+        failures.append("build manifest networkVersion does not match buildVersion")
 
     targets = manifest.get("targets")
     if not isinstance(targets, list):
@@ -863,6 +873,8 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
 
     source_revision = manifest.get("sourceRevision")
     source_provenance = manifest.get("sourceProvenance")
+    if not isinstance(source_revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
+        failures.append("build manifest sourceRevision is missing or invalid")
     if not isinstance(source_provenance, dict):
         failures.append("build manifest sourceProvenance field is not an object")
     else:
@@ -878,12 +890,10 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
             failures.append("build manifest sourceProvenance dirty flag is missing or invalid")
         if not isinstance(dirty_approved, bool):
             failures.append("build manifest sourceProvenance dirtyApproved flag is missing or invalid")
-        if isinstance(revision, str) and isinstance(source_tree_sha256, str) and isinstance(dirty, bool):
-            expected_source_revision = f"{revision}-dirty-{source_tree_sha256}" if dirty else revision
-            if source_revision != expected_source_revision:
-                failures.append("build manifest sourceRevision does not match sourceProvenance")
-        if dirty is True and dirty_approved is not True:
-            failures.append("build manifest sourceProvenance has an unapproved dirty source tree")
+        if isinstance(revision, str) and source_revision != revision:
+            failures.append("build manifest sourceRevision does not match sourceProvenance")
+        if dirty is True:
+            failures.append("build manifest sourceProvenance records a dirty source tree")
         if dirty is False and dirty_approved is True:
             failures.append("build manifest sourceProvenance marks a clean source tree as dirty-approved")
 
@@ -1208,6 +1218,7 @@ def write_build_manifest(package, avatar_sync=False, dll_only=False, gameplay=Fa
             artifact: sha256(manifest_artifact_path(package, artifact)) for artifact in copied_artifacts
         },
         "buildVersion": FIXTURE_BUILD_VERSION,
+        "networkVersion": FIXTURE_BUILD_VERSION,
         "sourceRevision": "0" * 40,
         "sourceProvenance": {
             "revision": "0" * 40,
@@ -1512,6 +1523,30 @@ def run_self_test():
             print("\n".join(failures))
             return 1
 
+        unavailable_network_package = root / "unavailable-network"
+        populate_test_package(unavailable_network_package)
+        manifest_path = unavailable_network_package / "SkyrimTogetherVR_BuildManifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["networkVersion"] = "unavailable"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        failures, *_ = audit_package(unavailable_network_package, skyrim_vr)
+        if "build manifest networkVersion is missing or invalid: 'unavailable'" not in failures:
+            print("Package self-test did not reject an unavailable network version.")
+            print("\n".join(failures))
+            return 1
+
+        mismatched_network_package = root / "mismatched-network"
+        populate_test_package(mismatched_network_package)
+        manifest_path = mismatched_network_package / "SkyrimTogetherVR_BuildManifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["networkVersion"] = "stvr-fixture-2-g00000000"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        failures, *_ = audit_package(mismatched_network_package, skyrim_vr)
+        if "build manifest networkVersion does not match buildVersion" not in failures:
+            print("Package self-test did not reject a mismatched network version.")
+            print("\n".join(failures))
+            return 1
+
         unavailable_source_package = root / "unavailable-source"
         populate_test_package(unavailable_source_package)
         manifest_path = unavailable_source_package / "SkyrimTogetherVR_BuildManifest.json"
@@ -1519,23 +1554,22 @@ def run_self_test():
         manifest["sourceRevision"] = "unavailable"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         failures, *_ = audit_package(unavailable_source_package, skyrim_vr)
-        if "build manifest sourceRevision does not match sourceProvenance" not in failures:
+        if "build manifest sourceRevision is missing or invalid" not in failures:
             print("Package self-test did not reject an unavailable source revision.")
             print("\n".join(failures))
             return 1
 
-        unapproved_dirty_source_package = root / "unapproved-dirty-source"
-        populate_test_package(unapproved_dirty_source_package)
-        manifest_path = unapproved_dirty_source_package / "SkyrimTogetherVR_BuildManifest.json"
+        dirty_source_package = root / "dirty-source"
+        populate_test_package(dirty_source_package)
+        manifest_path = dirty_source_package / "SkyrimTogetherVR_BuildManifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         source_provenance = manifest["sourceProvenance"]
         source_provenance["dirty"] = True
-        source_provenance["dirtyApproved"] = False
-        manifest["sourceRevision"] = f"{source_provenance['revision']}-dirty-{source_provenance['sourceTreeSha256']}"
+        source_provenance["dirtyApproved"] = True
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        failures, *_ = audit_package(unapproved_dirty_source_package, skyrim_vr)
-        if "build manifest sourceProvenance has an unapproved dirty source tree" not in failures:
-            print("Package self-test did not reject an unapproved dirty source tree.")
+        failures, *_ = audit_package(dirty_source_package, skyrim_vr)
+        if "build manifest sourceProvenance records a dirty source tree" not in failures:
+            print("Package self-test did not reject a dirty source tree.")
             print("\n".join(failures))
             return 1
 

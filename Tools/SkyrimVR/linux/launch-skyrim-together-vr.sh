@@ -4,7 +4,6 @@ set -euo pipefail
 APPID="611670"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 GAME_DIR="${STVR_GAME_DIR:-$SCRIPT_DIR}"
-GAME_DIR="$(readlink -f -- "$GAME_DIR")"
 
 die() {
   printf 'launch-skyrim-together-vr: %s\n' "$*" >&2
@@ -15,13 +14,80 @@ require_file() {
   [ -f "$1" ] || die "missing required file: $1"
 }
 
-default_launcher() {
-  local manifest="$GAME_DIR/SkyrimTogetherVR_BuildManifest.json"
-  local package_flavor=""
+canonicalize_file() {
+  require_file "$1"
+  readlink -f -- "$1"
+}
 
-  if [ -f "$manifest" ]; then
-    package_flavor="$(sed -nE 's/.*"packageFlavor"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$manifest" | head -n 1)"
-  fi
+canonicalize_executable() {
+  [ -f "$1" ] && [ -x "$1" ] || die "missing executable: $1"
+  readlink -f -- "$1"
+}
+
+GAME_DIR="$(readlink -f -- "$GAME_DIR")"
+[ -d "$GAME_DIR" ] || die "missing required game directory: $GAME_DIR"
+
+admit_build_manifest() {
+  local manifest="$1"
+  require_file "$manifest"
+  python3 - "$manifest" <<'PY'
+import json
+import re
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        manifest = json.load(source)
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"invalid SkyrimTogetherVR build manifest: {error}")
+
+if not isinstance(manifest, dict):
+    raise SystemExit("invalid SkyrimTogetherVR build manifest: root must be an object")
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(f"invalid SkyrimTogetherVR build manifest: {message}")
+
+require(manifest.get("schema") == "skyrim_together_vr_build_package_v2",
+        "unexpected schema")
+require(manifest.get("platform") == "windows", "platform must be windows")
+require(manifest.get("arch") == "x64", "arch must be x64")
+
+flavor = manifest.get("packageFlavor")
+require(flavor in {"default", "avatar-sync", "gameplay"},
+        "packageFlavor must be default, avatar-sync, or gameplay")
+
+build_version = manifest.get("buildVersion")
+require(isinstance(build_version, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", build_version) is not None
+        and build_version.casefold() not in {"none", "unavailable"}
+        and not build_version.casefold().startswith("unknown-"),
+        "buildVersion is invalid")
+require(manifest.get("networkVersion") == build_version,
+        "networkVersion must match buildVersion")
+
+source_revision = manifest.get("sourceRevision")
+require(isinstance(source_revision, str)
+        and re.fullmatch(r"[0-9a-fA-F]{40}", source_revision) is not None,
+        "sourceRevision must be 40 hexadecimal characters")
+provenance = manifest.get("sourceProvenance")
+require(isinstance(provenance, dict), "sourceProvenance must be an object")
+require(provenance.get("revision") == source_revision,
+        "sourceProvenance.revision must match sourceRevision")
+require(isinstance(provenance.get("sourceTreeSha256"), str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", provenance["sourceTreeSha256"]) is not None,
+        "sourceProvenance.sourceTreeSha256 must be 64 hexadecimal characters")
+require(provenance.get("dirty") is False, "sourceProvenance.dirty must be false")
+require(provenance.get("dirtyApproved") is False,
+        "sourceProvenance.dirtyApproved must be false")
+
+print(flavor)
+PY
+}
+
+default_launcher() {
+  local package_flavor="$1"
+
   case "$package_flavor" in
     gameplay)
       printf '%s\n' "$GAME_DIR/SkyrimTogetherVRGameplay.exe"
@@ -41,7 +107,8 @@ default_launcher() {
 find_steam_root() {
   local candidate
   if [ -n "${STVR_STEAM_ROOT:-}" ]; then
-    printf '%s\n' "$STVR_STEAM_ROOT"
+    [ -d "$STVR_STEAM_ROOT" ] || die "STVR_STEAM_ROOT is not a directory: $STVR_STEAM_ROOT"
+    readlink -f -- "$STVR_STEAM_ROOT"
     return 0
   fi
   for candidate in \
@@ -61,7 +128,7 @@ find_proton_dir() {
   local candidate
   if [ -n "${STVR_PROTONPATH:-}" ]; then
     [ -x "$STVR_PROTONPATH/proton" ] || die "STVR_PROTONPATH has no executable proton script"
-    printf '%s\n' "$STVR_PROTONPATH"
+    readlink -f -- "$STVR_PROTONPATH"
     return 0
   fi
 
@@ -72,7 +139,7 @@ find_proton_dir() {
     "$library/steamapps/common"; do
     while IFS= read -r candidate; do
       if [ -x "$candidate/proton" ]; then
-        printf '%s\n' "$candidate"
+        readlink -f -- "$candidate"
         return 0
       fi
     done < <(
@@ -80,7 +147,7 @@ find_proton_dir() {
     )
     while IFS= read -r candidate; do
       if [ -x "$candidate/proton" ]; then
-        printf '%s\n' "$candidate"
+        readlink -f -- "$candidate"
         return 0
       fi
     done < <(
@@ -88,7 +155,7 @@ find_proton_dir() {
     )
     while IFS= read -r candidate; do
       if [ -x "$candidate/proton" ]; then
-        printf '%s\n' "$candidate"
+        readlink -f -- "$candidate"
         return 0
       fi
     done < <(find "$search_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -Vr)
@@ -120,10 +187,17 @@ seed_handoff_plugin_order() {
     "SkyrimTogether.esp"
   )
 
+  for plugin in "${plugins[@]}"; do
+    [ -f "$data_dir/$plugin" ] || die "missing required handoff plugin file: $data_dir/$plugin"
+  done
+
   mkdir -p "$(dirname -- "$plugins_file")"
   touch "$plugins_file" "$loadorder_file"
-  temp_plugins="$(mktemp)"
-  temp_loadorder="$(mktemp)"
+  temp_plugins="$(mktemp "${plugins_file}.tmp.XXXXXX")" || die "could not create plugin-order temporary file"
+  temp_loadorder="$(mktemp "${loadorder_file}.tmp.XXXXXX")" || {
+    rm -f -- "$temp_plugins"
+    die "could not create load-order temporary file"
+  }
 
   # Preserve user-supplied entries, but rewrite the handoff-owned set in its
   # tested order. This also repairs fresh prefixes and previously partial files.
@@ -142,10 +216,17 @@ seed_handoff_plugin_order() {
     }
     {
       key = tolower($0)
+      sub(/\r$/, "", key)
       sub(/^\*/, "", key)
-      if (!managed[key]) print
+      if (!managed[key]) {
+        sub(/\r$/, "")
+        print
+      }
     }
-  ' "$plugins_file" > "$temp_plugins"
+  ' "$plugins_file" > "$temp_plugins" || {
+    rm -f -- "$temp_plugins" "$temp_loadorder"
+    die "could not rewrite plugin order"
+  }
   awk '
     BEGIN {
       managed["skyrim.esm"] = 1
@@ -161,33 +242,51 @@ seed_handoff_plugin_order() {
     }
     {
       key = tolower($0)
+      sub(/\r$/, "", key)
       sub(/^\*/, "", key)
-      if (!managed[key]) print
+      if (!managed[key]) {
+        sub(/\r$/, "")
+        print
+      }
     }
-  ' "$loadorder_file" > "$temp_loadorder"
-
-  for plugin in "${plugins[@]}"; do
-    [ -f "$data_dir/$plugin" ] || continue
+  ' "$loadorder_file" > "$temp_loadorder" || {
+    rm -f -- "$temp_plugins" "$temp_loadorder"
+    die "could not rewrite load order"
+  }
+  if ! for plugin in "${plugins[@]}"; do
     printf '*%s\n' "$plugin" >> "$temp_plugins"
     printf '%s\n' "$plugin" >> "$temp_loadorder"
-  done
-  mv -f "$temp_plugins" "$plugins_file"
-  mv -f "$temp_loadorder" "$loadorder_file"
+  done; then
+    rm -f -- "$temp_plugins" "$temp_loadorder"
+    die "could not append managed plugin order"
+  fi
+  mv -f "$temp_plugins" "$plugins_file" || {
+    rm -f -- "$temp_plugins" "$temp_loadorder"
+    die "could not install plugin order"
+  }
+  mv -f "$temp_loadorder" "$loadorder_file" || {
+    rm -f -- "$temp_loadorder"
+    die "could not install load order"
+  }
 }
 
 STEAM_ROOT="$(find_steam_root)" || die "could not find Steam; set STVR_STEAM_ROOT"
 STEAM_LIBRARY="${STVR_STEAM_LIBRARY:-$(
   readlink -f -- "$GAME_DIR/../../.."
 )}"
+STEAM_LIBRARY="$(readlink -f -- "$STEAM_LIBRARY")"
 COMPATDATA="${STVR_COMPATDATA:-$STEAM_LIBRARY/steamapps/compatdata/$APPID}"
 WINEPREFIX_DIR="${STVR_WINEPREFIX:-$COMPATDATA/pfx}"
 PROTON_DIR="$(find_proton_dir "$STEAM_ROOT" "$STEAM_LIBRARY")" || die "could not find Proton; set STVR_PROTONPATH"
 
+BUILD_MANIFEST="$GAME_DIR/SkyrimTogetherVR_BuildManifest.json"
+PACKAGE_FLAVOR="$(admit_build_manifest "$BUILD_MANIFEST")" || \
+  die "could not admit SkyrimTogetherVR build manifest: $BUILD_MANIFEST"
 LAUNCHER="${STVR_LAUNCHER:-}"
-[ -n "$LAUNCHER" ] || LAUNCHER="$(default_launcher)"
+[ -n "$LAUNCHER" ] || LAUNCHER="$(default_launcher "$PACKAGE_FLAVOR")"
 GAME_EXE="${STVR_GAME_EXE:-$GAME_DIR/SkyrimVR.exe}"
-require_file "$LAUNCHER"
-require_file "$GAME_EXE"
+LAUNCHER="$(canonicalize_file "$LAUNCHER")"
+GAME_EXE="$(canonicalize_file "$GAME_EXE")"
 
 LOCAL_APPDATA="$WINEPREFIX_DIR/drive_c/users/steamuser/AppData/Local/Skyrim VR"
 PLUGINS_FILE="$LOCAL_APPDATA/Plugins.txt"
@@ -208,6 +307,18 @@ export STEAM_COMPAT_INSTALL_PATH="${STEAM_COMPAT_INSTALL_PATH:-$GAME_DIR}"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$STEAM_ROOT}"
 export WINEPREFIX="$WINEPREFIX_DIR"
 export STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$COMPATDATA}"
+export STVR_GAME_PATH="$(to_win_path "$GAME_DIR")"
+export STVR_HOST_LAUNCH_PID="$$"
+
+if [ -n "${STVR_LAUNCH_NONCE:-}" ]; then
+  [[ "$STVR_LAUNCH_NONCE" =~ ^[0123456789abcdefABCDEF]{32}$ ]] || \
+    die 'STVR_LAUNCH_NONCE must be exactly 32 hexadecimal characters'
+else
+  STVR_LAUNCH_NONCE="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+  [[ "$STVR_LAUNCH_NONCE" =~ ^[0123456789abcdef]{32}$ ]] || \
+    die 'could not generate a valid STVR_LAUNCH_NONCE'
+fi
+export STVR_LAUNCH_NONCE
 
 append_colon_path() {
   local variable="$1" path="$2" current entry
@@ -275,7 +386,7 @@ configure_host_monado_runtime() {
     { [ -e "$candidate" ] || [ -L "$candidate" ]; } && break
     candidate=""
   done
-  [ -n "${candidate:-}" ] || die 'a selected host Monado socket requires XR_RUNTIME_JSON or an OpenXR active_runtime.json'
+  [ -n "${candidate:-}" ] || die 'a selected host Monado path requires XR_RUNTIME_JSON or an OpenXR active_runtime.json'
 
   result="$(python3 - "$candidate" <<'PY'
 import json
@@ -346,6 +457,7 @@ PY
   runtime_manifest="${runtime_lines[1]}"
   export XR_RUNTIME_JSON="$runtime_manifest"
   [ "$runtime_kind" = monado ] || return 0
+  STVR_SELECTED_MONADO_RUNTIME=1
   [ "${#runtime_lines[@]}" -ge 3 ] || die 'active Monado runtime did not resolve a prefix'
   runtime_prefix="${runtime_lines[2]}"
   append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RO "$runtime_prefix"
@@ -379,6 +491,7 @@ configure_isolated_monado_runtime() {
   XR_RUNTIME_JSON="$(readlink -f -- "$STVR_MONADO_XR_RUNTIME_JSON")"
   validate_monado_manifest "$MONADO_PREFIX" "$XR_RUNTIME_JSON" || die 'Monado OpenXR manifest does not match its prefix'
   export XR_RUNTIME_JSON
+  STVR_SELECTED_MONADO_RUNTIME=1
 
   IFS=: read -r -a _library_dirs <<< "$STVR_MONADO_LIBRARY_PATH"
   for library_dir in "${_library_dirs[@]}"; do
@@ -431,9 +544,14 @@ configure_isolated_monado_runtime() {
 MONADO_RUNTIME_DIR="${STVR_MONADO_RUNTIME_DIR:-}"
 configure_isolated_monado_runtime
 MONADO_IPC_SOCKET="${MONADO_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/monado_comp_ipc}"
-if [ -z "$MONADO_RUNTIME_DIR" ] && [ -S "$MONADO_IPC_SOCKET" ] && [ ! -L "$MONADO_IPC_SOCKET" ]; then
-  configure_host_monado_runtime
-  append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RW "$MONADO_IPC_SOCKET"
+if [ -z "$MONADO_RUNTIME_DIR" ]; then
+  if { [ "$STVR_SELECTED_OPENVR_RUNTIME" = xrizer ] || [ "$STVR_SELECTED_OPENVR_RUNTIME" = opencomposite ]; } \
+    || { [ -S "$MONADO_IPC_SOCKET" ] && [ ! -L "$MONADO_IPC_SOCKET" ]; }; then
+    configure_host_monado_runtime
+    if [ -S "$MONADO_IPC_SOCKET" ] && [ ! -L "$MONADO_IPC_SOCKET" ]; then
+      append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RW "$MONADO_IPC_SOCKET"
+    fi
+  fi
 fi
 export GAMEID="umu-$APPID"
 
@@ -450,20 +568,36 @@ if command -v umu-run >/dev/null 2>&1 && [ "${STVR_FORCE_PROTON:-0}" != "1" ]; t
   COMMAND=(umu-run "$LAUNCHER" "${ARGS[@]}")
 else
   PROTON_BIN="${STVR_PROTON:-$PROTON_DIR/proton}"
-  require_file "$PROTON_BIN"
+  PROTON_BIN="$(canonicalize_executable "$PROTON_BIN")"
   export PROTONPATH="${PROTONPATH:-$PROTON_DIR}"
   MODE="proton"
   COMMAND=("$PROTON_BIN" run "$LAUNCHER" "${ARGS[@]}")
 fi
 
+if [ "${STVR_DRY_RUN:-0}" != "1" ] \
+  && [ "${STVR_SELECTED_MONADO_RUNTIME:-0}" = "1" ] \
+  && { [ "$STVR_SELECTED_OPENVR_RUNTIME" = xrizer ] || [ "$STVR_SELECTED_OPENVR_RUNTIME" = opencomposite ]; }; then
+  if [ "${STVR_TEST_SKIP_MONADO_CHECK:-0}" != "1" ]; then
+    MONADO_MANAGER="$SCRIPT_DIR/manage-monado-runtime.sh"
+    [ -f "$MONADO_MANAGER" ] || MONADO_MANAGER="$GAME_DIR/manage-monado-runtime.sh"
+    [ -x "$MONADO_MANAGER" ] || die 'missing required manage-monado-runtime.sh for the selected Monado OpenVR path'
+    STVR_MONADO_IPC_SOCKET="$MONADO_IPC_SOCKET" "$MONADO_MANAGER" check || \
+      die 'selected Monado runtime failed listener and OpenXR canary admission check'
+  fi
+fi
+
 if [ "${STVR_DRY_RUN:-0}" = "1" ]; then
-  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nOpenVR runtime: %s\nOpenVR runtime path: %s\nOpenVR pathreg: %s\nVR override: %s\nVR pathreg override: %s\nProton VR runtime: %s\nMonado runtime: %s\nXR runtime: %s\nOpenXR library path: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nServer: %s\nCommand:' \
-    "$MODE" "$GAME_DIR" "$COMPATDATA" "$STVR_SELECTED_OPENVR_RUNTIME" "$STVR_SELECTED_OPENVR_RUNTIME_PATH" "$STVR_SELECTED_OPENVR_PATHREG" "${VR_OVERRIDE:-none}" "${VR_PATHREG_OVERRIDE:-none}" "${PROTON_VR_RUNTIME:-none}" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "${LD_LIBRARY_PATH:-default}" "$GAMEID" \
+  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nLaunch nonce: %s\nWindows game path: %s\nHost launch PID: %s\nOpenVR runtime: %s\nOpenVR runtime path: %s\nOpenVR pathreg: %s\nVR override: %s\nVR pathreg override: %s\nProton VR runtime: %s\nMonado runtime: %s\nXR runtime: %s\nOpenXR library path: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nServer: %s\nCommand:' \
+    "$MODE" "$GAME_DIR" "$COMPATDATA" "$STVR_LAUNCH_NONCE" "$STVR_GAME_PATH" "$STVR_HOST_LAUNCH_PID" "$STVR_SELECTED_OPENVR_RUNTIME" "$STVR_SELECTED_OPENVR_RUNTIME_PATH" "$STVR_SELECTED_OPENVR_PATHREG" "${VR_OVERRIDE:-none}" "${VR_PATHREG_OVERRIDE:-none}" "${PROTON_VR_RUNTIME:-none}" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "${LD_LIBRARY_PATH:-default}" "$GAMEID" \
     "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}" "${PRESSURE_VESSEL_FILESYSTEMS_RO:-}" "${STVR_AUTOCONNECT:-disabled}"
   printf ' %q' "${COMMAND[@]}"
   printf '\n'
   exit 0
 fi
+
+command -v flock >/dev/null 2>&1 || die 'flock is required for exclusive game-root launch admission'
+exec {STVR_LAUNCH_LOCK_FD}>"$GAME_DIR/.stvr-launch.lock"
+flock -n "$STVR_LAUNCH_LOCK_FD" || die "another launch already owns game root: $GAME_DIR"
 
 seed_handoff_plugin_order "$PLUGINS_FILE" "$LOADORDER_FILE" "$GAME_DIR/Data"
 if [ -d "$DISABLED_DIR" ]; then

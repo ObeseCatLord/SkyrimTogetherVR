@@ -299,24 +299,23 @@ void VRLifecycleService::StartStabilizing(const Sample& acSample) noexcept
 
 void VRLifecycleService::WriteStatusFile() noexcept
 {
-    std::error_code ec;
-    std::filesystem::create_directories(m_statusPath.parent_path(), ec);
+    const auto published = SkyrimTogetherVR::Handoff::WriteFileAtomically(
+        m_statusPath,
+        [this](std::ofstream& file)
+        {
+            SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
+            file << "state=" << GetStateName() << "\n";
+            file << "ready=" << (IsReady() ? "1" : "0") << "\n";
+            file << "epoch=" << m_epoch << "\n";
+            file << "bridgeLifecycleEpoch=" << m_observedBridgeLifecycleEpoch << "\n";
+            file << "ownerThreadId=" << m_ownerThreadId << "\n";
+            file << "stableTickCount=" << m_stableTickCount << "\n";
+            file << "playerFormId=" << m_readySample.PlayerFormId << "\n";
+            file << "playerBaseFormId=" << m_readySample.BaseFormId << "\n";
+            file << "playerCellFormId=" << m_readySample.CellFormId << "\n";
+            if (!m_suspendReason.empty())
+                file << "reason=" << m_suspendReason << "\n";
+        });
 
-    std::ofstream file(m_statusPath, std::ios::trunc);
-    if (!file)
-        return;
-
-    file << "state=" << GetStateName() << "\n";
-    file << "ready=" << (IsReady() ? "1" : "0") << "\n";
-    file << "epoch=" << m_epoch << "\n";
-    file << "bridgeLifecycleEpoch=" << m_observedBridgeLifecycleEpoch << "\n";
-    file << "ownerThreadId=" << m_ownerThreadId << "\n";
-    file << "stableTickCount=" << m_stableTickCount << "\n";
-    file << "playerFormId=" << m_readySample.PlayerFormId << "\n";
-    file << "playerBaseFormId=" << m_readySample.BaseFormId << "\n";
-    file << "playerCellFormId=" << m_readySample.CellFormId << "\n";
-    if (!m_suspendReason.empty())
-        file << "reason=" << m_suspendReason << "\n";
-
-    m_statusDirty = false;
+    m_statusDirty = !published;
 }

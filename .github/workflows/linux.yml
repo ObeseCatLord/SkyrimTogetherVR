@@ -52,6 +52,12 @@ jobs:
     - name: Run native tests
       run: xmake run TPTests
 
+    - name: Run Skyrim VR Python unit tests
+      run: python3 -m unittest discover -s Tools/SkyrimVR/tests -p 'test_*.py'
+
+    - name: Check Skyrim VR source readiness and committed reports
+      run: python3 Tools/SkyrimVR/audit_vr_readiness.py --source-only --check-committed-reports
+
     - name: Validate Linux launch scripts
       run: bash -n Tools/SkyrimVR/linux/*.sh Tools/SkyrimVR/linux/tests/*.sh
 
@@ -62,6 +68,7 @@ jobs:
         Tools/SkyrimVR/linux/tests/test-local-clients.sh
         Tools/SkyrimVR/linux/tests/test-local-client-units.sh
         Tools/SkyrimVR/linux/tests/test-launcher-runtime.sh
+        Tools/SkyrimVR/linux/tests/test-manage-monado-runtime.sh
 
     - name: Run handoff installer self-test
       run: python3 Tools/SkyrimVR/install_local_agent_handoff.py --self-test

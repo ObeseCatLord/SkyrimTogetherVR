@@ -306,7 +306,6 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept try
     m_statusElapsed += delta;
     if (m_statusDirty || m_statusElapsed >= kStatusWriteIntervalSeconds)
     {
-        m_statusDirty = false;
         m_statusElapsed = 0.0;
         WriteStatus();
     }
@@ -2489,128 +2488,114 @@ void VRAvatarService::WriteStatus() noexcept
 {
     try
     {
-        std::error_code ec;
-        std::filesystem::create_directories(m_statusPath.parent_path(), ec);
-        std::ofstream file(m_statusPath, std::ios::trunc);
-        if (!file)
-            return;
+        const auto published = SkyrimTogetherVR::Handoff::WriteFileAtomically(
+            m_statusPath,
+            [this](std::ofstream& file)
+            {
+                SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
+                const auto diagnostics = SkyrimTogetherVR::GameplayBridgeClient::GetDiagnostics();
+                const auto rejectedCommandTotal = diagnostics.RejectedCommandCount + diagnostics.RejectedSubmissionCount;
+                const auto rejectedCommandCount = rejectedCommandTotal >= m_rejectedCommandBaseline ? rejectedCommandTotal - m_rejectedCommandBaseline : rejectedCommandTotal;
+                const auto eventRingDropCount = diagnostics.EventRingDroppedPushCount >= m_eventRingDropBaseline ? diagnostics.EventRingDroppedPushCount - m_eventRingDropBaseline
+                                                                                                                 : diagnostics.EventRingDroppedPushCount;
+                const auto commandRingDropCount = diagnostics.CommandRingDroppedPushCount >= m_commandRingDropBaseline
+                                                      ? diagnostics.CommandRingDroppedPushCount - m_commandRingDropBaseline
+                                                      : diagnostics.CommandRingDroppedPushCount;
+                std::size_t activeAvatarCount = 0;
+                for (const auto& [serverId, avatar] : m_remoteAvatars)
+                {
+                    TP_UNUSED(serverId);
+                    if (avatar.Handle.Value != 0 && !avatar.DestroyPending)
+                        ++activeAvatarCount;
+                }
 
-        const auto diagnostics = SkyrimTogetherVR::GameplayBridgeClient::GetDiagnostics();
-        const auto rejectedCommandTotal = diagnostics.RejectedCommandCount + diagnostics.RejectedSubmissionCount;
-        const auto rejectedCommandCount = rejectedCommandTotal >= m_rejectedCommandBaseline
-            ? rejectedCommandTotal - m_rejectedCommandBaseline
-            : rejectedCommandTotal;
-        const auto eventRingDropCount = diagnostics.EventRingDroppedPushCount >= m_eventRingDropBaseline
-            ? diagnostics.EventRingDroppedPushCount - m_eventRingDropBaseline
-            : diagnostics.EventRingDroppedPushCount;
-        const auto commandRingDropCount = diagnostics.CommandRingDroppedPushCount >= m_commandRingDropBaseline
-            ? diagnostics.CommandRingDroppedPushCount - m_commandRingDropBaseline
-            : diagnostics.CommandRingDroppedPushCount;
-        std::size_t activeAvatarCount = 0;
-        for (const auto& [serverId, avatar] : m_remoteAvatars)
-        {
-            TP_UNUSED(serverId);
-            if (avatar.Handle.Value != 0 && !avatar.DestroyPending)
-                ++activeAvatarCount;
-        }
-
-        file << "schema=commonlib_bridge_v2\n";
-        file << "ready=1\n";
-        file << "connected=" << (m_connected ? 1 : 0) << "\n";
-        file << "bridgeReady=" << (diagnostics.Ready ? 1 : 0) << "\n";
-        file << "actorTargetsEnabled=" << (HasAvatarCapabilities() ? 1 : 0) << "\n";
-        file << "animationGraphEnabled=" << (HasAnimationCapabilities() ? 1 : 0) << "\n";
-        file << "localAnimationGraphReady=" << (IsLocalAnimationGraphReady() ? 1 : 0) << "\n";
-        file << "actorSkeletonWritesEnabled=0\n";
-        file << "visualPolicy=player_template_fallback\n";
-        file << "cleanupRequired=" << (m_transport.IsGameplayCleanupRequired() ? 1 : 0) << "\n";
-        file << "transportServerInstanceNonce=" << m_transport.GetServerInstanceNonce() << "\n";
-        file << "transportConnectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
-        file << "transportRequestedGameplayCapabilities=0x" << std::hex
-             << m_transport.GetRequestedGameplayCapabilities() << std::dec << "\n";
-        file << "transportNegotiatedGameplayCapabilities=0x" << std::hex
-             << m_transport.GetNegotiatedGameplayCapabilities() << std::dec << "\n";
-        file << "lifecycleEpoch=" << diagnostics.LifecycleEpoch << "\n";
-        file << "bridgeRequestedCapabilities=0x" << std::hex << diagnostics.RequestedCapabilities << std::dec << "\n";
-        file << "bridgeAvailableCapabilities=0x" << std::hex << diagnostics.AvailableCapabilities << std::dec << "\n";
-        file << "bridgeActiveCapabilities=0x" << std::hex << diagnostics.ActiveCapabilities << std::dec << "\n";
-        file << "localSnapshotReady=" << (HasValidLocalSnapshot() ? 1 : 0) << "\n";
-        file << "localServerAssigned=" << (m_localServerId ? 1 : 0) << "\n";
-        file << "localServerId=" << m_localServerId.value_or(0) << "\n";
-        file << "localAssignmentRejected=" << (m_assignmentRejected ? 1 : 0) << "\n";
-        file << "assignmentGate=" << AssignmentGateName(m_assignmentGate) << "\n";
-        file << "assignmentPending=" << (m_assignmentPending ? 1 : 0) << "\n";
-        file << "assignmentCookie=" << m_assignmentCookie << "\n";
-        file << "assignmentRetryElapsedMs=" << ToStatusMilliseconds(m_assignmentElapsed) << "\n";
-        file << "assignmentBootstrapGate=" << AssignmentBootstrapGateName(m_assignmentBootstrapGate) << "\n";
-        file << "assignmentBootstrapPending=" << (m_assignmentBootstrapPending ? 1 : 0) << "\n";
-        file << "assignmentBootstrapRetryScheduled=" << (m_assignmentBootstrapRetryScheduled ? 1 : 0) << "\n";
-        file << "assignmentBootstrapActive=" << (m_assignmentBootstrapActive ? 1 : 0) << "\n";
-        file << "assignmentBootstrapReady=" << (m_assignmentBootstrapReady ? 1 : 0) << "\n";
-        file << "assignmentBootstrapPermanentFailure=" << (m_assignmentBootstrapPermanentFailure ? 1 : 0) << "\n";
-        file << "assignmentBootstrapRequestId=" << m_assignmentBootstrapRequestId << "\n";
-        file << "assignmentBootstrapActionId=" << m_assignmentBootstrapActionId << "\n";
-        file << "assignmentBootstrapLastRequestId=" << m_assignmentBootstrapLastRequestId << "\n";
-        file << "assignmentBootstrapLastActionId=" << m_assignmentBootstrapLastActionId << "\n";
-        file << "assignmentBootstrapFailure="
-             << AssignmentBootstrapFailureName(m_assignmentBootstrapFailure) << "\n";
-        file << "assignmentBootstrapFailureCount=" << m_assignmentBootstrapFailureCount << "\n";
-        file << "assignmentBootstrapFailureRequestId=" << m_assignmentBootstrapFailureRequestId << "\n";
-        file << "assignmentBootstrapFailureActionId=" << m_assignmentBootstrapFailureActionId << "\n";
-        file << "assignmentBootstrapFailureRecordKind=" << m_assignmentBootstrapFailureRecordKind << "\n";
-        file << "assignmentBootstrapFailureOrdinal=" << m_assignmentBootstrapFailureOrdinal << "\n";
-        file << "assignmentBootstrapFailureBridgeStatus=" << m_assignmentBootstrapFailureBridgeStatus << "\n";
-        file << "assignmentBootstrapFailureBridgeReason=" << m_assignmentBootstrapFailureBridgeReason << "\n";
-        file << "assignmentBootstrapFailureTextAction=" << m_assignmentBootstrapFailureTextAction << "\n";
-        file << "assignmentBootstrapFailureTextChunkIndex="
-             << m_assignmentBootstrapFailureTextChunkIndex << "\n";
-        file << "assignmentBootstrapFailureTextChunkCount="
-             << m_assignmentBootstrapFailureTextChunkCount << "\n";
-        file << "assignmentBootstrapEndFailureMask=0x" << std::hex
-             << m_assignmentBootstrapEndFailureTelemetry.FailureMask << std::dec << "\n";
-        file << "assignmentBootstrapAppearanceValidationFailureMask=0x" << std::hex
-             << m_assignmentBootstrapEndFailureTelemetry.AppearanceValidationFailureMask << std::dec << "\n";
-        file << "assignmentBootstrapEndNameLength="
-             << m_assignmentBootstrapEndFailureTelemetry.NameLength << "\n";
-        file << "assignmentBootstrapEndHeadPartCount="
-             << m_assignmentBootstrapEndFailureTelemetry.HeadPartCount << "\n";
-        file << "assignmentBootstrapEndTintCount="
-             << m_assignmentBootstrapEndFailureTelemetry.TintCount << "\n";
-        file << "assignmentBootstrapEndCompletedRequiredTintPaths="
-             << m_assignmentBootstrapEndFailureTelemetry.CompletedRequiredTintPaths << "\n";
-        file << "assignmentBootstrapEndCompletedFaceMorphs="
-             << m_assignmentBootstrapEndFailureTelemetry.CompletedFaceMorphs << "\n";
-        file << "assignmentBootstrapEndCompletedFaceParts="
-             << m_assignmentBootstrapEndFailureTelemetry.CompletedFaceParts << "\n";
-        file << "assignmentBootstrapEndCompletedEssentialActorValues="
-             << m_assignmentBootstrapEndFailureTelemetry.CompletedEssentialActorValues << "\n";
-        file << "assignmentBootstrapExpectedRecords=" << m_assignmentBootstrapExpectedRecords << "\n";
-        file << "assignmentBootstrapNextOrdinal=" << m_assignmentBootstrapNextOrdinal << "\n";
-        file << "assignmentBootstrapRetryElapsedMs=" << ToStatusMilliseconds(m_assignmentBootstrapElapsed) << "\n";
-        file << "trackedAvatarCount=" << m_remoteAvatars.size() << "\n";
-        file << "pendingSpawnCount=" << m_pendingSpawns.size() << "\n";
-        file << "activeAvatarCount=" << activeAvatarCount << "\n";
-        file << "createSubmittedCount=" << m_createSubmittedCount << "\n";
-        file << "createSucceededCount=" << m_createSucceededCount << "\n";
-        file << "updateSubmittedCount=" << m_updateSubmittedCount << "\n";
-        file << "destroySubmittedCount=" << m_destroySubmittedCount << "\n";
-        file << "destroySucceededCount=" << m_destroySucceededCount << "\n";
-        file << "rejectedCommandCount=" << rejectedCommandCount << "\n";
-        file << "eventRingDropCount=" << eventRingDropCount << "\n";
-        file << "commandRingDropCount=" << commandRingDropCount << "\n";
-        file << "invalidTransformCount=" << m_invalidTransformCount << "\n";
-        file << "remoteMovementAcceptedCount=" << m_remoteMovementAcceptedCount << "\n";
-        file << "staleMovementRejectedCount=" << m_staleMovementRejectedCount << "\n";
-        file << "spatialTransferSubmittedCount=" << m_spatialTransferSubmittedCount << "\n";
-        file << "spatialTransferSucceededCount=" << m_spatialTransferSucceededCount << "\n";
-        file << "spatialTransferRejectedCount=" << m_spatialTransferRejectedCount << "\n";
-        file << "animationSnapshotSubmittedCount=" << m_animationSnapshotSubmittedCount << "\n";
-        file << "animationSnapshotAppliedCount=" << m_animationSnapshotAppliedCount << "\n";
-        file << "animationSnapshotRejectedCount=" << m_animationSnapshotRejectedCount << "\n";
-        file << "sameSpaceCount=" << m_sameSpaceCount << "\n";
+                file << "schema=commonlib_bridge_v2\n";
+                file << "ready=1\n";
+                file << "connected=" << (m_connected ? 1 : 0) << "\n";
+                file << "bridgeReady=" << (diagnostics.Ready ? 1 : 0) << "\n";
+                file << "actorTargetsEnabled=" << (HasAvatarCapabilities() ? 1 : 0) << "\n";
+                file << "animationGraphEnabled=" << (HasAnimationCapabilities() ? 1 : 0) << "\n";
+                file << "localAnimationGraphReady=" << (IsLocalAnimationGraphReady() ? 1 : 0) << "\n";
+                file << "actorSkeletonWritesEnabled=0\n";
+                file << "visualPolicy=player_template_fallback\n";
+                file << "cleanupRequired=" << (m_transport.IsGameplayCleanupRequired() ? 1 : 0) << "\n";
+                file << "transportServerInstanceNonce=" << m_transport.GetServerInstanceNonce() << "\n";
+                file << "transportConnectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
+                file << "transportRequestedGameplayCapabilities=0x" << std::hex << m_transport.GetRequestedGameplayCapabilities() << std::dec << "\n";
+                file << "transportNegotiatedGameplayCapabilities=0x" << std::hex << m_transport.GetNegotiatedGameplayCapabilities() << std::dec << "\n";
+                file << "lifecycleEpoch=" << diagnostics.LifecycleEpoch << "\n";
+                file << "bridgeRequestedCapabilities=0x" << std::hex << diagnostics.RequestedCapabilities << std::dec << "\n";
+                file << "bridgeAvailableCapabilities=0x" << std::hex << diagnostics.AvailableCapabilities << std::dec << "\n";
+                file << "bridgeActiveCapabilities=0x" << std::hex << diagnostics.ActiveCapabilities << std::dec << "\n";
+                file << "localSnapshotReady=" << (HasValidLocalSnapshot() ? 1 : 0) << "\n";
+                file << "localServerAssigned=" << (m_localServerId ? 1 : 0) << "\n";
+                file << "localServerId=" << m_localServerId.value_or(0) << "\n";
+                file << "localAssignmentRejected=" << (m_assignmentRejected ? 1 : 0) << "\n";
+                file << "assignmentGate=" << AssignmentGateName(m_assignmentGate) << "\n";
+                file << "assignmentPending=" << (m_assignmentPending ? 1 : 0) << "\n";
+                file << "assignmentCookie=" << m_assignmentCookie << "\n";
+                file << "assignmentRetryElapsedMs=" << ToStatusMilliseconds(m_assignmentElapsed) << "\n";
+                file << "assignmentBootstrapGate=" << AssignmentBootstrapGateName(m_assignmentBootstrapGate) << "\n";
+                file << "assignmentBootstrapPending=" << (m_assignmentBootstrapPending ? 1 : 0) << "\n";
+                file << "assignmentBootstrapRetryScheduled=" << (m_assignmentBootstrapRetryScheduled ? 1 : 0) << "\n";
+                file << "assignmentBootstrapActive=" << (m_assignmentBootstrapActive ? 1 : 0) << "\n";
+                file << "assignmentBootstrapReady=" << (m_assignmentBootstrapReady ? 1 : 0) << "\n";
+                file << "assignmentBootstrapPermanentFailure=" << (m_assignmentBootstrapPermanentFailure ? 1 : 0) << "\n";
+                file << "assignmentBootstrapRequestId=" << m_assignmentBootstrapRequestId << "\n";
+                file << "assignmentBootstrapActionId=" << m_assignmentBootstrapActionId << "\n";
+                file << "assignmentBootstrapLastRequestId=" << m_assignmentBootstrapLastRequestId << "\n";
+                file << "assignmentBootstrapLastActionId=" << m_assignmentBootstrapLastActionId << "\n";
+                file << "assignmentBootstrapFailure=" << AssignmentBootstrapFailureName(m_assignmentBootstrapFailure) << "\n";
+                file << "assignmentBootstrapFailureCount=" << m_assignmentBootstrapFailureCount << "\n";
+                file << "assignmentBootstrapFailureRequestId=" << m_assignmentBootstrapFailureRequestId << "\n";
+                file << "assignmentBootstrapFailureActionId=" << m_assignmentBootstrapFailureActionId << "\n";
+                file << "assignmentBootstrapFailureRecordKind=" << m_assignmentBootstrapFailureRecordKind << "\n";
+                file << "assignmentBootstrapFailureOrdinal=" << m_assignmentBootstrapFailureOrdinal << "\n";
+                file << "assignmentBootstrapFailureBridgeStatus=" << m_assignmentBootstrapFailureBridgeStatus << "\n";
+                file << "assignmentBootstrapFailureBridgeReason=" << m_assignmentBootstrapFailureBridgeReason << "\n";
+                file << "assignmentBootstrapFailureTextAction=" << m_assignmentBootstrapFailureTextAction << "\n";
+                file << "assignmentBootstrapFailureTextChunkIndex=" << m_assignmentBootstrapFailureTextChunkIndex << "\n";
+                file << "assignmentBootstrapFailureTextChunkCount=" << m_assignmentBootstrapFailureTextChunkCount << "\n";
+                file << "assignmentBootstrapEndFailureMask=0x" << std::hex << m_assignmentBootstrapEndFailureTelemetry.FailureMask << std::dec << "\n";
+                file << "assignmentBootstrapAppearanceValidationFailureMask=0x" << std::hex << m_assignmentBootstrapEndFailureTelemetry.AppearanceValidationFailureMask << std::dec
+                     << "\n";
+                file << "assignmentBootstrapEndNameLength=" << m_assignmentBootstrapEndFailureTelemetry.NameLength << "\n";
+                file << "assignmentBootstrapEndHeadPartCount=" << m_assignmentBootstrapEndFailureTelemetry.HeadPartCount << "\n";
+                file << "assignmentBootstrapEndTintCount=" << m_assignmentBootstrapEndFailureTelemetry.TintCount << "\n";
+                file << "assignmentBootstrapEndCompletedRequiredTintPaths=" << m_assignmentBootstrapEndFailureTelemetry.CompletedRequiredTintPaths << "\n";
+                file << "assignmentBootstrapEndCompletedFaceMorphs=" << m_assignmentBootstrapEndFailureTelemetry.CompletedFaceMorphs << "\n";
+                file << "assignmentBootstrapEndCompletedFaceParts=" << m_assignmentBootstrapEndFailureTelemetry.CompletedFaceParts << "\n";
+                file << "assignmentBootstrapEndCompletedEssentialActorValues=" << m_assignmentBootstrapEndFailureTelemetry.CompletedEssentialActorValues << "\n";
+                file << "assignmentBootstrapExpectedRecords=" << m_assignmentBootstrapExpectedRecords << "\n";
+                file << "assignmentBootstrapNextOrdinal=" << m_assignmentBootstrapNextOrdinal << "\n";
+                file << "assignmentBootstrapRetryElapsedMs=" << ToStatusMilliseconds(m_assignmentBootstrapElapsed) << "\n";
+                file << "trackedAvatarCount=" << m_remoteAvatars.size() << "\n";
+                file << "pendingSpawnCount=" << m_pendingSpawns.size() << "\n";
+                file << "activeAvatarCount=" << activeAvatarCount << "\n";
+                file << "createSubmittedCount=" << m_createSubmittedCount << "\n";
+                file << "createSucceededCount=" << m_createSucceededCount << "\n";
+                file << "updateSubmittedCount=" << m_updateSubmittedCount << "\n";
+                file << "destroySubmittedCount=" << m_destroySubmittedCount << "\n";
+                file << "destroySucceededCount=" << m_destroySucceededCount << "\n";
+                file << "rejectedCommandCount=" << rejectedCommandCount << "\n";
+                file << "eventRingDropCount=" << eventRingDropCount << "\n";
+                file << "commandRingDropCount=" << commandRingDropCount << "\n";
+                file << "invalidTransformCount=" << m_invalidTransformCount << "\n";
+                file << "remoteMovementAcceptedCount=" << m_remoteMovementAcceptedCount << "\n";
+                file << "staleMovementRejectedCount=" << m_staleMovementRejectedCount << "\n";
+                file << "spatialTransferSubmittedCount=" << m_spatialTransferSubmittedCount << "\n";
+                file << "spatialTransferSucceededCount=" << m_spatialTransferSucceededCount << "\n";
+                file << "spatialTransferRejectedCount=" << m_spatialTransferRejectedCount << "\n";
+                file << "animationSnapshotSubmittedCount=" << m_animationSnapshotSubmittedCount << "\n";
+                file << "animationSnapshotAppliedCount=" << m_animationSnapshotAppliedCount << "\n";
+                file << "animationSnapshotRejectedCount=" << m_animationSnapshotRejectedCount << "\n";
+                file << "sameSpaceCount=" << m_sameSpaceCount << "\n";
+            });
+        m_statusDirty = !published;
     }
     catch (...)
     {
+        m_statusDirty = true;
     }
 }
 

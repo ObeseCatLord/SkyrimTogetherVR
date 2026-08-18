@@ -38,6 +38,7 @@
 #include <Structs/VRProjectileEvent.h>
 
 #include "../vr_common/VRGameplayBridge.h"
+#include "../vr_common/VRHandoffPath.h"
 
 #include <TiltedCore/Math.hpp>
 #include <TiltedCore/Platform.hpp>
@@ -1725,6 +1726,11 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         REQUIRE(recvMessage.Version == "stvr-test-1-g12345678");
         REQUIRE(sendMessage == recvMessage);
+        recvMessage.Version = "different-build";
+        REQUIRE_FALSE(sendMessage == recvMessage);
+        recvMessage = sendMessage;
+        ++recvMessage.ConnectionAttempt;
+        REQUIRE_FALSE(sendMessage == recvMessage);
     }
 
     SECTION("AuthenticationResponse")
@@ -1733,6 +1739,9 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         AuthenticationResponse sendMessage, recvMessage;
         sendMessage.Type = AuthenticationResponse::ResponseType::kAccepted;
+        sendMessage.SKSEActive = true;
+        sendMessage.MO2Active = true;
+        sendMessage.Version = "stvr-test-1-g12345678";
         sendMessage.GameplayProtocolRevision = 1;
         sendMessage.ServerCapabilities = 3;
         sendMessage.NegotiatedCapabilities = 3;
@@ -1755,6 +1764,7 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         recvMessage.DeserializeRaw(reader);
 
+        REQUIRE(recvMessage.Version == "stvr-test-1-g12345678");
         REQUIRE(sendMessage == recvMessage);
     }
 
@@ -2584,6 +2594,15 @@ TEST_CASE("Packets", "[encoding.packets]")
 
         REQUIRE(sendMessage == recvMessage);
     }
+}
+
+TEST_CASE("VR handoff launch identity", "[vr.handoff]")
+{
+    std::string normalized;
+    REQUIRE(SkyrimTogetherVR::Handoff::NormalizeLaunchNonce("ABCDEF0123456789ABCDEF0123456789", normalized));
+    REQUIRE(normalized == "abcdef0123456789abcdef0123456789");
+    REQUIRE_FALSE(SkyrimTogetherVR::Handoff::NormalizeLaunchNonce("abcdef0123456789abcdef012345678", normalized));
+    REQUIRE_FALSE(SkyrimTogetherVR::Handoff::NormalizeLaunchNonce("abcdef0123456789abcdef012345678g", normalized));
 }
 
 TEST_CASE("StringCache", "[encoding.string_cache]")

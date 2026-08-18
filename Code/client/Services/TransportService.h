@@ -63,6 +63,7 @@ struct TransportService : Client
     [[nodiscard]] uint64_t GetSessionId() const noexcept { return m_sessionId; }
     [[nodiscard]] uint64_t GetConnectionGeneration() const noexcept { return m_connectionGeneration; }
     [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
+    [[nodiscard]] const String& GetAcceptedServerVersion() const noexcept { return m_acceptedServerVersion; }
     [[nodiscard]] uint64_t GetNegotiatedGameplayCapabilities() const noexcept { return m_negotiatedGameplayCapabilities; }
     [[nodiscard]] uint64_t GetRequestedGameplayCapabilities() const noexcept { return m_requestedGameplayCapabilities; }
     [[nodiscard]] bool IsGameplayCleanupRequired() const noexcept
@@ -126,6 +127,7 @@ private:
     uint64_t m_connectionGeneration = 0;
     uint64_t m_connectionAttemptGeneration = 0;
     uint64_t m_serverInstanceNonce = 0;
+    String m_acceptedServerVersion{};
     uint64_t m_negotiatedGameplayCapabilities = 0;
     uint64_t m_requestedGameplayCapabilities = 0;
     GameplayRetirementRequest m_gameplayRetirement{};

@@ -179,7 +179,9 @@ function Get-SourceProvenance {
     }
 
     $sourceTreeSha256 = Get-SourceTreeSha256
-    $sourceRevision = if ($isDirty) { "$revision-dirty-$sourceTreeSha256" } else { $revision }
+    # Keep the source identity immutable even for explicitly permitted developer
+    # builds. Dirty state is recorded separately and release audits reject it.
+    $sourceRevision = $revision
     return [ordered]@{
         revision = $revision
         sourceTreeSha256 = $sourceTreeSha256
@@ -633,7 +635,7 @@ function Get-BuildVersion {
     }
 
     $version = ($versionOutput | Select-Object -Last 1).Trim()
-    if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "none" -or $version -like "unknown-*") {
+    if ([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$' -or $version -in @("none", "unavailable") -or $version -like "unknown-*") {
         throw "Refusing to build with invalid network build version '$version'."
     }
     return $version
@@ -1153,6 +1155,7 @@ if (-not $NoPackage) {
         artifactSha256 = $artifactSha256
         packageFileSha256 = $packageFileSha256
         buildVersion = $buildVersion
+        networkVersion = $buildVersion
         sourceRevision = $sourceProvenance["sourceRevision"]
         sourceProvenance = $sourceProvenance
         packageRoot = $packageDir

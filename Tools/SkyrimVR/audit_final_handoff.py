@@ -50,6 +50,10 @@ def latest_build_evidence(build_dir: pathlib.Path, mode: str) -> pathlib.Path | 
 def runtime_manifest_matches(manifest: dict[str, object], role: str) -> bool:
     if manifest.get("schema") != "skyrim_together_vr_runtime_evidence_v1":
         return False
+    if manifest.get("liveAdmissionRequested") is not True:
+        return False
+    if manifest.get("runtimeEvidenceTrust") != "trusted":
+        return False
     avatar_sync = bool(manifest.get("avatarSyncAudit"))
     gameplay_audit = bool(manifest.get("gameplayAudit"))
     remote_player = bool(manifest.get("requiredRemotePlayer"))
@@ -147,6 +151,10 @@ def require_manifest_flags(
         actual = bool(manifest.get(key))
         if actual != expected_value:
             failures.append(f"{role} manifest {key}={actual} expected={expected_value}")
+    if manifest.get("liveAdmissionRequested") is not True:
+        failures.append(f"{role} manifest liveAdmissionRequested is not exactly true")
+    if manifest.get("runtimeEvidenceTrust") != "trusted":
+        failures.append(f"{role} manifest runtimeEvidenceTrust is not exactly 'trusted'")
 
 
 def audit_build_bundle(path: pathlib.Path, role: str, mode: str, failures: list[str]) -> None:
@@ -238,6 +246,15 @@ def build_manifest(avatar_sync: bool, gameplay: bool = False) -> dict[str, objec
         "packageRoot": "self-test",
         "stagedGameFiles": True,
         "companionPanel": True,
+        "buildVersion": "fixture",
+        "networkVersion": "fixture",
+        "sourceRevision": "0" * 40,
+        "sourceProvenance": {
+            "revision": "0" * 40,
+            "sourceTreeSha256": "1" * 64,
+            "dirty": False,
+            "dirtyApproved": False,
+        },
         "generatedAtUtc": "2026-01-01T00:00:00.0000000Z",
     }
 
@@ -280,6 +297,49 @@ def write_runtime_evidence_entry(
     raise ValueError(f"runtime evidence manifest has no file record for {archive_name}")
 
 
+def fixture_runtime_identity(
+    game_path: str,
+    network_version: str,
+) -> tuple[dict[str, object], dict[str, bytes], int]:
+    """Build sealed, mutually consistent readouts for a trusted live fixture."""
+    nonce = "0123456789abcdef0123456789abcdef"
+    evaluated_at_ns = 1_767_225_600_000_000_000
+    readout_mtime_ns = evaluated_at_ns - 1_000_000_000
+    common = f"launchNonce={nonce}\nprocessId=42\n"
+    payloads = {
+        "status": (
+            common
+            + f"online=1\nclientVersion={network_version}\nserverVersion={network_version}\n"
+            + f"gameplayProtocolRevision={collect_runtime_evidence.vr_handoff.GAMEPLAY_PROTOCOL_REVISION}\n"
+            + "serverInstanceNonce=7\nsessionId=8\n"
+            + f"connectionGeneration=9\ngamePath={game_path}\n"
+        ).encode("utf-8"),
+        "lifecycle": f"{common}gamePath={game_path}\n".encode("utf-8"),
+        "playercell": f"{common}gamePath={game_path}\n".encode("utf-8"),
+        "avatar": f"{common}gamePath={game_path}\n".encode("utf-8"),
+    }
+    identity_readouts = {
+        name: collect_runtime_evidence.vr_handoff.parse_key_value_bytes(payload)
+        for name, payload in payloads.items()
+    }
+    readout_metadata = {
+        name: {"mtimeNs": readout_mtime_ns, "present": True}
+        for name in collect_runtime_evidence.vr_handoff.RUNTIME_IDENTITY_READOUTS
+    }
+    runtime_identity = collect_runtime_evidence.vr_handoff.evaluate_runtime_identity(
+        identity_readouts,
+        pathlib.Path("."),
+        pathlib.Path(game_path),
+        max_age_seconds=30,
+        now_ns=evaluated_at_ns,
+        readout_metadata=readout_metadata,
+        expected_network_version=network_version,
+    )
+    if not runtime_identity["ok"]:
+        raise ValueError("self-test runtime identity fixture is invalid")
+    return runtime_identity, payloads, readout_mtime_ns
+
+
 def create_runtime_evidence_zip(
     path: pathlib.Path,
     *,
@@ -287,13 +347,20 @@ def create_runtime_evidence_zip(
     gameplay: bool = False,
     pose_context: bool,
     gameplay_relays: bool,
+    live_admission: bool = True,
 ) -> pathlib.Path:
     package_manifest = build_manifest(avatar_sync, gameplay=gameplay)
     avatar_runtime_checks = avatar_sync or gameplay
+    game_path = "self-test"
+    runtime_identity, identity_payloads, identity_mtime_ns = fixture_runtime_identity(
+        game_path,
+        str(package_manifest["networkVersion"]),
+    )
+    runtime_trust = "trusted" if live_admission and bool(runtime_identity["ok"]) else "untrusted"
     runtime_manifest = {
         "schema": "skyrim_together_vr_runtime_evidence_v1",
         "createdUtc": "2026-01-01T00:00:00+00:00",
-        "gamePath": "self-test",
+        "gamePath": game_path,
         "handoffDir": "self-test",
         "clientLog": "self-test",
         "packageBuildManifestPath": collect_runtime_evidence.BUILD_MANIFEST_NAME,
@@ -316,6 +383,9 @@ def create_runtime_evidence_zip(
         "requiredGrabRelay": gameplay_relays,
         "requiredHiggsRelay": gameplay_relays,
         "requiredSaveloadObserver": gameplay_relays,
+        "runtimeIdentity": runtime_identity,
+        "runtimeEvidenceTrust": runtime_trust,
+        "liveAdmissionRequested": live_admission,
         "runtimeAuditExitCode": 0,
         "runtimeChecklist": {
             collect_runtime_evidence.CHECK_PASS: len(audit_runtime_evidence_zip.REQUIRED_CHECK_IDS),
@@ -338,6 +408,17 @@ def create_runtime_evidence_zip(
                 "required": True,
                 "exists": True,
             },
+            *[
+                {
+                    "category": "handoff",
+                    "source": "self-test",
+                    "archiveName": f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES[name]}",
+                    "required": True,
+                    "exists": True,
+                    "mtimeNs": identity_mtime_ns,
+                }
+                for name in collect_runtime_evidence.vr_handoff.RUNTIME_IDENTITY_READOUTS
+            ],
         ],
     }
     runtime_checklist = checklist(pass_all=True)
@@ -352,6 +433,13 @@ def create_runtime_evidence_zip(
         archive.writestr("runtime_checklist.json", json.dumps(runtime_checklist, indent=2, sort_keys=True) + "\n")
         archive.writestr("runtime_checklist.txt", "SkyrimTogetherVR runtime checklist\n")
         write_runtime_evidence_entry(archive, runtime_manifest, "logs/tp_client.log", b"self-test\n")
+        for name in collect_runtime_evidence.vr_handoff.RUNTIME_IDENTITY_READOUTS:
+            write_runtime_evidence_entry(
+                archive,
+                runtime_manifest,
+                f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES[name]}",
+                identity_payloads[name],
+            )
         archive.writestr("manifest.json", json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n")
     return path
 
@@ -409,6 +497,36 @@ def run_self_test() -> int:
             pose_context=True,
             gameplay_relays=True,
         )
+        untrusted_runtime_default = create_runtime_evidence_zip(
+            runtime_out / "SkyrimTogetherVR-evidence-default-generic.zip",
+            avatar_sync=False,
+            gameplay=False,
+            pose_context=False,
+            gameplay_relays=False,
+            live_admission=False,
+        )
+        generic_runtime_result = audit_runtime_evidence_zip.audit_archive(
+            untrusted_runtime_default,
+            require_avatar_sync=False,
+            require_gameplay=False,
+            require_remote_player=False,
+            require_weapon_pose=False,
+            require_magic_pose=False,
+            require_projectile_pose=False,
+            require_movement_relay=False,
+            require_equipment_relay=False,
+            require_activation_relay=False,
+            require_magic_relay=False,
+            require_combat_relay=False,
+            require_projectile_relay=False,
+            require_grab_relay=False,
+            require_higgs_relay=False,
+            require_saveload_observer=False,
+            allow_failed_checks=False,
+        )
+        if generic_runtime_result != 0:
+            print("Final handoff self-test failed: generic runtime fixture is not audit-valid.")
+            return 1
         args = argparse.Namespace(
             build_default=None,
             build_avatar_sync=None,
@@ -449,6 +567,24 @@ def run_self_test() -> int:
         positive_result = run_audit(args)
         if positive_result != 0:
             return positive_result
+
+        untrusted_runtime_args = argparse.Namespace(
+            build_default=build_default,
+            build_avatar_sync=build_avatar,
+            build_gameplay=build_gameplay,
+            build_dll_only=build_dll,
+            runtime_default=untrusted_runtime_default,
+            runtime_avatar_sync=runtime_avatar,
+            runtime_gameplay=runtime_gameplay,
+            build_evidence_dir=build_out,
+            runtime_evidence_dir=runtime_out,
+            no_auto_discover=True,
+            require_gameplay_runtime=True,
+        )
+        untrusted_runtime_result = run_audit(untrusted_runtime_args)
+        if untrusted_runtime_result == 0:
+            print("Final handoff self-test failed: untrusted generic runtime evidence unexpectedly passed.")
+            return 1
 
         weakened_build_default = copy_zip_without_entry(
             build_default,

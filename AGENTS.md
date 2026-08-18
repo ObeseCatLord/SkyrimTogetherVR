@@ -247,6 +247,17 @@ Docker containers, or unrelated application data.
 
 ## Runtime Safety
 
+- Treat `Docs/SkyrimVR/runtime-admission-contract.md` as the authoritative
+  definition of a successful runtime test. A process, one fresh file, or
+  `online=1` alone is never sufficient.
+- Final-handoff discovery and audit accept only runtime archives with exact
+  `liveAdmissionRequested=true` and `runtimeEvidenceTrust=trusted`. Generic or
+  crash-only evidence remains useful for diagnosis but cannot prove release
+  admission even when its other checklist fields pass.
+- Use one exact game root per client. The canonical launcher holds an exclusive
+  writer lock for that root, and all accepted readouts must agree on launch
+  nonce, process, game root, client/server build, protocol, session, and
+  connection generation.
 - Never force-close `RaceSex Menu` with DevBench `menu close`/`kHide`. It does
   not run Skyrim's confirm/name transaction and has reproduced an access
   violation.
@@ -268,7 +279,7 @@ Start or verify Monado before launch:
 
 ```bash
 Tools/SkyrimVR/linux/manage-monado-runtime.sh start simulated-qwerty-fixed
-Tools/SkyrimVR/linux/manage-monado-runtime.sh status
+Tools/SkyrimVR/linux/manage-monado-runtime.sh check
 ```
 
 The helper leaves an already healthy Monado listener unchanged. If no listener
@@ -302,9 +313,11 @@ during the earlier `c18ca1d8` bring-up. Its authoritative installed
 `SkyrimTogetherVR_BuildManifest.json` now reports exact build `3fe08ccd`; do not
 infer the installed revision from this historical directory name.
 
-Require `SkyrimTogetherVR.status` to report `online=1`, then correlate the
-client session/server nonces with Foundry's `STVR auth accepted` line. The
-current exact acceptance is recorded in
+Require the status, lifecycle, player-cell, and avatar readouts to pass the
+fresh launch identity gate. `SkyrimTogetherVR.status` must also report equal
+nonempty client/server versions, protocol revision 14, and nonzero server,
+session, and connection-generation identities. Then correlate that identity
+with Foundry's `STVR auth accepted` line. The current exact acceptance is recorded in
 `Docs/SkyrimVR/runtime-connection-result-20260818-3fe08ccd.md`. The earlier
 `c18ca1d8` run remains as historical diagnosis of character creation and the
 stale fader.
@@ -317,6 +330,14 @@ launch: Proton can recreate that directory during prefix initialization and
 remove the mapping after the launcher has computed its command line. The
 result is launcher error 161 (`The specified path is invalid`) before Skyrim
 starts.
+
+Before either direct Proton or `umu-run`, the online launcher structurally
+validates `SkyrimTogetherVR_BuildManifest.json`: Windows x64 schema and flavor,
+canonical network-version grammar, equal build/network versions, a 40-hex
+source revision, a 64-hex source-tree hash, and clean non-approved provenance
+are mandatory. A custom launcher path does not bypass this check. Non-dry
+launches then take the canonical game-root lock before modifying plugin order
+or restoring handoff-owned DLLs.
 
 Launch the deterministic New Game and connection test:
 

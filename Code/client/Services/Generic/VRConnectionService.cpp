@@ -22,6 +22,7 @@
 #include <Services/PartyService.h>
 #include <Services/TransportService.h>
 #include <Services/VRLifecycleService.h>
+#include <Structs/GameplayCapabilities.h>
 #include <VRRuntimeDiagnostics.h>
 #include <World.h>
 
@@ -36,6 +37,7 @@ constexpr std::size_t kMaximumEndpointBytes = 255;
 constexpr std::size_t kMaximumPasswordBytes = 256;
 constexpr std::size_t kMaximumChatBytes = 512;
 constexpr std::size_t kMaximumTeleportTargetBytes = 512;
+constexpr std::size_t kMaximumStatusErrorBytes = 256;
 constexpr uint32_t kMaximumTeleportPlayerId = 0xffff;
 
 bool IsVrPlayerReadyForConnection(World& aWorld) noexcept
@@ -476,6 +478,14 @@ VRConnectionService::Command VRConnectionService::ParseCommandFile(const std::st
         {
             command.Password = value;
         }
+        else if (key == "launchnonce")
+        {
+            std::string commandNonce;
+            const auto launchNonce = SkyrimTogetherVR::Handoff::GetLaunchNonce();
+            if (!SkyrimTogetherVR::Handoff::NormalizeLaunchNonce(value, commandNonce) ||
+                launchNonce.empty() || commandNonce != launchNonce)
+                command.Error = "command launchNonce does not match the current launch";
+        }
         else if (key == "message" || key == "text")
         {
             command.Message = value;
@@ -790,6 +800,14 @@ void VRConnectionService::ArchiveCommandFile(const char* apSuffix) noexcept
 
 void VRConnectionService::SetStatus(std::string aState, std::string aError) noexcept
 {
+    for (auto& character : aError)
+    {
+        const auto value = static_cast<unsigned char>(character);
+        if (value < 0x20 || value == 0x7f)
+            character = ' ';
+    }
+    if (aError.size() > kMaximumStatusErrorBytes)
+        aError.resize(kMaximumStatusErrorBytes);
     m_state = std::move(aState);
     m_lastError = std::move(aError);
     m_statusDirty = true;
@@ -797,24 +815,27 @@ void VRConnectionService::SetStatus(std::string aState, std::string aError) noex
 
 void VRConnectionService::WriteStatusFile() noexcept
 {
-    std::error_code ec;
-    std::filesystem::create_directories(m_handoffDir, ec);
+    const auto published = SkyrimTogetherVR::Handoff::WriteFileAtomically(
+        m_statusPath,
+        [this](std::ofstream& file)
+        {
+            SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
+            file << "state=" << m_state << "\n";
+            file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
+            file << "playerId=" << m_transport.GetLocalPlayerId() << "\n";
+            file << "sessionId=" << m_transport.GetSessionId() << "\n";
+            file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
+            file << "clientVersion=" << BUILD_COMMIT << "\n";
+            file << "serverVersion=" << m_transport.GetAcceptedServerVersion() << "\n";
+            file << "gameplayProtocolRevision=" << SkyrimTogether::Protocol::kGameplayProtocolRevision << "\n";
+            file << "serverInstanceNonce=" << m_transport.GetServerInstanceNonce() << "\n";
+            const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
+            file << "lifecycleState=" << lifecycle.GetStateName() << "\n";
+            file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
+            file << "commandFile=" << m_commandPath.string() << "\n";
+            if (!m_lastError.empty())
+                file << "error=" << m_lastError << "\n";
+        });
 
-    std::ofstream file(m_statusPath, std::ios::trunc);
-    if (!file)
-        return;
-
-    file << "state=" << m_state << "\n";
-    file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
-    file << "playerId=" << m_transport.GetLocalPlayerId() << "\n";
-    file << "sessionId=" << m_transport.GetSessionId() << "\n";
-    file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
-    const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
-    file << "lifecycleState=" << lifecycle.GetStateName() << "\n";
-    file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
-    file << "commandFile=" << m_commandPath.string() << "\n";
-    if (!m_lastError.empty())
-        file << "error=" << m_lastError << "\n";
-
-    m_statusDirty = false;
+    m_statusDirty = !published;
 }

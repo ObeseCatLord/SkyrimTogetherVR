@@ -84,6 +84,197 @@ class AvatarAssignmentReadyTests(unittest.TestCase):
             with self.subTest(avatar=avatar, epoch=epoch):
                 self.assertFalse(DEV_BENCH.avatar_assignment_ready(avatar, online, epoch))
 
+    def test_launch_nonce_must_match_when_required(self) -> None:
+        avatar = ready_avatar_assignment()
+        avatar["launchNonce"] = "a" * 32
+        online = {"playerId": "3", "connectionGeneration": "7"}
+
+        self.assertTrue(DEV_BENCH.avatar_assignment_ready(avatar, online, "11", "a" * 32))
+        self.assertFalse(DEV_BENCH.avatar_assignment_ready(avatar, online, "11", "b" * 32))
+
+
+class ReleaseAdmissionTests(unittest.TestCase):
+    def test_exact_engine_reported_plugin_order_is_required(self) -> None:
+        mods = {
+            "plugins": [{"name": name} for name in DEV_BENCH.RELEASE_ACTIVE_PLUGIN_ORDER],
+            "lightPlugins": [],
+        }
+
+        self.assertEqual(
+            DEV_BENCH.require_release_active_plugin_order(mods),
+            DEV_BENCH.RELEASE_ACTIVE_PLUGIN_ORDER,
+        )
+
+    def test_unexpected_or_reordered_engine_plugins_fail_closed(self) -> None:
+        expected = list(DEV_BENCH.RELEASE_ACTIVE_PLUGIN_ORDER)
+        cases = (
+            expected + ["Unrelated.esp"],
+            [expected[1], expected[0], *expected[2:]],
+        )
+        for names in cases:
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(DEV_BENCH.AutomationError, "isolated release lane"):
+                    DEV_BENCH.require_release_active_plugin_order(
+                        {"plugins": [{"name": name} for name in names], "lightPlugins": []}
+                    )
+
+    def test_active_light_plugin_fails_closed(self) -> None:
+        mods = {
+            "plugins": [{"name": name} for name in DEV_BENCH.RELEASE_ACTIVE_PLUGIN_ORDER],
+            "lightPlugins": [{"name": "Unexpected.esl", "index": 0}],
+        }
+        with self.assertRaisesRegex(DEV_BENCH.AutomationError, "lightPluginCount=1"):
+            DEV_BENCH.require_release_active_plugin_order(mods)
+
+    def test_online_status_requires_nonce_versions_protocol_and_server_nonce(self) -> None:
+        status = {
+            "state": "online",
+            "online": "1",
+            "playerId": "1",
+            "sessionId": "session",
+            "launchNonce": "a" * 32,
+            "clientVersion": "1.0.0",
+            "serverVersion": "1.0.0",
+            "gameplayProtocolRevision": "14",
+            "serverInstanceNonce": "1",
+            "connectionGeneration": "2",
+        }
+
+        self.assertTrue(DEV_BENCH.online_status_ready(status, "session", 1, "a" * 32))
+        for key, value in (
+            ("serverVersion", "other"),
+            ("gameplayProtocolRevision", "13"),
+            ("serverInstanceNonce", "0"),
+            ("launchNonce", "b" * 32),
+        ):
+            with self.subTest(key=key):
+                rejected = {**status, key: value}
+                self.assertFalse(DEV_BENCH.online_status_ready(rejected, "session", 1, "a" * 32))
+
+    def test_nonce_bound_error_is_terminal_and_bounded(self) -> None:
+        error = {"state": "error", "launchNonce": "a" * 32, "error": "wrong_version " * 40}
+        with self.assertRaisesRegex(DEV_BENCH.TerminalAutomationError, "wrong_version") as raised:
+            DEV_BENCH.online_status_ready(error, "session", 0, "a" * 32)
+        self.assertLessEqual(len(str(raised.exception)), 256 + 64)
+
+    def test_usable_menu_requires_a_temporally_separated_non_modal_observation(self) -> None:
+        usable = {"openMenus": ["HUD Menu"], "messageBoxOpen": False}
+        blocked = {"openMenus": ["HUD Menu", "Loading Menu"], "messageBoxOpen": False}
+        self.assertTrue(DEV_BENCH.usable_stable_menu_state(usable))
+        self.assertFalse(DEV_BENCH.usable_stable_menu_state(blocked))
+
+        observations = []
+        sleeps = []
+        clock = [0.0]
+
+        def waits(description, timeout, poll, predicate):
+            observations.append(description)
+            value = poll()
+            self.assertTrue(predicate(value))
+            return value
+
+        def advance(duration):
+            sleeps.append(duration)
+            clock[0] += duration
+
+        result = DEV_BENCH.wait_for_usable_stable_menu(
+            state_reader=lambda: usable,
+            fader_closer=lambda: self.fail("no fader should be closed"),
+            timeout=1.0,
+            wait_for_state=waits,
+            monotonic=lambda: clock[0],
+            sleep=advance,
+        )
+        self.assertIs(result, usable)
+        self.assertEqual(observations, ["USABLE_STABLE menu state"])
+        self.assertGreaterEqual(sum(sleeps), DEV_BENCH.USABLE_STABLE_MENU_MINIMUM_INTERVAL)
+
+    def test_usable_menu_rejects_an_absent_hud(self) -> None:
+        self.assertFalse(
+            DEV_BENCH.usable_stable_menu_state(
+                {"openMenus": [], "messageBoxOpen": False}
+            )
+        )
+
+    def test_hud_disappearance_resets_the_stability_interval(self) -> None:
+        usable = {"openMenus": ["HUD Menu"], "messageBoxOpen": False}
+        hud_missing = {"openMenus": [], "messageBoxOpen": False}
+        states = iter((usable, usable, hud_missing, usable, usable, usable, usable, usable))
+        observations = []
+        clock = [0.0]
+
+        def waits(description, timeout, poll, predicate):
+            observations.append(description)
+            value = poll()
+            self.assertTrue(predicate(value))
+            return value
+
+        def advance(duration):
+            clock[0] += duration
+
+        result = DEV_BENCH.wait_for_usable_stable_menu(
+            state_reader=lambda: next(states),
+            fader_closer=lambda: self.fail("no fader should be closed"),
+            timeout=2.0,
+            wait_for_state=waits,
+            monotonic=lambda: clock[0],
+            sleep=advance,
+        )
+
+        self.assertIs(result, usable)
+        self.assertEqual(
+            observations,
+            ["USABLE_STABLE menu state", "USABLE_STABLE menu state after transition"],
+        )
+        self.assertGreaterEqual(
+            clock[0],
+            DEV_BENCH.USABLE_STABLE_MENU_MINIMUM_INTERVAL
+            + DEV_BENCH.USABLE_STABLE_MENU_POLL_INTERVAL,
+        )
+
+    def test_modal_loading_or_fader_transition_resets_the_stability_interval(self) -> None:
+        usable = {"openMenus": ["HUD Menu"], "messageBoxOpen": False}
+        transitions = (
+            {"openMenus": ["HUD Menu", "Loading Menu"], "messageBoxOpen": False},
+            {"openMenus": ["HUD Menu", "Fader Menu"], "messageBoxOpen": False},
+            {"openMenus": ["HUD Menu", "MessageBoxMenu"], "messageBoxOpen": True},
+        )
+
+        for transition in transitions:
+            with self.subTest(transition=transition):
+                states = iter((usable, usable, transition, usable, usable, usable, usable, usable))
+                observations = []
+                clock = [0.0]
+
+                def waits(description, timeout, poll, predicate):
+                    observations.append(description)
+                    value = poll()
+                    self.assertTrue(predicate(value))
+                    return value
+
+                def advance(duration):
+                    clock[0] += duration
+
+                result = DEV_BENCH.wait_for_usable_stable_menu(
+                    state_reader=lambda: next(states),
+                    fader_closer=lambda: self.fail("no fader should be closed"),
+                    timeout=2.0,
+                    wait_for_state=waits,
+                    monotonic=lambda: clock[0],
+                    sleep=advance,
+                )
+
+                self.assertIs(result, usable)
+                self.assertEqual(
+                    observations,
+                    ["USABLE_STABLE menu state", "USABLE_STABLE menu state after transition"],
+                )
+                self.assertGreaterEqual(
+                    clock[0],
+                    DEV_BENCH.USABLE_STABLE_MENU_MINIMUM_INTERVAL
+                    + DEV_BENCH.USABLE_STABLE_MENU_POLL_INTERVAL,
+                )
+
 
 class RaceSexNameStageTests(unittest.TestCase):
     def test_already_closed_sends_no_name_stage_pulse(self) -> None:
