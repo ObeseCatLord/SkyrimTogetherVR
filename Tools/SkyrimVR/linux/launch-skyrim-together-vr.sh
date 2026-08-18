@@ -145,10 +145,6 @@ export STEAM_COMPAT_INSTALL_PATH="${STEAM_COMPAT_INSTALL_PATH:-$GAME_DIR}"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$STEAM_ROOT}"
 export WINEPREFIX="$WINEPREFIX_DIR"
 
-INPUT_HELPER="$SCRIPT_DIR/stvr-xrizer-input-compat.sh"
-[ -f "$INPUT_HELPER" ] || INPUT_HELPER="$GAME_DIR/stvr-xrizer-input-compat.sh"
-[ -f "$INPUT_HELPER" ] && source "$INPUT_HELPER"
-
 append_colon_path() {
   local variable="$1" path="$2" current entry
   [[ "$path" == /* && "$path" != *:* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || \
@@ -161,6 +157,15 @@ append_colon_path() {
   printf -v "$variable" '%s' "${current:+$current:}$path"
   export "$variable"
 }
+
+stvr_append_pressure_vessel_ro() {
+  append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RO "$1"
+}
+
+INPUT_HELPER="$SCRIPT_DIR/stvr-xrizer-input-compat.sh"
+[ -f "$INPUT_HELPER" ] || INPUT_HELPER="$GAME_DIR/stvr-xrizer-input-compat.sh"
+[ -f "$INPUT_HELPER" ] || die "missing OpenVR runtime helper: $INPUT_HELPER"
+source "$INPUT_HELPER"
 
 validate_monado_manifest() {
   local prefix="$1" manifest="$2"
@@ -291,8 +296,8 @@ else
 fi
 
 if [ "${STVR_DRY_RUN:-0}" = "1" ]; then
-  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nMonado runtime: %s\nXR runtime: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nServer: %s\nCommand:' \
-    "$MODE" "$GAME_DIR" "$COMPATDATA" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "$GAMEID" \
+  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nOpenVR runtime: %s\nOpenVR runtime path: %s\nOpenVR pathreg: %s\nVR override: %s\nVR pathreg override: %s\nProton VR runtime: %s\nMonado runtime: %s\nXR runtime: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nServer: %s\nCommand:' \
+    "$MODE" "$GAME_DIR" "$COMPATDATA" "$STVR_SELECTED_OPENVR_RUNTIME" "$STVR_SELECTED_OPENVR_RUNTIME_PATH" "$STVR_SELECTED_OPENVR_PATHREG" "${VR_OVERRIDE:-none}" "${VR_PATHREG_OVERRIDE:-none}" "${PROTON_VR_RUNTIME:-none}" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "$GAMEID" \
     "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}" "${PRESSURE_VESSEL_FILESYSTEMS_RO:-}" "${STVR_AUTOCONNECT:-disabled}"
   printf ' %q' "${COMMAND[@]}"
   printf '\n'

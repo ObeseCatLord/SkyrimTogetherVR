@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import pathlib
+import re
+import struct
 import subprocess
 import tempfile
 import zipfile
@@ -97,6 +99,63 @@ CORE_DATA_NAMES = {
     "dragonborn.esm",
 }
 RUNTIME_HANDOFF_DIR = pathlib.PurePosixPath("Data/SkyrimTogetherReborn")
+OPENCOMPOSITE_RUNTIME_PATH = pathlib.PurePosixPath("build/bin/linux64/vrclient.so")
+OPENCOMPOSITE_REVISION = "cff07db75c4823afe93ed7027b03d5f7bc86f164"
+OPENCOMPOSITE_RUNTIME_SHA256 = "98a07ff54bc93b0190b576acf7fc8e28f47c5f1924bbe924228abf001cbdc913"
+OPENCOMPOSITE_BUILD_PATCH_SHA256 = "529453480dc9ff838b9cabcb341109672fb961dc0676d4006d238c4662558a67"
+OPENCOMPOSITE_BUILD_PATCH_STATUS = "applied-to-isolated-build-copy"
+OPENCOMPOSITE_OFFICIAL_ORIGINS = frozenset(
+    {
+        "https://github.com/znixian/OpenOVR.git",
+        "https://github.com/znixian/OpenOVR",
+        "git@github.com:znixian/OpenOVR.git",
+        "git@github.com:znixian/OpenOVR",
+        "ssh://git@github.com/znixian/OpenOVR.git",
+        "ssh://git@github.com/znixian/OpenOVR",
+        "https://gitlab.com/znixian/OpenOVR.git",
+        "https://gitlab.com/znixian/OpenOVR",
+        "git@gitlab.com:znixian/OpenOVR.git",
+        "git@gitlab.com:znixian/OpenOVR",
+        "ssh://git@gitlab.com/znixian/OpenOVR.git",
+        "ssh://git@gitlab.com/znixian/OpenOVR",
+    }
+)
+XRIZER_RUNTIME_PATH = pathlib.PurePosixPath("target/release/libxrizer.so")
+XRIZER_BASE_REVISION = "31319560c1bd0f1e5c16936a946bb1c7295dbfd9"
+XRIZER_RUNTIME_SHA256 = "f4588522640707852525a97feb3ff42d8227966d8653d699bd3b8f802e3dfd36"
+XRIZER_COMPATIBILITY_PATCH_SHA256 = "72eaa22a9b5a10bee0f6e1230ed78d8fbac9627af5ed56f919d9bb7e10979b12"
+XRIZER_COMPATIBILITY_PATCH_STATUS = "applied-worktree-patch"
+XRIZER_OFFICIAL_ORIGINS = frozenset(
+    {
+        "https://github.com/Supreeeme/xrizer.git",
+        "https://github.com/Supreeeme/xrizer",
+        "git@github.com:Supreeeme/xrizer.git",
+        "git@github.com:Supreeeme/xrizer",
+        "ssh://git@github.com/Supreeeme/xrizer.git",
+        "ssh://git@github.com/Supreeeme/xrizer",
+    }
+)
+# Steam's Soldier runtime is based on Ubuntu 20.04; portable loaders must not
+# require a newer glibc ABI than its GLIBC_2.31 baseline.
+PORTABLE_GLIBC_MAX = (2, 31)
+PORTABLE_NEEDED_LIBRARIES = frozenset(
+    {
+        "ld-linux-x86-64.so.2",
+        "libOpenGL.so.0",
+        "libGLU.so.1",
+        "libGLX.so.0",
+        "libGL.so.1",
+        "libX11.so.6",
+        "libc.so.6",
+        "libdl.so.2",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libstdc++.so.6",
+        "libvulkan.so.1",
+    }
+)
+NEUTRAL_OPENVR_PATHS = {"version": 1, "runtime": []}
 
 
 def run_git(repo: pathlib.Path, *args: str) -> str:
@@ -199,12 +258,18 @@ class Writer:
                 size += len(chunk)
         self.records.append({"path": name, "size": size, "sha256": digest.hexdigest()})
 
-    def add_bytes(self, payload: bytes, name: str) -> None:
+    def add_bytes(self, payload: bytes, name: str, *, record: bool = True) -> None:
+        name = name.replace(os.sep, "/")
+        if name in self.names:
+            raise ValueError(f"duplicate archive path: {name}")
+        self.names.add(name)
         info = zipfile.ZipInfo(name, self.timestamp)
         info.create_system = 3
         info.external_attr = 0o100644 << 16
         info.compress_type = zipfile.ZIP_DEFLATED
         self.archive.writestr(info, payload)
+        if record:
+            self.records.append({"path": name, "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
 
 
 def parse_args() -> argparse.Namespace:
@@ -216,12 +281,243 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fus-root", type=pathlib.Path, default=home / "LargeGames/FUS")
     parser.add_argument("--downloads", type=pathlib.Path, default=home / "Backup/Downloads")
     parser.add_argument("--xrizer-root", type=pathlib.Path, default=home / ".local/share/envision/ovr_comp")
+    parser.add_argument(
+        "--opencomposite-root",
+        type=pathlib.Path,
+        default=home / ".local/share/envision/opencomposite",
+        help="local OpenComposite checkout containing build/bin/linux64/vrclient.so",
+    )
     parser.add_argument("--reference-root", type=pathlib.Path, default=home / "Documents/SkyrimModding")
     parser.add_argument("--public-assets", type=pathlib.Path)
     parser.add_argument("--gameplay-package", type=pathlib.Path)
     parser.add_argument("--build-evidence", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     return parser.parse_args()
+
+
+def _elf_range(payload: bytes, offset: int, size: int, label: str) -> bytes:
+    if offset < 0 or size < 0 or offset > len(payload) or size > len(payload) - offset:
+        raise ValueError(f"truncated ELF {label}")
+    return payload[offset : offset + size]
+
+
+def _elf_string(table: bytes, offset: int, label: str) -> str:
+    if offset < 0 or offset >= len(table):
+        raise ValueError(f"invalid ELF {label} string offset")
+    end = table.find(b"\0", offset)
+    if end < 0:
+        raise ValueError(f"unterminated ELF {label} string")
+    return table[offset:end].decode("ascii", "strict")
+
+
+def _glibc_version(value: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"GLIBC_(\d+)\.(\d+)", value)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def analyze_elf_loader(payload: bytes) -> dict[str, object]:
+    """Parse the loader identity without executing or loading the ELF object."""
+
+    header = _elf_range(payload, 0, 64, "header")
+    if header[:7] != b"\x7fELF\x02\x01\x01":
+        raise ValueError("loader is not little-endian ELF64")
+    elf_type, machine = struct.unpack_from("<HH", header, 16)
+    if elf_type != 3 or machine != 62:
+        raise ValueError("loader is not an ELF x86_64 ET_DYN shared object")
+    phoff = struct.unpack_from("<Q", header, 32)[0]
+    shoff = struct.unpack_from("<Q", header, 40)[0]
+    phentsize, phnum, shentsize, shnum = struct.unpack_from("<HHHH", header, 54)
+    if phentsize != 56:
+        raise ValueError("unsupported ELF program-header size")
+    program_headers = _elf_range(payload, phoff, phentsize * phnum, "program headers")
+    loads: list[tuple[int, int, int]] = []
+    dynamic: tuple[int, int] | None = None
+    for index in range(phnum):
+        entry = program_headers[index * phentsize : (index + 1) * phentsize]
+        typ = struct.unpack_from("<I", entry, 0)[0]
+        offset, vaddr, _paddr, filesz = struct.unpack_from("<QQQQ", entry, 8)
+        if typ == 1:
+            _elf_range(payload, offset, filesz, "load segment")
+            loads.append((vaddr, offset, filesz))
+        elif typ == 2:
+            if dynamic is not None:
+                raise ValueError("ELF has multiple dynamic segments")
+            _elf_range(payload, offset, filesz, "dynamic segment")
+            dynamic = (offset, filesz)
+    if dynamic is None:
+        raise ValueError("ELF has no dynamic segment")
+
+    entries: list[tuple[int, int]] = []
+    dynamic_data = _elf_range(payload, *dynamic, "dynamic segment")
+    if len(dynamic_data) % 16:
+        raise ValueError("truncated ELF dynamic entry")
+    for index in range(0, len(dynamic_data), 16):
+        tag, value = struct.unpack_from("<qQ", dynamic_data, index)
+        entries.append((tag, value))
+        if tag == 0:
+            break
+    dynstr_address = next((value for tag, value in entries if tag == 5), None)
+    dynstr_size = next((value for tag, value in entries if tag == 10), None)
+    if dynstr_address is None or dynstr_size is None:
+        raise ValueError("ELF dynamic string table is missing")
+    for vaddr, offset, filesz in loads:
+        if vaddr <= dynstr_address and dynstr_address + dynstr_size <= vaddr + filesz:
+            dynstr = _elf_range(payload, offset + dynstr_address - vaddr, dynstr_size, "dynamic string table")
+            break
+    else:
+        raise ValueError("ELF dynamic string table is outside load segments")
+    needed = sorted(_elf_string(dynstr, value, "DT_NEEDED") for tag, value in entries if tag == 1)
+
+    if shentsize != 64 or not shnum:
+        raise ValueError("ELF version-requirement sections are missing")
+    sections = _elf_range(payload, shoff, shentsize * shnum, "section headers")
+    glibc_versions: list[tuple[int, int]] = []
+    for index in range(shnum):
+        section = sections[index * shentsize : (index + 1) * shentsize]
+        typ = struct.unpack_from("<I", section, 4)[0]
+        if typ != 0x6FFFFFFE:  # SHT_GNU_verneed
+            continue
+        offset, size = struct.unpack_from("<QQ", section, 24)
+        link = struct.unpack_from("<I", section, 40)[0]
+        if link >= shnum:
+            raise ValueError("ELF version-requirement string table is invalid")
+        linked = sections[link * shentsize : (link + 1) * shentsize]
+        str_offset, str_size = struct.unpack_from("<QQ", linked, 24)
+        strings = _elf_range(payload, str_offset, str_size, "version string table")
+        version_data = _elf_range(payload, offset, size, "version-requirement section")
+        cursor = 0
+        while cursor < len(version_data):
+            record = _elf_range(version_data, cursor, 16, "version requirement")
+            count = struct.unpack_from("<H", record, 2)[0]
+            aux_offset = struct.unpack_from("<I", record, 8)[0]
+            next_offset = struct.unpack_from("<I", record, 12)[0]
+            aux_cursor = cursor + aux_offset
+            for _ in range(count):
+                aux = _elf_range(version_data, aux_cursor, 16, "version requirement auxiliary entry")
+                version = _glibc_version(_elf_string(strings, struct.unpack_from("<I", aux, 8)[0], "version"))
+                if version is not None:
+                    glibc_versions.append(version)
+                aux_next = struct.unpack_from("<I", aux, 12)[0]
+                if not aux_next:
+                    break
+                aux_cursor += aux_next
+            if not next_offset:
+                break
+            cursor += next_offset
+    if not glibc_versions:
+        raise ValueError("ELF has no GLIBC symbol-version requirements")
+    maximum = max(glibc_versions)
+    return {
+        "elfClass": "ELF64",
+        "elfMachine": "x86_64",
+        "elfType": "ET_DYN",
+        "maxGlibc": f"GLIBC_{maximum[0]}.{maximum[1]}",
+        "neededLibraries": needed,
+    }
+
+
+def validate_portable_loader(path: pathlib.Path) -> dict[str, object]:
+    identity = analyze_elf_loader(path.read_bytes())
+    maximum = _glibc_version(identity["maxGlibc"])
+    assert maximum is not None
+    if maximum > PORTABLE_GLIBC_MAX:
+        ceiling = f"GLIBC_{PORTABLE_GLIBC_MAX[0]}.{PORTABLE_GLIBC_MAX[1]}"
+        raise ValueError(f"loader requires {identity['maxGlibc']}, above portable glibc ceiling {ceiling}")
+    unexpected = sorted(set(identity["neededLibraries"]) - PORTABLE_NEEDED_LIBRARIES)
+    if unexpected:
+        raise ValueError("loader has non-portable DT_NEEDED dependency: " + ", ".join(unexpected))
+    return identity
+
+
+def validated_opencomposite_runtime(root: pathlib.Path) -> tuple[pathlib.Path, dict[str, object]]:
+    """Return only the reviewed OpenComposite loader and checkout provenance."""
+
+    supplied_root = root.expanduser()
+    if supplied_root.is_symlink():
+        raise ValueError(f"OpenComposite root must not be a symbolic link: {supplied_root}")
+    root = supplied_root.resolve()
+    runtime = root.joinpath(*OPENCOMPOSITE_RUNTIME_PATH.parts)
+    if not root.is_dir():
+        raise ValueError(f"OpenComposite root is not a regular directory: {root}")
+    top_level = pathlib.Path(run_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
+    if top_level != root:
+        raise ValueError(f"OpenComposite root must be the checkout top level: {root}")
+    origin = run_git(root, "remote", "get-url", "origin").strip()
+    if origin not in OPENCOMPOSITE_OFFICIAL_ORIGINS:
+        raise ValueError(f"OpenComposite origin is not the official znixian/OpenOVR repository: {origin!r}")
+    if run_git(root, "status", "--porcelain=v1", "--untracked-files=all").strip():
+        raise ValueError("OpenComposite checkout must be clean")
+    if runtime.is_symlink() or not runtime.is_file():
+        raise FileNotFoundError(f"missing regular OpenComposite Linux runtime: {runtime}")
+    revision = run_git(root, "rev-parse", "HEAD").strip()
+    if revision != OPENCOMPOSITE_REVISION:
+        raise ValueError(f"OpenComposite checkout must be pinned at {OPENCOMPOSITE_REVISION}, got {revision!r}")
+    runtime_hash = sha256(runtime)
+    if runtime_hash != OPENCOMPOSITE_RUNTIME_SHA256:
+        raise ValueError("OpenComposite runtime SHA-256 is not the reviewed current binary")
+    build_patch = pathlib.Path(__file__).with_name("opencomposite-bullseye.patch")
+    if not build_patch.is_file() or build_patch.is_symlink():
+        raise FileNotFoundError(f"missing regular OpenComposite build patch: {build_patch}")
+    build_patch_hash = hashlib.sha256(build_patch.read_bytes()).hexdigest()
+    if build_patch_hash != OPENCOMPOSITE_BUILD_PATCH_SHA256:
+        raise ValueError("OpenComposite build patch SHA-256 is not the reviewed current patch")
+    identity = validate_portable_loader(runtime)
+    return runtime, {
+        "path": "dependencies/opencomposite-runtime/bin/linux64/vrclient.so",
+        "sha256": runtime_hash,
+        "sourceRevision": revision,
+        "sourceOrigin": origin,
+        "checkoutTopLevel": True,
+        "checkoutClean": True,
+        "buildPatchStatus": OPENCOMPOSITE_BUILD_PATCH_STATUS,
+        "buildPatchSha256": build_patch_hash,
+        **identity,
+    }
+
+
+def validated_xrizer_runtime(root: pathlib.Path) -> tuple[pathlib.Path, dict[str, object]]:
+    """Return the reviewed XRizer compatibility build and its provenance."""
+
+    supplied_root = root.expanduser()
+    if supplied_root.is_symlink():
+        raise ValueError(f"XRizer root must not be a symbolic link: {supplied_root}")
+    root = supplied_root.resolve()
+    if not root.is_dir():
+        raise ValueError(f"XRizer root is not a regular directory: {root}")
+    top_level = pathlib.Path(run_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
+    if top_level != root:
+        raise ValueError(f"XRizer root must be the checkout top level: {root}")
+    origin = run_git(root, "remote", "get-url", "origin").strip()
+    if origin not in XRIZER_OFFICIAL_ORIGINS:
+        raise ValueError(f"XRizer origin is not the official Supreeeme/xrizer repository: {origin!r}")
+    revision = run_git(root, "rev-parse", "HEAD").strip()
+    if revision != XRIZER_BASE_REVISION:
+        raise ValueError(f"XRizer checkout must be pinned at {XRIZER_BASE_REVISION}, got {revision!r}")
+    if run_git(root, "diff", "--cached", "--binary", "HEAD"):
+        raise ValueError("XRizer compatibility patch must not contain staged changes")
+    if run_git(root, "ls-files", "--others", "--exclude-standard").strip():
+        raise ValueError("XRizer checkout must not contain untracked files")
+    patch = run_git(root, "diff", "--binary", "--no-ext-diff", "HEAD").encode("utf-8")
+    patch_hash = hashlib.sha256(patch).hexdigest()
+    if patch_hash != XRIZER_COMPATIBILITY_PATCH_SHA256:
+        raise ValueError("XRizer compatibility patch SHA-256 is not the reviewed current patch")
+    runtime = root.joinpath(*XRIZER_RUNTIME_PATH.parts)
+    if runtime.is_symlink() or not runtime.is_file():
+        raise FileNotFoundError(f"missing regular XRizer Linux runtime: {runtime}")
+    runtime_hash = sha256(runtime)
+    if runtime_hash != XRIZER_RUNTIME_SHA256:
+        raise ValueError("XRizer runtime SHA-256 is not the reviewed current binary")
+    identity = validate_portable_loader(runtime)
+    return runtime, {
+        "path": "dependencies/xrizer-runtime/bin/linux64/vrclient.so",
+        "sha256": runtime_hash,
+        "baseRevision": XRIZER_BASE_REVISION,
+        "sourceRevision": revision,
+        "sourceOrigin": origin,
+        "compatibilityPatchStatus": XRIZER_COMPATIBILITY_PATCH_STATUS,
+        "compatibilityPatchSha256": patch_hash,
+        **identity,
+    }
 
 
 def main() -> int:
@@ -267,6 +563,8 @@ def main() -> int:
     ).returncode:
         raise ValueError(f"build source revision {build_revision} is not an ancestor of handoff HEAD {head}")
     build_identity = validate_artifact_pair(gameplay_package, build_evidence, build_revision)
+    xrizer_runtime, xrizer_provenance = validated_xrizer_runtime(args.xrizer_root)
+    opencomposite_runtime, opencomposite_provenance = validated_opencomposite_runtime(args.opencomposite_root)
 
     with tempfile.TemporaryDirectory(prefix="stvr-local-handoff-") as temp_dir:
         bundle = pathlib.Path(temp_dir) / "source.bundle"
@@ -323,12 +621,24 @@ def main() -> int:
                     rel = path.relative_to(args.game_dir)
                 writer.add(path, f"{root}/dependencies/current-game-overlay/{rel.as_posix()}")
 
-            xrizer_runtime = args.xrizer_root / "target/release"
-            for name in ("libxrizer.so", "openvrpaths.vrpath"):
-                writer.add(xrizer_runtime / name, f"{root}/dependencies/xrizer-runtime/{name}")
+            writer.add(xrizer_runtime, f"{root}/dependencies/xrizer-runtime/bin/linux64/vrclient.so")
+            writer.add(
+                opencomposite_runtime,
+                f"{root}/dependencies/opencomposite-runtime/bin/linux64/vrclient.so",
+            )
+            writer.add_bytes(
+                (json.dumps(NEUTRAL_OPENVR_PATHS, sort_keys=True) + "\n").encode("utf-8"),
+                f"{root}/dependencies/openvrpaths.vrpath",
+            )
             for path in iter_tree(args.xrizer_root):
+                if path.name == "openvrpaths.vrpath":
+                    continue
                 rel = path.relative_to(args.xrizer_root).as_posix()
                 writer.add(path, f"{root}/dependencies/source-references/XRizer/{rel}")
+
+            for path in iter_tree(args.opencomposite_root):
+                rel = path.relative_to(args.opencomposite_root).as_posix()
+                writer.add(path, f"{root}/dependencies/source-references/OpenComposite/{rel}")
 
             for label, rel_root in REFERENCE_SOURCES.items():
                 source_root = args.reference_root / rel_root
@@ -380,18 +690,14 @@ def main() -> int:
                     "sha256": sha256(build_evidence),
                     **build_identity,
                 },
-                "machinePaths": {
-                    "repo": str(repo),
-                    "game": str(args.game_dir),
-                    "compatdata": str(args.compatdata),
-                    "fus": str(args.fus_root),
-                    "xrizer": str(args.xrizer_root),
-                },
+                "xrizerRuntime": xrizer_provenance,
+                "openCompositeRuntime": opencomposite_provenance,
                 "records": writer.records,
             }
             writer.add_bytes(
                 (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
                 f"{root}/LOCAL-MANIFEST.json",
+                record=False,
             )
 
     checksum = output.with_suffix(output.suffix + ".sha256.txt")

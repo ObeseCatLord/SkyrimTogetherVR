@@ -94,22 +94,22 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:0fd7a319-arm64`.
+- Image tag: `skyrim-together-vr-server:70ad5d1d-arm64`.
 - Image ID:
-  `sha256:b15c222a43164a13eafd2fe54e01af93f7c7782216ab8f9761b9b1cd0318894f`.
+  `sha256:da3448ba745089a4633b0c3873512e411b44c316f6a5b5f9c949072edf366aee`.
 - Runtime executable SHA-256:
-  `8fc8824ccfce714076e27b67cf68bdcbf593fd361c9c56d174b6ee36c0ce6974`.
+  `ce7b46ad509d200e2a341cc74877085fe088dc1504e3d4273a31944cbb321bd6`.
 - Runtime core SHA-256:
-  `08b9ffdebf061eb9cceff763c1cc8ffa55168d54434825c60923b0d7206ed774`.
-- Server deployment revision: `0fd7a319`; the matching client build is
-  `0fd7a319a9f2b74588551e0c13dbcac462f91f0e` and reports
-  `stvr-v0.1.0-alpha.1-75-g0fd7a319`.
+  `21c3c1c54b7403f940bfbd95dcdb4027ee2f76bb68db966e645ad521524ec626`.
+- Server deployment revision: `70ad5d1d`; the matching client build is
+  `70ad5d1d0225e18d1cb8d1cc625e80ee7062e9bc` and reports
+  `stvr-v0.1.0-alpha.1-81-g70ad5d1d`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `0fd7a319` source revision. The current
+The client and server use the exact `70ad5d1d` source revision. The current
 deployment has one container and zero restarts, listens on UDP port 26099, and
 retains the existing persistent config, Data, and log mounts. The earlier
 `a4b90e01` Linux/Monado single-client bootstrap result remains documented in

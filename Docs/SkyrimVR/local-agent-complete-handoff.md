@@ -1,9 +1,48 @@
 # Local Agent Complete Handoff
 
 This is a private, machine-local handoff. It contains third-party mod files,
-SKSEVR, installed-game overlay files, a Linux XRizer runtime/source snapshot,
-and reference checkouts. Do **not** upload this archive to GitHub, Nexus, cloud
-storage, or a public issue.
+SKSEVR, installed-game overlay files, bundled Linux XRizer and OpenComposite
+OpenVR runtimes, and reference checkouts. Do **not** upload this archive to
+GitHub, Nexus, cloud storage, or a public issue.
+
+This file is copied to the extracted archive root as `START-HERE.md`.
+
+## Quick Start
+
+Linux requires an already working legal Skyrim VR 1.4.15 installation, its
+Steam app `611670` Proton prefix, Proton/UMU, and an active Monado OpenXR
+session. From the extracted handoff root, these commands install the verified
+payload and connect through the bundled portable OpenComposite runtime:
+
+```bash
+HANDOFF=$PWD
+GAME_DIR=/path/to/SteamLibrary/steamapps/common/SkyrimVR
+COMPATDATA=/path/to/SteamLibrary/steamapps/compatdata/611670
+python3 "$HANDOFF/INSTALL-SECOND-CLIENT.py" --game-dir "$GAME_DIR" --compatdata "$COMPATDATA" --install
+SERVER=$(python3 -c 'import json; print(json.load(open("LOCAL-MANIFEST.json"))["serverEndpoint"])')
+STVR_OPENVR_RUNTIME=opencomposite STVR_AUTOCONNECT="$SERVER" "$GAME_DIR/launch-skyrim-together-vr.sh"
+```
+
+Use `STVR_OPENVR_RUNTIME=xrizer` instead when XRizer is preferred. The launch
+script validates the selected runtime and prints its resolved paths before
+starting Proton. Set `STVR_PASSWORD` in the same command only when the server
+requires one; do not store it in the handoff or logs.
+
+On Windows, start SteamVR/OpenXR first. Then run this PowerShell sequence from
+the extracted handoff root:
+
+```powershell
+$Handoff = (Get-Location).Path
+$GameDir = 'D:\SteamLibrary\steamapps\common\SkyrimVR'
+& "$Handoff\INSTALL-SECOND-CLIENT-WINDOWS.bat" -GameDir $GameDir -Install
+$env:STVR_AUTOCONNECT = (Get-Content "$Handoff\LOCAL-MANIFEST.json" -Raw | ConvertFrom-Json).serverEndpoint
+Set-Location $GameDir
+.\SkyrimTogetherVRGameplay.exe
+```
+
+Both installers default to validation-only unless their explicit install
+switch is supplied. Detailed prerequisites, dry runs, profile handling,
+uninstall commands, runtime alternatives, and evidence collection follow.
 
 ## Authoritative Identity
 
@@ -21,6 +60,24 @@ storage, or a public issue.
 - The Windows installer never copies `dependencies/xrizer-runtime/`, Linux
   launch scripts, or the handoff's `openvr_api.dll` into a Windows game root.
   Windows uses its existing SteamVR/OpenXR installation.
+- The Linux installer transactionally installs the bundled runtime binaries as
+  `.stvr-openvr/xrizer/bin/linux64/vrclient.so` and
+  `.stvr-openvr/opencomposite/bin/linux64/vrclient.so`, plus a neutral
+  `.stvr-openvr/openvrpaths.vrpath` containing only `{"version": 1,
+  "runtime": []}`. This is a portable registry, not copied generated
+  metadata, so it contains no source-machine runtime paths.
+- Both installers preserve the target game's root `openvr_api.dll`. In
+  particular, Linux never replaces an existing per-game OpenComposite DLL;
+  the bundled native runtime is selected through `VR_OVERRIDE` instead.
+- `dependencies/source-references/OpenComposite/` contains the reviewed
+  OpenOVR source snapshot and license (without `.git` or `build`). The
+  manifest binds its loader to the clean official `znixian/OpenOVR` checkout
+  revision `cff07db75c4823afe93ed7027b03d5f7bc86f164` and portable loader
+  SHA-256 `98a07ff54bc93b0190b576acf7fc8e28f47c5f1924bbe924228abf001cbdc913`.
+  The archive audit parses both native loaders without executing them and
+  rejects a non-x86-64 shared object, an unreviewed dependency, or a glibc
+  requirement newer than `GLIBC_2.31`. The bundled OpenComposite loader needs
+  at most `GLIBC_2.14`; XRizer needs at most `GLIBC_2.29`.
 
 The archive intentionally omits base-game BSA/ESM content, Steam, Proton,
 Monado, Docker, raw runtime logs, build trees, PDBs, and Git object databases.
@@ -45,11 +102,22 @@ INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\Sky
 
 Use the explicit install switch only after the dry run passes. This installs
 the exact gameplay package and only portable `Data`/SKSEVR overlay data. It
-never replaces `SkyrimVR.exe`.
+never replaces `SkyrimVR.exe` or `openvr_api.dll` (case-insensitively).
 
 ```bat
 INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -Install
 ```
+
+The Windows installer journals every replacement. Review an uninstall without
+changing files, then apply it explicitly:
+
+```bat
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -Uninstall
+INSTALL-SECOND-CLIENT-WINDOWS.bat -GameDir "D:\SteamLibrary\steamapps\common\SkyrimVR" -Uninstall -Install
+```
+
+Non-force uninstall refuses to replace a file changed after installation.
+Add `-Force` only after reviewing the reported conflict paths.
 
 The optional profile operation copies only the bundled `Plugins.txt` and
 `loadorder.txt` to `%LOCALAPPDATA%\Skyrim VR`. It does not overwrite
@@ -138,6 +206,26 @@ STVR_GAME_DIR="$GAME_DIR" STVR_DRY_RUN=1 "$GAME_DIR/launch-skyrim-together-vr.sh
 Set `STVR_STEAM_ROOT`, `STVR_STEAM_LIBRARY`, `STVR_COMPATDATA`, or
 `STVR_PROTONPATH` only when automatic discovery does not match that machine.
 Do not use the old handoff's launcher copies for this repair.
+
+After the normal Linux install, launchers default to the bundled XRizer
+runtime. Select XRizer, OpenComposite, or the local SteamVR default without
+referring to the machine that created the handoff:
+
+```bash
+GAME_DIR=/path/to/second-steam-library/steamapps/common/SkyrimVR
+STVR_OPENVR_RUNTIME=xrizer "$GAME_DIR/launch-skyrim-together-vr.sh"
+STVR_OPENVR_RUNTIME=opencomposite "$GAME_DIR/launch-skyrim-together-vr.sh"
+STVR_OPENVR_RUNTIME=steamvr "$GAME_DIR/launch-skyrim-together-vr.sh"
+```
+
+The explicit runtime overrides use the same installed paths when needed:
+
+```bash
+STVR_XRIZER_RUNTIME="$GAME_DIR/.stvr-openvr/xrizer" \
+  "$GAME_DIR/launch-skyrim-together-vr.sh"
+STVR_OPENCOMPOSITE_RUNTIME="$GAME_DIR/.stvr-openvr/opencomposite" \
+  "$GAME_DIR/launch-skyrim-together-vr.sh"
+```
 
 Start or verify Monado using the helper carried in `source/`, replacing the
 profile UUID when needed:

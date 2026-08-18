@@ -283,12 +283,13 @@ def operation_for_file(
     return InstallOperation(target_root, relative, source, sha256(source), mode)
 
 
-def collect_overlay(root: pathlib.Path) -> tuple[list[InstallOperation], int]:
+def collect_overlay(root: pathlib.Path) -> tuple[list[InstallOperation], tuple[int, int]]:
     overlay = archive_child(root, "dependencies/current-game-overlay")
     if not overlay.is_dir():
         raise FileNotFoundError(f"missing current-game-overlay: {overlay}")
     operations: list[InstallOperation] = []
     skipped_exe = 0
+    skipped_openvr_api = 0
     for source in sorted(overlay.rglob("*")):
         if source.is_dir():
             if source.is_symlink():
@@ -298,10 +299,15 @@ def collect_overlay(root: pathlib.Path) -> tuple[list[InstallOperation], int]:
         if relative.as_posix().casefold() == "skyrimvr.exe":
             skipped_exe += 1
             continue
+        if relative.as_posix().casefold() == "openvr_api.dll":
+            skipped_openvr_api += 1
+            continue
         operations.append(operation_for_file("game", relative, source))
     if skipped_exe != 1:
         raise ValueError("current-game-overlay must contain exactly one SkyrimVR.exe to preserve")
-    return operations, skipped_exe
+    if skipped_openvr_api != 1:
+        raise ValueError("current-game-overlay must contain exactly one openvr_api.dll to preserve")
+    return operations, (skipped_exe, skipped_openvr_api)
 
 
 def collect_gameplay_package(package: pathlib.Path) -> list[InstallOperation]:
@@ -312,8 +318,8 @@ def collect_gameplay_package(package: pathlib.Path) -> list[InstallOperation]:
             if not name.startswith("package/") or name == "package/":
                 raise ValueError(f"gameplay package has unexpected entry: {name}")
             relative = pathlib.PurePosixPath(name.removeprefix("package/"))
-            if relative.as_posix().casefold() == "skyrimvr.exe":
-                raise ValueError("gameplay package must not replace the legal SkyrimVR.exe")
+            if relative.as_posix().casefold() in {"skyrimvr.exe", "openvr_api.dll"}:
+                raise ValueError(f"gameplay package must not replace {relative.name}")
             mode = (info.external_attr >> 16) & 0o777
             operations.append(
                 InstallOperation("game", relative, (package, name), source_hash((package, name)), mode or 0o644)
@@ -337,6 +343,29 @@ def collect_canonical_launchers(root: pathlib.Path) -> list[InstallOperation]:
         source = archive_child(root, pathlib.PurePosixPath("source/Tools/SkyrimVR/linux") / name)
         operations.append(operation_for_file("game", pathlib.PurePosixPath(name), source, executable=True))
     return operations
+
+
+def collect_openvr_runtimes(root: pathlib.Path) -> list[InstallOperation]:
+    """Install complete portable OpenVR loader layouts and neutral registry."""
+
+    runtimes = (
+        (
+            pathlib.PurePosixPath("dependencies/xrizer-runtime/bin/linux64/vrclient.so"),
+            pathlib.PurePosixPath(".stvr-openvr/xrizer/bin/linux64/vrclient.so"),
+        ),
+        (
+            pathlib.PurePosixPath("dependencies/opencomposite-runtime/bin/linux64/vrclient.so"),
+            pathlib.PurePosixPath(".stvr-openvr/opencomposite/bin/linux64/vrclient.so"),
+        ),
+        (
+            pathlib.PurePosixPath("dependencies/openvrpaths.vrpath"),
+            pathlib.PurePosixPath(".stvr-openvr/openvrpaths.vrpath"),
+        ),
+    )
+    return [
+        operation_for_file("game", destination, archive_child(root, source))
+        for source, destination in runtimes
+    ]
 
 
 def state_directory(game_dir: pathlib.Path) -> pathlib.Path:
@@ -383,28 +412,29 @@ def target_for(
     if target_root == "game":
         if relative.parts[0] == STATE_DIR_NAME:
             raise ValueError("handoff must not write its transaction state directory")
-        if relative.as_posix().casefold() == "skyrimvr.exe":
-            raise ValueError("handoff must not replace SkyrimVR.exe")
+        if relative.as_posix().casefold() in {"skyrimvr.exe", "openvr_api.dll"}:
+            raise ValueError(f"handoff must not replace {relative.name}")
         return safe_target_path(game_dir, relative)
     if target_root == "compatdata":
         return safe_target_path(compatdata, relative)
     raise ValueError(f"invalid transaction target root: {target_root}")
 
 
-def planned_operations(root: pathlib.Path, package: pathlib.Path) -> tuple[list[InstallOperation], tuple[int, int, int, int]]:
-    overlay, skipped_exe = collect_overlay(root)
+def planned_operations(root: pathlib.Path, package: pathlib.Path) -> tuple[list[InstallOperation], tuple[int, int, int, int, int]]:
+    overlay, _skipped_root_files = collect_overlay(root)
     gameplay = collect_gameplay_package(package)
     profiles = collect_profiles(root)
     # Later values replace earlier ones for identical destinations.  In
     # particular, canonical portable launchers replace source-machine copies
     # from current-game-overlay or the gameplay package.
     selected: dict[tuple[str, str], InstallOperation] = {}
-    for operation in [*overlay, *gameplay, *profiles, *collect_canonical_launchers(root)]:
+    runtimes = collect_openvr_runtimes(root)
+    for operation in [*overlay, *gameplay, *profiles, *collect_canonical_launchers(root), *runtimes]:
         key = (operation.target_root, operation.relative.as_posix())
         if key in selected:
             del selected[key]
         selected[key] = operation
-    return list(selected.values()), (len(overlay), len(gameplay), len(profiles), len(LAUNCHERS))
+    return list(selected.values()), (len(overlay), len(gameplay), len(profiles), len(LAUNCHERS), len(runtimes))
 
 
 def fsync_directory(path: pathlib.Path) -> None:
@@ -1058,6 +1088,7 @@ def self_test() -> int:
         overlay = pathlib.Path(temp_dir) / "handoff" / "dependencies/current-game-overlay"
         (overlay / "Data/SKSE").mkdir(parents=True)
         (overlay / "SkyrimVR.exe").write_bytes(b"preserve")
+        (overlay / "openvr_api.dll").write_bytes(b"stock-valve-openvr")
         (overlay / "Data/SKSE/Plugins.txt").write_text("portable", encoding="ascii")
         handoff_root = overlay.parents[1]
         assert len(collect_overlay(handoff_root)[0]) == 1
@@ -1097,6 +1128,14 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("gameplay package replacing SkyrimVR.exe was accepted")
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("package/openvr_api.dll", "forbidden")
+        try:
+            collect_gameplay_package(package)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("gameplay package replacing openvr_api.dll was accepted")
 
         with zipfile.ZipFile(package, "w") as archive:
             archive.writestr("package/Data/gameplay.txt", "gameplay")
@@ -1107,6 +1146,16 @@ def self_test() -> int:
             portable.write_text(f"portable-{name}\n", encoding="ascii")
             portable.chmod(0o644)
             (overlay / name).write_text(f"source-machine-{name}\n", encoding="ascii")
+        xrizer = handoff_root / "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
+        xrizer.parent.mkdir(parents=True)
+        xrizer.write_bytes(b"xrizer-runtime")
+        xrizer.chmod(0o755)
+        opencomposite = handoff_root / "dependencies/opencomposite-runtime/bin/linux64/vrclient.so"
+        opencomposite.parent.mkdir(parents=True)
+        opencomposite.write_bytes(b"opencomposite-runtime")
+        opencomposite.chmod(0o755)
+        openvrpaths = handoff_root / "dependencies/openvrpaths.vrpath"
+        openvrpaths.write_text('{"runtime": [], "version": 1}\n', encoding="utf-8")
         profiles = handoff_root / "profiles/direct-proton"
         profiles.mkdir(parents=True)
         for name in PROFILE_PATHS:
@@ -1118,19 +1167,33 @@ def self_test() -> int:
         original_profile.write_text("original-profile\n", encoding="ascii")
         original_profile.chmod(0o640)
         (game_dir / "SkyrimVR.exe").write_bytes(b"legal-game-remains")
+        user_openvr_api = game_dir / "openvr_api.dll"
+        user_openvr_api.write_bytes(b"user-opencomposite-runtime")
+        user_openvr_api.chmod(0o640)
         operations, counts = planned_operations(handoff_root, package)
-        assert counts == (4, 2, 3, 3)
+        assert counts == (4, 2, 3, 3, 3)
         assert not (game_dir / "Data/gameplay.txt").exists(), "dry-run planning mutated game files"
         assert install_transaction(operations, game_dir, compatdata, "self-test")
         for name in LAUNCHERS:
             launcher = game_dir / name
             assert launcher.read_text(encoding="ascii") == f"portable-{name}\n"
             assert launcher.stat().st_mode & stat.S_IXUSR
+        assert (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").read_bytes() == b"xrizer-runtime"
+        assert (game_dir / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so").read_bytes() == b"opencomposite-runtime"
+        assert (game_dir / ".stvr-openvr/openvrpaths.vrpath").read_text(encoding="utf-8") == '{"runtime": [], "version": 1}\n'
+        assert (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").stat().st_mode & stat.S_IXUSR
         assert (game_dir / "SkyrimVR.exe").read_bytes() == b"legal-game-remains"
+        assert user_openvr_api.read_bytes() == b"user-opencomposite-runtime"
+        assert stat.S_IMODE(user_openvr_api.stat().st_mode) == 0o640
         assert not install_transaction(operations, game_dir, compatdata, "self-test"), "same install was not idempotent"
         assert uninstall_transaction(game_dir, compatdata, force=False) > 0
         assert not (game_dir / "Data/gameplay.txt").exists()
         assert not (game_dir / LAUNCHERS[0]).exists()
+        assert not (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").exists()
+        assert not (game_dir / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so").exists()
+        assert not (game_dir / ".stvr-openvr/openvrpaths.vrpath").exists()
+        assert user_openvr_api.read_bytes() == b"user-opencomposite-runtime"
+        assert stat.S_IMODE(user_openvr_api.stat().st_mode) == 0o640
         assert original_profile.read_text(encoding="ascii") == "original-profile\n"
         assert stat.S_IMODE(original_profile.stat().st_mode) == 0o640
         assert not state_directory(game_dir).exists()
@@ -1241,7 +1304,7 @@ def main() -> int:
             raise ValueError(f"{key} metadata does not match the paired gameplay artifacts")
     verify_source_ancestry(root, build_revision, source_head)
 
-    operations, (overlay_count, package_count, profile_count, launcher_count) = planned_operations(root, package)
+    operations, (overlay_count, package_count, profile_count, launcher_count, runtime_count) = planned_operations(root, package)
     # Dry runs still prove every planned target is inside a safe target root,
     # but never create state, directories, backups, or target files.
     for operation in operations:
@@ -1253,7 +1316,7 @@ def main() -> int:
         action = "validated (dry run; no target files changed)"
     print(
         f"{action}: {overlay_count} overlay files, {package_count} gameplay files, "
-        f"{profile_count} Proton profile files, {launcher_count} launchers; "
+        f"{profile_count} Proton profile files, {launcher_count} launchers, {runtime_count} OpenVR runtime files; "
         f"build {build_revision[:8]}"
     )
     return 0

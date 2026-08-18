@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import zipfile
@@ -30,7 +32,10 @@ REQUIRED_PATHS = (
     "source/Tools/SkyrimVR/linux/launch-skyrim-together-vr.sh",
     "source/Tools/SkyrimVR/linux/launch-skyrim-vr-offline.sh",
     "source/Tools/SkyrimVR/linux/stvr-xrizer-input-compat.sh",
+    "source/Tools/SkyrimVR/build_portable_openvr_runtimes.sh",
+    "source/Tools/SkyrimVR/opencomposite-bullseye.patch",
     "dependencies/current-game-overlay/SkyrimVR.exe",
+    "dependencies/current-game-overlay/openvr_api.dll",
     "dependencies/current-game-overlay/sksevr_loader.exe",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/devbench.dll",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/devbench/config.json",
@@ -40,7 +45,10 @@ REQUIRED_PATHS = (
     "dependencies/current-game-overlay/Data/SKSE/Plugins/activeragdoll.dll",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/VRIK.dll",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/version-1-4-15-0.csv",
-    "dependencies/xrizer-runtime/libxrizer.so",
+    "dependencies/xrizer-runtime/bin/linux64/vrclient.so",
+    "dependencies/opencomposite-runtime/bin/linux64/vrclient.so",
+    "dependencies/openvrpaths.vrpath",
+    "dependencies/source-references/OpenComposite/LICENSE.txt",
     "profiles/direct-proton/Plugins.txt",
     "review-notes/REVIEW-AGENT-HANDOFF.md",
     "review-notes/REVIEW-FRIEND-SUMMARY.md",
@@ -68,6 +76,7 @@ REQUIRED_PREFIXES = (
     "dependencies/source-references/CommonLibSSE-sample-plugin/src/",
     "dependencies/source-references/SKSE-Menu-Framework-3/",
     "dependencies/source-references/PapyrusTweaks/",
+    "dependencies/source-references/OpenComposite/",
     "dependencies/fus-mods/HIGGS - Hand Interaction and Gravity Gloves for Skyrim VR/",
     "dependencies/fus-mods/PLANCK - Physical Animation and Character Kinetics/",
     "dependencies/fus-mods/VRIK Player Avatar/",
@@ -79,6 +88,58 @@ REQUIRED_PREFIXES = (
     "dependencies/download-archives/SkyrimVRTools-27782-",
 )
 
+OPENCOMPOSITE_RUNTIME_PATH = "dependencies/opencomposite-runtime/bin/linux64/vrclient.so"
+OPENCOMPOSITE_REVISION = "cff07db75c4823afe93ed7027b03d5f7bc86f164"
+OPENCOMPOSITE_RUNTIME_SHA256 = "98a07ff54bc93b0190b576acf7fc8e28f47c5f1924bbe924228abf001cbdc913"
+OPENCOMPOSITE_BUILD_PATCH_SHA256 = "529453480dc9ff838b9cabcb341109672fb961dc0676d4006d238c4662558a67"
+OPENCOMPOSITE_BUILD_PATCH_STATUS = "applied-to-isolated-build-copy"
+OPENCOMPOSITE_OFFICIAL_ORIGINS = {
+    "https://github.com/znixian/OpenOVR.git",
+    "https://github.com/znixian/OpenOVR",
+    "git@github.com:znixian/OpenOVR.git",
+    "git@github.com:znixian/OpenOVR",
+    "ssh://git@github.com/znixian/OpenOVR.git",
+    "ssh://git@github.com/znixian/OpenOVR",
+    "https://gitlab.com/znixian/OpenOVR.git",
+    "https://gitlab.com/znixian/OpenOVR",
+    "git@gitlab.com:znixian/OpenOVR.git",
+    "git@gitlab.com:znixian/OpenOVR",
+    "ssh://git@gitlab.com/znixian/OpenOVR.git",
+    "ssh://git@gitlab.com/znixian/OpenOVR",
+}
+XRIZER_RUNTIME_PATH = "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
+XRIZER_BASE_REVISION = "31319560c1bd0f1e5c16936a946bb1c7295dbfd9"
+XRIZER_RUNTIME_SHA256 = "f4588522640707852525a97feb3ff42d8227966d8653d699bd3b8f802e3dfd36"
+XRIZER_COMPATIBILITY_PATCH_SHA256 = "72eaa22a9b5a10bee0f6e1230ed78d8fbac9627af5ed56f919d9bb7e10979b12"
+XRIZER_COMPATIBILITY_PATCH_STATUS = "applied-worktree-patch"
+XRIZER_OFFICIAL_ORIGINS = {
+    "https://github.com/Supreeeme/xrizer.git",
+    "https://github.com/Supreeeme/xrizer",
+    "git@github.com:Supreeeme/xrizer.git",
+    "git@github.com:Supreeeme/xrizer",
+    "ssh://git@github.com/Supreeeme/xrizer.git",
+    "ssh://git@github.com/Supreeeme/xrizer",
+}
+PORTABLE_GLIBC_MAX = (2, 31)
+PORTABLE_NEEDED_LIBRARIES = frozenset(
+    {
+        "ld-linux-x86-64.so.2",
+        "libOpenGL.so.0",
+        "libGLU.so.1",
+        "libGLX.so.0",
+        "libGL.so.1",
+        "libX11.so.6",
+        "libc.so.6",
+        "libdl.so.2",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libstdc++.so.6",
+        "libvulkan.so.1",
+    }
+)
+NEUTRAL_OPENVR_PATHS = {"version": 1, "runtime": []}
+
 
 def hash_entry(archive: zipfile.ZipFile, name: str) -> tuple[str, int]:
     digest = hashlib.sha256()
@@ -88,6 +149,165 @@ def hash_entry(archive: zipfile.ZipFile, name: str) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _elf_range(payload: bytes, offset: int, size: int, label: str) -> bytes:
+    if offset < 0 or size < 0 or offset > len(payload) or size > len(payload) - offset:
+        raise ValueError(f"truncated ELF {label}")
+    return payload[offset : offset + size]
+
+
+def _elf_string(table: bytes, offset: int, label: str) -> str:
+    if offset < 0 or offset >= len(table):
+        raise ValueError(f"invalid ELF {label} string offset")
+    end = table.find(b"\0", offset)
+    if end < 0:
+        raise ValueError(f"unterminated ELF {label} string")
+    return table[offset:end].decode("ascii", "strict")
+
+
+def _glibc_version(value: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"GLIBC_(\d+)\.(\d+)", value)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def analyze_elf_loader(payload: bytes) -> dict[str, object]:
+    """Parse loader identity from bytes without executing or loading the ELF object."""
+
+    header = _elf_range(payload, 0, 64, "header")
+    if header[:7] != b"\x7fELF\x02\x01\x01":
+        raise ValueError("loader is not little-endian ELF64")
+    elf_type, machine = struct.unpack_from("<HH", header, 16)
+    if elf_type != 3 or machine != 62:
+        raise ValueError("loader is not an ELF x86_64 ET_DYN shared object")
+    phoff = struct.unpack_from("<Q", header, 32)[0]
+    shoff = struct.unpack_from("<Q", header, 40)[0]
+    phentsize, phnum, shentsize, shnum = struct.unpack_from("<HHHH", header, 54)
+    if phentsize != 56:
+        raise ValueError("unsupported ELF program-header size")
+    program_headers = _elf_range(payload, phoff, phentsize * phnum, "program headers")
+    loads: list[tuple[int, int, int]] = []
+    dynamic: tuple[int, int] | None = None
+    for index in range(phnum):
+        entry = program_headers[index * phentsize : (index + 1) * phentsize]
+        typ = struct.unpack_from("<I", entry, 0)[0]
+        offset, vaddr, _paddr, filesz = struct.unpack_from("<QQQQ", entry, 8)
+        if typ == 1:
+            _elf_range(payload, offset, filesz, "load segment")
+            loads.append((vaddr, offset, filesz))
+        elif typ == 2:
+            if dynamic is not None:
+                raise ValueError("ELF has multiple dynamic segments")
+            _elf_range(payload, offset, filesz, "dynamic segment")
+            dynamic = (offset, filesz)
+    if dynamic is None:
+        raise ValueError("ELF has no dynamic segment")
+
+    entries: list[tuple[int, int]] = []
+    dynamic_data = _elf_range(payload, *dynamic, "dynamic segment")
+    if len(dynamic_data) % 16:
+        raise ValueError("truncated ELF dynamic entry")
+    for index in range(0, len(dynamic_data), 16):
+        tag, value = struct.unpack_from("<qQ", dynamic_data, index)
+        entries.append((tag, value))
+        if tag == 0:
+            break
+    dynstr_address = next((value for tag, value in entries if tag == 5), None)
+    dynstr_size = next((value for tag, value in entries if tag == 10), None)
+    if dynstr_address is None or dynstr_size is None:
+        raise ValueError("ELF dynamic string table is missing")
+    for vaddr, offset, filesz in loads:
+        if vaddr <= dynstr_address and dynstr_address + dynstr_size <= vaddr + filesz:
+            dynstr = _elf_range(payload, offset + dynstr_address - vaddr, dynstr_size, "dynamic string table")
+            break
+    else:
+        raise ValueError("ELF dynamic string table is outside load segments")
+    needed = sorted(_elf_string(dynstr, value, "DT_NEEDED") for tag, value in entries if tag == 1)
+
+    if shentsize != 64 or not shnum:
+        raise ValueError("ELF version-requirement sections are missing")
+    sections = _elf_range(payload, shoff, shentsize * shnum, "section headers")
+    glibc_versions: list[tuple[int, int]] = []
+    for index in range(shnum):
+        section = sections[index * shentsize : (index + 1) * shentsize]
+        typ = struct.unpack_from("<I", section, 4)[0]
+        if typ != 0x6FFFFFFE:
+            continue
+        offset, size = struct.unpack_from("<QQ", section, 24)
+        link = struct.unpack_from("<I", section, 40)[0]
+        if link >= shnum:
+            raise ValueError("ELF version-requirement string table is invalid")
+        linked = sections[link * shentsize : (link + 1) * shentsize]
+        str_offset, str_size = struct.unpack_from("<QQ", linked, 24)
+        strings = _elf_range(payload, str_offset, str_size, "version string table")
+        version_data = _elf_range(payload, offset, size, "version-requirement section")
+        cursor = 0
+        while cursor < len(version_data):
+            record = _elf_range(version_data, cursor, 16, "version requirement")
+            count = struct.unpack_from("<H", record, 2)[0]
+            aux_offset = struct.unpack_from("<I", record, 8)[0]
+            next_offset = struct.unpack_from("<I", record, 12)[0]
+            aux_cursor = cursor + aux_offset
+            for _ in range(count):
+                aux = _elf_range(version_data, aux_cursor, 16, "version requirement auxiliary entry")
+                version = _glibc_version(_elf_string(strings, struct.unpack_from("<I", aux, 8)[0], "version"))
+                if version is not None:
+                    glibc_versions.append(version)
+                aux_next = struct.unpack_from("<I", aux, 12)[0]
+                if not aux_next:
+                    break
+                aux_cursor += aux_next
+            if not next_offset:
+                break
+            cursor += next_offset
+    if not glibc_versions:
+        raise ValueError("ELF has no GLIBC symbol-version requirements")
+    maximum = max(glibc_versions)
+    return {
+        "elfClass": "ELF64",
+        "elfMachine": "x86_64",
+        "elfType": "ET_DYN",
+        "maxGlibc": f"GLIBC_{maximum[0]}.{maximum[1]}",
+        "neededLibraries": needed,
+    }
+
+
+def portable_loader_failure(identity: dict[str, object]) -> str | None:
+    maximum = _glibc_version(identity.get("maxGlibc", ""))
+    if maximum is None:
+        return "loader has invalid GLIBC symbol-version identity"
+    if maximum > PORTABLE_GLIBC_MAX:
+        ceiling = f"GLIBC_{PORTABLE_GLIBC_MAX[0]}.{PORTABLE_GLIBC_MAX[1]}"
+        return f"loader requires {identity['maxGlibc']}, above portable glibc ceiling {ceiling}"
+    unexpected = sorted(set(identity.get("neededLibraries", [])) - PORTABLE_NEEDED_LIBRARIES)
+    if unexpected:
+        return "loader has non-portable DT_NEEDED dependency: " + ", ".join(unexpected)
+    return None
+
+
+def runtime_provenance_failures(
+    label: str,
+    metadata: object,
+    expected: dict[str, object],
+    official_origins: set[str],
+    identity: dict[str, object] | None,
+) -> list[str]:
+    if not isinstance(metadata, dict):
+        return [f"{label} runtime provenance metadata is missing"]
+    failures: list[str] = []
+    if any(metadata.get(key) != value for key, value in expected.items()):
+        failures.append(f"{label} runtime provenance metadata is not the reviewed current loader")
+    if metadata.get("sourceOrigin") not in official_origins:
+        failures.append(f"{label} runtime provenance has a non-official origin")
+    if identity is not None:
+        for key in ("elfClass", "elfMachine", "elfType", "maxGlibc", "neededLibraries"):
+            if metadata.get(key) != identity.get(key):
+                failures.append(f"{label} runtime provenance ELF identity does not match payload")
+                break
+        policy_failure = portable_loader_failure(identity)
+        if policy_failure:
+            failures.append(f"{label} runtime {policy_failure}")
+    return failures
 
 
 def main() -> int:
@@ -162,6 +382,116 @@ def main() -> int:
         for required in REQUIRED_PATHS:
             if required not in relative_names:
                 failures.append(f"missing required payload: {required}")
+        opencomposite_patch_name = f"{root}/source/Tools/SkyrimVR/opencomposite-bullseye.patch"
+        if records_by_path.get(opencomposite_patch_name, {}).get("sha256") != OPENCOMPOSITE_BUILD_PATCH_SHA256:
+            failures.append("OpenComposite build patch payload hash is not the reviewed current patch")
+        stale_runtime_metadata = sorted(
+            name for name in relative_names if name.endswith("openvrpaths.vrpath") and name != "dependencies/openvrpaths.vrpath"
+        )
+        if stale_runtime_metadata:
+            failures.append(
+                "generated openvrpaths.vrpath is producer-machine metadata, not portable payload: "
+                + ", ".join(stale_runtime_metadata)
+            )
+        if "machinePaths" in manifest:
+            failures.append("manifest contains producer-machine path metadata")
+        pathreg_name = f"{root}/dependencies/openvrpaths.vrpath"
+        if pathreg_name in names:
+            try:
+                pathreg = json.loads(archive.read(pathreg_name).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                failures.append(f"portable openvrpaths.vrpath is invalid JSON: {error}")
+            else:
+                if pathreg != NEUTRAL_OPENVR_PATHS:
+                    failures.append("portable openvrpaths.vrpath must contain only version 1 and an empty runtime list")
+        runtime_specs = (
+            (
+                "XRizer",
+                "xrizerRuntime",
+                XRIZER_RUNTIME_PATH,
+                XRIZER_RUNTIME_SHA256,
+                {
+                    "path": XRIZER_RUNTIME_PATH,
+                    "sha256": XRIZER_RUNTIME_SHA256,
+                    "baseRevision": XRIZER_BASE_REVISION,
+                    "sourceRevision": XRIZER_BASE_REVISION,
+                    "compatibilityPatchStatus": XRIZER_COMPATIBILITY_PATCH_STATUS,
+                    "compatibilityPatchSha256": XRIZER_COMPATIBILITY_PATCH_SHA256,
+                    "elfClass": "ELF64",
+                    "elfMachine": "x86_64",
+                    "elfType": "ET_DYN",
+                    "maxGlibc": "GLIBC_2.29",
+                    "neededLibraries": [
+                        "ld-linux-x86-64.so.2",
+                        "libc.so.6",
+                        "libdl.so.2",
+                        "libgcc_s.so.1",
+                        "libm.so.6",
+                        "libpthread.so.0",
+                        "libstdc++.so.6",
+                    ],
+                },
+                XRIZER_OFFICIAL_ORIGINS,
+            ),
+            (
+                "OpenComposite",
+                "openCompositeRuntime",
+                OPENCOMPOSITE_RUNTIME_PATH,
+                OPENCOMPOSITE_RUNTIME_SHA256,
+                {
+                    "path": OPENCOMPOSITE_RUNTIME_PATH,
+                    "sha256": OPENCOMPOSITE_RUNTIME_SHA256,
+                    "sourceRevision": OPENCOMPOSITE_REVISION,
+                    "checkoutTopLevel": True,
+                    "checkoutClean": True,
+                    "buildPatchStatus": OPENCOMPOSITE_BUILD_PATCH_STATUS,
+                    "buildPatchSha256": OPENCOMPOSITE_BUILD_PATCH_SHA256,
+                    "elfClass": "ELF64",
+                    "elfMachine": "x86_64",
+                    "elfType": "ET_DYN",
+                    "maxGlibc": "GLIBC_2.14",
+                    "neededLibraries": [
+                        "ld-linux-x86-64.so.2",
+                        "libGL.so.1",
+                        "libX11.so.6",
+                        "libc.so.6",
+                        "libdl.so.2",
+                        "libgcc_s.so.1",
+                        "libm.so.6",
+                        "libstdc++.so.6",
+                        "libvulkan.so.1",
+                    ],
+                },
+                OPENCOMPOSITE_OFFICIAL_ORIGINS,
+            ),
+        )
+        for label, metadata_key, runtime_path, expected, expected_provenance, origins in runtime_specs:
+            runtime_name = f"{root}/{runtime_path}"
+            if records_by_path.get(runtime_name, {}).get("sha256") != expected:
+                failures.append(f"{label} runtime payload hash is not the reviewed current loader")
+            identity = None
+            if runtime_name in names:
+                try:
+                    identity = analyze_elf_loader(archive.read(runtime_name))
+                except (UnicodeDecodeError, ValueError, zipfile.BadZipFile) as error:
+                    failures.append(f"{label} runtime payload is not a valid ELF loader: {error}")
+            failures.extend(
+                runtime_provenance_failures(
+                    label,
+                    manifest.get(metadata_key),
+                    expected_provenance,
+                    origins,
+                    identity,
+                )
+            )
+        opencomposite_source_prefix = "dependencies/source-references/OpenComposite/"
+        invalid_opencomposite_snapshot = sorted(
+            name for name in relative_names
+            if name.startswith(opencomposite_source_prefix)
+            and any(part in {".git", "build"} for part in pathlib.PurePosixPath(name).parts)
+        )
+        if invalid_opencomposite_snapshot:
+            failures.append("OpenComposite source snapshot contains excluded .git/build content")
         for prefix in REQUIRED_PREFIXES:
             if not any(name.startswith(prefix) for name in relative_names):
                 failures.append(f"missing required payload prefix: {prefix}")

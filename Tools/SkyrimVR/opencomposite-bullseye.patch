@@ -1,0 +1,66 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 08c4c10..e775787 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -65,7 +65,7 @@ if (NOT MSVC)
+ 	# There is also -Bsymbolic set when linking the final shared library, see the bottom of this file
+ 	# FIXME the Vulkan functions still get exported, hopefully they won't fight with the application's ones.
+     add_definitions(-fvisibility=hidden)
+-	add_compile_options(-Wall -Wextra -Wpedantic -pedantic-errors -Wno-unused-parameter -Wno-missing-field-initializers -Wno-format-security)
++	add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter -Wno-missing-field-initializers -Wno-format-security)
+ 	set(ERROR_ON_WARNING_FLAG -Werror)
+ endif ()
+ if (ERROR_ON_WARNING)
+diff --git a/OpenOVR/Misc/Input/InteractionProfile.h b/OpenOVR/Misc/Input/InteractionProfile.h
+index 8d8a658..c0f64cc 100644
+--- a/OpenOVR/Misc/Input/InteractionProfile.h
++++ b/OpenOVR/Misc/Input/InteractionProfile.h
+@@ -178,10 +178,9 @@ public:
+ 	std::optional<T> GetProperty(vr::ETrackedDeviceProperty property, ITrackedDevice::TrackedDeviceType hand)
+ 	    const
+ 	{
+-		using enum ITrackedDevice::TrackedDeviceType;
+-		if (hand != HAND_NONE && propertiesMap.contains(property)) {
++		if (hand != ITrackedDevice::HAND_NONE && propertiesMap.contains(property)) {
+ 			hand_values_type ret = propertiesMap.at(property);
+-			return std::get<T>((hand == HAND_RIGHT && ret.right.has_value()) ? ret.right.value() : ret.left);
++			return std::get<T>((hand == ITrackedDevice::HAND_RIGHT && ret.right.has_value()) ? ret.right.value() : ret.left);
+ 		} else if (hmdPropertiesMap.contains(property)) {
+ 			return std::get<T>(hmdPropertiesMap.at(property));
+ 		}
+diff --git a/OpenOVR/Reimpl/BaseInput_Hand.cpp b/OpenOVR/Reimpl/BaseInput_Hand.cpp
+index 15b2188..5bd775f 100644
+--- a/OpenOVR/Reimpl/BaseInput_Hand.cpp
++++ b/OpenOVR/Reimpl/BaseInput_Hand.cpp
+@@ -434,7 +434,8 @@ vr::EVRInputError BaseInput::GetSkeletalBoneData(
+ 	auto state = GetInterpolatedControllerState(hand, controller);
+ 
+ 	auto boneDataGen = [state](const BoneArray& openPose, const BoneArray& closedPose) {
+-		return std::ranges::iota_view(0, static_cast<int>(eBone_Count)) | std::views::transform([=](int bone_index) {
++		BoneArray result{};
++		for (int bone_index = 0; bone_index < static_cast<int>(eBone_Count); ++bone_index) {
+ 			auto bone = openPose[bone_index];
+ 
+ 			// Put the thumb down on touch
+@@ -466,8 +467,9 @@ vr::EVRInputError BaseInput::GetSkeletalBoneData(
+ 					InterpolateBone(bone, closedPose[bone_index], state.gripPct);
+ 			}
+ 
+-			return bone;
+-		});
++			result[bone_index] = bone;
++		}
++		return result;
+ 	};
+ 
+ 	// Find the interaction profile to retrieve hand poses
+@@ -495,7 +497,8 @@ vr::EVRInputError BaseInput::GetSkeletalBoneData(
+ 		return vr::VRInputError_InvalidSkeleton;
+ 	}
+ 
+-	std::ranges::copy(boneDataGen(open.value(), closed.value()), boneData.begin());
++	const auto generatedBoneData = boneDataGen(open.value(), closed.value());
++	std::copy(generatedBoneData.begin(), generatedBoneData.end(), boneData.begin());
+ 
+ 	if (transformSpace == EVRSkeletalTransformSpace::VRSkeletalTransformSpace_Model)
+ 		ParentSpaceSkeletonToModelSpace(boneData.data());

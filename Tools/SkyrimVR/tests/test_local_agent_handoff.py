@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 
 
@@ -77,6 +79,205 @@ class LocalAgentHandoffTests(unittest.TestCase):
             "source/Docs/SkyrimVR/local-agent-complete-handoff.md",
             audit.REQUIRED_PATHS,
         )
+        self.assertIn("dependencies/xrizer-runtime/bin/linux64/vrclient.so", audit.REQUIRED_PATHS)
+        self.assertIn("dependencies/opencomposite-runtime/bin/linux64/vrclient.so", audit.REQUIRED_PATHS)
+        self.assertIn("dependencies/openvrpaths.vrpath", audit.REQUIRED_PATHS)
+        self.assertIn("dependencies/source-references/OpenComposite/LICENSE.txt", audit.REQUIRED_PATHS)
+        self.assertIn("source/Tools/SkyrimVR/build_portable_openvr_runtimes.sh", audit.REQUIRED_PATHS)
+        self.assertIn("source/Tools/SkyrimVR/opencomposite-bullseye.patch", audit.REQUIRED_PATHS)
+        self.assertIn("dependencies/source-references/OpenComposite/", audit.REQUIRED_PREFIXES)
+        self.assertIn("--opencomposite-root", generator)
+        self.assertIn("openCompositeRuntime", generator)
+        self.assertNotIn("machinePaths", generator)
+        readme = (ROOT / "Docs/SkyrimVR/local-agent-complete-handoff.md").read_text(encoding="utf-8")
+        self.assertIn("## Quick Start", readme)
+        self.assertIn("STVR_OPENVR_RUNTIME=opencomposite", readme)
+        self.assertIn("$env:STVR_AUTOCONNECT", readme)
+
+    def test_generator_accepts_only_reviewed_opencomposite_loader(self) -> None:
+        creator = load_module("create_local_agent_handoff_opencomposite", TOOLS / "create_local_agent_handoff.py")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runtime = root / "build/bin/linux64/vrclient.so"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_bytes(b"\x7fELF\x02\x01\x01" + b"\0" * 9 + (3).to_bytes(2, "little") + (62).to_bytes(2, "little"))
+
+            def validate(*, origin="https://github.com/znixian/OpenOVR.git", status="", revision=None, digest=None):
+                def fake_git(repo, *args):
+                    if args == ("rev-parse", "--show-toplevel"):
+                        return f"{root}\n"
+                    if args == ("remote", "get-url", "origin"):
+                        return f"{origin}\n"
+                    if args == ("status", "--porcelain=v1", "--untracked-files=all"):
+                        return status
+                    if args == ("rev-parse", "HEAD"):
+                        return f"{revision or creator.OPENCOMPOSITE_REVISION}\n"
+                    raise AssertionError(args)
+
+                with mock.patch.object(creator, "run_git", side_effect=fake_git), mock.patch.object(
+                    creator, "sha256", return_value=digest or creator.OPENCOMPOSITE_RUNTIME_SHA256
+                ), mock.patch.object(
+                    creator,
+                    "validate_portable_loader",
+                    return_value={
+                        "elfClass": "ELF64",
+                        "elfMachine": "x86_64",
+                        "elfType": "ET_DYN",
+                        "maxGlibc": "GLIBC_2.31",
+                        "neededLibraries": ["libc.so.6"],
+                    },
+                ):
+                    return creator.validated_opencomposite_runtime(root)
+
+            discovered, provenance = validate()
+            self.assertEqual(discovered, runtime)
+            self.assertEqual(provenance["sourceRevision"], creator.OPENCOMPOSITE_REVISION)
+            self.assertEqual(provenance["sha256"], creator.OPENCOMPOSITE_RUNTIME_SHA256)
+            self.assertEqual(provenance["buildPatchStatus"], creator.OPENCOMPOSITE_BUILD_PATCH_STATUS)
+            self.assertEqual(provenance["buildPatchSha256"], creator.OPENCOMPOSITE_BUILD_PATCH_SHA256)
+            self.assertTrue(provenance["checkoutTopLevel"])
+            self.assertTrue(provenance["checkoutClean"])
+            with self.assertRaisesRegex(ValueError, "official"):
+                validate(origin="https://example.invalid/fork/OpenOVR.git")
+            with self.assertRaisesRegex(ValueError, "clean"):
+                validate(status=" M local-change\n")
+            with self.assertRaisesRegex(ValueError, "pinned"):
+                validate(revision="a" * 40)
+            with self.assertRaisesRegex(ValueError, "SHA-256"):
+                validate(digest="0" * 64)
+
+    def test_generator_accepts_only_reviewed_xrizer_compatibility_build(self) -> None:
+        creator = load_module("create_local_agent_handoff_xrizer", TOOLS / "create_local_agent_handoff.py")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runtime = root / creator.XRIZER_RUNTIME_PATH
+            runtime.parent.mkdir(parents=True)
+            runtime.write_bytes(b"placeholder")
+
+            def validate(
+                *, origin="https://github.com/Supreeeme/xrizer", revision=None, patch=None, expected_patch=None, digest=None
+            ):
+                patch_text = patch if patch is not None else "reviewed patch\n"
+
+                def fake_git(repo, *args):
+                    responses = {
+                        ("rev-parse", "--show-toplevel"): f"{root}\n",
+                        ("remote", "get-url", "origin"): f"{origin}\n",
+                        ("rev-parse", "HEAD"): f"{revision or creator.XRIZER_BASE_REVISION}\n",
+                        ("diff", "--cached", "--binary", "HEAD"): "",
+                        ("ls-files", "--others", "--exclude-standard"): "",
+                        ("diff", "--binary", "--no-ext-diff", "HEAD"): patch_text,
+                    }
+                    return responses[args]
+
+                reviewed_patch = hashlib.sha256((expected_patch or patch_text).encode("utf-8")).hexdigest()
+                with mock.patch.object(creator, "run_git", side_effect=fake_git), mock.patch.object(
+                    creator, "sha256", return_value=digest or creator.XRIZER_RUNTIME_SHA256
+                ), mock.patch.object(
+                    creator, "XRIZER_COMPATIBILITY_PATCH_SHA256", reviewed_patch
+                ), mock.patch.object(
+                    creator,
+                    "validate_portable_loader",
+                    return_value={
+                        "elfClass": "ELF64",
+                        "elfMachine": "x86_64",
+                        "elfType": "ET_DYN",
+                        "maxGlibc": "GLIBC_2.31",
+                        "neededLibraries": ["libc.so.6"],
+                    },
+                ):
+                    return creator.validated_xrizer_runtime(root)
+
+            _, provenance = validate()
+            self.assertEqual(provenance["baseRevision"], creator.XRIZER_BASE_REVISION)
+            self.assertEqual(provenance["compatibilityPatchStatus"], creator.XRIZER_COMPATIBILITY_PATCH_STATUS)
+            with self.assertRaisesRegex(ValueError, "official"):
+                validate(origin="https://example.invalid/fork/xrizer.git")
+            with self.assertRaisesRegex(ValueError, "pinned"):
+                validate(revision="a" * 40)
+            with self.assertRaisesRegex(ValueError, "patch SHA-256"):
+                validate(patch="other patch\n", expected_patch="reviewed patch\n")
+            with self.assertRaisesRegex(ValueError, "runtime SHA-256"):
+                validate(digest="0" * 64)
+
+    def test_elf_loader_parser_rejects_nonportable_or_malformed_loaders(self) -> None:
+        creator = load_module("create_local_agent_handoff_elf", TOOLS / "create_local_agent_handoff.py")
+        audit = load_module("audit_local_agent_handoff_elf", TOOLS / "audit_local_agent_handoff.py")
+        self.assertEqual(creator.PORTABLE_GLIBC_MAX, audit.PORTABLE_GLIBC_MAX)
+        self.assertEqual(creator.PORTABLE_NEEDED_LIBRARIES, audit.PORTABLE_NEEDED_LIBRARIES)
+        et_exec = bytearray(64)
+        et_exec[:7] = b"\x7fELF\x02\x01\x01"
+        et_exec[16:18] = (2).to_bytes(2, "little")
+        et_exec[18:20] = (62).to_bytes(2, "little")
+        with self.assertRaisesRegex(ValueError, "ET_DYN"):
+            creator.analyze_elf_loader(bytes(et_exec))
+        with self.assertRaisesRegex(ValueError, "truncated ELF header"):
+            audit.analyze_elf_loader(b"\x7fELF")
+
+        above_ceiling = {
+            "elfClass": "ELF64",
+            "elfMachine": "x86_64",
+            "elfType": "ET_DYN",
+            "maxGlibc": "GLIBC_2.32",
+            "neededLibraries": ["libc.so.6"],
+        }
+        with mock.patch.object(creator, "analyze_elf_loader", return_value=above_ceiling), tempfile.NamedTemporaryFile() as loader:
+            with self.assertRaisesRegex(ValueError, "portable glibc ceiling GLIBC_2.31"):
+                creator.validate_portable_loader(pathlib.Path(loader.name))
+        self.assertIn("portable glibc ceiling GLIBC_2.31", audit.portable_loader_failure(above_ceiling))
+
+        bad_dependency = {**above_ceiling, "maxGlibc": "GLIBC_2.31", "neededLibraries": ["libevil.so.1"]}
+        with mock.patch.object(creator, "analyze_elf_loader", return_value=bad_dependency), tempfile.NamedTemporaryFile() as loader:
+            with self.assertRaisesRegex(ValueError, "non-portable DT_NEEDED dependency"):
+                creator.validate_portable_loader(pathlib.Path(loader.name))
+        self.assertIn("libevil.so.1", audit.portable_loader_failure(bad_dependency))
+
+    def test_auditor_rejects_forged_xrizer_provenance_metadata(self) -> None:
+        audit = load_module("audit_local_agent_handoff_xrizer", TOOLS / "audit_local_agent_handoff.py")
+        expected = {
+            "path": audit.XRIZER_RUNTIME_PATH,
+            "sha256": audit.XRIZER_RUNTIME_SHA256,
+            "baseRevision": audit.XRIZER_BASE_REVISION,
+            "sourceRevision": audit.XRIZER_BASE_REVISION,
+            "compatibilityPatchStatus": audit.XRIZER_COMPATIBILITY_PATCH_STATUS,
+            "compatibilityPatchSha256": audit.XRIZER_COMPATIBILITY_PATCH_SHA256,
+            "elfClass": "ELF64",
+            "elfMachine": "x86_64",
+            "elfType": "ET_DYN",
+            "maxGlibc": "GLIBC_2.31",
+            "neededLibraries": ["libc.so.6"],
+        }
+        forged = {
+            **expected,
+            "sourceRevision": "a" * 40,
+            "compatibilityPatchStatus": "missing",
+            "compatibilityPatchSha256": "0" * 64,
+        }
+        identity = {key: expected[key] for key in ("elfClass", "elfMachine", "elfType", "maxGlibc", "neededLibraries")}
+        failures = audit.runtime_provenance_failures(
+            "XRizer", forged, expected, audit.XRIZER_OFFICIAL_ORIGINS, identity
+        )
+        self.assertTrue(any("not the reviewed" in failure for failure in failures))
+        forged_identity = {**identity, "maxGlibc": "GLIBC_2.32"}
+        self.assertTrue(any("does not match payload" in failure for failure in audit.runtime_provenance_failures(
+            "XRizer", expected, expected, audit.XRIZER_OFFICIAL_ORIGINS, forged_identity
+        )))
+
+    def test_creator_records_neutral_openvr_registry_bytes(self) -> None:
+        creator = load_module("create_local_agent_handoff_registry", TOOLS / "create_local_agent_handoff.py")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = pathlib.Path(temp_dir) / "handoff.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                writer = creator.Writer(archive, (2026, 1, 1, 0, 0, 0))
+                writer.add_bytes(b'{"runtime": [], "version": 1}\n', "handoff/dependencies/openvrpaths.vrpath")
+                self.assertEqual(
+                    writer.records,
+                    [{
+                        "path": "handoff/dependencies/openvrpaths.vrpath",
+                        "size": 30,
+                        "sha256": "93949a53f3b9217ef8c4d4a16944d3d87d0ff8652c0dda9cde6f0fcee9fee3cb",
+                    }],
+                )
 
     def test_windows_installer_is_dry_run_by_default_and_fail_closed(self) -> None:
         script = WINDOWS_INSTALLER.read_text(encoding="utf-8")
@@ -88,7 +289,11 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("SkyrimVR.exe is not the supported legal Skyrim VR 1.4.15 executable", script)
         self.assertIn("ZIP entry is a symbolic link or reparse target", script)
         self.assertIn("LOCAL-MANIFEST.json record does not match payload", script)
-        self.assertIn("gameplay package must not replace the legal SkyrimVR.exe", script)
+        self.assertIn('$relative -ieq "SkyrimVR.exe" -or $relative -ieq "openvr_api.dll"', script)
+        self.assertIn('$relative -ieq "openvr_api.dll"', script)
+        self.assertIn("$openVrApiCount", script)
+        self.assertIn("exactly one openvr_api.dll to preserve", script)
+        self.assertIn("OPENVR_API.DLL", script)
         self.assertIn('$parts = @(Assert-SafeRelativePath $Relative "install path")', script)
         self.assertIn("$overlayPlan = @(Get-WindowsOverlayPlan $root $game)", script)
         self.assertIn("$packagePlan = @(Get-GameplayPackagePlan", script)
@@ -126,6 +331,40 @@ class LocalAgentHandoffTests(unittest.TestCase):
             self.assertFalse(target.exists())
             installer.write_operation(operation, target)
             self.assertEqual(target.read_text(encoding="ascii"), "payload")
+
+    def test_linux_overlay_preserves_existing_opencomposite_dll(self) -> None:
+        installer = load_module("install_local_agent_handoff_openvr_api", INSTALLER)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            overlay = root / "handoff/dependencies/current-game-overlay"
+            (overlay / "Data").mkdir(parents=True)
+            (overlay / "SkyrimVR.exe").write_bytes(b"handoff-game")
+            (overlay / "openvr_api.dll").write_bytes(b"stock-valve-openvr")
+            (overlay / "Data/portable.txt").write_bytes(b"portable")
+            operations, skipped = installer.collect_overlay(root / "handoff")
+            self.assertEqual(skipped, (1, 1))
+            self.assertNotIn("openvr_api.dll", {operation.relative.as_posix() for operation in operations})
+
+            game = root / "game"
+            compatdata = root / "compatdata"
+            game.mkdir()
+            compatdata.mkdir()
+            user_opencomposite = game / "openvr_api.dll"
+            original = b"user-opencomposite-runtime"
+            user_opencomposite.write_bytes(original)
+            user_opencomposite.chmod(0o640)
+            self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+            self.assertEqual(user_opencomposite.read_bytes(), original)
+            self.assertEqual(stat.S_IMODE(user_opencomposite.stat().st_mode), 0o640)
+            self.assertEqual(installer.uninstall_transaction(game, compatdata, force=False), 1)
+            self.assertEqual(user_opencomposite.read_bytes(), original)
+            self.assertEqual(stat.S_IMODE(user_opencomposite.stat().st_mode), 0o640)
+
+            package = root / "malicious.zip"
+            with installer.zipfile.ZipFile(package, "w") as archive:
+                archive.writestr("package/openvr_api.dll", "malicious")
+            with self.assertRaisesRegex(ValueError, "openvr_api.dll"):
+                installer.collect_gameplay_package(package)
 
     def test_linux_transaction_recovers_unpublished_state_and_partial_backups(self) -> None:
         installer = load_module("install_local_agent_handoff_prepare_recovery", INSTALLER)
@@ -305,6 +544,53 @@ class LocalAgentHandoffTests(unittest.TestCase):
             (state_dir / "unexpected").write_text("foreign", encoding="ascii")
             with self.assertRaises(ValueError):
                 installer.install_transaction(operations, game, compatdata, "handoff")
+
+    def test_linux_runtime_operations_install_rollback_and_uninstall(self) -> None:
+        installer = load_module("install_local_agent_handoff_runtimes", INSTALLER)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            handoff = root / "handoff"
+            xrizer = handoff / "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
+            opencomposite = handoff / "dependencies/opencomposite-runtime/bin/linux64/vrclient.so"
+            pathreg = handoff / "dependencies/openvrpaths.vrpath"
+            xrizer.parent.mkdir(parents=True)
+            opencomposite.parent.mkdir(parents=True)
+            xrizer.write_bytes(b"new-xrizer")
+            opencomposite.write_bytes(b"new-opencomposite")
+            pathreg.write_text('{"runtime": [], "version": 1}\n', encoding="utf-8")
+            xrizer.chmod(0o755)
+            opencomposite.chmod(0o755)
+            game = root / "game"
+            compatdata = root / "compatdata"
+            game.mkdir()
+            compatdata.mkdir()
+            installed_xrizer = game / ".stvr-openvr/xrizer/bin/linux64/vrclient.so"
+            installed_xrizer.parent.mkdir(parents=True)
+            installed_xrizer.write_bytes(b"old-xrizer")
+            installed_xrizer.chmod(0o640)
+
+            operations = installer.collect_openvr_runtimes(handoff)
+            self.assertEqual([operation.relative.as_posix() for operation in operations], [
+                ".stvr-openvr/xrizer/bin/linux64/vrclient.so",
+                ".stvr-openvr/opencomposite/bin/linux64/vrclient.so",
+                ".stvr-openvr/openvrpaths.vrpath",
+            ])
+            self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+            self.assertEqual(installed_xrizer.read_bytes(), b"new-xrizer")
+            self.assertEqual(stat.S_IMODE(installed_xrizer.stat().st_mode), 0o755)
+            installed_opencomposite = game / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so"
+            self.assertEqual(installed_opencomposite.read_bytes(), b"new-opencomposite")
+            self.assertEqual(stat.S_IMODE(installed_opencomposite.stat().st_mode), 0o755)
+            self.assertEqual(
+                (game / ".stvr-openvr/openvrpaths.vrpath").read_text(encoding="utf-8"),
+                '{"runtime": [], "version": 1}\n',
+            )
+            self.assertFalse(installer.install_transaction(operations, game, compatdata, "handoff"))
+            self.assertEqual(installer.uninstall_transaction(game, compatdata, force=False), 3)
+            self.assertEqual(installed_xrizer.read_bytes(), b"old-xrizer")
+            self.assertEqual(stat.S_IMODE(installed_xrizer.stat().st_mode), 0o640)
+            self.assertFalse(installed_opencomposite.exists())
+            self.assertFalse((game / ".stvr-openvr/openvrpaths.vrpath").exists())
 
     def test_linux_installer_requires_exact_verified_handoff_record_set(self) -> None:
         installer = load_module("install_local_agent_handoff_payload", INSTALLER)
