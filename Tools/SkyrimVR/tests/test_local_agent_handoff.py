@@ -113,6 +113,15 @@ class LocalAgentHandoffTests(unittest.TestCase):
     def test_handoff_finalizer_seals_and_verifies_local_and_remote_archives(self) -> None:
         finalizer = (TOOLS / "finalize_local_agent_handoff.sh").read_text(encoding="utf-8")
         build_helper = (TOOLS / "build_winboat_gameplay.sh").read_text(encoding="utf-8")
+        result = subprocess.run(
+            [str(TOOLS / "finalize_local_agent_handoff.sh"), "--self-test-pins"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("XRIZER_RUNTIME_SHA256=", result.stdout)
+        self.assertIn("OPENCOMPOSITE_RUNTIME_SHA256=", result.stdout)
         self.assertIn("build_portable_openvr_runtimes.sh", finalizer)
         self.assertIn("validate_runtime_dir", finalizer)
         self.assertIn("audit_local_agent_handoff.py", finalizer)

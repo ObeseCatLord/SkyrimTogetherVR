@@ -15,6 +15,7 @@ build_evidence=''
 output=''
 portable_runtime_dir=''
 upload_target=''
+self_test_pins=0
 
 usage() {
     cat >&2 <<EOF
@@ -26,6 +27,7 @@ Options:
   --xrizer-root DIR             Reviewed XRizer source checkout
   --opencomposite-root DIR      Reviewed OpenComposite source checkout
   --upload-target HOST:DIR/     Upload ZIP and sidecar, then verify remotely
+  --self-test-pins              Load and print reviewed pins, then exit
 EOF
 }
 
@@ -43,36 +45,28 @@ while (($#)); do
         --xrizer-root) xrizer_root=${2:?missing XRizer root}; shift 2 ;;
         --opencomposite-root) opencomposite_root=${2:?missing OpenComposite root}; shift 2 ;;
         --upload-target) upload_target=${2:?missing upload target}; shift 2 ;;
+        --self-test-pins) self_test_pins=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) usage; die "unknown argument: $1" ;;
     esac
 done
 
-[[ -n $gameplay_package && -n $build_evidence ]] || { usage; exit 2; }
+if ((self_test_pins == 0)); then
+    [[ -n $gameplay_package && -n $build_evidence ]] || { usage; exit 2; }
+fi
 command -v git >/dev/null || die 'git is required'
 command -v python3 >/dev/null || die 'python3 is required'
 command -v sha256sum >/dev/null || die 'sha256sum is required'
 command -v unzip >/dev/null || die 'unzip is required'
 
 cd -- "$repo_root"
-[[ -z $(git status --porcelain=v1 --untracked-files=all) ]] || die 'repository must be clean'
-gameplay_package=$(realpath -e -- "$gameplay_package")
-build_evidence=$(realpath -e -- "$build_evidence")
-
-mkdir -p -- "$state_tmp" "$portable_root" "$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
-export TMPDIR=$state_tmp
-
-if [[ ${STVR_BUILD_LOCK_HELD:-0} != 1 ]]; then
-    exec 8>"${XDG_RUNTIME_DIR:-$state_tmp}/skyrim-together-vr-build-active.lock"
-    flock -n 8 || die 'another Skyrim Together VR build or handoff operation is active'
-fi
-
 mapfile -t pins < <(python3 - "$repo_root" <<'PY'
 import importlib.util
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1]) / "Tools/SkyrimVR/create_local_agent_handoff.py"
+sys.path.insert(0, str(path.parent))
 spec = importlib.util.spec_from_file_location("stvr_handoff_creator", path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -91,6 +85,26 @@ xrizer_revision=${pins[0]}
 xrizer_sha256=${pins[1]}
 opencomposite_revision=${pins[2]}
 opencomposite_sha256=${pins[3]}
+
+if ((self_test_pins)); then
+    printf 'XRIZER_BASE_REVISION=%s\n' "$xrizer_revision"
+    printf 'XRIZER_RUNTIME_SHA256=%s\n' "$xrizer_sha256"
+    printf 'OPENCOMPOSITE_REVISION=%s\n' "$opencomposite_revision"
+    printf 'OPENCOMPOSITE_RUNTIME_SHA256=%s\n' "$opencomposite_sha256"
+    exit 0
+fi
+
+[[ -z $(git status --porcelain=v1 --untracked-files=all) ]] || die 'repository must be clean'
+gameplay_package=$(realpath -e -- "$gameplay_package")
+build_evidence=$(realpath -e -- "$build_evidence")
+
+mkdir -p -- "$state_tmp" "$portable_root" "$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
+export TMPDIR=$state_tmp
+
+if [[ ${STVR_BUILD_LOCK_HELD:-0} != 1 ]]; then
+    exec 8>"${XDG_RUNTIME_DIR:-$state_tmp}/skyrim-together-vr-build-active.lock"
+    flock -n 8 || die 'another Skyrim Together VR build or handoff operation is active'
+fi
 
 validate_runtime_dir() {
     local root=$1
