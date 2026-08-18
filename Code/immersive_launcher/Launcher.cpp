@@ -364,12 +364,17 @@ bool LoadProgram(LaunchContext& LC, RuntimeVersion& aRuntimeVersion)
     if (!IsExpectedGameExecutable(program))
         DIE_NOW(L"Skyrim VR executable does not match the supported 1.4.15.0 build");
 
+    // PE mapping executes target TLS/import initialization. From that point the
+    // process must identify as SkyrimVR.exe, just as it did before loader
+    // hardening; delaying this until after mapping makes early game startup use
+    // the wrapper path and can cause a clean return before the first frame.
+    LC.SetLoaded();
+
     ExeLoader loader(CurrentTarget.exeLoadSz);
     if (!loader.Load(program))
         DIE_NOW(L"Fatal error while mapping executable");
 
     LC.gameMain = loader.GetEntryPoint();
-    LC.SetLoaded();
     return true;
 }
 
