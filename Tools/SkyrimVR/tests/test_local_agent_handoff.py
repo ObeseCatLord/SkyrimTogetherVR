@@ -98,6 +98,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("dependencies/openvrpaths.vrpath", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/source-references/OpenComposite/LICENSE.txt", audit.REQUIRED_PATHS)
         self.assertIn("source/Tools/SkyrimVR/build_portable_openvr_runtimes.sh", audit.REQUIRED_PATHS)
+        self.assertIn("source/Tools/SkyrimVR/finalize_local_agent_handoff.sh", audit.REQUIRED_PATHS)
         self.assertIn("docker run --rm --interactive", runtime_builder.replace("\n", " "))
         self.assertIn("source/Tools/SkyrimVR/opencomposite-bullseye.patch", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/source-references/OpenComposite/", audit.REQUIRED_PREFIXES)
@@ -108,6 +109,19 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("## Quick Start", readme)
         self.assertIn("STVR_OPENVR_RUNTIME=opencomposite", readme)
         self.assertIn("$env:STVR_AUTOCONNECT", readme)
+
+    def test_handoff_finalizer_seals_and_verifies_local_and_remote_archives(self) -> None:
+        finalizer = (TOOLS / "finalize_local_agent_handoff.sh").read_text(encoding="utf-8")
+        build_helper = (TOOLS / "build_winboat_gameplay.sh").read_text(encoding="utf-8")
+        self.assertIn("build_portable_openvr_runtimes.sh", finalizer)
+        self.assertIn("validate_runtime_dir", finalizer)
+        self.assertIn("audit_local_agent_handoff.py", finalizer)
+        self.assertIn("unzip -tq", finalizer)
+        self.assertIn('cd -- "$(dirname -- "$output")"', finalizer)
+        self.assertIn("rsync -ah --partial", finalizer)
+        self.assertIn("sha256sum -c '${remote_name}.sha256.txt'", finalizer)
+        self.assertIn("finalize_local_agent_handoff.sh", build_helper)
+        self.assertIn("STVR_HANDOFF_UPLOAD_TARGET", build_helper)
 
     def test_auditor_requires_matching_executable_xrizer_runtime_pair(self) -> None:
         audit = load_module("audit_local_agent_handoff_pair", TOOLS / "audit_local_agent_handoff.py")

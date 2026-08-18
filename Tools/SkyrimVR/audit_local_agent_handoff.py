@@ -34,6 +34,7 @@ REQUIRED_PATHS = (
     "source/Tools/SkyrimVR/linux/launch-skyrim-vr-offline.sh",
     "source/Tools/SkyrimVR/linux/stvr-xrizer-input-compat.sh",
     "source/Tools/SkyrimVR/build_portable_openvr_runtimes.sh",
+    "source/Tools/SkyrimVR/finalize_local_agent_handoff.sh",
     "source/Tools/SkyrimVR/opencomposite-bullseye.patch",
     "dependencies/current-game-overlay/SkyrimVR.exe",
     "dependencies/current-game-overlay/openvr_api.dll",

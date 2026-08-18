@@ -93,18 +93,34 @@ repository-adjacent `_refs` locations, in that order.
 The WinBoat helper prints the retained Windows result paths and then uses the
 private WinBoat SCP channel to import the exact result. It creates a deterministic
 Linux gameplay ZIP, independently validates the gameplay manifest, evidence,
-hashes, flavor, and source revision, and regenerates and audits the complete
-local-agent handoff ZIP. The final paths are printed as
+hashes, flavor, and source revision, then calls
+`Tools/SkyrimVR/finalize_local_agent_handoff.sh`. The finalizer uses root-backed
+state storage instead of `/tmp`, builds or reuses the exact pinned Bullseye
+OpenComposite/XRizer binaries, validates their hashes and glibc ceilings,
+regenerates and audits the complete local-agent handoff ZIP, checks ZIP
+integrity, verifies the basename sidecar from the archive directory, uploads
+both files resumably to `foundry:~/videos/`, and verifies the checksum on
+Foundry. Override the destination with `STVR_HANDOFF_UPLOAD_TARGET=host:path/`.
+The final paths are printed as
 `STVR_LINUX_GAMEPLAY_PACKAGE`, `STVR_LINUX_BUILD_EVIDENCE`, and
 `STVR_LOCAL_HANDOFF`. Do not manually select a different package/evidence pair
 afterward. The handoff generator requires the same clean committed worktree and
 includes the current checklist/documentation without raw Codex/session telemetry
 or unredacted runtime logs.
 
-After an updated local-agent handoff passes its archive audit and ZIP integrity
-check, copy the ZIP and its SHA-256 sidecar to `foundry:~/videos/`. Verify the
-remote SHA-256 before reporting the handoff complete. This is the standing
-private handoff location; do not publish the local-only archive to GitHub.
+For an already imported exact package/evidence pair, run the same final stage
+without rebuilding the Windows DLLs:
+
+```bash
+Tools/SkyrimVR/finalize_local_agent_handoff.sh \
+  --gameplay-package /absolute/path/to/gameplay.zip \
+  --build-evidence /absolute/path/to/build-evidence.zip \
+  --upload-target foundry:videos/
+```
+
+The finalizer refuses a dirty repository, mismatched or unreviewed runtimes,
+an existing output path, an invalid archive, a bad local sidecar, or a failed
+remote checksum. The Foundry archive is private; do not publish it to GitHub.
 
 When handoff updates are not authorized, `--skip-handoff` is required. It still
 performs the full Windows build/audit, SCP import, deterministic gameplay package,

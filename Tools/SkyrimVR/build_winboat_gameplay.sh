@@ -240,13 +240,11 @@ else
     handoff_dir="$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
     mkdir -p "$handoff_dir"
     handoff_zip="$handoff_dir/SkyrimTogetherVR-local-agent-complete-handoff-${short_commit}-${timestamp}.zip"
-    python3 "$repo_root/Tools/SkyrimVR/create_local_agent_handoff.py" \
-        --repo "$repo_root" \
+    "$repo_root/Tools/SkyrimVR/finalize_local_agent_handoff.sh" \
         --gameplay-package "$package_zip" \
         --build-evidence "$evidence_copy" \
-        --output "$handoff_zip"
-    python3 "$repo_root/Tools/SkyrimVR/audit_local_agent_handoff.py" "$handoff_zip"
-    unzip -tq "$handoff_zip"
+        --output "$handoff_zip" \
+        --upload-target "${STVR_HANDOFF_UPLOAD_TARGET:-foundry:videos/}"
     printf 'STVR_LINUX_GAMEPLAY_PACKAGE=%s\n' "$package_zip"
     printf 'STVR_LINUX_BUILD_EVIDENCE=%s\n' "$evidence_copy"
     printf 'STVR_LOCAL_HANDOFF=%s\n' "$handoff_zip"
