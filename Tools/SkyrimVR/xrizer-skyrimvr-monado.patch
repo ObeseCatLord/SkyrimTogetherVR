@@ -1,5 +1,5 @@
 diff --git a/build.rs b/build.rs
-index 5a1780d..59ab7fa 100644
+index 5a1780dfe729b49484e888ba531bc577fa6e9d94..59ab7fae1418f2ebedc10f6eca97f06911064e1f 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -3,6 +3,12 @@ use std::env;
@@ -16,7 +16,7 @@ index 5a1780d..59ab7fa 100644
      for path in shaders::compile(&out_dir) {
          println!("cargo::rerun-if-changed={}", path.to_str().unwrap());
 diff --git a/src/compositor.rs b/src/compositor.rs
-index 6eaebd6..65b1057 100644
+index 6eaebd687786025a12d23b06a204d71df8bc6630..65b10575b69ec45c282a1acf2189ba1b922d9f18 100644
 --- a/src/compositor.rs
 +++ b/src/compositor.rs
 @@ -582,8 +582,12 @@ impl vr::IVRCompositor029_Interface for Compositor {
@@ -59,7 +59,7 @@ index 6eaebd6..65b1057 100644
      fn zero_dims_texture() {
          let f = Fixture::new();
 diff --git a/src/input.rs b/src/input.rs
-index 77ab6ed..072a9a0 100644
+index 77ab6ed2769825f4189ef22a12cb508eed54a50c..072a9a04bece81e05946d00b4fe16c21876f08f2 100644
 --- a/src/input.rs
 +++ b/src/input.rs
 @@ -67,7 +67,12 @@ pub struct Input<C: openxr_data::Compositor> {
@@ -157,7 +157,7 @@ index 77ab6ed..072a9a0 100644
  
  enum LoadedActions {
 diff --git a/src/input/devices.rs b/src/input/devices.rs
-index ca23250..ffd1445 100644
+index ca232509a9df59b74b7b6c4875622816a6cd3f43..ffd14450944071a7615cb05d64117198c0997db3 100644
 --- a/src/input/devices.rs
 +++ b/src/input/devices.rs
 @@ -8,6 +8,8 @@ use openvr as vr;
@@ -223,7 +223,7 @@ index ca23250..ffd1445 100644
              force_estimated_thumb: TypeId::of::<P>() == TypeId::of::<Knuckles>(),
          }
 diff --git a/src/input/legacy.rs b/src/input/legacy.rs
-index 9610aa8..b387273 100644
+index 9610aa8a4853125a25ebd0ac8bbeba6b5f8f3eb1..b3872734228b4cf4a8a887a2712f15a49a318e93 100644
 --- a/src/input/legacy.rs
 +++ b/src/input/legacy.rs
 @@ -4,17 +4,147 @@ use crate::{
@@ -799,7 +799,7 @@ index 9610aa8..b387273 100644
      fn no_legacy_input_before_session_setup() {
          let fixture = Fixture::new();
 diff --git a/src/input/profiles/knuckles.rs b/src/input/profiles/knuckles.rs
-index 4b297d5..269cc23 100644
+index 4b297d5d4e1a280d96b06651301fe4827923480d..269cc23c600ceedae9055f5a108a48f78abcf08c 100644
 --- a/src/input/profiles/knuckles.rs
 +++ b/src/input/profiles/knuckles.rs
 @@ -3,6 +3,7 @@ use super::{
@@ -827,7 +827,7 @@ index 4b297d5..269cc23 100644
              squeeze_click: c.leftright::<Squeeze, Value, _, _>(),
              main_xy: c.leftright::<Thumbstick, (), _, _>(),
 diff --git a/src/input/tests.rs b/src/input/tests.rs
-index c2160e7..d9ae598 100644
+index c2160e78b74237df339cad10f725550f054adde3..d9ae598932b0dbe38d972d388bf542990325cf68 100644
 --- a/src/input/tests.rs
 +++ b/src/input/tests.rs
 @@ -1029,6 +1029,44 @@ fn empty_manifest() {
@@ -876,7 +876,7 @@ index c2160e7..d9ae598 100644
  fn load_actions_race() {
      let mut f = Fixture::new();
 diff --git a/src/overlay.rs b/src/overlay.rs
-index 528d8fd..9ccd11c 100644
+index 528d8fd0632fab6080fd416e77405a99551fc2d8..9ccd11cf6f01ad24213c495b91f62092c39395b3 100644
 --- a/src/overlay.rs
 +++ b/src/overlay.rs
 @@ -2,6 +2,7 @@ use crate::{
