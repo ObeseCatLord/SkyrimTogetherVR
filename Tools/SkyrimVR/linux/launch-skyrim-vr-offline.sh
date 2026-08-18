@@ -90,6 +90,7 @@ export SteamGameId="${SteamGameId:-$APPID}"
 export STEAM_COMPAT_INSTALL_PATH="${STEAM_COMPAT_INSTALL_PATH:-$GAME_DIR}"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$STEAM_ROOT}"
 export WINEPREFIX="$WINEPREFIX_DIR"
+export STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$COMPATDATA}"
 
 append_colon_path() {
   local variable="$1" path="$2" current entry
@@ -129,6 +130,79 @@ try:
 except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
     raise SystemExit(f"invalid Monado OpenXR manifest: {error}")
 PY
+}
+
+configure_host_monado_runtime() {
+  local candidate result runtime_kind runtime_manifest runtime_prefix library_dir
+  local -a candidates runtime_lines
+  if [ -n "${XR_RUNTIME_JSON:-}" ]; then
+    candidates=("$XR_RUNTIME_JSON")
+  else
+    if [ -n "${XDG_CONFIG_HOME:-}" ]; then candidates+=("$XDG_CONFIG_HOME/openxr/1/active_runtime.json"); fi
+    if [ -n "${HOME:-}" ]; then candidates+=("$HOME/.config/openxr/1/active_runtime.json"); fi
+  fi
+  for candidate in "${candidates[@]}"; do
+    { [ -e "$candidate" ] || [ -L "$candidate" ]; } && break
+    candidate=""
+  done
+  [ -n "${candidate:-}" ] || die 'a selected host Monado socket requires XR_RUNTIME_JSON or an OpenXR active_runtime.json'
+
+  result="$(python3 - "$candidate" <<'PY'
+import json
+import os
+import sys
+candidate = sys.argv[1]
+def below(child, parent):
+    try:
+        return os.path.commonpath((child, parent)) == parent
+    except ValueError:
+        return False
+try:
+    manifest = os.path.realpath(candidate)
+    if not manifest.endswith(".json") or not os.path.isfile(manifest): raise ValueError("active runtime is not a regular JSON manifest")
+    with open(manifest, encoding="utf-8") as source: runtime = json.load(source)["runtime"]
+    if not isinstance(runtime, dict): raise ValueError("runtime")
+    libraries = []
+    for key in ("library_path", "MND_libmonado_path"):
+        if key not in runtime: continue
+        value = runtime[key]
+        if not isinstance(value, str) or not value: raise ValueError(key)
+        library = os.path.realpath(os.path.join(os.path.dirname(manifest), value))
+        if not os.path.isfile(library): raise ValueError(key)
+        libraries.append(library)
+    if not libraries or "library_path" not in runtime: raise ValueError("library_path")
+    is_monado = "MND_libmonado_path" in runtime or "monado" in os.path.basename(libraries[0]).lower()
+    if not is_monado:
+        print("other")
+        print(manifest)
+        raise SystemExit(0)
+    if "MND_libmonado_path" not in runtime: raise ValueError("Monado manifest is missing MND_libmonado_path")
+    manifest_dir = os.path.dirname(manifest)
+    prefix = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(manifest))))
+    if (prefix == os.path.sep or os.path.basename(os.path.dirname(manifest_dir)) != "openxr"
+            or os.path.basename(manifest_dir) != "1"
+            or os.path.basename(os.path.dirname(os.path.dirname(manifest_dir))) != "share"):
+        raise ValueError("Monado manifest is not under PREFIX/share/openxr/1")
+    if any(not below(library, prefix) for library in libraries): raise ValueError("Monado library outside manifest prefix")
+    print("monado")
+    print(manifest)
+    print(prefix)
+    for directory in dict.fromkeys([os.path.dirname(library) for library in libraries] + [os.path.join(prefix, "lib"), os.path.join(prefix, "lib64")]):
+        if os.path.isdir(directory): print(directory)
+except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"invalid active OpenXR runtime: {error}")
+PY
+)" || die "could not validate active OpenXR runtime: $candidate"
+  mapfile -t runtime_lines <<<"$result"
+  [ "${#runtime_lines[@]}" -ge 2 ] || die 'active OpenXR runtime did not resolve a manifest'
+  runtime_kind="${runtime_lines[0]}"
+  runtime_manifest="${runtime_lines[1]}"
+  export XR_RUNTIME_JSON="$runtime_manifest"
+  [ "$runtime_kind" = monado ] || return 0
+  [ "${#runtime_lines[@]}" -ge 3 ] || die 'active Monado runtime did not resolve a prefix'
+  runtime_prefix="${runtime_lines[2]}"
+  append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RO "$runtime_prefix"
+  for library_dir in "${runtime_lines[@]:3}"; do append_colon_path LD_LIBRARY_PATH "$library_dir"; done
 }
 
 configure_isolated_monado_runtime() {
@@ -186,6 +260,7 @@ MONADO_RUNTIME_DIR="${STVR_MONADO_RUNTIME_DIR:-}"
 configure_isolated_monado_runtime
 MONADO_IPC_SOCKET="${MONADO_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/monado_comp_ipc}"
 if [ -z "$MONADO_RUNTIME_DIR" ] && [ -S "$MONADO_IPC_SOCKET" ] && [ ! -L "$MONADO_IPC_SOCKET" ]; then
+  configure_host_monado_runtime
   append_colon_path PRESSURE_VESSEL_FILESYSTEMS_RW "$MONADO_IPC_SOCKET"
 fi
 export GAMEID="umu-$APPID"
@@ -198,15 +273,14 @@ if command -v umu-run >/dev/null 2>&1 && [ "${STVR_FORCE_PROTON:-0}" != "1" ]; t
 else
   PROTON_BIN="${STVR_PROTON:-$PROTON_DIR/proton}"
   [ -f "$PROTON_BIN" ] || die "missing Proton executable: $PROTON_BIN"
-  export STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$COMPATDATA}"
   export PROTONPATH="${PROTONPATH:-$PROTON_DIR}"
   MODE="proton"
   COMMAND=("$PROTON_BIN" run "$LOADER" "$@")
 fi
 
 if [ "${STVR_DRY_RUN:-0}" = "1" ]; then
-  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nOpenVR runtime: %s\nOpenVR runtime path: %s\nOpenVR pathreg: %s\nVR override: %s\nVR pathreg override: %s\nProton VR runtime: %s\nMonado runtime: %s\nXR runtime: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nCommand:' \
-    "$MODE" "$GAME_DIR" "$COMPATDATA" "$STVR_SELECTED_OPENVR_RUNTIME" "$STVR_SELECTED_OPENVR_RUNTIME_PATH" "$STVR_SELECTED_OPENVR_PATHREG" "${VR_OVERRIDE:-none}" "${VR_PATHREG_OVERRIDE:-none}" "${PROTON_VR_RUNTIME:-none}" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "$GAMEID" \
+  printf 'Mode: %s\nGame dir: %s\nCompatdata: %s\nOpenVR runtime: %s\nOpenVR runtime path: %s\nOpenVR pathreg: %s\nVR override: %s\nVR pathreg override: %s\nProton VR runtime: %s\nMonado runtime: %s\nXR runtime: %s\nOpenXR library path: %s\nGAMEID: %s\nPressure vessel RW: %s\nPressure vessel RO: %s\nCommand:' \
+    "$MODE" "$GAME_DIR" "$COMPATDATA" "$STVR_SELECTED_OPENVR_RUNTIME" "$STVR_SELECTED_OPENVR_RUNTIME_PATH" "$STVR_SELECTED_OPENVR_PATHREG" "${VR_OVERRIDE:-none}" "${VR_PATHREG_OVERRIDE:-none}" "${PROTON_VR_RUNTIME:-none}" "${MONADO_RUNTIME_DIR:-default}" "${XR_RUNTIME_JSON:-default}" "${LD_LIBRARY_PATH:-default}" "$GAMEID" \
     "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}" "${PRESSURE_VESSEL_FILESYSTEMS_RO:-}"
   printf ' %q' "${COMMAND[@]}"
   printf '\n'

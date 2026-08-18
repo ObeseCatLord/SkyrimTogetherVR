@@ -12,7 +12,7 @@ This file is copied to the extracted archive root as `START-HERE.md`.
 Linux requires an already working legal Skyrim VR 1.4.15 installation, its
 Steam app `611670` Proton prefix, Proton/UMU, and an active Monado OpenXR
 session. From the extracted handoff root, these commands install the verified
-payload and connect through the bundled portable OpenComposite runtime:
+payload and connect through the bundled portable XRizer runtime:
 
 ```bash
 HANDOFF=$PWD
@@ -20,13 +20,24 @@ GAME_DIR=/path/to/SteamLibrary/steamapps/common/SkyrimVR
 COMPATDATA=/path/to/SteamLibrary/steamapps/compatdata/611670
 python3 "$HANDOFF/INSTALL-SECOND-CLIENT.py" --game-dir "$GAME_DIR" --compatdata "$COMPATDATA" --install
 SERVER=$(python3 -c 'import json; print(json.load(open("LOCAL-MANIFEST.json"))["serverEndpoint"])')
-STVR_OPENVR_RUNTIME=opencomposite STVR_AUTOCONNECT="$SERVER" "$GAME_DIR/launch-skyrim-together-vr.sh"
+STVR_OPENVR_RUNTIME=xrizer STVR_AUTOCONNECT="$SERVER" "$GAME_DIR/launch-skyrim-together-vr.sh"
 ```
 
-Use `STVR_OPENVR_RUNTIME=xrizer` instead when XRizer is preferred. The launch
-script validates the selected runtime and prints its resolved paths before
-starting Proton. Set `STVR_PASSWORD` in the same command only when the server
-requires one; do not store it in the handoff or logs.
+The launch script validates the selected runtime and prints its resolved paths
+before starting Proton. OpenComposite remains an explicit alternative, but the
+2026-08-18 Linux/Monado connection result used the bundled XRizer payload. Set
+`STVR_PASSWORD` in the same command only when the server requires one; do not
+store it in the handoff or logs.
+
+With XRizer, physical Index input remains on the native Index OpenXR profile
+while Skyrim sees the Oculus-compatible legacy control map. In RaceSex, Grip
+activates Done, Trigger accepts `Finish and name your character?`, and a second
+Trigger accepts Skyrim VR's hidden default-name stage after the dialog closes.
+XRizer has no interactive naming keyboard in this path, so the preset remains
+`Prisoner`. The same stages are used by unattended automation; it injects
+bounded Grip/Trigger pulses without suppressing real input. A 2026-08-18 full
+OpenVR trace confirmed Skyrim VR does not call XRizer's keyboard entry points
+during this transaction.
 
 On Windows, start SteamVR/OpenXR first. Then run this PowerShell sequence from
 the extracted handoff root:
@@ -60,8 +71,9 @@ uninstall commands, runtime alternatives, and evidence collection follow.
 - The Windows installer never copies `dependencies/xrizer-runtime/`, Linux
   launch scripts, or the handoff's `openvr_api.dll` into a Windows game root.
   Windows uses its existing SteamVR/OpenXR installation.
-- The Linux installer transactionally installs the bundled runtime binaries as
-  `.stvr-openvr/xrizer/bin/linux64/vrclient.so` and
+- The Linux installer transactionally installs the paired XRizer runtime as
+  `.stvr-openvr/xrizer/libxrizer.so` and
+  `.stvr-openvr/xrizer/bin/linux64/vrclient.so`, and installs
   `.stvr-openvr/opencomposite/bin/linux64/vrclient.so`, plus a neutral
   `.stvr-openvr/openvrpaths.vrpath` containing only `{"version": 1,
   "runtime": []}`. This is a portable registry, not copied generated

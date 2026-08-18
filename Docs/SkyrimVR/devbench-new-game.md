@@ -5,14 +5,13 @@ without headset input:
 
 1. waits for DevBench on `127.0.0.1:8921`;
 2. dismisses Skyrim VR calibration when present;
-3. creates or reuses a persistent `ydotoold` keyboard before Proton starts;
-4. focuses Skyrim with `kdotool`, selects the top New Game entry with `End`
-   (Skyrim VR's Scaleform list is indexed bottom-to-top), and sends the VR
-   trigger alias to Monado's Qwerty controller;
-5. requests RaceSex completion with Monado `N` (the Qwerty
-   `KHR/simple_controller` menu action, exposed by XRizer as legacy Grip /
-   RaceSex `XButton`), verifies the affirmative dialog, and activates it through
-   a held Monado `P` controller trigger;
+3. compiles a small cached Win32 scan-code helper and sends `End`, then `Enter`
+   inside the active Proton prefix to select Skyrim VR's top New Game entry;
+4. publishes a bounded XRizer `trigger` command to accept Realm of Lorkhan's
+   New Game confirmation;
+5. publishes XRizer `menu`, which is deliberately exposed as legacy OpenVR
+   `Grip` (`0x02`) because Skyrim VR maps RaceSex `XButton`/Done to that button,
+   verifies the affirmative dialog, and activates it with XRizer `trigger`;
 5a. while finalizing and waiting to connect, scans for `MessageBoxMenu`; only
    the verified Realm of Lorkhan intro is accepted via `menu accept` when its
    body matches `someplace unknown` and `outside of time and space` and its sole
@@ -28,25 +27,24 @@ without headset input:
    command and waits for fresh online status with a nonzero player ID plus the
    first current-cell request.
 
-Requirements are DevBench 1.9.1, `kdotool`, `ydotool`/`ydotoold`, write access
-to `/dev/uinput`, and the Monado Qwerty aliases from
-`Tools/SkyrimVR/monado-qwerty-automation.patch`. The patch maps `P` to the
-focused controller trigger and `O` to squeeze because synthetic pointer
-positioning is not reliable on multi-monitor Wayland.
+Requirements are DevBench 1.9.1, `x86_64-w64-mingw32-g++`, the same GE-Proton
+and prefix used to launch Skyrim VR, and the bundled patched XRizer runtime.
+Host focus tools, `ydotool`, and `/dev/uinput` are not part of the current path.
 
-The automation sets `STVR_XRIZER_KEYBOARD_TEXT` to `Shezarrine` (override with
-`--character-name`) for the locally patched XRizer runtime. That opt-in path
-returns the configured text and emits OpenVR `KeyboardDone` after Skyrim asks
-for its virtual keyboard. XRizer preserves its normal unsupported-keyboard
-behavior when the variable is absent.
+After the visible RaceSex confirmation closes, Skyrim VR has a second hidden
+default-name stage. Automation sends exactly one additional Trigger only while
+RaceSex is still the sole actionable target. Manual controller use follows the
+same sequence: Grip for Done, Trigger for OK, then Trigger again for the preset
+name. The old Monado-Qwerty flow appeared to need one press because its 500 ms
+hold spanned both stages. A full XRizer call trace confirmed Skyrim VR does not
+call OpenVR's keyboard API during this transaction, so the second explicit
+controller stage is required even though XRizer implements those APIs.
 
-The default window expressions are anchored to the exact `Skyrim VR` and
-`Monado!` titles. This prevents browser tabs or other windows containing the
-word Skyrim from receiving automation input. Do not substitute Monado `O` for
-the RaceSex Done action: Qwerty devices negotiate
-`/interaction_profiles/khr/simple_controller`, whose legacy Grip binding comes
-from `/input/menu/click` (`N`), not the Qwerty WMR squeeze input (`O`). Confirm
-the negotiated profile in `stvr-devbench-launch.log` when changing runtimes.
+The command file accepts exactly `menu` or `trigger`, must be an absolute,
+bounded regular file, and is consumed without following symlinks. A synthetic
+button remains pressed for a complete OpenXR action-sync interval. Its level and
+edges are composed with physical state, so a held real trigger is not released
+or double-pressed by automation.
 
 For an unattended run, let the automation launch Skyrim after its persistent
 input device is ready:
@@ -92,8 +90,9 @@ for the New Game release gate. Run the same build first with the default
 the observer log proves stable cadence, one owner thread, correct forwarding,
 and clean launch/load/exit behavior.
 
-Synthetic keyboard taps are held for 500 ms. Short taps were intermittently
-missed by Skyrim VR and XRizer even when the correct window had focus.
+The Win32 helper emits deterministic scan-code press/release pairs. Controller
+commands are level-held for one complete XRizer action-sync interval rather
+than depending on host key timing.
 
 Task-sequence evidence is scoped to bytes appended after the current launch;
 sequence values restart at 1 in each process even though the bridge log itself

@@ -94,29 +94,28 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:70ad5d1d-arm64`.
+- Image tag: `skyrim-together-vr-server:c18ca1d8-arm64`.
 - Image ID:
-  `sha256:da3448ba745089a4633b0c3873512e411b44c316f6a5b5f9c949072edf366aee`.
+  `sha256:db94654b0a0f621af2b17c27c11fc7dc7ff5903157f7cc9314c4388fd680ef36`.
 - Runtime executable SHA-256:
-  `ce7b46ad509d200e2a341cc74877085fe088dc1504e3d4273a31944cbb321bd6`.
+  `bcbe58b16b3a74df2d0a4e443417add8bae6a1491ec7288f0abb17aaef082791`.
 - Runtime core SHA-256:
-  `21c3c1c54b7403f940bfbd95dcdb4027ee2f76bb68db966e645ad521524ec626`.
-- Server deployment revision: `70ad5d1d`; the matching client build is
-  `70ad5d1d0225e18d1cb8d1cc625e80ee7062e9bc` and reports
-  `stvr-v0.1.0-alpha.1-81-g70ad5d1d`.
+  `04e0a53b3e19c98aa8a55f80e4b7689a8f57cd2ecad08968036d7321b15abea2`.
+- Server deployment revision: `c18ca1d8`; the matching client build is
+  `c18ca1d8f3ed6b61c82a87c763c3c1c1899740e4` and reports
+  `stvr-v0.1.0-alpha.1-83-gc18ca1d8`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `70ad5d1d` source revision. The current
+The client and server use the exact `c18ca1d8` source revision. The current
 deployment has one container and zero restarts, listens on UDP port 26099, and
-retains the existing persistent config, Data, and log mounts. The earlier
-`a4b90e01` Linux/Monado single-client bootstrap result remains documented in
-`runtime-connection-result-20260811-a4b90e01.md`, but it is not runtime proof
-for this newer deployment. Run fresh one-client and two-client tests before
-making gameplay-parity claims. Rebuild and redeploy whenever shared message
-definitions, encoding, or server code changes.
+retains the existing persistent config, Data, and log mounts. A matching
+Linux/Monado client authenticated successfully on 2026-08-18; see
+`runtime-connection-result-20260818-c18ca1d8.md`. This is one-client bootstrap
+proof, not two-client gameplay proof. Rebuild and redeploy whenever shared
+message definitions, encoding, or server code changes.
 
 The existing test server currently has an empty `sPassword`. If a password is
 configured later, keep it outside the repository and handoff and obtain it

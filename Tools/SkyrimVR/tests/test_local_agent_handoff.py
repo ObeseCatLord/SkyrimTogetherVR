@@ -57,6 +57,18 @@ def transaction_fixture(installer, root: pathlib.Path, order: tuple[str, ...] = 
 
 
 class LocalAgentHandoffTests(unittest.TestCase):
+    def test_xrizer_provenance_constants_match_reviewed_artifacts(self) -> None:
+        creator = load_module("create_local_agent_handoff_xrizer_constants", TOOLS / "create_local_agent_handoff.py")
+        audit = load_module("audit_local_agent_handoff_xrizer_constants", TOOLS / "audit_local_agent_handoff.py")
+        reviewed = {
+            "XRIZER_BASE_REVISION": "31319560c1bd0f1e5c16936a946bb1c7295dbfd9",
+            "XRIZER_RUNTIME_SHA256": "432b1676c1c314e6da16dcd9bad54259657ae013a897000b367a111093d509cb",
+            "XRIZER_COMPATIBILITY_PATCH_SHA256": "c18a31c658e8c4aa3131b0c734cd06dce564031192417c0febb62a069729d669",
+        }
+        for name, expected in reviewed.items():
+            self.assertEqual(getattr(creator, name), expected)
+            self.assertEqual(getattr(audit, name), expected)
+
     def test_linux_installer_self_test_covers_dry_run_and_rejection(self) -> None:
         result = subprocess.run(
             [sys.executable, str(INSTALLER), "--self-test"],
@@ -69,6 +81,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
 
     def test_generator_and_audit_require_windows_root_installers(self) -> None:
         generator = (TOOLS / "create_local_agent_handoff.py").read_text(encoding="utf-8")
+        runtime_builder = (TOOLS / "build_portable_openvr_runtimes.sh").read_text(encoding="utf-8")
         audit = load_module("audit_local_agent_handoff", TOOLS / "audit_local_agent_handoff.py")
 
         self.assertIn('f"{root}/INSTALL-SECOND-CLIENT-WINDOWS.ps1"', generator)
@@ -79,11 +92,13 @@ class LocalAgentHandoffTests(unittest.TestCase):
             "source/Docs/SkyrimVR/local-agent-complete-handoff.md",
             audit.REQUIRED_PATHS,
         )
+        self.assertIn("dependencies/xrizer-runtime/libxrizer.so", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/xrizer-runtime/bin/linux64/vrclient.so", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/opencomposite-runtime/bin/linux64/vrclient.so", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/openvrpaths.vrpath", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/source-references/OpenComposite/LICENSE.txt", audit.REQUIRED_PATHS)
         self.assertIn("source/Tools/SkyrimVR/build_portable_openvr_runtimes.sh", audit.REQUIRED_PATHS)
+        self.assertIn("docker run --rm --interactive", runtime_builder.replace("\n", " "))
         self.assertIn("source/Tools/SkyrimVR/opencomposite-bullseye.patch", audit.REQUIRED_PATHS)
         self.assertIn("dependencies/source-references/OpenComposite/", audit.REQUIRED_PREFIXES)
         self.assertIn("--opencomposite-root", generator)
@@ -93,6 +108,36 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("## Quick Start", readme)
         self.assertIn("STVR_OPENVR_RUNTIME=opencomposite", readme)
         self.assertIn("$env:STVR_AUTOCONNECT", readme)
+
+    def test_auditor_requires_matching_executable_xrizer_runtime_pair(self) -> None:
+        audit = load_module("audit_local_agent_handoff_pair", TOOLS / "audit_local_agent_handoff.py")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = pathlib.Path(temp_dir) / "handoff.zip"
+            root = "handoff"
+            root_name = f"{root}/{audit.XRIZER_ROOT_RUNTIME_PATH}"
+            loader_name = f"{root}/{audit.XRIZER_RUNTIME_PATH}"
+
+            def write_entry(archive: zipfile.ZipFile, name: str, payload: bytes, mode: int = 0o100755) -> None:
+                entry = zipfile.ZipInfo(name)
+                entry.create_system = 3
+                entry.external_attr = mode << 16
+                archive.writestr(entry, payload)
+
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                write_entry(archive, root_name, b"xrizer")
+                write_entry(archive, loader_name, b"xrizer")
+            with zipfile.ZipFile(archive_path) as archive:
+                records = {root_name: {"sha256": audit.XRIZER_RUNTIME_SHA256}}
+                self.assertFalse(audit.xrizer_runtime_pair_failures(archive, root, archive.namelist(), records))
+
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                write_entry(archive, root_name, b"xrizer", 0o100644)
+                write_entry(archive, loader_name, b"different")
+            with zipfile.ZipFile(archive_path) as archive:
+                failures = audit.xrizer_runtime_pair_failures(archive, root, archive.namelist(), {})
+                self.assertTrue(any("hash" in failure for failure in failures))
+                self.assertTrue(any("regular executable" in failure for failure in failures))
+                self.assertTrue(any("differ" in failure for failure in failures))
 
     def test_generator_accepts_only_reviewed_opencomposite_loader(self) -> None:
         creator = load_module("create_local_agent_handoff_opencomposite", TOOLS / "create_local_agent_handoff.py")
@@ -166,7 +211,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
                         ("rev-parse", "HEAD"): f"{revision or creator.XRIZER_BASE_REVISION}\n",
                         ("diff", "--cached", "--binary", "HEAD"): "",
                         ("ls-files", "--others", "--exclude-standard"): "",
-                        ("diff", "--binary", "--no-ext-diff", "HEAD"): patch_text,
+                        ("diff", "--binary", "--no-ext-diff", "--full-index", "HEAD"): patch_text,
                     }
                     return responses[args]
 
@@ -550,20 +595,25 @@ class LocalAgentHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             handoff = root / "handoff"
+            xrizer_root = handoff / "dependencies/xrizer-runtime/libxrizer.so"
             xrizer = handoff / "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
             opencomposite = handoff / "dependencies/opencomposite-runtime/bin/linux64/vrclient.so"
             pathreg = handoff / "dependencies/openvrpaths.vrpath"
             xrizer.parent.mkdir(parents=True)
+            xrizer_root.parent.mkdir(parents=True, exist_ok=True)
+            xrizer_root.write_bytes(b"new-xrizer")
             opencomposite.parent.mkdir(parents=True)
             xrizer.write_bytes(b"new-xrizer")
             opencomposite.write_bytes(b"new-opencomposite")
             pathreg.write_text('{"runtime": [], "version": 1}\n', encoding="utf-8")
+            xrizer_root.chmod(0o755)
             xrizer.chmod(0o755)
             opencomposite.chmod(0o755)
             game = root / "game"
             compatdata = root / "compatdata"
             game.mkdir()
             compatdata.mkdir()
+            installed_xrizer_root = game / ".stvr-openvr/xrizer/libxrizer.so"
             installed_xrizer = game / ".stvr-openvr/xrizer/bin/linux64/vrclient.so"
             installed_xrizer.parent.mkdir(parents=True)
             installed_xrizer.write_bytes(b"old-xrizer")
@@ -571,11 +621,14 @@ class LocalAgentHandoffTests(unittest.TestCase):
 
             operations = installer.collect_openvr_runtimes(handoff)
             self.assertEqual([operation.relative.as_posix() for operation in operations], [
+                ".stvr-openvr/xrizer/libxrizer.so",
                 ".stvr-openvr/xrizer/bin/linux64/vrclient.so",
                 ".stvr-openvr/opencomposite/bin/linux64/vrclient.so",
                 ".stvr-openvr/openvrpaths.vrpath",
             ])
             self.assertTrue(installer.install_transaction(operations, game, compatdata, "handoff"))
+            self.assertEqual(installed_xrizer_root.read_bytes(), b"new-xrizer")
+            self.assertEqual(stat.S_IMODE(installed_xrizer_root.stat().st_mode), 0o755)
             self.assertEqual(installed_xrizer.read_bytes(), b"new-xrizer")
             self.assertEqual(stat.S_IMODE(installed_xrizer.stat().st_mode), 0o755)
             installed_opencomposite = game / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so"
@@ -585,8 +638,13 @@ class LocalAgentHandoffTests(unittest.TestCase):
                 (game / ".stvr-openvr/openvrpaths.vrpath").read_text(encoding="utf-8"),
                 '{"runtime": [], "version": 1}\n',
             )
+            self.assertEqual(
+                stat.S_IMODE((game / ".stvr-openvr/openvrpaths.vrpath").stat().st_mode),
+                0o644,
+            )
             self.assertFalse(installer.install_transaction(operations, game, compatdata, "handoff"))
-            self.assertEqual(installer.uninstall_transaction(game, compatdata, force=False), 3)
+            self.assertEqual(installer.uninstall_transaction(game, compatdata, force=False), 4)
+            self.assertFalse(installed_xrizer_root.exists())
             self.assertEqual(installed_xrizer.read_bytes(), b"old-xrizer")
             self.assertEqual(stat.S_IMODE(installed_xrizer.stat().st_mode), 0o640)
             self.assertFalse(installed_opencomposite.exists())

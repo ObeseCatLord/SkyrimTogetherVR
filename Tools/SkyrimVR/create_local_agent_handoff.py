@@ -122,8 +122,8 @@ OPENCOMPOSITE_OFFICIAL_ORIGINS = frozenset(
 )
 XRIZER_RUNTIME_PATH = pathlib.PurePosixPath("target/release/libxrizer.so")
 XRIZER_BASE_REVISION = "31319560c1bd0f1e5c16936a946bb1c7295dbfd9"
-XRIZER_RUNTIME_SHA256 = "f4588522640707852525a97feb3ff42d8227966d8653d699bd3b8f802e3dfd36"
-XRIZER_COMPATIBILITY_PATCH_SHA256 = "72eaa22a9b5a10bee0f6e1230ed78d8fbac9627af5ed56f919d9bb7e10979b12"
+XRIZER_RUNTIME_SHA256 = "432b1676c1c314e6da16dcd9bad54259657ae013a897000b367a111093d509cb"
+XRIZER_COMPATIBILITY_PATCH_SHA256 = "c18a31c658e8c4aa3131b0c734cd06dce564031192417c0febb62a069729d669"
 XRIZER_COMPATIBILITY_PATCH_STATUS = "applied-worktree-patch"
 XRIZER_OFFICIAL_ORIGINS = frozenset(
     {
@@ -240,14 +240,14 @@ class Writer:
         self.records: list[dict[str, object]] = []
         self.names: set[str] = set()
 
-    def add(self, source: pathlib.Path, name: str) -> None:
+    def add(self, source: pathlib.Path, name: str, *, executable: bool = False) -> None:
         name = name.replace(os.sep, "/")
         if name in self.names:
             raise ValueError(f"duplicate archive path: {name}")
         self.names.add(name)
         info = zipfile.ZipInfo(name, self.timestamp)
         info.create_system = 3
-        info.external_attr = (0o100755 if source.stat().st_mode & 0o111 else 0o100644) << 16
+        info.external_attr = (0o100755 if executable or source.stat().st_mode & 0o111 else 0o100644) << 16
         info.compress_type = zipfile.ZIP_STORED if source.suffix.lower() == ".zip" else zipfile.ZIP_DEFLATED
         digest = hashlib.sha256()
         size = 0
@@ -497,7 +497,7 @@ def validated_xrizer_runtime(root: pathlib.Path) -> tuple[pathlib.Path, dict[str
         raise ValueError("XRizer compatibility patch must not contain staged changes")
     if run_git(root, "ls-files", "--others", "--exclude-standard").strip():
         raise ValueError("XRizer checkout must not contain untracked files")
-    patch = run_git(root, "diff", "--binary", "--no-ext-diff", "HEAD").encode("utf-8")
+    patch = run_git(root, "diff", "--binary", "--no-ext-diff", "--full-index", "HEAD").encode("utf-8")
     patch_hash = hashlib.sha256(patch).hexdigest()
     if patch_hash != XRIZER_COMPATIBILITY_PATCH_SHA256:
         raise ValueError("XRizer compatibility patch SHA-256 is not the reviewed current patch")
@@ -621,7 +621,12 @@ def main() -> int:
                     rel = path.relative_to(args.game_dir)
                 writer.add(path, f"{root}/dependencies/current-game-overlay/{rel.as_posix()}")
 
-            writer.add(xrizer_runtime, f"{root}/dependencies/xrizer-runtime/bin/linux64/vrclient.so")
+            writer.add(xrizer_runtime, f"{root}/dependencies/xrizer-runtime/libxrizer.so", executable=True)
+            writer.add(
+                xrizer_runtime,
+                f"{root}/dependencies/xrizer-runtime/bin/linux64/vrclient.so",
+                executable=True,
+            )
             writer.add(
                 opencomposite_runtime,
                 f"{root}/dependencies/opencomposite-runtime/bin/linux64/vrclient.so",

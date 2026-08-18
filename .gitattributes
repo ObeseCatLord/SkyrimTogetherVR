@@ -17,3 +17,4 @@
 
 # Custom for the project to build
 *.sh text eol=lf
+*.patch text eol=lf whitespace=-blank-at-eol

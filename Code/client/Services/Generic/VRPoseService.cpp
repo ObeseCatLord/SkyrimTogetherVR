@@ -25,6 +25,7 @@ namespace
 constexpr double kPoseSendInterval = 1.0 / 20.0;
 constexpr double kVrikBridgeReadInterval = 1.0 / 20.0;
 constexpr double kPoseStatusWriteInterval = 0.25;
+constexpr double kPoseSnapshotLogInterval = 30.0;
 constexpr double kRemotePoseStaleSeconds = 3.0;
 constexpr double kVrikBridgeStaleSeconds = 1.0;
 constexpr char kPoseStatusFileName[] = "SkyrimTogetherVR.pose";
@@ -529,7 +530,7 @@ void VRPoseService::OnUpdate(const UpdateEvent& acEvent) noexcept try
     }
 
     m_logTimer += acEvent.Delta;
-    if (m_logTimer < 1.0)
+    if (m_logTimer < kPoseSnapshotLogInterval)
         return;
 
     m_logTimer = 0.0;

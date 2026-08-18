@@ -32,7 +32,11 @@ WIN32_INPUT_CACHE_ENTRIES = 4
 
 XRIZER_INPUT_COMMANDS = frozenset({"menu", "trigger"})
 XRIZER_INPUT_CONSUME_TIMEOUT = 5.0
-ASSIGNMENT_STABILITY_WINDOW = 3.0
+TASK_RUN_CHECKPOINT_INTERVAL = 5.0
+ASSIGNMENT_STABILITY_SCHEDULING_MARGIN = 2.0
+ASSIGNMENT_STABILITY_WINDOW = (
+    2 * TASK_RUN_CHECKPOINT_INTERVAL + ASSIGNMENT_STABILITY_SCHEDULING_MARGIN
+)
 GAMEPLAY_BRIDGE_LOG_RELATIVE_PATH = pathlib.Path(
     "drive_c/users/steamuser/Documents/My Games/Skyrim VR/SKSE/SkyrimTogetherVRGameplayBridge.log"
 )
@@ -399,6 +403,97 @@ def is_menu_ready_for_input(state: dict, targets: tuple[str, ...]) -> bool:
     )
 
 
+def complete_racesex_name_stage(
+    post_confirmation_state: dict,
+    *,
+    state_reader: Callable[[], dict],
+    trigger_publisher: Callable[[], None],
+    timeout: float,
+    wait_for_close: Callable[..., dict] = wait_until,
+) -> dict:
+    """Accept RaceSex's hidden default-name stage with one actionable pulse."""
+    if "RaceSex Menu" not in post_confirmation_state.get("openMenus", []):
+        return post_confirmation_state
+    if not is_menu_ready_for_input(post_confirmation_state, ("RaceSex Menu",)):
+        raise AutomationError(
+            "RaceSex remained open after its visible confirmation, but the hidden "
+            f"name stage is not actionable: {post_confirmation_state}"
+        )
+
+    trigger_publisher()
+    return wait_for_close(
+        "RaceSex Menu to close through vanilla name/finalization",
+        timeout,
+        state_reader,
+        lambda value: "RaceSex Menu" not in value.get("openMenus", []),
+    )
+
+
+def drain_stale_realm_lorkhan_fader(
+    *,
+    state_reader: Callable[[], dict],
+    fader_closer: Callable[[], None],
+    timeout: float,
+    wait_for_close: Callable[..., dict] = wait_until,
+) -> dict:
+    """Close only the proven stale HUD/Fader post-finalization state."""
+    state = state_reader()
+    open_menus = state.get("openMenus", [])
+    if "Fader Menu" not in open_menus:
+        return state
+    if (
+        state.get("messageBoxOpen") is True
+        or len(open_menus) != 2
+        or set(open_menus) != {"HUD Menu", "Fader Menu"}
+    ):
+        raise AutomationError(
+            "Refusing to close Fader Menu from an unsafe post-finalization "
+            f"menu state: {state}"
+        )
+
+    fader_closer()
+    return wait_for_close(
+        "stale RealmLorkhan Fader Menu to close",
+        timeout,
+        state_reader,
+        lambda value: "Fader Menu" not in value.get("openMenus", []),
+    )
+
+
+def accept_new_game_confirmation(args: argparse.Namespace) -> dict:
+    """Reach RaceSex without firing a blind controller pulse during loading."""
+    deadline = time.monotonic() + args.timeout
+    next_attempt = 0.0
+    attempts = 0
+    last: dict = {}
+    while time.monotonic() < deadline:
+        if GAME_PROCESS is not None and GAME_PROCESS.poll() is not None:
+            raise AutomationError(
+                f"game launcher exited with status {GAME_PROCESS.returncode} "
+                "while accepting New Game"
+            )
+        last = menu_state(args.url)
+        if is_menu_ready_for_input(last, ("RaceSex Menu",)):
+            return last
+
+        now = time.monotonic()
+        if now >= next_attempt and is_menu_ready_for_input(last, ("Main Menu",)):
+            if attempts >= 4:
+                raise AutomationError(
+                    "New Game remained on an actionable Main Menu after four "
+                    f"controller confirmation attempts; last state: {last}"
+                )
+            publish_xrizer_input_command(args.xrizer_input_command, "trigger")
+            attempts += 1
+            next_attempt = time.monotonic() + 3.0
+        time.sleep(0.25)
+
+    raise AutomationError(
+        "timed out waiting for RaceSex after selecting New Game; "
+        f"confirmation attempts={attempts}, last state: {last}"
+    )
+
+
 def allowlisted_messagebox_index(description: dict, context: str) -> tuple[int, str] | None:
     body = normalize_messagebox_text(description.get("bodyText", ""))
     buttons = [normalize_messagebox_text(button) for button in description.get("buttons", [])]
@@ -672,7 +767,7 @@ def avatar_assignment_ready(
         and avatar.get("connected") == "1"
         and avatar.get("localServerAssigned") == "1"
         and player_id > 0
-        and status_int(avatar, "localServerId") == player_id
+        and status_int(avatar, "localServerId") > 0
         and avatar.get("transportConnectionGeneration")
         == online_status.get("connectionGeneration")
         and avatar.get("lifecycleEpoch") == lifecycle_epoch
@@ -977,17 +1072,10 @@ def main() -> int:
             # End selects the top New entry and Enter activates it. This route
             # stays inside the game's Wine input stack, avoiding host injectors.
             select_new_game_with_win32_scancodes(args)
-            time.sleep(1.0)
-
-            # Skyrim VR's modded-new-game confirmation is not a MessageBoxMenu.
-            publish_xrizer_input_command(args.xrizer_input_command, "trigger")
-
-            race_state = wait_until(
-                "actionable RaceSex Menu after selecting New Game",
-                args.timeout,
-                lambda: menu_state(args.url),
-                lambda value: is_menu_ready_for_input(value, ("RaceSex Menu",)),
-            )
+            # Skyrim VR's modded-new-game confirmation is not a
+            # MessageBoxMenu, so gate bounded trigger retries on observable
+            # Main Menu/RaceSex state instead of a fixed sleep.
+            race_state = accept_new_game_confirmation(args)
         else:
             race_state = state
         print(f"RaceSex ready: {race_state.get('openMenus', [])}")
@@ -1015,18 +1103,20 @@ def main() -> int:
             f"{description['buttons'][0]}"
         )
 
-        wait_until(
+        post_confirmation_state = wait_until(
             "RaceSex confirmation dialog to close after controller activation",
             15.0,
             lambda: menu_state(args.url),
             lambda value: value.get("messageBoxOpen") is False,
         )
         try:
-            wait_until(
-                "RaceSex Menu to close through vanilla finalization",
-                15.0,
-                lambda: menu_state(args.url),
-                lambda value: "RaceSex Menu" not in value.get("openMenus", []),
+            complete_racesex_name_stage(
+                post_confirmation_state,
+                state_reader=lambda: menu_state(args.url),
+                trigger_publisher=lambda: publish_xrizer_input_command(
+                    args.xrizer_input_command, "trigger"
+                ),
+                timeout=15.0,
             )
         except AutomationError as exc:
             raise AutomationError(
@@ -1093,6 +1183,14 @@ def main() -> int:
             "player identity or Realm cell changed during finalization stability check: "
             f"{first_identity} -> {finalization_identity(stable_scene, stable_player)}"
         )
+
+    drain_stale_realm_lorkhan_fader(
+        state_reader=lambda: menu_state(args.url),
+        fader_closer=lambda: post_tool(
+            args.url, "menu", {"action": "close", "name": "Fader Menu"}
+        ),
+        timeout=10.0,
+    )
 
     print(f"Realm of Lorkhan ready at {scene.get('position')}")
     print(f"Player finalized: {player.get('name')} ({player.get('race')})")

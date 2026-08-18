@@ -11,6 +11,7 @@ Start with these documents:
 - [`linux-monado-prerelease-guide.md`](SkyrimVR/linux-monado-prerelease-guide.md): Linux and Monado install/test workflow.
 - [`linux-local-multi-client.md`](SkyrimVR/linux-local-multi-client.md): isolated same-host simulated Monado clients with owned transient cgroups.
 - [`server-deployment.md`](SkyrimVR/server-deployment.md): dedicated-server deployment and the existing Foundry service.
+- [`runtime-connection-result-20260818-c18ca1d8.md`](SkyrimVR/runtime-connection-result-20260818-c18ca1d8.md): latest isolated Linux/Monado one-client authentication proof and XRizer regression diagnosis.
 - [`final-handoff-checklist.md`](SkyrimVR/final-handoff-checklist.md): build, install, and two-client acceptance checklist.
 - [`original-gameplay-parity-checklist.md`](SkyrimVR/original-gameplay-parity-checklist.md): living source/build/runtime matrix for parity with the original branch.
 - [`local-agent-complete-handoff.md`](SkyrimVR/local-agent-complete-handoff.md): private all-dependencies handoff layout and local-machine test instructions.

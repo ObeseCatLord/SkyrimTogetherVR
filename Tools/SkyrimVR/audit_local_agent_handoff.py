@@ -9,6 +9,7 @@ import json
 import pathlib
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import tempfile
@@ -45,6 +46,7 @@ REQUIRED_PATHS = (
     "dependencies/current-game-overlay/Data/SKSE/Plugins/activeragdoll.dll",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/VRIK.dll",
     "dependencies/current-game-overlay/Data/SKSE/Plugins/version-1-4-15-0.csv",
+    "dependencies/xrizer-runtime/libxrizer.so",
     "dependencies/xrizer-runtime/bin/linux64/vrclient.so",
     "dependencies/opencomposite-runtime/bin/linux64/vrclient.so",
     "dependencies/openvrpaths.vrpath",
@@ -107,10 +109,11 @@ OPENCOMPOSITE_OFFICIAL_ORIGINS = {
     "ssh://git@gitlab.com/znixian/OpenOVR.git",
     "ssh://git@gitlab.com/znixian/OpenOVR",
 }
+XRIZER_ROOT_RUNTIME_PATH = "dependencies/xrizer-runtime/libxrizer.so"
 XRIZER_RUNTIME_PATH = "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
 XRIZER_BASE_REVISION = "31319560c1bd0f1e5c16936a946bb1c7295dbfd9"
-XRIZER_RUNTIME_SHA256 = "f4588522640707852525a97feb3ff42d8227966d8653d699bd3b8f802e3dfd36"
-XRIZER_COMPATIBILITY_PATCH_SHA256 = "72eaa22a9b5a10bee0f6e1230ed78d8fbac9627af5ed56f919d9bb7e10979b12"
+XRIZER_RUNTIME_SHA256 = "432b1676c1c314e6da16dcd9bad54259657ae013a897000b367a111093d509cb"
+XRIZER_COMPATIBILITY_PATCH_SHA256 = "c18a31c658e8c4aa3131b0c734cd06dce564031192417c0febb62a069729d669"
 XRIZER_COMPATIBILITY_PATCH_STATUS = "applied-worktree-patch"
 XRIZER_OFFICIAL_ORIGINS = {
     "https://github.com/Supreeeme/xrizer.git",
@@ -310,6 +313,30 @@ def runtime_provenance_failures(
     return failures
 
 
+def xrizer_runtime_pair_failures(
+    archive: zipfile.ZipFile,
+    root: str,
+    names: list[str],
+    records_by_path: dict[object, dict[str, object]],
+) -> list[str]:
+    """Require the paired XRizer runtime files to be executable byte-for-byte copies."""
+
+    root_name = f"{root}/{XRIZER_ROOT_RUNTIME_PATH}"
+    loader_name = f"{root}/{XRIZER_RUNTIME_PATH}"
+    failures: list[str] = []
+    if records_by_path.get(root_name, {}).get("sha256") != XRIZER_RUNTIME_SHA256:
+        failures.append("XRizer root runtime payload hash is not the reviewed current loader")
+    if root_name not in names or loader_name not in names:
+        return failures
+    for name in (root_name, loader_name):
+        mode = archive.getinfo(name).external_attr >> 16
+        if stat.S_IFMT(mode) != stat.S_IFREG or mode & 0o111 != 0o111:
+            failures.append(f"XRizer runtime payload is not a regular executable file: {name}")
+    if archive.read(root_name) != archive.read(loader_name):
+        failures.append("XRizer root runtime and OpenVR loader payloads differ")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=pathlib.Path)
@@ -484,6 +511,7 @@ def main() -> int:
                     identity,
                 )
             )
+        failures.extend(xrizer_runtime_pair_failures(archive, root, names, records_by_path))
         opencomposite_source_prefix = "dependencies/source-references/OpenComposite/"
         invalid_opencomposite_snapshot = sorted(
             name for name in relative_names

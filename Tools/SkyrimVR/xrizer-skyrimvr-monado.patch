@@ -1,3 +1,20 @@
+diff --git a/build.rs b/build.rs
+index 5a1780d..59ab7fa 100644
+--- a/build.rs
++++ b/build.rs
+@@ -3,6 +3,12 @@ use std::env;
+ use vergen_gitcl::{Emitter, GitclBuilder};
+ 
+ fn main() -> Result<(), anyhow::Error> {
++    if env::var_os("CARGO_FEATURE_STATIC_OPENXR").is_some()
++        && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
++    {
++        println!("cargo::rustc-link-arg=-lstdc++fs");
++    }
++
+     let out_dir = env::var("OUT_DIR").unwrap();
+     for path in shaders::compile(&out_dir) {
+         println!("cargo::rerun-if-changed={}", path.to_str().unwrap());
 diff --git a/src/compositor.rs b/src/compositor.rs
 index 6eaebd6..65b1057 100644
 --- a/src/compositor.rs
@@ -20,7 +37,7 @@ index 6eaebd6..65b1057 100644
 @@ -1755,6 +1759,23 @@ mod tests {
          assert!(!f.comp.GetFrameTiming(timing.as_mut_ptr(), 1));
      }
-
+ 
 +    #[test]
 +    fn get_frame_timings() {
 +        let f = Fixture::new();
@@ -42,7 +59,7 @@ index 6eaebd6..65b1057 100644
      fn zero_dims_texture() {
          let f = Fixture::new();
 diff --git a/src/input.rs b/src/input.rs
-index 77ab6ed..54cae4b 100644
+index 77ab6ed..072a9a0 100644
 --- a/src/input.rs
 +++ b/src/input.rs
 @@ -67,7 +67,12 @@ pub struct Input<C: openxr_data::Compositor> {
@@ -57,9 +74,17 @@ index 77ab6ed..54cae4b 100644
 +    Controller(vr::VREvent_Controller_t),
 +    Keyboard(vr::VREvent_Keyboard_t),
  }
-
+ 
  #[derive(Debug)]
-@@ -1572,20 +1577,27 @@ impl<C: openxr_data::Compositor> Input<C> {
+@@ -1500,6 +1505,7 @@ impl<C: openxr_data::Compositor> Input<C> {
+                     .unwrap();
+ 
+                 self.legacy_state.on_action_sync();
++                self.legacy_state.on_direct_input_action_sync();
+             }
+             None => {
+                 if self.loading_actions.load(Ordering::Relaxed) {
+@@ -1572,20 +1578,27 @@ impl<C: openxr_data::Compositor> Input<C> {
                          vr::EVREventType::TrackedDeviceDeactivated
                      },
                      index: i as vr::TrackedDeviceIndex_t,
@@ -68,7 +93,7 @@ index 77ab6ed..54cae4b 100644
                  });
              }
          }
-
+ 
 -        if let Some(event) = self.events.lock().unwrap().pop_front() {
 -            const MIN_CONTROLLER_EVENT_SIZE: usize = std::mem::offset_of!(vr::VREvent_t, data)
 -                + std::mem::size_of::<vr::VREvent_Controller_t>();
@@ -93,7 +118,7 @@ index 77ab6ed..54cae4b 100644
              // VREvent_t can be different sizes depending on the OpenVR version,
              // so we use raw pointers to avoid creating a reference, because if the
              // size doesn't match our VREvent_t's size, we are in UB land
-@@ -1593,13 +1605,36 @@ impl<C: openxr_data::Compositor> Input<C> {
+@@ -1593,13 +1606,36 @@ impl<C: openxr_data::Compositor> Input<C> {
                  (&raw mut (*out).eventType).write(event.ty as u32);
                  (&raw mut (*out).trackedDeviceIndex).write(event.index);
                  (&raw mut (*out).eventAgeSeconds).write(0.0);
@@ -129,7 +154,7 @@ index 77ab6ed..54cae4b 100644
 +        });
 +    }
  }
-
+ 
  enum LoadedActions {
 diff --git a/src/input/devices.rs b/src/input/devices.rs
 index ca23250..ffd1445 100644
@@ -137,7 +162,7 @@ index ca23250..ffd1445 100644
 +++ b/src/input/devices.rs
 @@ -8,6 +8,8 @@ use openvr as vr;
  use openxr as xr;
-
+ 
  use crate::input::profiles::knuckles::Knuckles;
 +use crate::input::profiles::oculus_touch::OculusTouch;
 +use crate::input::profiles::vive_controller::ViveWands;
@@ -145,9 +170,9 @@ index ca23250..ffd1445 100644
  use crate::input::profiles::vive_tracker::ViveTracker;
  #[cfg(feature = "monado")]
 @@ -20,6 +22,30 @@ use log::trace;
-
+ 
  use super::{Input, InteractionProfile, profiles::MainAxisType};
-
+ 
 +/// Some legacy OpenVR games require a controller type for which they ship a
 +/// control map. Keep Index OpenXR bindings while changing only that facade.
 +#[derive(Clone, Copy)]
@@ -176,7 +201,7 @@ index ca23250..ffd1445 100644
      Hmd,
      Controller {
 @@ -61,8 +87,20 @@ pub struct ProfileData {
-
+ 
  impl ProfileData {
      pub fn new<P: InteractionProfile>() -> Self {
 +        let properties = if TypeId::of::<P>() == TypeId::of::<Knuckles>() {
@@ -198,10 +223,284 @@ index ca23250..ffd1445 100644
              force_estimated_thumb: TypeId::of::<P>() == TypeId::of::<Knuckles>(),
          }
 diff --git a/src/input/legacy.rs b/src/input/legacy.rs
-index 9610aa8..ae0b03b 100644
+index 9610aa8..b387273 100644
 --- a/src/input/legacy.rs
 +++ b/src/input/legacy.rs
-@@ -238,7 +238,9 @@ impl<C: openxr_data::Compositor> Input<C> {
+@@ -4,17 +4,147 @@ use crate::{
+         LoadedActions, ManifestLoadedActions,
+         profiles::{self, RunWithProfile},
+     },
+-    openxr_data::{self},
++    openxr_data::{self, Hand},
+ };
+ use log::{debug, trace, warn};
+ use openvr as vr;
+ use openxr as xr;
++use std::fs::{self, OpenOptions};
++use std::io::Read;
++use std::os::unix::{
++    ffi::OsStrExt,
++    fs::{MetadataExt, OpenOptionsExt},
++};
++use std::path::{Path, PathBuf};
+ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
++use std::sync::{Mutex, OnceLock};
++
++const INPUT_COMMAND_ENV: &str = "STVR_XRIZER_INPUT_COMMAND";
++const MAX_INPUT_COMMAND_PATH_BYTES: usize = 4096;
++const MAX_INPUT_COMMAND_BYTES: usize = b"trigger".len();
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum InputCommand {
++    Menu,
++    Trigger,
++}
++
++impl InputCommand {
++    fn button(self) -> vr::EVRButtonId {
++        match self {
++            // Skyrim VR maps RaceSex XButton to legacy OpenVR button 0x02.
++            // That is Grip for both Oculus hands in controlmapvr.txt; the
++            // simple-controller menu action reaches that same legacy facade.
++            Self::Menu => vr::EVRButtonId::Grip,
++            Self::Trigger => vr::EVRButtonId::SteamVR_Trigger,
++        }
++    }
++
++    fn affects_button(self, id: vr::EVRButtonId) -> bool {
++        self.button() == id
++    }
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++struct DirectInputUpdate {
++    active: Option<InputCommand>,
++    previous: Option<InputCommand>,
++}
++
++fn input_command_path() -> Option<PathBuf> {
++    valid_input_command_path(PathBuf::from(std::env::var_os(INPUT_COMMAND_ENV)?))
++}
++
++fn valid_input_command_path(path: PathBuf) -> Option<PathBuf> {
++    let bytes = path.as_os_str().as_bytes();
++    (path.is_absolute() && !bytes.is_empty() && bytes.len() <= MAX_INPUT_COMMAND_PATH_BYTES)
++        .then_some(path)
++}
++
++fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
++    a.dev() == b.dev() && a.ino() == b.ino()
++}
++
++#[derive(Clone, Copy, Eq, PartialEq)]
++struct InputCommandFileIdentity {
++    dev: u64,
++    ino: u64,
++}
++
++impl From<&fs::Metadata> for InputCommandFileIdentity {
++    fn from(metadata: &fs::Metadata) -> Self {
++        Self {
++            dev: metadata.dev(),
++            ino: metadata.ino(),
++        }
++    }
++}
++
++/// Read and consume one producer-published direct input command. Bad, incomplete,
++/// or replaced files remain in place so their producer can diagnose the timeout.
++fn consume_input_command(
++    path: &Path,
++) -> Result<Option<InputCommand>, (Option<InputCommandFileIdentity>, &'static str)> {
++    let path_metadata = match fs::symlink_metadata(path) {
++        Ok(metadata) => metadata,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
++        Err(_) => return Err((None, "could not inspect command path")),
++    };
++    let identity = Some(InputCommandFileIdentity::from(&path_metadata));
++    if !path_metadata.file_type().is_file() || path_metadata.len() > MAX_INPUT_COMMAND_BYTES as u64
++    {
++        return Err((identity, "path is not a bounded regular file"));
++    }
++
++    let mut file = OpenOptions::new()
++        .read(true)
++        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
++        .open(path)
++        .map_err(|_| (identity, "could not safely open command file"))?;
++    let file_metadata = file
++        .metadata()
++        .map_err(|_| (identity, "could not inspect opened command file"))?;
++    if !file_metadata.file_type().is_file()
++        || file_metadata.len() > MAX_INPUT_COMMAND_BYTES as u64
++        || !same_file(&path_metadata, &file_metadata)
++    {
++        return Err((identity, "command file changed while opening"));
++    }
++
++    let mut bytes = [0; MAX_INPUT_COMMAND_BYTES + 1];
++    let count = file
++        .read(&mut bytes)
++        .map_err(|_| (identity, "could not read command file"))?;
++    let command = match &bytes[..count] {
++        b"menu" => InputCommand::Menu,
++        b"trigger" => InputCommand::Trigger,
++        _ => return Err((identity, "command must be exactly `menu` or `trigger`")),
++    };
++
++    // Do not remove an atomically replaced file. The normal publisher never
++    // replaces a pending command, but this check keeps the opt-in path safe.
++    let current_metadata = fs::symlink_metadata(path)
++        .map_err(|_| (identity, "command file disappeared while consuming"))?;
++    if !current_metadata.file_type().is_file() || !same_file(&file_metadata, &current_metadata) {
++        return Err((identity, "command file changed while consuming"));
++    }
++    fs::remove_file(path).map_err(|_| (identity, "could not consume command file"))?;
++    Ok(Some(command))
++}
++
++#[derive(Default)]
++struct DirectInputState {
++    active: Option<InputCommand>,
++    observed: [Option<InputCommand>; 2],
++    rejected_command: Option<InputCommandFileIdentity>,
++}
+ 
+ #[derive(Default)]
+ pub(super) struct LegacyState {
+     packet_num: AtomicU32,
+     got_state_this_frame: [AtomicBool; 2],
++    input_command_path: OnceLock<Option<PathBuf>>,
++    direct_input: Mutex<DirectInputState>,
+ }
+ 
+ impl LegacyState {
+@@ -24,6 +154,92 @@ impl LegacyState {
+             state.store(false, Ordering::Relaxed);
+         }
+     }
++
++    fn take_input_command(&self, direct_input: &mut DirectInputState) -> Option<InputCommand> {
++        let path = self.input_command_path.get_or_init(input_command_path);
++        let Some(path) = path.as_deref() else {
++            return None;
++        };
++        match consume_input_command(path) {
++            Ok(Some(command)) => {
++                direct_input.rejected_command = None;
++                Some(command)
++            }
++            Ok(None) => {
++                direct_input.rejected_command = None;
++                None
++            }
++            Err((identity, reason)) => {
++                if direct_input.rejected_command != identity {
++                    warn!(
++                        "ignoring malformed direct input command at {}: {reason}",
++                        path.display()
++                    );
++                    direct_input.rejected_command = identity;
++                }
++                None
++            }
++        }
++    }
++
++    /// Consume commands only at a completed legacy action sync. A command stays
++    /// pressed for every controller-state poll until the next sync. Per-hand
++    /// observations let event composition suppress a release for a hand that
++    /// never observed the synthetic press.
++    pub fn on_direct_input_action_sync(&self) {
++        let mut direct_input = self.direct_input.lock().unwrap();
++        if let Some(command) = direct_input.active.take() {
++            debug!("releasing direct input command {command:?}");
++            return;
++        }
++
++        if let Some(command) = self.take_input_command(&mut direct_input) {
++            debug!("arming and pressing direct input command {command:?}");
++            direct_input.active = Some(command);
++        }
++    }
++
++    fn direct_input_for_hand(&self, hand: Hand, record_transition: bool) -> DirectInputUpdate {
++        let mut direct_input = self.direct_input.lock().unwrap();
++        let active = direct_input.active;
++        let previous = if record_transition {
++            let observed = &mut direct_input.observed[hand as usize - 1];
++            let previous = *observed;
++            *observed = active;
++            previous
++        } else {
++            active
++        };
++        DirectInputUpdate { active, previous }
++    }
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++struct CombinedButtonState {
++    pressed: bool,
++    changed: bool,
++}
++
++fn combine_button_state(
++    real_pressed: bool,
++    real_changed: bool,
++    command: DirectInputUpdate,
++    id: vr::EVRButtonId,
++) -> CombinedButtonState {
++    let command_pressed = command.active.is_some_and(|value| value.affects_button(id));
++    let previous_command_pressed = command
++        .previous
++        .is_some_and(|value| value.affects_button(id));
++    let previous_real_pressed = if real_changed {
++        !real_pressed
++    } else {
++        real_pressed
++    };
++    let pressed = real_pressed || command_pressed;
++    CombinedButtonState {
++        pressed,
++        changed: pressed != (previous_real_pressed || previous_command_pressed),
++    }
+ }
+ 
+ // Adapted from openvr.h
+@@ -214,10 +430,13 @@ impl<C: openxr_data::Compositor> Input<C> {
+         state.unPacketNum = self.legacy_state.packet_num.load(Ordering::Relaxed);
+ 
+         // Only send the input event if we haven't already.
+-        let mut events = self.legacy_state.got_state_this_frame[hand as usize - 1]
++        let record_transition = self.legacy_state.got_state_this_frame[hand as usize - 1]
+             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+-            .is_ok()
+-            .then(|| self.events.lock().unwrap());
++            .is_ok();
++        let mut events = record_transition.then(|| self.events.lock().unwrap());
++        let command = self
++            .legacy_state
++            .direct_input_for_hand(hand, record_transition);
+ 
+         let mut read_button =
+             |id, click_action: &xr::Action<bool>, touch_action: Option<&xr::Action<bool>>| {
+@@ -226,7 +445,13 @@ impl<C: openxr_data::Compositor> Input<C> {
+                 state.ulButtonTouched |= button_mask_from_id(id) & (touched as u64 * u64::MAX);
+ 
+                 let click_state = click_action.state(&data.session, hand_path).unwrap();
+-                let pressed = click_state.current_state;
++                let combined = combine_button_state(
++                    click_state.current_state,
++                    click_state.changed_since_last_sync,
++                    command,
++                    id,
++                );
++                let pressed = combined.pressed;
+                 state.ulButtonPressed |= button_mask_from_id(id) & (pressed as u64 * u64::MAX);
+ 
+                 if let Some(events) = &mut events {
+@@ -238,10 +463,12 @@ impl<C: openxr_data::Compositor> Input<C> {
                                  vr::EVREventType::ButtonUntouch
                              },
                              index: device_index,
@@ -211,8 +510,12 @@ index 9610aa8..ae0b03b 100644
 +                            }),
                          });
                      }
-                     if click_state.changed_since_last_sync {
-@@ -249,7 +251,9 @@ impl<C: openxr_data::Compositor> Input<C> {
+-                    if click_state.changed_since_last_sync {
++                    if combined.changed {
+                         events.push_back(super::InputEvent {
+                             ty: if pressed {
+                                 vr::EVREventType::ButtonPress
+@@ -249,7 +476,9 @@ impl<C: openxr_data::Compositor> Input<C> {
                                  vr::EVREventType::ButtonUnpress
                              },
                              index: device_index,
@@ -223,6 +526,278 @@ index 9610aa8..ae0b03b 100644
                          });
                      }
                  }
+@@ -278,7 +507,11 @@ impl<C: openxr_data::Compositor> Input<C> {
+ 
+         let t = actions.trigger.state(&data.session, hand_path).unwrap();
+         state.rAxis[1] = vr::VRControllerAxis_t {
+-            x: t.current_state,
++            x: if command.active == Some(InputCommand::Trigger) {
++                t.current_state.max(1.0)
++            } else {
++                t.current_state
++            },
+             y: 0.0,
+         };
+ 
+@@ -420,6 +653,7 @@ impl LegacyActionData {
+ 
+ #[cfg(test)]
+ mod tests {
++    use super::*;
+     use crate::input::profiles::{knuckles::Knuckles, simple_controller::SimpleController};
+     use crate::input::tests::{Fixture, compare_pose};
+     use crate::openxr_data::Hand;
+@@ -463,6 +697,250 @@ mod tests {
+         verify_offset!(data, data);
+     };
+ 
++    fn test_command_path(name: &str) -> std::path::PathBuf {
++        let nonce = std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .unwrap()
++            .as_nanos();
++        std::env::temp_dir().join(format!(
++            "xrizer-input-command-{name}-{}-{nonce}",
++            std::process::id()
++        ))
++    }
++
++    #[test]
++    fn direct_input_command_requires_an_absolute_bounded_path() {
++        assert!(valid_input_command_path(PathBuf::from("relative-command")).is_none());
++        assert!(valid_input_command_path(PathBuf::from("/")).is_some());
++        assert!(
++            valid_input_command_path(PathBuf::from(format!(
++                "/{}",
++                "x".repeat(MAX_INPUT_COMMAND_PATH_BYTES)
++            )))
++            .is_none()
++        );
++    }
++
++    #[test]
++    fn direct_input_command_is_parsed_then_consumed_once() {
++        let path = test_command_path("parse");
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(path.clone())).unwrap();
++
++        fs::write(&path, b"menu").unwrap();
++        assert_eq!(
++            state.take_input_command(&mut state.direct_input.lock().unwrap()),
++            Some(InputCommand::Menu)
++        );
++        assert!(!path.exists());
++        assert_eq!(
++            state.take_input_command(&mut state.direct_input.lock().unwrap()),
++            None
++        );
++
++        fs::write(&path, b"trigger").unwrap();
++        assert_eq!(
++            state.take_input_command(&mut state.direct_input.lock().unwrap()),
++            Some(InputCommand::Trigger)
++        );
++        assert!(!path.exists());
++
++        fs::write(&path, b"menu\n").unwrap();
++        assert_eq!(
++            state.take_input_command(&mut state.direct_input.lock().unwrap()),
++            None
++        );
++        assert!(path.exists());
++        fs::remove_file(path).unwrap();
++    }
++
++    #[test]
++    fn direct_input_command_rejects_a_symlink() {
++        let target = test_command_path("target");
++        let link = test_command_path("link");
++        fs::write(&target, b"menu").unwrap();
++        std::os::unix::fs::symlink(&target, &link).unwrap();
++
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(link.clone())).unwrap();
++        assert_eq!(
++            state.take_input_command(&mut state.direct_input.lock().unwrap()),
++            None
++        );
++        assert!(link.exists());
++        assert!(target.exists());
++
++        fs::remove_file(link).unwrap();
++        fs::remove_file(target).unwrap();
++    }
++
++    #[test]
++    fn direct_input_command_uses_skyrim_racesex_grip_button() {
++        assert_eq!(InputCommand::Menu.button(), vr::EVRButtonId::Grip);
++        assert_eq!(InputCommand::Menu.button() as u32, 0x02);
++    }
++
++    #[test]
++    fn direct_input_command_stays_pressed_for_repeated_polls_from_both_hands() {
++        let path = test_command_path("both-hands");
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(path.clone())).unwrap();
++        fs::write(&path, b"trigger").unwrap();
++        state.on_direct_input_action_sync();
++        assert!(!path.exists());
++
++        // Either polling order sees the same level for the complete sync frame.
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Right, true),
++            DirectInputUpdate {
++                active: Some(InputCommand::Trigger),
++                previous: None,
++            }
++        );
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Left, true),
++            DirectInputUpdate {
++                active: Some(InputCommand::Trigger),
++                previous: None,
++            }
++        );
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Right, false),
++            DirectInputUpdate {
++                active: Some(InputCommand::Trigger),
++                previous: Some(InputCommand::Trigger),
++            }
++        );
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Left, false),
++            DirectInputUpdate {
++                active: Some(InputCommand::Trigger),
++                previous: Some(InputCommand::Trigger),
++            }
++        );
++    }
++
++    #[test]
++    fn direct_input_command_has_observed_press_and_release_transitions() {
++        let path = test_command_path("press-duration");
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(path.clone())).unwrap();
++        fs::write(&path, b"trigger").unwrap();
++        state.on_direct_input_action_sync();
++        let press = state.direct_input_for_hand(Hand::Left, true);
++        assert_eq!(
++            combine_button_state(false, false, press, vr::EVRButtonId::SteamVR_Trigger),
++            CombinedButtonState {
++                pressed: true,
++                changed: true,
++            }
++        );
++
++        state.on_direct_input_action_sync();
++        let release = state.direct_input_for_hand(Hand::Left, true);
++        assert_eq!(
++            combine_button_state(false, false, release, vr::EVRButtonId::SteamVR_Trigger),
++            CombinedButtonState {
++                pressed: false,
++                changed: true,
++            }
++        );
++    }
++
++    #[test]
++    fn direct_input_composes_with_held_and_simultaneous_physical_input() {
++        let synthetic_press = DirectInputUpdate {
++            active: Some(InputCommand::Trigger),
++            previous: None,
++        };
++        let synthetic_release = DirectInputUpdate {
++            active: None,
++            previous: Some(InputCommand::Trigger),
++        };
++
++        // A pre-existing physical hold must not receive a duplicate press or a
++        // synthetic release while that physical control remains held.
++        assert_eq!(
++            combine_button_state(
++                true,
++                false,
++                synthetic_press,
++                vr::EVRButtonId::SteamVR_Trigger,
++            ),
++            CombinedButtonState {
++                pressed: true,
++                changed: false,
++            }
++        );
++        assert_eq!(
++            combine_button_state(
++                true,
++                false,
++                synthetic_release,
++                vr::EVRButtonId::SteamVR_Trigger,
++            ),
++            CombinedButtonState {
++                pressed: true,
++                changed: false,
++            }
++        );
++
++        // A real and synthetic press in the same sync produces one combined edge.
++        assert_eq!(
++            combine_button_state(
++                true,
++                true,
++                synthetic_press,
++                vr::EVRButtonId::SteamVR_Trigger,
++            ),
++            CombinedButtonState {
++                pressed: true,
++                changed: true,
++            }
++        );
++    }
++
++    #[test]
++    fn unobserved_direct_input_press_does_not_emit_a_release() {
++        let path = test_command_path("unobserved");
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(path.clone())).unwrap();
++        fs::write(&path, b"menu").unwrap();
++        state.on_direct_input_action_sync();
++        state.on_direct_input_action_sync();
++
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Left, true),
++            DirectInputUpdate {
++                active: None,
++                previous: None,
++            }
++        );
++    }
++
++    #[test]
++    fn direct_input_command_does_not_change_state_without_a_command_file() {
++        let path = test_command_path("no-command");
++        let state = LegacyState::default();
++        state.input_command_path.set(Some(path)).unwrap();
++
++        state.on_direct_input_action_sync();
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Left, true),
++            DirectInputUpdate {
++                active: None,
++                previous: None,
++            }
++        );
++        assert_eq!(
++            state.direct_input_for_hand(Hand::Right, true),
++            DirectInputUpdate {
++                active: None,
++                previous: None,
++            }
++        );
++    }
++
+     #[test]
+     fn no_legacy_input_before_session_setup() {
+         let fixture = Fixture::new();
 diff --git a/src/input/profiles/knuckles.rs b/src/input/profiles/knuckles.rs
 index 4b297d5..269cc23 100644
 --- a/src/input/profiles/knuckles.rs
@@ -258,7 +833,7 @@ index c2160e7..d9ae598 100644
 @@ -1029,6 +1029,44 @@ fn empty_manifest() {
      assert!(f.input.action_map.read().unwrap().is_empty());
  }
-
+ 
 +#[test]
 +fn keyboard_done_event_survives_an_undersized_poll() {
 +    let f = Fixture::new();
@@ -301,7 +876,7 @@ index c2160e7..d9ae598 100644
  fn load_actions_race() {
      let mut f = Fixture::new();
 diff --git a/src/overlay.rs b/src/overlay.rs
-index 528d8fd..63e5e5f 100644
+index 528d8fd..9ccd11c 100644
 --- a/src/overlay.rs
 +++ b/src/overlay.rs
 @@ -2,6 +2,7 @@ use crate::{
@@ -321,7 +896,7 @@ index 528d8fd..63e5e5f 100644
 +    collections::{HashMap, VecDeque},
 +    ops::Deref,
 +};
-
+ 
  // OpenVR overlays are allowed to use ≥ 0
  pub const SKYBOX_Z_ORDER: i64 = -1;
 @@ -30,6 +34,7 @@ pub struct OverlayMan {
@@ -330,7 +905,7 @@ index 528d8fd..63e5e5f 100644
      skybox: RwLock<Vec<OverlayKey>>,
 +    keyboard_text: Mutex<Option<CString>>,
  }
-
+ 
  #[derive(derive_more::Deref)]
 @@ -44,6 +49,7 @@ impl OverlayMan {
              overlays: Default::default(),
@@ -339,8 +914,8 @@ index 528d8fd..63e5e5f 100644
 +            keyboard_text: Default::default(),
          }
      }
-
-@@ -478,6 +484,50 @@ struct Overlay {
+ 
+@@ -478,6 +484,110 @@ struct Overlay {
      transform: Option<(vr::ETrackingUniverseOrigin, vr::HmdMatrix34_t)>,
      compositor: Option<SupportedBackend>,
      rect: Option<xr::Rect2Di>,
@@ -388,18 +963,78 @@ index 528d8fd..63e5e5f 100644
 +        (&raw mut (*out).data.keyboard).write(event.data);
 +    }
 +    true
++}
++
++fn copy_keyboard_text(text: Option<&CStr>, text_out: *mut c_char, text_capacity: u32) -> u32 {
++    let Some(text) = text else {
++        if !text_out.is_null() && text_capacity > 0 {
++            unsafe { text_out.write(0) };
++        }
++        return 0;
++    };
++
++    let bytes = text.to_bytes();
++    let required_size = u32::try_from(bytes.len() + 1).unwrap_or(u32::MAX);
++    if text_out.is_null() || text_capacity == 0 {
++        return required_size;
++    }
++
++    let utf8 = text
++        .to_str()
++        .expect("automation keyboard text was validated as UTF-8");
++    let mut copy_len = bytes.len().min(text_capacity.saturating_sub(1) as usize);
++    while !utf8.is_char_boundary(copy_len) {
++        copy_len -= 1;
++    }
++
++    unsafe {
++        std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), text_out, copy_len);
++        text_out.add(copy_len).write(0);
++    }
++    required_size
++}
++
++fn validate_keyboard_text(text: String, char_max: u32) -> Result<CString, vr::EVROverlayError> {
++    if text.chars().count() > char_max as usize {
++        log::warn!("STVR_XRIZER_KEYBOARD_TEXT exceeds the requested character limit");
++        return Err(vr::EVROverlayError::RequestFailed);
++    }
++
++    let text = CString::new(text).map_err(|_| {
++        log::warn!("STVR_XRIZER_KEYBOARD_TEXT contains an interior NUL");
++        vr::EVROverlayError::RequestFailed
++    })?;
++    if u32::try_from(text.as_bytes_with_nul().len()).is_err() {
++        return Err(vr::EVROverlayError::RequestFailed);
++    }
++
++    Ok(text)
++}
++
++fn keyboard_text_from_env(char_max: u32) -> Result<CString, vr::EVROverlayError> {
++    match std::env::var("STVR_XRIZER_KEYBOARD_TEXT") {
++        Ok(text) => validate_keyboard_text(text, char_max),
++        Err(std::env::VarError::NotPresent) => {
++            debug!("STVR_XRIZER_KEYBOARD_TEXT is not set; rejecting virtual keyboard input");
++            Err(vr::EVROverlayError::RequestFailed)
++        }
++        Err(std::env::VarError::NotUnicode(_)) => {
++            log::warn!("STVR_XRIZER_KEYBOARD_TEXT is not valid UTF-8");
++            Err(vr::EVROverlayError::RequestFailed)
++        }
++    }
  }
-
+ 
  impl Overlay {
-@@ -499,6 +549,7 @@ impl Overlay {
+@@ -499,6 +609,7 @@ impl Overlay {
              transform: None,
              compositor: None,
              rect: None,
 +            events: Default::default(),
          }
      }
-
-@@ -801,22 +852,85 @@ impl vr::IVROverlay028_Interface for OverlayMan {
+ 
+@@ -801,22 +912,41 @@ impl vr::IVROverlay028_Interface for OverlayMan {
      fn HideKeyboard(&self) {
          crate::warn_unimplemented!("HideKeyboard");
      }
@@ -407,29 +1042,7 @@ index 528d8fd..63e5e5f 100644
 -        todo!()
 +    fn GetKeyboardText(&self, text_out: *mut c_char, text_capacity: u32) -> u32 {
 +        let keyboard_text = self.keyboard_text.lock().unwrap();
-+        let Some(text) = keyboard_text.as_ref() else {
-+            todo!()
-+        };
-+
-+        let bytes = text.as_bytes();
-+        let required_size = u32::try_from(bytes.len() + 1).unwrap_or(u32::MAX);
-+        if text_out.is_null() || text_capacity == 0 {
-+            return required_size;
-+        }
-+
-+        let utf8 = text
-+            .to_str()
-+            .expect("automation keyboard text was validated as UTF-8");
-+        let mut copy_len = bytes.len().min(text_capacity.saturating_sub(1) as usize);
-+        while !utf8.is_char_boundary(copy_len) {
-+            copy_len -= 1;
-+        }
-+
-+        unsafe {
-+            std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), text_out, copy_len);
-+            text_out.add(copy_len).write(0);
-+        }
-+        required_size
++        copy_keyboard_text(keyboard_text.as_deref(), text_out, text_capacity)
      }
      fn ShowKeyboardForOverlay(
          &self,
@@ -447,32 +1060,10 @@ index 528d8fd..63e5e5f 100644
      ) -> vr::EVROverlayError {
 -        crate::warn_unimplemented!("ShowKeyboardForOverlay");
 -        vr::EVROverlayError::RequestFailed
-+        let text = match std::env::var("STVR_XRIZER_KEYBOARD_TEXT") {
++        let text = match keyboard_text_from_env(char_max) {
 +            Ok(text) => text,
-+            Err(std::env::VarError::NotPresent) => {
-+                crate::warn_unimplemented!("ShowKeyboardForOverlay");
-+                return vr::EVROverlayError::RequestFailed;
-+            }
-+            Err(std::env::VarError::NotUnicode(_)) => {
-+                log::warn!("STVR_XRIZER_KEYBOARD_TEXT is not valid UTF-8");
-+                return vr::EVROverlayError::RequestFailed;
-+            }
++            Err(error) => return error,
 +        };
-+
-+        if text.chars().count() > char_max as usize {
-+            log::warn!("STVR_XRIZER_KEYBOARD_TEXT exceeds the requested character limit");
-+            return vr::EVROverlayError::RequestFailed;
-+        }
-+        let text = match CString::new(text) {
-+            Ok(text) => text,
-+            Err(_) => {
-+                log::warn!("STVR_XRIZER_KEYBOARD_TEXT contains an interior NUL");
-+                return vr::EVROverlayError::RequestFailed;
-+            }
-+        };
-+        if u32::try_from(text.as_bytes_with_nul().len()).is_err() {
-+            return vr::EVROverlayError::RequestFailed;
-+        }
 +
 +        let overlay_key = OverlayKey::from(KeyData::from_ffi(overlay_handle));
 +        let overlay_event = OverlayEvent::keyboard_done(user_value, overlay_handle);
@@ -492,7 +1083,32 @@ index 528d8fd..63e5e5f 100644
      }
      fn ShowKeyboard(
          &self,
-@@ -1001,11 +1115,16 @@ impl vr::IVROverlay028_Interface for OverlayMan {
+@@ -824,12 +954,20 @@ impl vr::IVROverlay028_Interface for OverlayMan {
+         _: vr::EGamepadTextInputLineMode,
+         _: u32,
+         _: *const c_char,
+-        _: u32,
++        char_max: u32,
+         _: *const c_char,
+-        _: u64,
++        user_value: u64,
+     ) -> vr::EVROverlayError {
+-        crate::warn_unimplemented!("ShowKeyboard");
+-        vr::EVROverlayError::RequestFailed
++        let text = match keyboard_text_from_env(char_max) {
++            Ok(text) => text,
++            Err(error) => return error,
++        };
++        *self.keyboard_text.lock().unwrap() = Some(text);
++        self.openxr
++            .input
++            .force(|_| Input::new(self.openxr.clone()))
++            .enqueue_keyboard_done(user_value, vr::k_ulOverlayHandleInvalid);
++        vr::EVROverlayError::None
+     }
+     fn GetPrimaryDashboardDevice(&self) -> vr::TrackedDeviceIndex_t {
+         todo!()
+@@ -1001,11 +1139,16 @@ impl vr::IVROverlay028_Interface for OverlayMan {
      }
      fn PollNextOverlayEvent(
          &self,
@@ -513,7 +1129,7 @@ index 528d8fd..63e5e5f 100644
      }
      fn WaitFrameSync(&self, _: u32) -> vr::EVROverlayError {
          todo!()
-@@ -1593,3 +1712,38 @@ impl vr::IVROverlay007On010 for OverlayMan {
+@@ -1593,3 +1736,184 @@ impl vr::IVROverlay007On010 for OverlayMan {
          todo!()
      }
  }
@@ -521,6 +1137,152 @@ index 528d8fd..63e5e5f 100644
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    use crate::{clientcore::Injector, input::Input, openxr_data::OpenXrData};
++    use std::{
++        ffi::OsString,
++        sync::{Arc, Mutex},
++    };
++
++    static KEYBOARD_ENV_LOCK: Mutex<()> = Mutex::new(());
++
++    struct KeyboardEnvReset(Option<OsString>);
++
++    impl Drop for KeyboardEnvReset {
++        fn drop(&mut self) {
++            unsafe {
++                if let Some(value) = self.0.take() {
++                    std::env::set_var("STVR_XRIZER_KEYBOARD_TEXT", value);
++                } else {
++                    std::env::remove_var("STVR_XRIZER_KEYBOARD_TEXT");
++                }
++            }
++        }
++    }
++
++    fn set_keyboard_env(value: Option<&str>) -> KeyboardEnvReset {
++        let original = std::env::var_os("STVR_XRIZER_KEYBOARD_TEXT");
++        unsafe {
++            if let Some(value) = value {
++                std::env::set_var("STVR_XRIZER_KEYBOARD_TEXT", value);
++            } else {
++                std::env::remove_var("STVR_XRIZER_KEYBOARD_TEXT");
++            }
++        }
++        KeyboardEnvReset(original)
++    }
++
++    fn global_keyboard_fixture() -> (OverlayMan, Arc<Input<Compositor>>) {
++        let injector = Injector::default();
++        let openxr = Arc::new(OpenXrData::new(&injector).unwrap());
++        let input = Arc::new(Input::new(openxr.clone()));
++        openxr.input.set(Arc::downgrade(&input));
++
++        (OverlayMan::new(openxr, &injector), input)
++    }
++
++    #[test]
++    fn missing_keyboard_text_returns_an_empty_result_without_panicking() {
++        let mut output = [1_i8; 4];
++        assert_eq!(copy_keyboard_text(None, output.as_mut_ptr(), 4), 0);
++        assert_eq!(output[0], 0);
++        assert_eq!(copy_keyboard_text(None, std::ptr::null_mut(), 0), 0);
++    }
++
++    #[test]
++    fn keyboard_text_reports_required_size_and_preserves_utf8_boundaries() {
++        let text = CString::new("Dovahkiin").unwrap();
++        assert_eq!(copy_keyboard_text(Some(&text), std::ptr::null_mut(), 0), 10);
++
++        let mut output = [0_i8; 5];
++        assert_eq!(copy_keyboard_text(Some(&text), output.as_mut_ptr(), 5), 10);
++        assert_eq!(
++            unsafe { CStr::from_ptr(output.as_ptr()) }.to_bytes(),
++            b"Dova"
++        );
++    }
++
++    #[test]
++    fn global_keyboard_publishes_text_and_system_keyboard_done_event() {
++        let _env_lock = KEYBOARD_ENV_LOCK.lock().unwrap();
++        let _env_reset = set_keyboard_env(Some("Dovahkiin"));
++        let (overlays, input) = global_keyboard_fixture();
++
++        assert_eq!(
++            <OverlayMan as vr::IVROverlay028_Interface>::ShowKeyboard(
++                &overlays,
++                vr::EGamepadTextInputMode::Normal,
++                vr::EGamepadTextInputLineMode::SingleLine,
++                0,
++                std::ptr::null(),
++                9,
++                std::ptr::null(),
++                0x1234,
++            ),
++            vr::EVROverlayError::None
++        );
++
++        let mut text = [0_i8; 16];
++        assert_eq!(
++            <OverlayMan as vr::IVROverlay028_Interface>::GetKeyboardText(
++                &overlays,
++                text.as_mut_ptr(),
++                text.len() as u32,
++            ),
++            10
++        );
++        assert_eq!(unsafe { CStr::from_ptr(text.as_ptr()) }, c"Dovahkiin");
++
++        let mut event = vr::VREvent_t::default();
++        assert!(input.get_next_event(std::mem::size_of::<vr::VREvent_t>() as u32, &mut event,));
++        let event_type = unsafe { (&raw const event.eventType).read_unaligned() };
++        let keyboard = unsafe { (&raw const event.data.keyboard).read_unaligned() };
++        assert_eq!(event_type, vr::EVREventType::KeyboardDone as u32);
++        assert_eq!(keyboard.uUserValue, 0x1234);
++        assert_eq!(keyboard.overlayHandle, vr::k_ulOverlayHandleInvalid);
++    }
++
++    #[test]
++    fn global_keyboard_without_automation_text_fails_closed() {
++        let _env_lock = KEYBOARD_ENV_LOCK.lock().unwrap();
++        let _env_reset = set_keyboard_env(None);
++        let (overlays, _input) = global_keyboard_fixture();
++
++        assert_eq!(
++            <OverlayMan as vr::IVROverlay028_Interface>::ShowKeyboard(
++                &overlays,
++                vr::EGamepadTextInputMode::Normal,
++                vr::EGamepadTextInputLineMode::SingleLine,
++                0,
++                std::ptr::null(),
++                16,
++                std::ptr::null(),
++                0,
++            ),
++            vr::EVROverlayError::RequestFailed
++        );
++        let mut text = [1_i8; 1];
++        assert_eq!(
++            <OverlayMan as vr::IVROverlay028_Interface>::GetKeyboardText(
++                &overlays,
++                text.as_mut_ptr(),
++                text.len() as u32,
++            ),
++            0
++        );
++        assert_eq!(text, [0]);
++    }
++
++    #[test]
++    fn keyboard_text_validation_rejects_character_limit_and_nul() {
++        assert_eq!(
++            validate_keyboard_text("Dragonborn".to_owned(), 9),
++            Err(vr::EVROverlayError::RequestFailed)
++        );
++        assert_eq!(
++            validate_keyboard_text("Dragon\0born".to_owned(), 16),
++            Err(vr::EVROverlayError::RequestFailed)
++        );
++    }
 +
 +    #[test]
 +    fn keyboard_done_overlay_event_survives_an_undersized_poll() {

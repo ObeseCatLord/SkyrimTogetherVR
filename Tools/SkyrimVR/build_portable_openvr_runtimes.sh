@@ -72,6 +72,7 @@ FROM ${BUILDER_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates clang cmake git glslang-tools libgl-dev \
     libglu1-mesa-dev libopenxr-dev libvulkan-dev libx11-xcb-dev ninja-build \
+    libxcb-glx0-dev \
     pkg-config python3 && rm -rf /var/lib/apt/lists/*
 RUN printf '#!/bin/sh\nexec glslangValidator -V "$@"\n' >/usr/local/bin/glslc \
     && chmod 0755 /usr/local/bin/glslc \
@@ -84,7 +85,7 @@ docker build --quiet --build-arg "BUILDER_IMAGE=$BUILDER_IMAGE" --tag "$builder_
 
 mkdir -- "$output_dir"
 output_created=1
-docker run --rm --user "$(id -u):$(id -g)" \
+docker run --rm --interactive --user "$(id -u):$(id -g)" \
   --env HOME=/tmp --env LC_ALL=C --env SOURCE_DATE_EPOCH=0 --env CARGO_INCREMENTAL=0 \
   --env "XRIZER_REPOSITORY=$XRIZER_REPOSITORY" --env "XRIZER_REVISION=$XRIZER_REVISION" \
   --env "OPENCOMPOSITE_REPOSITORY=$OPENCOMPOSITE_REPOSITORY" \
@@ -102,7 +103,7 @@ verify_checkout() {
   git -C "$source" diff --cached --exit-code >/dev/null
 }
 verify_elf() {
-  local library=$1 version major minor needed
+  local library=$1 version major minor needed relocation_output
   local -a glibc_versions needed_libraries
   [ -f "$library" ] && [ ! -L "$library" ] || die "not a regular file: $library"
   readelf --file-header "$library" | grep -Fq 'Class:                             ELF64'
@@ -124,6 +125,18 @@ verify_elf() {
       *) die "$library has non-portable DT_NEEDED dependency: $needed" ;;
     esac
   done
+  relocation_output=$(ldd -r -- "$library" 2>&1) \
+    || { printf '%s\n' "$relocation_output" >&2; die "dynamic relocation check failed for $library"; }
+  if grep -Eq 'undefined symbol:|=> not found' <<<"$relocation_output"; then
+    printf '%s\n' "$relocation_output" >&2
+    die "$library has unresolved dynamic symbols or missing dependencies"
+  fi
+}
+verify_factory_symbol() {
+  local library=$1
+  readelf --dyn-syms --wide "$library" \
+    | awk '$4 == "FUNC" && $5 == "GLOBAL" && $7 != "UND" && $8 == "HmdSystemFactory" { found=1 } END { exit !found }' \
+    || die "$library does not export HmdSystemFactory"
 }
 
 git clone --no-checkout "$XRIZER_REPOSITORY" /work/xrizer
@@ -132,11 +145,15 @@ verify_checkout /work/xrizer "$XRIZER_REPOSITORY" "$XRIZER_REVISION"
 git -C /work/xrizer apply --check /recipe/xrizer-skyrimvr-monado.patch
 git -C /work/xrizer apply /recipe/xrizer-skyrimvr-monado.patch
 git -C /work/xrizer diff --check
+(cd /work/xrizer && cargo test --locked --features static-openxr)
+(cd /work/xrizer && cargo clean)
 (cd /work/xrizer && cargo build --locked --release --features static-openxr)
+install -D -m 0755 /work/xrizer/target/release/libxrizer.so /out/xrizer/libxrizer.so
 install -D -m 0755 /work/xrizer/target/release/libxrizer.so /out/xrizer/bin/linux64/vrclient.so
 
 git clone --no-checkout "$OPENCOMPOSITE_REPOSITORY" /work/opencomposite
 git -C /work/opencomposite checkout --detach "$OPENCOMPOSITE_REVISION"
+git -C /work/opencomposite submodule update --init --recursive
 verify_checkout /work/opencomposite "$OPENCOMPOSITE_REPOSITORY" "$OPENCOMPOSITE_REVISION"
 git -C /work/opencomposite apply --check /recipe/opencomposite-bullseye.patch
 git -C /work/opencomposite apply /recipe/opencomposite-bullseye.patch
@@ -146,14 +163,22 @@ cmake -S /work/opencomposite -B /work/opencomposite/build -G Ninja -DCMAKE_BUILD
 cmake --build /work/opencomposite/build --parallel
 install -D -m 0755 /work/opencomposite/build/bin/linux64/vrclient.so /out/opencomposite/bin/linux64/vrclient.so
 
+verify_elf /out/xrizer/libxrizer.so
+verify_factory_symbol /out/xrizer/libxrizer.so
 verify_elf /out/xrizer/bin/linux64/vrclient.so
+cmp -- /out/xrizer/libxrizer.so /out/xrizer/bin/linux64/vrclient.so
 verify_elf /out/opencomposite/bin/linux64/vrclient.so
 BUILD
 
-for runtime in xrizer opencomposite; do
+for runtime in opencomposite; do
   library="$output_dir/$runtime/bin/linux64/vrclient.so"
   [[ -f "$library" && ! -L "$library" ]] || die "missing regular output file: $library"
 done
+for library in "$output_dir/xrizer/libxrizer.so" "$output_dir/xrizer/bin/linux64/vrclient.so"; do
+  [[ -f "$library" && ! -L "$library" && -x "$library" ]] || die "missing regular executable output file: $library"
+done
+cmp -- "$output_dir/xrizer/libxrizer.so" "$output_dir/xrizer/bin/linux64/vrclient.so"
+printf 'built: %s\n' "$output_dir/xrizer/libxrizer.so"
 printf 'built: %s\n' "$output_dir/xrizer/bin/linux64/vrclient.so"
 printf 'built: %s\n' "$output_dir/opencomposite/bin/linux64/vrclient.so"
 (cd -- "$output_dir" && find xrizer opencomposite -type f -print0 | sort -z | xargs -0 sha256sum)

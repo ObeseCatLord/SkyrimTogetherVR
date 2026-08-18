@@ -25,12 +25,19 @@ write_elf64_x86_64() {
   printf '%s' 'f0VMRgIBAQAAAAAAAAAAAAMAPgABAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAABAAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAAAAAAAAAB4AAAAAAAAAAAQAAAAAAAA' | base64 -d > "$1"
 }
 mkdir -p "$game" "$compat/pfx" "$steam" "$proton" "$library_proton" "$runtime" \
+  "$game/Data" \
   "$monado/lib" "$monado/share/openxr/1" "$host_runtime/pulse" \
   "$game/.stvr-openvr/xrizer/bin/linux64" "$game/.stvr-openvr/opencomposite/bin/linux64" \
   "$opencomposite/bin/linux64" \
-  "$steamvr/bin/linux64" "$game_without_opencomposite/.stvr-openvr" "$home" "$config/openvr"
+  "$steamvr/bin/linux64" "$game_without_opencomposite/.stvr-openvr" "$home" "$config/openvr" "$config/openxr/1"
 touch "$game/SkyrimVR.exe" "$game/SkyrimTogetherVRGameplay.exe" "$game/sksevr_loader.exe"
+touch "$game/Data/Skyrim.esm" "$game/Data/Update.esm" "$game/Data/Dawnguard.esm" \
+  "$game/Data/HearthFires.esm" "$game/Data/Dragonborn.esm" "$game/Data/SkyrimVR.esm" \
+  "$game/Data/higgs_vr.esp" "$game/Data/vrik.esp" \
+  "$game/Data/Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp" \
+  "$game/Data/SkyrimTogether.esp"
 write_elf64_x86_64 "$game/.stvr-openvr/xrizer/bin/linux64/vrclient.so"
+cp "$game/.stvr-openvr/xrizer/bin/linux64/vrclient.so" "$game/.stvr-openvr/xrizer/libxrizer.so"
 write_elf64_x86_64 "$game/.stvr-openvr/opencomposite/bin/linux64/vrclient.so"
 write_elf64_x86_64 "$opencomposite/bin/linux64/vrclient.so"
 write_elf64_x86_64 "$steamvr/bin/linux64/vrclient.so"
@@ -50,6 +57,8 @@ cat > "$monado/share/openxr/1/openxr_monado.json" <<'EOF'
 EOF
 
 manifest="$monado/share/openxr/1/openxr_monado.json"
+active_runtime="$config/openxr/1/active_runtime.json"
+ln -s "$manifest" "$active_runtime"
 python3 - "$host_runtime/monado_comp_ipc" <<'PY'
 import socket
 import sys
@@ -78,6 +87,44 @@ common_env=(
   XDG_CONFIG_HOME="$config"
 )
 
+read_xrizer_keyboard_text() {
+  env -u STVR_XRIZER_KEYBOARD_TEXT \
+    GAME_DIR="$game" HOME="$home" XDG_CONFIG_HOME="$config" \
+    bash -c '
+      set -euo pipefail
+      stvr_append_pressure_vessel_ro() { :; }
+      source "$1"
+      printf "%s" "$STVR_XRIZER_KEYBOARD_TEXT"
+    ' _ "$TOOLS_DIR/stvr-xrizer-input-compat.sh"
+}
+
+[ "$(read_xrizer_keyboard_text)" = Prisoner ] || {
+  printf 'XRizer helper did not provide the manual character-name fallback\n' >&2
+  exit 1
+}
+custom_name="$(env STVR_XRIZER_KEYBOARD_TEXT=ManualIndexUser \
+  GAME_DIR="$game" HOME="$home" XDG_CONFIG_HOME="$config" \
+  bash -c '
+    set -euo pipefail
+    stvr_append_pressure_vessel_ro() { :; }
+    source "$1"
+    printf "%s" "$STVR_XRIZER_KEYBOARD_TEXT"
+  ' _ "$TOOLS_DIR/stvr-xrizer-input-compat.sh")"
+[ "$custom_name" = ManualIndexUser ] || {
+  printf 'XRizer helper replaced an explicit character name\n' >&2
+  exit 1
+}
+if env STVR_XRIZER_KEYBOARD_TEXT= \
+  GAME_DIR="$game" HOME="$home" XDG_CONFIG_HOME="$config" \
+  bash -c '
+    set -euo pipefail
+    stvr_append_pressure_vessel_ro() { :; }
+    source "$1"
+  ' _ "$TOOLS_DIR/stvr-xrizer-input-compat.sh" >/dev/null 2>&1; then
+  printf 'XRizer helper accepted an empty automatic character name\n' >&2
+  exit 1
+fi
+
 online="$(env "${common_env[@]}" STVR_FORCE_PROTON=1 GAMEID=umu-611670-alice "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
 offline="$(env "${common_env[@]}" STVR_FORCE_PROTON=1 GAMEID=umu-611670-alice "$TOOLS_DIR/launch-skyrim-vr-offline.sh")"
 grep -Fq "Monado runtime: $runtime" <<<"$online"
@@ -98,20 +145,86 @@ grep -Fq "$game/SkyrimTogetherVRGameplay.exe" <<<"$online"
 
 default_online="$(env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
   -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
-  -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW \
+  -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW -u XR_RUNTIME_JSON \
   STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
-  STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" \
+  STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
   "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
 default_offline="$(env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
   -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
-  -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW \
+  -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW -u XR_RUNTIME_JSON \
   STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
-  STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" \
+  STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
   "$TOOLS_DIR/launch-skyrim-vr-offline.sh")"
 grep -Fq 'Monado runtime: default' <<<"$default_online"
 grep -Fq 'Monado runtime: default' <<<"$default_offline"
+grep -Fq "XR runtime: $manifest" <<<"$default_online"
+grep -Fq "XR runtime: $manifest" <<<"$default_offline"
+grep -Fq "OpenXR library path: $monado/lib" <<<"$default_online"
+grep -Fq "OpenXR library path: $monado/lib" <<<"$default_offline"
 grep -Fq "Pressure vessel RW: $host_runtime/monado_comp_ipc" <<<"$default_online"
 grep -Fq "Pressure vessel RW: $host_runtime/monado_comp_ipc" <<<"$default_offline"
+grep -Fq "Pressure vessel RO: $game/.stvr-openvr/xrizer:$game/.stvr-openvr:$monado" <<<"$default_online"
+grep -Fq "Pressure vessel RO: $game/.stvr-openvr/xrizer:$game/.stvr-openvr:$monado" <<<"$default_offline"
+
+bad_manifest="$TMPDIR_LOCAL/bad-active-runtime.json"
+printf '%s\n' '{not json' > "$bad_manifest"
+ln -sfn "$bad_manifest" "$active_runtime"
+explicit_runtime="$TMPDIR_LOCAL/explicit-runtime.json"
+ln -s "$manifest" "$explicit_runtime"
+for launcher in "$TOOLS_DIR/launch-skyrim-together-vr.sh" "$TOOLS_DIR/launch-skyrim-vr-offline.sh"; do
+  explicit_output="$(env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
+    -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
+    -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW \
+    STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
+    STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
+    XR_RUNTIME_JSON="$explicit_runtime" "$launcher")"
+  grep -Fq "XR runtime: $manifest" <<<"$explicit_output"
+  if env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
+    -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
+    -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW -u XR_RUNTIME_JSON \
+    STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
+    STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
+    "$launcher" >/dev/null 2>&1; then
+    printf 'launcher accepted a malformed active OpenXR runtime\n' >&2
+    exit 1
+  fi
+done
+
+nonmonado_prefix="$TMPDIR_LOCAL/nonmonado-prefix"
+mkdir -p "$nonmonado_prefix/lib"
+touch "$nonmonado_prefix/lib/libopenxr_other.so"
+nonmonado_manifest="$nonmonado_prefix/openxr_other.json"
+printf '%s\n' '{"runtime":{"library_path":"lib/libopenxr_other.so"}}' > "$nonmonado_manifest"
+ln -sfn "$nonmonado_manifest" "$active_runtime"
+for launcher in "$TOOLS_DIR/launch-skyrim-together-vr.sh" "$TOOLS_DIR/launch-skyrim-vr-offline.sh"; do
+  nonmonado_output="$(env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
+    -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
+    -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW -u XR_RUNTIME_JSON \
+    STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
+    STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
+    "$launcher")"
+  grep -Fq "XR runtime: $nonmonado_manifest" <<<"$nonmonado_output"
+  grep -Fq "Pressure vessel RO: $game/.stvr-openvr/xrizer:$game/.stvr-openvr" <<<"$nonmonado_output"
+done
+
+outside_library="$TMPDIR_LOCAL/outside/libopenxr_monado.so"
+mkdir -p "$(dirname -- "$outside_library")"
+touch "$outside_library"
+outside_manifest="$monado/share/openxr/1/outside-runtime.json"
+printf '%s\n' '{"runtime":{"library_path":"../../../../outside/libopenxr_monado.so","MND_libmonado_path":"../../../lib/libmonado.so"}}' > "$outside_manifest"
+ln -sfn "$outside_manifest" "$active_runtime"
+for launcher in "$TOOLS_DIR/launch-skyrim-together-vr.sh" "$TOOLS_DIR/launch-skyrim-vr-offline.sh"; do
+  if env -u STVR_MONADO_RUNTIME_DIR -u STVR_MONADO_IPC_SOCKET \
+    -u STVR_MONADO_PREFIX -u STVR_MONADO_XR_RUNTIME_JSON -u STVR_MONADO_LIBRARY_PATH \
+    -u STVR_MONADO_HOST_MOUNTS -u PRESSURE_VESSEL_FILESYSTEMS_RW -u XR_RUNTIME_JSON \
+    STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
+    STVR_STEAM_ROOT="$steam" STVR_PROTONPATH="$proton" XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" \
+    "$launcher" >/dev/null 2>&1; then
+    printf 'launcher accepted an active Monado library outside its prefix\n' >&2
+    exit 1
+  fi
+done
+ln -sfn "$manifest" "$active_runtime"
 
 opencomposite_online="$(env "${common_env[@]}" STVR_OPENVR_RUNTIME=opencomposite \
   STVR_OPENCOMPOSITE_RUNTIME="$opencomposite" PROTON_VR_RUNTIME="$game/.stvr-openvr/xrizer" \
@@ -145,17 +258,88 @@ umu="$(env PATH="$fake_bin:$PATH" "${common_env[@]}" "$TOOLS_DIR/launch-skyrim-t
 grep -Fq 'Mode: umu-run' <<<"$umu"
 grep -Fq 'GAMEID: umu-611670' <<<"$umu"
 
+legacy_xrizer="$TMPDIR_LOCAL/legacy-xrizer"
+ordinary_xrizer="$TMPDIR_LOCAL/ordinary-xrizer"
+mkdir -p "$legacy_xrizer/bin/linux64" "$ordinary_xrizer/bin/linux64"
+write_elf64_x86_64 "$legacy_xrizer/libxrizer.so"
+cp "$legacy_xrizer/libxrizer.so" "$legacy_xrizer/bin/linux64/vrclient.so"
+write_elf64_x86_64 "$ordinary_xrizer/libxrizer.so"
+cp "$ordinary_xrizer/libxrizer.so" "$ordinary_xrizer/bin/linux64/vrclient.so"
+real_readelf="$(command -v readelf)"
+cat > "$fake_bin/readelf" <<'EOF'
+#!/usr/bin/env bash
+target="${!#}"
+case "$target" in
+  *legacy-xrizer/*)
+    printf '%s\n' '  1: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND _ZNSt12experimental10filesystem2v17pathC1Ev'
+    ;;
+  *ordinary-xrizer/*)
+    printf '%s\n' '  1: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND _ZSt4cout'
+    ;;
+  *)
+    exec "$STVR_REAL_READELF" "$@"
+    ;;
+esac
+EOF
+chmod +x "$fake_bin/readelf"
+if env PATH="$fake_bin:$PATH" STVR_REAL_READELF="$real_readelf" "${common_env[@]}" \
+  STVR_OPENVR_RUNTIME=xrizer STVR_XRIZER_RUNTIME="$legacy_xrizer" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >"$TMPDIR_LOCAL/legacy-xrizer.out" 2>"$TMPDIR_LOCAL/legacy-xrizer.err"; then
+  printf 'launcher accepted XRizer with unresolved legacy filesystem symbols\n' >&2
+  exit 1
+fi
+grep -Fq 'std::experimental::filesystem' "$TMPDIR_LOCAL/legacy-xrizer.err"
+grep -Fq '_ZNSt12experimental10filesystem2v17pathC1Ev' "$TMPDIR_LOCAL/legacy-xrizer.err"
+env PATH="$fake_bin:$PATH" STVR_REAL_READELF="$real_readelf" "${common_env[@]}" \
+  STVR_OPENVR_RUNTIME=xrizer STVR_XRIZER_RUNTIME="$ordinary_xrizer" \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh" >/dev/null
+
+profile_dir="$compat/pfx/drive_c/users/steamuser/AppData/Local/Skyrim VR"
+mkdir -p "$profile_dir"
+printf '%s\n' '*Unrelated.esp' '*SkyrimTogether.esp' > "$profile_dir/Plugins.txt"
+printf '%s\n' 'Unrelated.esp' 'SkyrimTogether.esp' > "$profile_dir/loadorder.txt"
+env "${common_env[@]}" STVR_DRY_RUN=0 STVR_FORCE_PROTON=1 \
+  "$TOOLS_DIR/launch-skyrim-together-vr.sh"
+cat > "$TMPDIR_LOCAL/expected-plugins.txt" <<'EOF'
+*Unrelated.esp
+*Skyrim.esm
+*Update.esm
+*Dawnguard.esm
+*HearthFires.esm
+*Dragonborn.esm
+*SkyrimVR.esm
+*higgs_vr.esp
+*vrik.esp
+*Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp
+*SkyrimTogether.esp
+EOF
+cat > "$TMPDIR_LOCAL/expected-loadorder.txt" <<'EOF'
+Unrelated.esp
+Skyrim.esm
+Update.esm
+Dawnguard.esm
+HearthFires.esm
+Dragonborn.esm
+SkyrimVR.esm
+higgs_vr.esp
+vrik.esp
+Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp
+SkyrimTogether.esp
+EOF
+cmp "$TMPDIR_LOCAL/expected-plugins.txt" "$profile_dir/Plugins.txt"
+cmp "$TMPDIR_LOCAL/expected-loadorder.txt" "$profile_dir/loadorder.txt"
+
 auto_proton="$(env -u PROTONPATH -u STVR_PROTONPATH \
   STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
   STVR_STEAM_ROOT="$steam" STVR_STEAM_LIBRARY="$TMPDIR_LOCAL/library" \
-  XDG_RUNTIME_DIR="$host_runtime" "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
+  XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" "$TOOLS_DIR/launch-skyrim-together-vr.sh")"
 printf -v escaped_library_proton '%q' "$library_proton/proton"
 grep -Fq "$escaped_library_proton run" <<<"$auto_proton"
 
 offline_auto_proton="$(env -u PROTONPATH -u STVR_PROTONPATH \
   STVR_DRY_RUN=1 STVR_FORCE_PROTON=1 STVR_GAME_DIR="$game" STVR_COMPATDATA="$compat" \
   STVR_STEAM_ROOT="$steam" STVR_STEAM_LIBRARY="$TMPDIR_LOCAL/library" \
-  XDG_RUNTIME_DIR="$host_runtime" "$TOOLS_DIR/launch-skyrim-vr-offline.sh")"
+  XDG_RUNTIME_DIR="$host_runtime" HOME="$home" XDG_CONFIG_HOME="$config" "$TOOLS_DIR/launch-skyrim-vr-offline.sh")"
 grep -Fq "$escaped_library_proton run" <<<"$offline_auto_proton"
 
 if env "${common_env[@]}" STVR_MONADO_IPC_SOCKET="$TMPDIR_LOCAL/wrong/monado_comp_ipc" \
@@ -186,6 +370,18 @@ for launcher in "$TOOLS_DIR/launch-skyrim-together-vr.sh" "$TOOLS_DIR/launch-sky
     printf 'launcher accepted an empty explicit XRizer runtime\n' >&2
     exit 1
   fi
+  rm -f "$game/.stvr-openvr/xrizer/libxrizer.so"
+  if env "${common_env[@]}" STVR_OPENVR_RUNTIME=xrizer "$launcher" >/dev/null 2>&1; then
+    printf 'launcher accepted bundled XRizer without its runtime-root library\n' >&2
+    exit 1
+  fi
+  cp "$game/.stvr-openvr/xrizer/bin/linux64/vrclient.so" "$game/.stvr-openvr/xrizer/libxrizer.so"
+  printf 'different XRizer payload' >> "$game/.stvr-openvr/xrizer/libxrizer.so"
+  if env "${common_env[@]}" STVR_OPENVR_RUNTIME=xrizer "$launcher" >/dev/null 2>&1; then
+    printf 'launcher accepted bundled XRizer with mismatched root and loader payloads\n' >&2
+    exit 1
+  fi
+  cp "$game/.stvr-openvr/xrizer/bin/linux64/vrclient.so" "$game/.stvr-openvr/xrizer/libxrizer.so"
   if env "${common_env[@]}" STVR_OPENVR_RUNTIME=opencomposite STVR_OPENCOMPOSITE_RUNTIME="$TMPDIR_LOCAL/windows-only" \
     "$launcher" >/dev/null 2>&1; then
     printf 'launcher accepted a Windows-only OpenComposite payload\n' >&2

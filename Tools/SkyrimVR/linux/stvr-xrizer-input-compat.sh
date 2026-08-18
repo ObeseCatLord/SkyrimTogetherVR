@@ -97,6 +97,34 @@ stvr_resolve_native_loader() {
   printf '%s\n' "$resolved"
 }
 
+stvr_validate_xrizer_elf_symbols() {
+  local library="$1" symbols legacy_symbol
+  command -v readelf >/dev/null 2>&1 || {
+    printf 'OpenVR runtime selection: cannot inspect XRizer ELF %s because readelf is unavailable\n' \
+      "$library" >&2
+    return 1
+  }
+  symbols="$(readelf --dyn-syms --wide "$library" 2>/dev/null)" || {
+    printf 'OpenVR runtime selection: cannot inspect XRizer ELF %s with readelf\n' "$library" >&2
+    return 1
+  }
+  legacy_symbol="$(awk '
+    {
+      for (field = 1; field < NF; field++) {
+        if ($field == "UND" && $(field + 1) ~ /^_ZNSt12experimental10filesystem/) {
+          print $(field + 1)
+          exit
+        }
+      }
+    }
+  ' <<<"$symbols")"
+  if [ -n "$legacy_symbol" ]; then
+    printf 'OpenVR runtime selection: rejecting XRizer ELF %s with unresolved legacy std::experimental::filesystem symbol %s (libstdc++ ABI mismatch)\n' \
+      "$library" "$legacy_symbol" >&2
+    return 1
+  fi
+}
+
 stvr_validate_pathreg() {
   local pathreg="$1" resolved
   [ -n "$pathreg" ] && [ -f "$pathreg" ] || return 1
@@ -163,26 +191,49 @@ stvr_is_bundled_runtime() {
   [ "$runtime" = "$bundled" ]
 }
 
-# Prints the normalized runtime root.  A packaged XRizer is identified by its
-# fixed bundle location; source/build outputs additionally require libxrizer.
+# Prints the normalized runtime root. A packaged XRizer must carry both the
+# runtime-root library Proton/OpenVR loads and its OpenVR loader copy.
 stvr_validate_xrizer_runtime() {
-  local supplied="$1" runtime release loader
+  local supplied="$1" runtime release loader xrizer_loader xrizer_library
   runtime="$(stvr_resolve_runtime_dir "$supplied")" || return 1
-  if loader="$(stvr_resolve_native_loader "$runtime" 'bin/linux64/vrclient.so')"; then
-    if stvr_is_bundled_runtime xrizer "$runtime" || [ -f "$runtime/libxrizer.so" ] || \
-      [ -f "$runtime/bin/linux64/libxrizer.so" ]; then
+  if stvr_is_bundled_runtime xrizer "$runtime"; then
+    if [ -f "$runtime/libxrizer.so" ] && [ ! -L "$runtime/libxrizer.so" ] && \
+      [ -f "$runtime/bin/linux64/vrclient.so" ] && [ ! -L "$runtime/bin/linux64/vrclient.so" ] && \
+      xrizer_loader="$(stvr_resolve_native_loader "$runtime" 'libxrizer.so')" && \
+      loader="$(stvr_resolve_native_loader "$runtime" 'bin/linux64/vrclient.so')" && \
+      cmp -s -- "$runtime/libxrizer.so" "$runtime/bin/linux64/vrclient.so"; then
+      stvr_validate_xrizer_elf_symbols "$xrizer_loader" || return 1
+      stvr_validate_xrizer_elf_symbols "$loader" || return 1
       printf '%s\n' "$runtime"
       return 0
     fi
+    return 1
+  fi
+  if loader="$(stvr_resolve_native_loader "$runtime" 'bin/linux64/vrclient.so')"; then
+    if [ -f "$runtime/libxrizer.so" ]; then
+      xrizer_library="$runtime/libxrizer.so"
+    elif [ -f "$runtime/bin/linux64/libxrizer.so" ]; then
+      xrizer_library="$runtime/bin/linux64/libxrizer.so"
+    else
+      return 1
+    fi
+    stvr_validate_xrizer_elf_symbols "$xrizer_library" || return 1
+    stvr_validate_xrizer_elf_symbols "$loader" || return 1
+    printf '%s\n' "$runtime"
+    return 0
   fi
   release="$runtime/target/release"
-  if [ -f "$release/libxrizer.so" ] && stvr_resolve_native_loader "$release" 'vrclient.so' >/dev/null; then
+  if [ -f "$release/libxrizer.so" ] && loader="$(stvr_resolve_native_loader "$release" 'vrclient.so')" && \
+    stvr_validate_xrizer_elf_symbols "$release/libxrizer.so" && \
+    stvr_validate_xrizer_elf_symbols "$loader"; then
     printf '%s\n' "$release"
     return 0
   fi
   # An official build-output directory is also acceptable when supplied
   # directly, but a generic OpenVR registry entry never is.
-  if [ -f "$runtime/libxrizer.so" ] && stvr_resolve_native_loader "$runtime" 'vrclient.so' >/dev/null; then
+  if [ -f "$runtime/libxrizer.so" ] && loader="$(stvr_resolve_native_loader "$runtime" 'vrclient.so')" && \
+    stvr_validate_xrizer_elf_symbols "$runtime/libxrizer.so" && \
+    stvr_validate_xrizer_elf_symbols "$loader"; then
     printf '%s\n' "$runtime"
     return 0
   fi
@@ -236,6 +287,16 @@ stvr_configure_openvr_runtime() {
       export VR_OVERRIDE="$runtime"
       export VR_PATHREG_OVERRIDE="$pathreg"
       export XRIZER_OPENVR_KNUCKLES_AS_OCULUS_TOUCH="${XRIZER_OPENVR_KNUCKLES_AS_OCULUS_TOUCH:-1}"
+      # XRizer has no interactive OpenVR keyboard. Supplying a bounded default
+      # lets a physical controller complete Skyrim's normal confirm/name
+      # transaction; automation can override the same callback before launch.
+      if [[ ! -v STVR_XRIZER_KEYBOARD_TEXT ]]; then
+        STVR_XRIZER_KEYBOARD_TEXT=Prisoner
+      elif [ -z "$STVR_XRIZER_KEYBOARD_TEXT" ]; then
+        stvr_openvr_runtime_die \
+          'STVR_XRIZER_KEYBOARD_TEXT must not be empty when XRizer is selected'
+      fi
+      export STVR_XRIZER_KEYBOARD_TEXT
       if [ "${STVR_XRIZER_INPUT_DEBUG:-0}" = "1" ]; then
         export RUST_LOG="${RUST_LOG:+$RUST_LOG,}openvr_calls=trace,tracked_property=trace,xrizer::input=debug,xrizer::input::legacy=trace"
       fi

@@ -350,21 +350,29 @@ def collect_openvr_runtimes(root: pathlib.Path) -> list[InstallOperation]:
 
     runtimes = (
         (
+            pathlib.PurePosixPath("dependencies/xrizer-runtime/libxrizer.so"),
+            pathlib.PurePosixPath(".stvr-openvr/xrizer/libxrizer.so"),
+            True,
+        ),
+        (
             pathlib.PurePosixPath("dependencies/xrizer-runtime/bin/linux64/vrclient.so"),
             pathlib.PurePosixPath(".stvr-openvr/xrizer/bin/linux64/vrclient.so"),
+            True,
         ),
         (
             pathlib.PurePosixPath("dependencies/opencomposite-runtime/bin/linux64/vrclient.so"),
             pathlib.PurePosixPath(".stvr-openvr/opencomposite/bin/linux64/vrclient.so"),
+            True,
         ),
         (
             pathlib.PurePosixPath("dependencies/openvrpaths.vrpath"),
             pathlib.PurePosixPath(".stvr-openvr/openvrpaths.vrpath"),
+            False,
         ),
     )
     return [
-        operation_for_file("game", destination, archive_child(root, source))
-        for source, destination in runtimes
+        operation_for_file("game", destination, archive_child(root, source), executable=executable)
+        for source, destination, executable in runtimes
     ]
 
 
@@ -1146,9 +1154,12 @@ def self_test() -> int:
             portable.write_text(f"portable-{name}\n", encoding="ascii")
             portable.chmod(0o644)
             (overlay / name).write_text(f"source-machine-{name}\n", encoding="ascii")
+        xrizer_root = handoff_root / "dependencies/xrizer-runtime/libxrizer.so"
         xrizer = handoff_root / "dependencies/xrizer-runtime/bin/linux64/vrclient.so"
         xrizer.parent.mkdir(parents=True)
+        xrizer_root.write_bytes(b"xrizer-runtime")
         xrizer.write_bytes(b"xrizer-runtime")
+        xrizer_root.chmod(0o755)
         xrizer.chmod(0o755)
         opencomposite = handoff_root / "dependencies/opencomposite-runtime/bin/linux64/vrclient.so"
         opencomposite.parent.mkdir(parents=True)
@@ -1171,16 +1182,18 @@ def self_test() -> int:
         user_openvr_api.write_bytes(b"user-opencomposite-runtime")
         user_openvr_api.chmod(0o640)
         operations, counts = planned_operations(handoff_root, package)
-        assert counts == (4, 2, 3, 3, 3)
+        assert counts == (4, 2, 3, 3, 4)
         assert not (game_dir / "Data/gameplay.txt").exists(), "dry-run planning mutated game files"
         assert install_transaction(operations, game_dir, compatdata, "self-test")
         for name in LAUNCHERS:
             launcher = game_dir / name
             assert launcher.read_text(encoding="ascii") == f"portable-{name}\n"
             assert launcher.stat().st_mode & stat.S_IXUSR
+        assert (game_dir / ".stvr-openvr/xrizer/libxrizer.so").read_bytes() == b"xrizer-runtime"
         assert (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").read_bytes() == b"xrizer-runtime"
         assert (game_dir / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so").read_bytes() == b"opencomposite-runtime"
         assert (game_dir / ".stvr-openvr/openvrpaths.vrpath").read_text(encoding="utf-8") == '{"runtime": [], "version": 1}\n'
+        assert (game_dir / ".stvr-openvr/xrizer/libxrizer.so").stat().st_mode & stat.S_IXUSR
         assert (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").stat().st_mode & stat.S_IXUSR
         assert (game_dir / "SkyrimVR.exe").read_bytes() == b"legal-game-remains"
         assert user_openvr_api.read_bytes() == b"user-opencomposite-runtime"
@@ -1189,6 +1202,7 @@ def self_test() -> int:
         assert uninstall_transaction(game_dir, compatdata, force=False) > 0
         assert not (game_dir / "Data/gameplay.txt").exists()
         assert not (game_dir / LAUNCHERS[0]).exists()
+        assert not (game_dir / ".stvr-openvr/xrizer/libxrizer.so").exists()
         assert not (game_dir / ".stvr-openvr/xrizer/bin/linux64/vrclient.so").exists()
         assert not (game_dir / ".stvr-openvr/opencomposite/bin/linux64/vrclient.so").exists()
         assert not (game_dir / ".stvr-openvr/openvrpaths.vrpath").exists()

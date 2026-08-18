@@ -241,15 +241,35 @@ Tools/SkyrimVR/linux/manage-monado-runtime.sh status
 ```
 
 The helper leaves an already healthy Monado listener unchanged. If no listener
-exists, it removes only an orphan `monado_comp_ipc` socket and stale
-`monado-tools` clients, then launches the selected Envision profile in the
+exists, it removes only an orphan `monado_comp_ipc` socket, then launches the
+selected Envision profile in the
 persistent `stvr-monado-runtime.service` user unit. Do not run `envision
 --start &` from a short-lived shell: that shell can tear down Monado while
 leaving its socket behind, causing XRizer `XR_ERROR_RUNTIME_UNAVAILABLE` and a
 launcher status 5. Readiness requires `ss -xlp` to show `monado-service` as the
-live listener; the socket file existing by itself is not evidence. Use
+live listener and the OpenXR canary must enumerate a headset and view
+configuration; the socket file existing by itself is not evidence. The socket
+fixture deliberately writes additional listeners after the match because an
+early parser exit becomes a false negative under `pipefail`. Use
 `restart`, `stop`, or a different profile UUID through the same helper when the
 runtime must change.
+
+The current isolated handoff acceptance path is:
+
+```bash
+GAME=/home/obesecatlord/Games/SkyrimVR-STVR-handoff-c18ca1d8
+PREFIX=/home/obesecatlord/Games/STVR-handoff-proton-compatdata-c18ca1d8
+PROTON=/home/obesecatlord/.local/share/Steam/compatibilitytools.d/GE-Proton10-34
+cd "$GAME"
+STVR_FORCE_PROTON=1 STVR_COMPATDATA="$PREFIX" STVR_PROTONPATH="$PROTON" \
+  STVR_OPENVR_RUNTIME=xrizer STVR_AUTOCONNECT=incidentalstoat.xyz:26099 \
+  ./launch-skyrim-together-vr.sh
+```
+
+Require `SkyrimTogetherVR.status` to report `online=1`, then correlate the
+client session/server nonces with Foundry's `STVR auth accepted` line. The
+2026-08-18 `c18ca1d8` run is recorded in
+`Docs/SkyrimVR/runtime-connection-result-20260818-c18ca1d8.md`.
 
 The Linux helper must pass the game executable through Proton's standard
 `Z:` mapping, for example
@@ -329,44 +349,48 @@ export YDOTOOL_SOCKET=/run/user/1000/stvr-ydotool.sock
 
 ## Verified Menu Inputs
 
-Use `kdotool` to focus the exact window before every input. Hold synthetic keys
-for at least 500 ms.
-
 Main Menu -> New Game:
 
-1. Focus `^Skyrim VR$`; send Linux key `End` (`107`), then `Enter` (`28`).
-2. Focus `^Monado!.*$`; send `P` (`25`) to activate the emulated trigger and
-   accept Realm of Lorkhan's New Game confirmation.
+1. Use `devbench_new_game.py`'s cached Win32 helper to send scan codes `End`,
+   then `Enter` inside the exact Proton prefix. Do not use host focus injection.
+2. Publish XRizer `trigger` to accept Realm of Lorkhan's New Game confirmation.
 
-RaceSex completion with the Monado Qwerty driver and XRizer:
+Automated RaceSex completion with XRizer:
 
-1. Confirm the current XRizer log negotiated
-   `/interaction_profiles/khr/simple_controller` for both hands.
-2. Focus `^Monado!.*$`; send `N` (`49`). This is simple-controller Menu,
-   translated by XRizer to legacy Grip and Skyrim's RaceSex `XButton`/Done.
-3. Require DevBench `messageBoxOpen: true` and body text
+1. Publish XRizer `menu`. Despite the command name, this emits legacy OpenVR
+   `Grip` (`0x02`), matching the installed `controlmapvr.txt` RaceSex
+   `XButton`/Done binding. `ApplicationMenu` (`0x01`) is incorrect here.
+2. Require DevBench `messageBoxOpen: true` and body text
    `Finish and name your character?`.
-4. Focus `^Monado!.*$`; send `P` (`25`). This is simple-controller Select,
-   translated to legacy Trigger/Menu Accept.
-5. Require the confirmation dialog to close and then require `RaceSex Menu` to
-   disappear. A closed dialog with RaceSex still open is not finalization.
+3. Publish XRizer `trigger`, translated to legacy Trigger/Menu Accept.
+4. After the visible dialog closes, require RaceSex to remain the sole
+   actionable target and publish one more `trigger` for Skyrim VR's hidden
+   default-name stage.
+5. Require `RaceSex Menu` to disappear. A closed dialog with RaceSex still
+   open is not finalization.
 
-The automation launcher sets `STVR_XRIZER_KEYBOARD_TEXT=Shezarrine` by default
-(`--character-name` overrides it). The active Envision runtime is the checkout
-named by `~/.config/openvr/openvrpaths.vrpath`, currently
-`~/.local/share/envision/ovr_comp`; do not build an inactive duplicate checkout.
-Its opt-in patch implements `ShowKeyboardForOverlay`, stores the name, and
-queues `KeyboardDone` in both the global OpenVR event queue and the requesting
-overlay's `PollNextOverlayEvent` queue. Skyrim VR requires the overlay event;
-global delivery alone closes the confirmation but leaves RaceSex open. In
-`IVROverlay_028`, `unCharMax` is the second `u32` after line mode; the first is
-keyboard flags. Without the environment variable, XRizer retains its normal
-`RequestFailed` behavior.
+For manual physical-controller completion, use the normal controller actions:
+Grip activates RaceSex Done, Trigger accepts the affirmative dialog, and a
+second Trigger accepts the preset name after the dialog disappears. The
+Oculus legacy facade changes only the properties Skyrim uses to select its
+control-map columns; XRizer still obtains poses, sticks, Grip, and Trigger from
+the native Index OpenXR profile. This is source-verified but must be accepted on
+physical Index hardware; the simulated Qwerty profile cannot prove it.
 
-This exact path was runtime-verified on 2026-07-14: automation selected New
-Game without a manual click, finalized the player as `Shezarrine`, closed
-RaceSex through the normal transaction, accepted the allowlisted Realm intro,
-and reached `RealmLorkhan`. FUS does not supply a RaceSex/input mod fix: its
+The normal XRizer launcher supplies `STVR_XRIZER_KEYBOARD_TEXT=Prisoner` only
+when the caller did not set a name. The patched runtime implements both OpenVR
+keyboard entry points, but a 2026-08-18 full OpenVR call trace proved Skyrim VR
+does not call either one in this RaceSex transaction. The old Qwerty automation
+worked because its 500 ms Trigger hold spanned the visible confirmation and the
+hidden default-name stage. Direct commands intentionally emit one controller
+press, so automation now performs a second state-gated press explicitly.
+
+The predecessor controller/keyboard path was runtime-verified on 2026-07-14:
+automation selected New Game without a manual click, finalized the player as
+`Shezarrine`, closed RaceSex through the normal transaction, accepted the
+allowlisted Realm intro, and reached `RealmLorkhan`. The current direct command
+path must repeat that no-save gate before its handoff is published. FUS does
+not supply a RaceSex/input mod fix: its
 launcher explicitly disables OpenComposite because it breaks the keyboard and
 SteamVR overlays. SteamVR normally provides the overlay keyboard transaction
 that XRizer must emulate for this Monado test path.
@@ -422,10 +446,9 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   --data '{"action":"describe"}' http://127.0.0.1:8921/api/tool/menu
 ```
 
-If XRizer logs `ShowKeyboardForOverlay unimplemented`, the opt-in automation
-runtime is not active. Accepting the RaceSex dialog will leave RaceSex waiting
-for the naming callback. Stop there; do not hide the menu or report connection
-success.
+If the visible RaceSex dialog closes but RaceSex remains open, send one more
+Trigger to accept the preset name. Do not hide RaceSex or report connection
+success unless the menu closes through that transaction.
 
 ## Success Evidence
 
@@ -437,9 +460,9 @@ process:
   `0x010400F1`, SKSE version at least `0x020000C0`, and release index at least
   `60`; do not confuse that SKSE interface version with SkyrimVR.exe and VR
   Address Library version `1.4.15.0`;
-- no `Main Menu`, `RaceSex Menu`, loading menu, or message box; Skyrim VR's
-  persistent `Fader Menu` is presentation state and is allowed when the
-  lifecycle readout remains `ready`;
+- no `Main Menu`, `RaceSex Menu`, loading menu, message box, or persistent
+  `Fader Menu`; the automation may close only a lone Realm post-load fader
+  after stable player/cell finalization has already been proven;
 - Realm of Lorkhan scene and stable nonempty player name/race;
 - `SkyrimTogether.esp` active;
 - lifecycle `state=ready`, `ready=1`, nonzero epoch/owner/player/cell;

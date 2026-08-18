@@ -266,6 +266,14 @@ TEST_CASE("VR combat and projectile ownership source audit", "[skyrim-vr][gamepl
     REQUIRE(combatMagic.find("ExecuteCombatTarget") == std::string::npos);
 }
 
+TEST_CASE("VR pose snapshot diagnostics use a bounded log cadence", "[skyrim-vr][pose][source-audit]")
+{
+    const auto poseService = ReadRepositorySource("Code/client/Services/Generic/VRPoseService.cpp");
+    REQUIRE_FALSE(poseService.empty());
+    REQUIRE(poseService.find("constexpr double kPoseSnapshotLogInterval = 30.0;") != std::string::npos);
+    REQUIRE(poseService.find("if (m_logTimer < kPoseSnapshotLogInterval)") != std::string::npos);
+}
+
 TEST_CASE("VR gameplay bridge admits only deferred appearance text shapes", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(IsDeferredAppearanceGameplayText(
