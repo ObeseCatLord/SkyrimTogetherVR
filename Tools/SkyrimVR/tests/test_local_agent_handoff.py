@@ -62,7 +62,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
         audit = load_module("audit_local_agent_handoff_xrizer_constants", TOOLS / "audit_local_agent_handoff.py")
         reviewed = {
             "XRIZER_BASE_REVISION": "31319560c1bd0f1e5c16936a946bb1c7295dbfd9",
-            "XRIZER_RUNTIME_SHA256": "432b1676c1c314e6da16dcd9bad54259657ae013a897000b367a111093d509cb",
+            "XRIZER_RUNTIME_SHA256": "b278c4695f15bba7c554aaac5303520247cc8ab3bcae3f8b55e934e2b114ccaf",
             "XRIZER_COMPATIBILITY_PATCH_SHA256": "64d837980afd29cc3d557f4326eee34a165f0bb49888c247fc2af36361990142",
         }
         for name, expected in reviewed.items():

@@ -42,6 +42,12 @@ states.
 
 The runtime used for this follow-up has SHA-256
 `432b1676c1c314e6da16dcd9bad54259657ae013a897000b367a111093d509cb`.
+That hash records the exact host-built binary used for this historical run.
+The portable handoff rebuild uses the same reviewed source and compatibility
+patch but is built in the pinned Bullseye container; its SHA-256 is
+`b278c4695f15bba7c554aaac5303520247cc8ab3bcae3f8b55e934e2b114ccaf`
+and its maximum glibc requirement is `GLIBC_2.31` or older. Runtime acceptance
+of that exact portable binary is tracked separately from this `c18ca1d8` run.
 A full OpenVR call trace contained no `ShowKeyboard`,
 `ShowKeyboardForOverlay`, or `GetKeyboardText` call during RaceSex, confirming
 that the second engine/controller stage, not an XRizer keyboard callback, is

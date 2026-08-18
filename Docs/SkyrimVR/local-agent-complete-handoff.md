@@ -85,7 +85,7 @@ uninstall commands, runtime alternatives, and evidence collection follow.
   OpenOVR source snapshot and license (without `.git` or `build`). The
   manifest binds its loader to the clean official `znixian/OpenOVR` checkout
   revision `cff07db75c4823afe93ed7027b03d5f7bc86f164` and portable loader
-  SHA-256 `98a07ff54bc93b0190b576acf7fc8e28f47c5f1924bbe924228abf001cbdc913`.
+  SHA-256 `a703fdd1eaff092d28d91798b0ad1afb1611523da1456563dd51f2892b471751`.
   The archive audit parses both native loaders without executing them and
   rejects a non-x86-64 shared object, an unreviewed dependency, or a glibc
   requirement newer than `GLIBC_2.31`. The bundled OpenComposite loader needs
