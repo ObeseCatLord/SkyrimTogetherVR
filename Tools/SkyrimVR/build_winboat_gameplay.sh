@@ -5,16 +5,26 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
 
 usage() {
-    printf 'Usage: %s [--skip-handoff] [<commit>]\n' "${0##*/}" >&2
+    printf 'Usage: %s [--runtime-evidence ZIP] [--skip-handoff] [<commit>]\n' "${0##*/}" >&2
 }
 
 skip_handoff=0
+runtime_evidence=${STVR_RUNTIME_EVIDENCE:-}
 revision=HEAD
 revision_set=0
 while (($# > 0)); do
     case $1 in
         --skip-handoff)
             skip_handoff=1
+            ;;
+        --runtime-evidence)
+            if (($# < 2)); then
+                echo "Missing ZIP path after --runtime-evidence." >&2
+                usage
+                exit 2
+            fi
+            runtime_evidence=$2
+            shift
             ;;
         --help|-h)
             usage
@@ -47,6 +57,18 @@ while (($# > 0)); do
     esac
     shift
 done
+
+if ((skip_handoff == 0)); then
+    if [[ -z $runtime_evidence ]]; then
+        echo "Runtime evidence is required for handoff generation. Use --runtime-evidence ZIP after live gameplay-bootstrap acceptance, or use --skip-handoff for build-only and run finalize_local_agent_handoff.sh after live acceptance." >&2
+        exit 2
+    fi
+    if [[ ! -f $runtime_evidence ]]; then
+        echo "Runtime evidence ZIP does not exist: $runtime_evidence. Use --skip-handoff for build-only and run finalize_local_agent_handoff.sh after live acceptance." >&2
+        exit 2
+    fi
+    runtime_evidence=$(realpath -e -- "$runtime_evidence")
+fi
 
 build_lock_file="${XDG_RUNTIME_DIR:-/tmp}/skyrim-together-vr-build-active.lock"
 exec 8>"$build_lock_file"
@@ -243,6 +265,7 @@ else
     "$repo_root/Tools/SkyrimVR/finalize_local_agent_handoff.sh" \
         --gameplay-package "$package_zip" \
         --build-evidence "$evidence_copy" \
+        --runtime-evidence "$runtime_evidence" \
         --output "$handoff_zip" \
         --upload-target "${STVR_HANDOFF_UPLOAD_TARGET:-foundry:videos/}"
     printf 'STVR_LINUX_GAMEPLAY_PACKAGE=%s\n' "$package_zip"

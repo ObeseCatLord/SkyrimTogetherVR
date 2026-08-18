@@ -97,6 +97,8 @@ hashes, flavor, and source revision, then calls
 `Tools/SkyrimVR/finalize_local_agent_handoff.sh`. The finalizer uses root-backed
 state storage instead of `/tmp`, builds or reuses the exact pinned Bullseye
 OpenComposite/XRizer binaries, validates their hashes and glibc ceilings,
+audits the supplied live one-client gameplay-bootstrap evidence and binds it to
+the exact gameplay build manifest,
 regenerates and audits the complete local-agent handoff ZIP, checks ZIP
 integrity, verifies the basename sidecar from the archive directory, uploads
 both files resumably to `foundry:~/videos/`, and verifies the checksum on
@@ -108,19 +110,22 @@ afterward. The handoff generator requires the same clean committed worktree and
 includes the current checklist/documentation without raw Codex/session telemetry
 or unredacted runtime logs.
 
-For an already imported exact package/evidence pair, run the same final stage
-without rebuilding the Windows DLLs:
+For an already imported exact package/build-evidence pair and its accepted live
+runtime evidence, run the same final stage without rebuilding the Windows DLLs:
 
 ```bash
 Tools/SkyrimVR/finalize_local_agent_handoff.sh \
   --gameplay-package /absolute/path/to/gameplay.zip \
   --build-evidence /absolute/path/to/build-evidence.zip \
+  --runtime-evidence /absolute/path/to/gameplay-bootstrap-runtime-evidence.zip \
   --upload-target foundry:videos/
 ```
 
 The finalizer refuses a dirty repository, mismatched or unreviewed runtimes,
-an existing output path, an invalid archive, a bad local sidecar, or a failed
-remote checksum. The Foundry archive is private; do not publish it to GitHub.
+runtime evidence from another build, an existing output path, an invalid
+archive, a bad local sidecar, or a failed remote checksum. The resulting
+handoff embeds the exact runtime evidence under `evidence/`. The Foundry
+archive is private; do not publish it to GitHub.
 
 When handoff updates are not authorized, `--skip-handoff` is required. It still
 performs the full Windows build/audit, SCP import, deterministic gameplay package,
@@ -139,6 +144,16 @@ Tools/SkyrimVR/build_winboat_gameplay.sh <commit> --skip-handoff
 
 The helper prints `STVR_LINUX_GAMEPLAY_PACKAGE`, `STVR_LINUX_BUILD_EVIDENCE`, and
 an explicit `STVR_LOCAL_HANDOFF=SKIPPED` status in this mode.
+
+A new build cannot truthfully produce a final handoff until that exact binary
+has passed the live bootstrap. Use `--skip-handoff` for the initial build,
+install and run it, collect with `collect_runtime_evidence.py
+--gameplay-bootstrap`, audit with `audit_runtime_evidence_zip.py
+--require-gameplay-bootstrap`, commit the resulting tooling/docs, and then run
+the finalizer command above. `build_winboat_gameplay.sh` accepts
+`--runtime-evidence ZIP` or `STVR_RUNTIME_EVIDENCE` only for an evidence archive
+whose nested build identity matches the revision being built; it never
+auto-selects an older archive.
 
 The helper stages its generated PowerShell driver as a temporary `.ps1` through
 the private SCP channel instead of passing it through `-EncodedCommand`, which
@@ -282,10 +297,17 @@ STVR_FORCE_PROTON=1 STVR_COMPATDATA="$PREFIX" STVR_PROTONPATH="$PROTON" \
   ./launch-skyrim-together-vr.sh
 ```
 
+The directory name is retained because the transactional install was created
+during the earlier `c18ca1d8` bring-up. Its authoritative installed
+`SkyrimTogetherVR_BuildManifest.json` now reports exact build `3fe08ccd`; do not
+infer the installed revision from this historical directory name.
+
 Require `SkyrimTogetherVR.status` to report `online=1`, then correlate the
 client session/server nonces with Foundry's `STVR auth accepted` line. The
-2026-08-18 `c18ca1d8` run is recorded in
-`Docs/SkyrimVR/runtime-connection-result-20260818-c18ca1d8.md`.
+current exact acceptance is recorded in
+`Docs/SkyrimVR/runtime-connection-result-20260818-3fe08ccd.md`. The earlier
+`c18ca1d8` run remains as historical diagnosis of character creation and the
+stale fader.
 
 The Linux helper must pass the game executable through Proton's standard
 `Z:` mapping, for example

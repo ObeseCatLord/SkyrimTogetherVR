@@ -94,26 +94,26 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:c18ca1d8-arm64`.
+- Image tag: `skyrim-together-vr-server:3fe08ccd-arm64`.
 - Image ID:
-  `sha256:db94654b0a0f621af2b17c27c11fc7dc7ff5903157f7cc9314c4388fd680ef36`.
+  `sha256:de20e13617d8bb2e2eca796d0ad321af9d5f01404b7733da0b954903296d2300`.
 - Runtime executable SHA-256:
-  `bcbe58b16b3a74df2d0a4e443417add8bae6a1491ec7288f0abb17aaef082791`.
+  `8965dbe5d7a9e5f579587240a6de22917791602642193cfdd88d293c450ccf89`.
 - Runtime core SHA-256:
-  `04e0a53b3e19c98aa8a55f80e4b7689a8f57cd2ecad08968036d7321b15abea2`.
-- Server deployment revision: `c18ca1d8`; the matching client build is
-  `c18ca1d8f3ed6b61c82a87c763c3c1c1899740e4` and reports
-  `stvr-v0.1.0-alpha.1-83-gc18ca1d8`.
+  `882fbbb50a45e9478fc9793d4cf96f0e37101824b4b3044c2d53e14137f01629`.
+- Server deployment revision: `3fe08ccd`; the matching client build is
+  `3fe08ccd99b0d4cfa14c5dab872fa9c37f67d6c8` and reports
+  `stvr-v0.1.0-alpha.1-84-g3fe08ccd`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `c18ca1d8` source revision. The current
+The client and server use the exact `3fe08ccd` source revision. The current
 deployment has one container and zero restarts, listens on UDP port 26099, and
 retains the existing persistent config, Data, and log mounts. A matching
-Linux/Monado client authenticated successfully on 2026-08-18; see
-`runtime-connection-result-20260818-c18ca1d8.md`. This is one-client bootstrap
+handoff-only Linux/Monado client authenticated successfully on 2026-08-18; see
+`runtime-connection-result-20260818-3fe08ccd.md`. This is one-client bootstrap
 proof, not two-client gameplay proof. Rebuild and redeploy whenever shared
 message definitions, encoding, or server code changes.
 

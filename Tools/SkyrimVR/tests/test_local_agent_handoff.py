@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -22,6 +23,7 @@ TOOLS = ROOT / "Tools" / "SkyrimVR"
 INSTALLER = TOOLS / "install_local_agent_handoff.py"
 WINDOWS_INSTALLER = TOOLS / "install_local_agent_handoff_windows.ps1"
 WINDOWS_WRAPPER = TOOLS / "install_local_agent_handoff_windows.bat"
+WINBOAT_BUILD = TOOLS / "build_winboat_gameplay.sh"
 
 sys.path.insert(0, str(TOOLS))
 
@@ -54,6 +56,41 @@ def transaction_fixture(installer, root: pathlib.Path, order: tuple[str, ...] = 
         targets[name] = target
         operations.append(installer.operation_for_file("game", pathlib.PurePosixPath(target.name), source))
     return game, compatdata, operations, targets
+
+
+def runtime_evidence_fixture(
+    path: pathlib.Path,
+    revision: str,
+    *,
+    flavor: str = "gameplay",
+    bootstrap: bool = True,
+) -> dict[str, str]:
+    package_manifest = {
+        "schema": "skyrim_together_vr_build_package_v2",
+        "gameplay": True,
+        "packageFlavor": flavor,
+        "sourceRevision": revision,
+        "generatedAtUtc": "2026-08-18T17:15:38.6031574Z",
+    }
+    runtime_manifest = {
+        "schema": "skyrim_together_vr_runtime_evidence_v1",
+        "gameplayBootstrapAudit": bootstrap,
+        "packageBuildManifest": package_manifest,
+    }
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(runtime_manifest))
+        archive.writestr("package/SkyrimTogetherVR_BuildManifest.json", json.dumps(package_manifest))
+    canonical = json.dumps(
+        package_manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    return {
+        "sourceRevision": revision,
+        "buildManifestSha256": hashlib.sha256(canonical).hexdigest(),
+        "generatedAtUtc": package_manifest["generatedAtUtc"],
+    }
 
 
 class LocalAgentHandoffTests(unittest.TestCase):
@@ -125,12 +162,148 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("build_portable_openvr_runtimes.sh", finalizer)
         self.assertIn("validate_runtime_dir", finalizer)
         self.assertIn("audit_local_agent_handoff.py", finalizer)
+        self.assertIn("--runtime-evidence ZIP", finalizer)
+        self.assertIn("--require-gameplay-bootstrap", finalizer)
+        self.assertLess(finalizer.index("audit_runtime_evidence_zip.py"), finalizer.index("create_local_agent_handoff.py\" \\\n"))
         self.assertIn("unzip -tq", finalizer)
         self.assertIn('cd -- "$(dirname -- "$output")"', finalizer)
         self.assertIn("rsync -ah --partial", finalizer)
         self.assertIn("sha256sum -c '${remote_name}.sha256.txt'", finalizer)
         self.assertIn("finalize_local_agent_handoff.sh", build_helper)
+        self.assertIn('--runtime-evidence "$runtime_evidence"', build_helper)
         self.assertIn("STVR_HANDOFF_UPLOAD_TARGET", build_helper)
+        missing_runtime = subprocess.run(
+            [
+                str(TOOLS / "finalize_local_agent_handoff.sh"),
+                "--gameplay-package",
+                "package.zip",
+                "--build-evidence",
+                "build.zip",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(missing_runtime.returncode, 2)
+        self.assertIn("--runtime-evidence ZIP", missing_runtime.stderr)
+
+    def test_winboat_wrapper_requires_runtime_evidence_before_build_work(self) -> None:
+        result = subprocess.run(
+            [str(WINBOAT_BUILD), "3fe08ccd99b0d4cfa14c5dab872fa9c37f67d6c8"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Runtime evidence is required for handoff generation", result.stderr)
+        self.assertIn("use --skip-handoff for build-only", result.stderr)
+        self.assertIn("run finalize_local_agent_handoff.sh after live acceptance", result.stderr)
+        self.assertNotIn("WinBoat", result.stderr)
+
+    def test_winboat_wrapper_parses_runtime_evidence_and_forwards_it(self) -> None:
+        script = WINBOAT_BUILD.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory(prefix="stvr-winboat-runtime-argument-") as temp_dir:
+            missing = pathlib.Path(temp_dir) / "missing-runtime-evidence.zip"
+            result = subprocess.run(
+                [str(WINBOAT_BUILD), "--runtime-evidence", str(missing), "HEAD"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"Runtime evidence ZIP does not exist: {missing}", result.stderr)
+        self.assertIn('runtime_evidence=${STVR_RUNTIME_EVIDENCE:-}', script)
+        self.assertIn('--runtime-evidence "$runtime_evidence"', script)
+        self.assertLess(script.index("if ((skip_handoff == 0)); then"), script.index("build_lock_file="))
+
+    def test_winboat_wrapper_skip_handoff_keeps_runtime_evidence_optional(self) -> None:
+        script = WINBOAT_BUILD.read_text(encoding="utf-8")
+        self.assertIn("if ((skip_handoff == 0)); then", script)
+        result = subprocess.run(
+            [str(WINBOAT_BUILD), "--skip-handoff", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[--runtime-evidence ZIP] [--skip-handoff] [<commit>]", result.stderr)
+
+    def test_runtime_evidence_is_required_and_bound_to_gameplay_build_identity(self) -> None:
+        creator = load_module("create_local_agent_handoff_runtime_evidence", TOOLS / "create_local_agent_handoff.py")
+        audit = load_module("audit_local_agent_handoff_runtime_evidence", TOOLS / "audit_local_agent_handoff.py")
+        revision = "3fe08ccd99b0d4cfa14c5dab872fa9c37f67d6c8"
+        with tempfile.TemporaryDirectory(prefix="stvr-handoff-runtime-evidence-") as temp_dir:
+            evidence = pathlib.Path(temp_dir) / "runtime-evidence.zip"
+            build_identity = runtime_evidence_fixture(evidence, revision)
+            identity = creator.validate_runtime_evidence(evidence, build_identity)
+            self.assertEqual(identity["sourceRevision"], revision)
+            self.assertEqual(identity["buildManifestSha256"], build_identity["buildManifestSha256"])
+            metadata = {
+                "name": evidence.name,
+                "path": f"evidence/{evidence.name}",
+                "sha256": creator.sha256(evidence),
+                **identity,
+            }
+            self.assertEqual(
+                audit.runtime_evidence_failures(
+                    evidence.read_bytes(),
+                    metadata,
+                    revision,
+                    build_identity["buildManifestSha256"],
+                    build_identity["generatedAtUtc"],
+                ),
+                [],
+            )
+            with self.assertRaisesRegex(ValueError, "does not match the gameplay package/build evidence"):
+                creator.validate_runtime_evidence(
+                    evidence,
+                    {**build_identity, "buildManifestSha256": "0" * 64},
+                )
+            failures = audit.runtime_evidence_failures(
+                evidence.read_bytes(),
+                metadata,
+                "0" * 40,
+                build_identity["buildManifestSha256"],
+                build_identity["generatedAtUtc"],
+            )
+            self.assertTrue(any("source revision" in failure for failure in failures))
+
+            with mock.patch.object(sys, "argv", ["create_local_agent_handoff.py"]), mock.patch.object(
+                sys, "stderr", io.StringIO()
+            ):
+                with self.assertRaises(SystemExit):
+                    creator.parse_args()
+
+    def test_runtime_evidence_rejects_non_gameplay_nested_package(self) -> None:
+        creator = load_module("create_local_agent_handoff_runtime_flavor", TOOLS / "create_local_agent_handoff.py")
+        audit = load_module("audit_local_agent_handoff_runtime_flavor", TOOLS / "audit_local_agent_handoff.py")
+        revision = "3fe08ccd99b0d4cfa14c5dab872fa9c37f67d6c8"
+        with tempfile.TemporaryDirectory(prefix="stvr-handoff-runtime-flavor-") as temp_dir:
+            evidence = pathlib.Path(temp_dir) / "runtime-evidence.zip"
+            build_identity = runtime_evidence_fixture(evidence, revision, flavor="avatar-sync")
+            with self.assertRaisesRegex(ValueError, "not gameplay"):
+                creator.validate_runtime_evidence(evidence, build_identity)
+            failures = audit.runtime_evidence_failures(
+                evidence.read_bytes(),
+                {},
+                revision,
+                build_identity["buildManifestSha256"],
+                build_identity["generatedAtUtc"],
+            )
+            self.assertTrue(any("package flavor" in failure for failure in failures))
+
+            no_bootstrap = pathlib.Path(temp_dir) / "not-bootstrap.zip"
+            build_identity = runtime_evidence_fixture(no_bootstrap, revision, bootstrap=False)
+            with self.assertRaisesRegex(ValueError, "--gameplay-bootstrap"):
+                creator.validate_runtime_evidence(no_bootstrap, build_identity)
+            failures = audit.runtime_evidence_failures(
+                no_bootstrap.read_bytes(),
+                {},
+                revision,
+                build_identity["buildManifestSha256"],
+                build_identity["generatedAtUtc"],
+            )
+            self.assertTrue(any("gameplayBootstrapAudit" in failure for failure in failures))
 
     def test_auditor_requires_matching_executable_xrizer_runtime_pair(self) -> None:
         audit = load_module("audit_local_agent_handoff_pair", TOOLS / "audit_local_agent_handoff.py")

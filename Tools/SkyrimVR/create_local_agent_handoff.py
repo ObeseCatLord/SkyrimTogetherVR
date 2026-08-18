@@ -180,6 +180,64 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_json_sha256(value: dict[str, object]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def validate_runtime_evidence(
+    path: pathlib.Path,
+    expected_build_identity: dict[str, str],
+) -> dict[str, object]:
+    """Bind accepted gameplay-bootstrap evidence to the exact gameplay build manifest."""
+    if not zipfile.is_zipfile(path):
+        raise ValueError(f"runtime evidence is not a ZIP archive: {path}")
+    with zipfile.ZipFile(path) as archive:
+        bad_entry = archive.testzip()
+        if bad_entry is not None:
+            raise ValueError(f"runtime evidence CRC failure: {bad_entry}")
+        names = {name.replace("\\", "/"): name for name in archive.namelist() if not name.endswith(("/", "\\"))}
+        for required in ("manifest.json", "package/SkyrimTogetherVR_BuildManifest.json"):
+            if required not in names:
+                raise ValueError(f"runtime evidence is missing {required}")
+        try:
+            runtime_manifest = json.loads(archive.read(names["manifest.json"]).decode("utf-8-sig"))
+            package_manifest = json.loads(
+                archive.read(names["package/SkyrimTogetherVR_BuildManifest.json"]).decode("utf-8-sig")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"runtime evidence contains invalid JSON: {error}") from error
+    if not isinstance(runtime_manifest, dict) or not isinstance(package_manifest, dict):
+        raise ValueError("runtime evidence manifests must be JSON objects")
+    if runtime_manifest.get("gameplayBootstrapAudit") is not True:
+        raise ValueError("runtime evidence was not collected with --gameplay-bootstrap")
+    if package_manifest.get("packageFlavor") != "gameplay" or package_manifest.get("gameplay") is not True:
+        raise ValueError("runtime evidence package manifest is not gameplay")
+    source_revision = package_manifest.get("sourceRevision")
+    expected_revision = expected_build_identity.get("sourceRevision")
+    if source_revision != expected_revision:
+        raise ValueError(
+            f"runtime evidence source revision {source_revision!r} does not match gameplay build {expected_revision!r}"
+        )
+    build_manifest_sha256 = canonical_json_sha256(package_manifest)
+    expected_manifest_sha256 = expected_build_identity.get("buildManifestSha256")
+    if build_manifest_sha256 != expected_manifest_sha256:
+        raise ValueError("runtime evidence build manifest does not match the gameplay package/build evidence")
+    embedded_manifest = runtime_manifest.get("packageBuildManifest")
+    if not isinstance(embedded_manifest, dict) or canonical_json_sha256(embedded_manifest) != build_manifest_sha256:
+        raise ValueError("runtime evidence embedded package manifest does not match its packaged manifest")
+    generated_at = str(package_manifest.get("generatedAtUtc", ""))
+    if generated_at != expected_build_identity.get("generatedAtUtc"):
+        raise ValueError("runtime evidence generated build identity does not match the gameplay artifacts")
+    return {
+        "gameplayBootstrapAudit": True,
+        "packageFlavor": "gameplay",
+        "sourceRevision": source_revision,
+        "buildManifestSha256": build_manifest_sha256,
+        "generatedAtUtc": generated_at,
+    }
+
+
 def newest(root: pathlib.Path, pattern: str) -> pathlib.Path:
     matches = [path for path in root.glob(pattern) if path.is_file()]
     if not matches:
@@ -291,6 +349,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--public-assets", type=pathlib.Path)
     parser.add_argument("--gameplay-package", type=pathlib.Path)
     parser.add_argument("--build-evidence", type=pathlib.Path)
+    parser.add_argument("--runtime-evidence", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path)
     return parser.parse_args()
 
@@ -544,7 +603,8 @@ def main() -> int:
     build_evidence = args.build_evidence or newest(
         repo / "artifacts/SkyrimTogetherVR/build-evidence", "SkyrimTogetherVR-build-evidence-gameplay-*.zip"
     )
-    for path in (public_runtime, public_handoff, gameplay_package, build_evidence):
+    runtime_evidence = args.runtime_evidence
+    for path in (public_runtime, public_handoff, gameplay_package, build_evidence, runtime_evidence):
         if not path.is_file():
             raise FileNotFoundError(path)
     with zipfile.ZipFile(build_evidence) as archive:
@@ -563,6 +623,7 @@ def main() -> int:
     ).returncode:
         raise ValueError(f"build source revision {build_revision} is not an ancestor of handoff HEAD {head}")
     build_identity = validate_artifact_pair(gameplay_package, build_evidence, build_revision)
+    runtime_evidence_identity = validate_runtime_evidence(runtime_evidence, build_identity)
     xrizer_runtime, xrizer_provenance = validated_xrizer_runtime(args.xrizer_root)
     opencomposite_runtime, opencomposite_provenance = validated_opencomposite_runtime(args.opencomposite_root)
 
@@ -585,6 +646,7 @@ def main() -> int:
             writer.add(public_handoff, f"{root}/bundles/{public_handoff.name}")
             writer.add(gameplay_package, f"{root}/build/{gameplay_package.name}")
             writer.add(build_evidence, f"{root}/build/{build_evidence.name}")
+            writer.add(runtime_evidence, f"{root}/evidence/{runtime_evidence.name}")
             writer.add(bundle, f"{root}/source.bundle")
             writer.add(repo / "Docs/SkyrimVR/local-agent-complete-handoff.md", f"{root}/START-HERE.md")
             writer.add(
@@ -694,6 +756,12 @@ def main() -> int:
                     "name": build_evidence.name,
                     "sha256": sha256(build_evidence),
                     **build_identity,
+                },
+                "runtimeEvidence": {
+                    "name": runtime_evidence.name,
+                    "path": f"evidence/{runtime_evidence.name}",
+                    "sha256": sha256(runtime_evidence),
+                    **runtime_evidence_identity,
                 },
                 "xrizerRuntime": xrizer_provenance,
                 "openCompositeRuntime": opencomposite_provenance,

@@ -73,6 +73,16 @@ MANIFEST_FLAG_REQUIRED_CHECKS = (
     ("requiredSaveloadObserver", "saveload_observer", "save/load observer"),
 )
 
+GAMEPLAY_BOOTSTRAP_CHECKS = (
+    ("connection_status", "connection status"),
+    ("live_lifecycle", "live lifecycle readiness"),
+    ("live_player_cell", "live player-cell readiness"),
+    ("local_pose", "local avatar pose"),
+    ("local_avatar_bootstrap", "local-avatar bridge state"),
+    ("local_vrik_api", "local VRIK API"),
+    ("higgs_bridge", "local HIGGS bridge"),
+)
+
 
 def load_json(zf: zipfile.ZipFile, name: str, failures: list[str]) -> dict[str, object]:
     try:
@@ -148,6 +158,9 @@ def require_manifest_requested_checks(
             "manifest avatar-sync actor target application",
             failures,
         )
+    if bool(manifest.get("gameplayBootstrapAudit")):
+        for check_id, label in GAMEPLAY_BOOTSTRAP_CHECKS:
+            require_check_pass(checks_by_id, check_id, f"manifest gameplay-bootstrap {label}", failures)
 
 
 def audit_archive(
@@ -169,6 +182,7 @@ def audit_archive(
     require_higgs_relay: bool,
     require_saveload_observer: bool,
     allow_failed_checks: bool,
+    require_gameplay_bootstrap: bool = False,
 ) -> int:
     failures: list[str] = []
     warnings: list[str] = []
@@ -182,6 +196,8 @@ def audit_archive(
     with zipfile.ZipFile(path) as zf:
         names = set(zf.namelist())
         for entry in REQUIRED_ARCHIVE_ENTRIES:
+            if entry == "logs/tp_client.log":
+                continue
             if entry not in names:
                 failures.append(f"missing archive entry: {entry}")
 
@@ -211,18 +227,23 @@ def audit_archive(
 
         manifest_avatar_sync = bool(manifest.get("avatarSyncAudit"))
         manifest_gameplay = bool(manifest.get("gameplayAudit"))
+        manifest_gameplay_bootstrap = bool(manifest.get("gameplayBootstrapAudit"))
+        if not manifest_gameplay_bootstrap and "logs/tp_client.log" not in names:
+            failures.append("missing archive entry: logs/tp_client.log")
         if require_avatar_sync and not require_gameplay and (not manifest_avatar_sync or manifest_gameplay):
             failures.append("archive was not collected with --avatar-sync")
         elif require_avatar_sync and not manifest_avatar_sync:
             failures.append("archive was not collected with --avatar-sync")
         if require_gameplay and not manifest_gameplay:
             failures.append("archive was not collected with --gameplay")
+        if require_gameplay_bootstrap and not manifest_gameplay_bootstrap:
+            failures.append("archive was not collected with --gameplay-bootstrap")
 
         if package_manifest:
             package_manifest_ok, package_manifest_detail = collect_runtime_evidence.validate_build_manifest_data(
                 package_manifest,
-                avatar_sync=manifest_avatar_sync and not manifest_gameplay,
-                gameplay=manifest_gameplay,
+                avatar_sync=manifest_avatar_sync and not (manifest_gameplay or manifest_gameplay_bootstrap),
+                gameplay=manifest_gameplay or manifest_gameplay_bootstrap,
             )
             if not package_manifest_ok:
                 failures.append("package build manifest validation failed: " + package_manifest_detail)
@@ -230,8 +251,8 @@ def audit_archive(
             if isinstance(embedded_package_manifest, dict):
                 embedded_ok, embedded_detail = collect_runtime_evidence.validate_build_manifest_data(
                     embedded_package_manifest,
-                    avatar_sync=manifest_avatar_sync and not manifest_gameplay,
-                    gameplay=manifest_gameplay,
+                    avatar_sync=manifest_avatar_sync and not (manifest_gameplay or manifest_gameplay_bootstrap),
+                    gameplay=manifest_gameplay or manifest_gameplay_bootstrap,
                 )
                 if not embedded_ok:
                     failures.append("embedded package build manifest validation failed: " + embedded_detail)
@@ -260,6 +281,10 @@ def audit_archive(
             check
             for check in checks_by_id.values()
             if check.get("status") == collect_runtime_evidence.CHECK_FAIL
+            and (
+                not manifest_gameplay_bootstrap
+                or check.get("id") in collect_runtime_evidence.GAMEPLAY_BOOTSTRAP_REQUIRED_CHECK_IDS
+            )
         ]
         if failed_checks and not allow_failed_checks:
             for check in failed_checks:
@@ -362,6 +387,7 @@ def audit_archive(
         print(f"Runtime audit exit code: {runtime_audit_exit}")
         print(f"Avatar-sync audit: {manifest_avatar_sync}")
         print(f"Gameplay audit: {manifest_gameplay}")
+        print(f"Gameplay bootstrap audit: {manifest_gameplay_bootstrap}")
         if package_manifest:
             print(f"Package build manifest schema: {package_manifest.get('schema')}")
             print(f"Package build manifest avatarSync: {package_manifest.get('avatarSync')}")
@@ -890,6 +916,11 @@ def main() -> int:
     parser.add_argument("archive", type=pathlib.Path, nargs="?", help="runtime evidence zip to audit")
     parser.add_argument("--require-avatar-sync", action="store_true", help="require the archive to come from --avatar-sync collection")
     parser.add_argument("--require-gameplay", action="store_true", help="require the archive to come from --gameplay collection")
+    parser.add_argument(
+        "--require-gameplay-bootstrap",
+        action="store_true",
+        help="require the archive to come from one-client --gameplay-bootstrap collection",
+    )
     parser.add_argument("--require-remote-player", action="store_true", help="require remote-player proxy and VRIK avatar readiness checklist lanes")
     parser.add_argument("--require-weapon-pose", action="store_true", help="require weapon offset pose nodes to pass")
     parser.add_argument("--require-magic-pose", action="store_true", help="require spell or magic aim/origin pose nodes to pass")
@@ -909,6 +940,8 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true", help="run a temp-directory evidence zip audit fixture")
     args = parser.parse_args()
 
+    if sum((args.require_avatar_sync, args.require_gameplay, args.require_gameplay_bootstrap)) > 1:
+        parser.error("--require-avatar-sync, --require-gameplay, and --require-gameplay-bootstrap cannot be combined")
     if args.require_vr_pose_context:
         args.require_weapon_pose = True
         args.require_magic_pose = True
@@ -955,6 +988,7 @@ def main() -> int:
         require_higgs_relay=args.require_higgs_relay,
         require_saveload_observer=args.require_saveload_observer,
         allow_failed_checks=args.allow_failed_checks,
+        require_gameplay_bootstrap=args.require_gameplay_bootstrap,
     )
 
 

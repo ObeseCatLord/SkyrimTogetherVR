@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import pathlib
 import re
@@ -153,6 +154,67 @@ def hash_entry(archive: zipfile.ZipFile, name: str) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def canonical_json_sha256(value: dict[str, object]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def runtime_evidence_failures(
+    payload: bytes,
+    metadata: object,
+    expected_revision: object,
+    expected_build_manifest_sha256: object,
+    expected_generated_at: object,
+) -> list[str]:
+    failures: list[str] = []
+    if not isinstance(metadata, dict):
+        return ["runtimeEvidence metadata is not an object"]
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as evidence:
+            bad_entry = evidence.testzip()
+            if bad_entry is not None:
+                return [f"runtime evidence CRC failure: {bad_entry}"]
+            try:
+                runtime_manifest = json.loads(evidence.read("manifest.json").decode("utf-8-sig"))
+                package_manifest = json.loads(
+                    evidence.read("package/SkyrimTogetherVR_BuildManifest.json").decode("utf-8-sig")
+                )
+            except KeyError as error:
+                return [f"runtime evidence is missing nested entry: {error}"]
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                return [f"runtime evidence contains invalid JSON: {error}"]
+    except (OSError, zipfile.BadZipFile) as error:
+        return [f"runtime evidence payload is not a ZIP archive: {error}"]
+    if not isinstance(runtime_manifest, dict) or not isinstance(package_manifest, dict):
+        return ["runtime evidence manifests are not JSON objects"]
+    if runtime_manifest.get("gameplayBootstrapAudit") is not True:
+        failures.append("runtime evidence gameplayBootstrapAudit is not true")
+    if package_manifest.get("packageFlavor") != "gameplay" or package_manifest.get("gameplay") is not True:
+        failures.append("runtime evidence package flavor is not gameplay")
+    source_revision = package_manifest.get("sourceRevision")
+    if source_revision != expected_revision:
+        failures.append("runtime evidence source revision does not match the embedded gameplay artifacts")
+    build_manifest_sha256 = canonical_json_sha256(package_manifest)
+    if build_manifest_sha256 != expected_build_manifest_sha256:
+        failures.append("runtime evidence build manifest identity does not match the embedded gameplay artifacts")
+    embedded_manifest = runtime_manifest.get("packageBuildManifest")
+    if not isinstance(embedded_manifest, dict) or canonical_json_sha256(embedded_manifest) != build_manifest_sha256:
+        failures.append("runtime evidence embedded package manifest differs from its packaged manifest")
+    identity = {
+        "gameplayBootstrapAudit": True,
+        "packageFlavor": "gameplay",
+        "sourceRevision": source_revision,
+        "buildManifestSha256": build_manifest_sha256,
+        "generatedAtUtc": str(package_manifest.get("generatedAtUtc", "")),
+    }
+    if identity["generatedAtUtc"] != expected_generated_at:
+        failures.append("runtime evidence generated build identity does not match the embedded gameplay artifacts")
+    for key, value in identity.items():
+        if metadata.get(key) != value:
+            failures.append(f"runtimeEvidence {key} does not match nested runtime evidence")
+    return failures
 
 
 def _elf_range(payload: bytes, offset: int, size: int, label: str) -> bytes:
@@ -566,11 +628,40 @@ def main() -> int:
             if records_by_path.get(matching, {}).get("sha256") != artifact_hash:
                 failures.append(f"{metadata_key} hash does not match its payload record")
 
+        runtime_metadata = manifest.get("runtimeEvidence", {})
+        runtime_evidence_path = ""
+        if not isinstance(runtime_metadata, dict):
+            failures.append("runtimeEvidence metadata is not an object")
+        else:
+            runtime_name = runtime_metadata.get("name")
+            runtime_path = runtime_metadata.get("path")
+            expected_path = f"evidence/{runtime_name}" if isinstance(runtime_name, str) else ""
+            if not runtime_name or runtime_path != expected_path or expected_path not in relative_names:
+                failures.append("invalid runtimeEvidence artifact reference")
+            else:
+                runtime_evidence_path = f"{root}/{expected_path}"
+                if records_by_path.get(runtime_evidence_path, {}).get("sha256") != runtime_metadata.get("sha256"):
+                    failures.append("runtimeEvidence hash does not match its payload record")
+
         build_revision = manifest.get("buildSourceRevision")
         source_head = manifest.get("sourceHead")
         if not isinstance(build_revision, str) or not isinstance(source_head, str):
             failures.append("manifest source/build revisions are missing")
-        elif len(artifact_paths) == 2:
+        if runtime_evidence_path:
+            gameplay_metadata = manifest.get("gameplayPackage", {})
+            if not isinstance(gameplay_metadata, dict):
+                failures.append("gameplayPackage metadata is not an object")
+            else:
+                failures.extend(
+                    runtime_evidence_failures(
+                        archive.read(runtime_evidence_path),
+                        runtime_metadata,
+                        build_revision,
+                        gameplay_metadata.get("buildManifestSha256"),
+                        gameplay_metadata.get("generatedAtUtc"),
+                    )
+                )
+        if isinstance(build_revision, str) and isinstance(source_head, str) and len(artifact_paths) == 2:
             try:
                 with tempfile.TemporaryDirectory(
                     prefix=".stvr-handoff-audit-", dir=args.archive.resolve().parent

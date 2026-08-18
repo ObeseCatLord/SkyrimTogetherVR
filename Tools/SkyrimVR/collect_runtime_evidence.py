@@ -99,6 +99,21 @@ GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS = (
     "SkyrimTogetherVRPlanckBridge.dll",
     "SkyrimTogetherVRTickBridge.dll",
 )
+GAMEPLAY_BOOTSTRAP_REQUIRED_READOUTS = frozenset(
+    ("status", "lifecycle", "pose", "avatar", "playercell", "higgs")
+)
+GAMEPLAY_BOOTSTRAP_REQUIRED_CHECK_IDS = frozenset(
+    (
+        "package_build_manifest",
+        "connection_status",
+        "live_lifecycle",
+        "live_player_cell",
+        "local_pose",
+        "local_avatar_bootstrap",
+        "local_vrik_api",
+        "higgs_bridge",
+    )
+)
 
 
 def build_collection_args(**overrides: object) -> argparse.Namespace:
@@ -134,6 +149,7 @@ def build_collection_args(**overrides: object) -> argparse.Namespace:
         "require_gameplay_relays": False,
         "avatar_sync": False,
         "gameplay": False,
+        "gameplay_bootstrap": False,
     }
     unknown = sorted(set(overrides) - set(values))
     if unknown:
@@ -151,11 +167,17 @@ def collection_args_self_test() -> list[str]:
         failures.append("extra_file must default to an empty list")
 
     expected_log = pathlib.Path("fixture-gameplay-bridge.log")
-    configured = build_collection_args(gameplay_bridge_log=expected_log, require_gameplay_relays=True)
+    configured = build_collection_args(
+        gameplay_bridge_log=expected_log,
+        require_gameplay_relays=True,
+        gameplay_bootstrap=True,
+    )
     if configured.gameplay_bridge_log != expected_log:
         failures.append("gameplay_bridge_log override was not retained")
     if not configured.require_gameplay_relays:
         failures.append("require_gameplay_relays override was not retained")
+    if not configured.gameplay_bootstrap:
+        failures.append("gameplay_bootstrap override was not retained")
     return failures
 
 
@@ -359,13 +381,21 @@ def add_conditional_check(
         add_not_required(checks, check_id, objective, label, not_required_detail)
 
 
-def log_breadcrumb_detail(log_path: pathlib.Path, skip_log: bool) -> tuple[bool, str]:
+def log_breadcrumb_detail(
+    log_path: pathlib.Path,
+    skip_log: bool,
+    *,
+    require_shutdown: bool = True,
+) -> tuple[bool, str]:
     if skip_log:
         return True, "skipped by --skip-log"
     if not log_path.exists():
         return False, f"missing: {log_path}"
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    missing = [token for token in audit_runtime_handoff.LOG_BREADCRUMBS if token not in text]
+    breadcrumbs = audit_runtime_handoff.LOG_BREADCRUMBS
+    if not require_shutdown:
+        breadcrumbs = tuple(token for token in breadcrumbs if "lifecycle shutdown hook reached" not in token)
+    missing = [token for token in breadcrumbs if token not in text]
     if missing:
         return False, "missing: " + ", ".join(missing)
     return True, "all deferred startup/update-owner breadcrumbs present"
@@ -496,6 +526,49 @@ def validate_build_manifest_file(
     return ok, detail, manifest
 
 
+def local_avatar_bootstrap_detail(avatar: dict[str, str]) -> tuple[bool, str]:
+    """Validate live local-avatar bridge state without requiring a remote avatar."""
+    required_true = (
+        "ready",
+        "connected",
+        "bridgeReady",
+        "actorTargetsEnabled",
+        "animationGraphEnabled",
+        "localAnimationGraphReady",
+        "localSnapshotReady",
+        "localServerAssigned",
+    )
+    errors: list[str] = []
+    if avatar.get("schema") != audit_runtime_handoff.COMMONLIB_BRIDGE_AVATAR_SCHEMA:
+        errors.append(f"schema={avatar.get('schema', '<missing>')}")
+    for key in required_true:
+        if not get_bool(avatar, key):
+            errors.append(f"{key} must be enabled")
+    if get_bool(avatar, "actorSkeletonWritesEnabled"):
+        errors.append("actorSkeletonWritesEnabled must be disabled")
+    if get_bool(avatar, "cleanupRequired"):
+        errors.append("cleanupRequired must be disabled")
+    if avatar.get("visualPolicy") != "player_template_fallback":
+        errors.append(f"visualPolicy={avatar.get('visualPolicy', '<missing>')}")
+    if get_int(avatar, "lifecycleEpoch") <= 0:
+        errors.append("lifecycleEpoch must be positive")
+    if get_int(avatar, "localServerId") <= 0:
+        errors.append("localServerId must be positive")
+
+    detail = "schema={} ready={} connected={} bridgeReady={} localSnapshotReady={} lifecycleEpoch={} localServerId={}".format(
+        avatar.get("schema", "<missing>"),
+        avatar.get("ready", "<missing>"),
+        avatar.get("connected", "<missing>"),
+        avatar.get("bridgeReady", "<missing>"),
+        avatar.get("localSnapshotReady", "<missing>"),
+        avatar.get("lifecycleEpoch", "<missing>"),
+        avatar.get("localServerId", "<missing>"),
+    )
+    if errors:
+        return False, detail + " errors=" + "; ".join(errors)
+    return True, detail
+
+
 def build_runtime_checklist(
     readouts: dict[str, dict[str, str]],
     log_path: pathlib.Path,
@@ -519,6 +592,7 @@ def build_runtime_checklist(
     require_grab_relay: bool,
     require_higgs_relay: bool,
     require_saveload_observer: bool,
+    require_gameplay_bootstrap: bool,
 ) -> dict[str, object]:
     checks: list[dict[str, str]] = []
     status = readouts.get("status", {})
@@ -541,7 +615,11 @@ def build_runtime_checklist(
     remoteplayers = readouts.get("remoteplayers", {})
     avatar = readouts.get("avatar", {})
 
-    log_ok, log_detail = log_breadcrumb_detail(log_path, skip_log)
+    log_ok, log_detail = log_breadcrumb_detail(
+        log_path,
+        skip_log,
+        require_shutdown=not require_gameplay_bootstrap,
+    )
     add_check(
         checks,
         "package_build_manifest",
@@ -575,6 +653,28 @@ def build_runtime_checklist(
         "VR lifecycle owner and readiness",
         lifecycle_ok,
         lifecycle_detail,
+    )
+    lifecycle_live = (
+        lifecycle_ok
+        and get_bool(lifecycle, "ready")
+        and lifecycle.get("state") == "ready"
+        and get_int(lifecycle, "epoch") > 0
+        and get_int(lifecycle, "stableTickCount") > 0
+    )
+    add_conditional_check(
+        checks,
+        "live_lifecycle",
+        "5,8",
+        "live lifecycle readiness",
+        lifecycle_live,
+        "state={} ready={} epoch={} stableTickCount={}".format(
+            lifecycle.get("state", "<missing>"),
+            lifecycle.get("ready", "<missing>"),
+            lifecycle.get("epoch", "<missing>"),
+            lifecycle.get("stableTickCount", "<missing>"),
+        ),
+        required=require_gameplay_bootstrap,
+        not_required_detail="run collection with --gameplay-bootstrap while the client remains live",
     )
     add_check(
         checks,
@@ -610,6 +710,17 @@ def build_runtime_checklist(
             pose.get("local.vrik.detected", "<missing>"),
             pose.get("local.vrik.interfaceAvailable", "<missing>"),
         ),
+    )
+    local_avatar_ok, local_avatar_detail = local_avatar_bootstrap_detail(avatar)
+    add_conditional_check(
+        checks,
+        "local_avatar_bootstrap",
+        "9",
+        "live local-avatar bridge state",
+        local_avatar_ok,
+        local_avatar_detail,
+        required=require_gameplay_bootstrap,
+        not_required_detail="run collection with --gameplay-bootstrap after the local avatar bridge is ready",
     )
 
     weapon_pose_available = get_bool(pose, "local.leftWeaponOffset.valid") or get_bool(
@@ -709,6 +820,30 @@ def build_runtime_checklist(
         "VR player cell/grid/level status",
         playercell_ok,
         playercell_detail,
+    )
+    playercell_live = (
+        playercell_ok
+        and get_bool(playercell, "ready")
+        and get_bool(playercell, "online")
+        and get_int(playercell, "localPlayerId") > 0
+        and get_int(playercell, "sessionId") > 0
+        and get_int(playercell, "connectionGeneration") > 0
+    )
+    add_conditional_check(
+        checks,
+        "live_player_cell",
+        "8",
+        "live player-cell readiness",
+        playercell_live,
+        "ready={} online={} player={} session={} generation={}".format(
+            playercell.get("ready", "<missing>"),
+            playercell.get("online", "<missing>"),
+            playercell.get("localPlayerId", "<missing>"),
+            playercell.get("sessionId", "<missing>"),
+            playercell.get("connectionGeneration", "<missing>"),
+        ),
+        required=require_gameplay_bootstrap,
+        not_required_detail="run collection with --gameplay-bootstrap while the client remains connected",
     )
     remote_avatar_ready = (
         get_int(remoteplayers, "avatarValidationReadyCount") > 0
@@ -1205,6 +1340,13 @@ def build_runtime_checklist(
             "run with --avatar-sync for the explicit VRIK/HIGGS remote-avatar validation build",
         )
 
+    if require_gameplay_bootstrap:
+        for check in checks:
+            if check["status"] != CHECK_FAIL or check["id"] in GAMEPLAY_BOOTSTRAP_REQUIRED_CHECK_IDS:
+                continue
+            check["status"] = CHECK_NOT_REQUIRED
+            check["detail"] = "optional in --gameplay-bootstrap: " + check["detail"]
+
     summary = {
         CHECK_PASS: sum(1 for check in checks if check["status"] == CHECK_PASS),
         CHECK_FAIL: sum(1 for check in checks if check["status"] == CHECK_FAIL),
@@ -1493,12 +1635,20 @@ def write_runtime_audit(
 ) -> int | None:
     if args.no_audit:
         return None
+    if args.gameplay_bootstrap:
+        zf.writestr(
+            "runtime_audit.txt",
+            "SkyrimTogetherVR one-client gameplay bootstrap audit\n"
+            "The authoritative scoped result is runtime_checklist.json.\n"
+            "Full gameplay relay and interaction lanes are optional in this scope.\n",
+        )
+        return 0
 
     audit_args = argparse.Namespace(
         game_path=args.game_path,
         handoff_dir=handoff_dir,
         log=log_path,
-        skip_log=args.skip_log,
+        skip_log=args.skip_log or args.gameplay_bootstrap,
         require_connected=args.require_connected,
         require_vrik=args.require_vrik,
         require_higgs=args.require_higgs,
@@ -1533,12 +1683,14 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
     log_path = resolve_client_log(args)
     gameplay_bridge_log_path = resolve_gameplay_bridge_log(args)
     build_manifest_path = game_path / BUILD_MANIFEST_NAME
+    package_gameplay = args.gameplay or args.gameplay_bootstrap
     build_manifest_ok, build_manifest_detail, build_manifest = validate_build_manifest_file(
         build_manifest_path,
         avatar_sync=args.avatar_sync,
-        gameplay=args.gameplay,
+        gameplay=package_gameplay,
     )
     avatar_runtime_checks = args.avatar_sync or args.gameplay
+    local_avatar_evidence = avatar_runtime_checks or args.gameplay_bootstrap
     output_path = resolve_output_path(args.out)
     collected_files: list[dict[str, object]] = []
     crash_evidence = args.crash_evidence or args.include_crash_dumps
@@ -1553,6 +1705,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         "packageBuildManifest": build_manifest,
         "avatarSyncAudit": avatar_runtime_checks,
         "gameplayAudit": args.gameplay,
+        "gameplayBootstrapAudit": args.gameplay_bootstrap,
         "crashEvidence": crash_evidence,
         "requiredConnected": args.require_connected,
         "requiredVrik": args.require_vrik,
@@ -1570,6 +1723,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         "requiredGrabRelay": args.require_grab_relay,
         "requiredHiggsRelay": args.require_higgs_relay,
         "requiredSaveloadObserver": args.require_saveload_observer,
+        "requiredGameplayBootstrap": args.gameplay_bootstrap,
     }
     readouts = vr_handoff.read_readouts(handoff_dir)
     runtime_checklist = build_runtime_checklist(
@@ -1594,6 +1748,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
         require_grab_relay=args.require_grab_relay,
         require_higgs_relay=args.require_higgs_relay,
         require_saveload_observer=args.require_saveload_observer,
+        require_gameplay_bootstrap=args.gameplay_bootstrap,
     )
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1612,7 +1767,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
             "logs/tp_client.log",
             collected_files,
             category="client-log",
-            required=not args.skip_log,
+            required=not args.skip_log and not args.gameplay_bootstrap,
         )
 
         for index, candidate in enumerate(rotated_client_log_candidates(log_path), start=1):
@@ -1631,11 +1786,14 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
             f"logs/{GAMEPLAY_BRIDGE_LOG_NAME}",
             collected_files,
             category="gameplay-bridge-log",
-            required=True,
+            required=not args.gameplay_bootstrap,
         )
 
         for name, file_name in sorted(vr_handoff.READOUT_FILES.items()):
-            required = name != "avatar" or avatar_runtime_checks
+            if args.gameplay_bootstrap:
+                required = name in GAMEPLAY_BOOTSTRAP_REQUIRED_READOUTS
+            else:
+                required = name != "avatar" or local_avatar_evidence
             add_file(
                 zf,
                 handoff_dir / file_name,
@@ -2404,6 +2562,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             require_grab_relay=False,
             require_higgs_relay=False,
             require_saveload_observer=False,
+            require_gameplay_bootstrap=False,
         )
         baseline_checks = {
             str(check.get("id")): check
@@ -2464,11 +2623,16 @@ def main() -> int:
     parser.add_argument("--require-gameplay-relays", action="store_true", help="runtime checklist requires all staged gameplay relay evidence")
     parser.add_argument("--avatar-sync", action="store_true", help="embedded audit requires explicit avatar-sync runtime data")
     parser.add_argument("--gameplay", action="store_true", help="embedded audit validates the full gameplay package manifest and avatar/relay runtime data")
+    parser.add_argument(
+        "--gameplay-bootstrap",
+        action="store_true",
+        help="require live one-client connection, lifecycle, cell, local-avatar, VRIK, and HIGGS evidence for the gameplay package",
+    )
     parser.add_argument("--self-test", action="store_true", help="run a temp-directory evidence collection fixture")
     args = parser.parse_args()
 
-    if args.avatar_sync and args.gameplay:
-        parser.error("--avatar-sync and --gameplay cannot be combined")
+    if sum((args.avatar_sync, args.gameplay, args.gameplay_bootstrap)) > 1:
+        parser.error("--avatar-sync, --gameplay, and --gameplay-bootstrap cannot be combined")
     if args.require_vr_pose_context:
         args.require_weapon_pose = True
         args.require_magic_pose = True
@@ -2487,6 +2651,10 @@ def main() -> int:
         args.require_magic_pose = True
         args.require_projectile_pose = True
         args.require_gameplay_relays = True
+    if args.gameplay_bootstrap:
+        args.require_connected = True
+        args.require_vrik = True
+        args.require_higgs = True
     if args.require_gameplay_relays:
         args.require_movement_relay = True
         args.require_equipment_relay = True

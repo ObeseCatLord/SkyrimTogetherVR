@@ -24,8 +24,9 @@ STVR_OPENVR_RUNTIME=xrizer STVR_AUTOCONNECT="$SERVER" "$GAME_DIR/launch-skyrim-t
 ```
 
 The launch script validates the selected runtime and prints its resolved paths
-before starting Proton. OpenComposite remains an explicit alternative, but the
-2026-08-18 Linux/Monado connection result used the bundled XRizer payload. Set
+before starting Proton. OpenComposite remains an explicit alternative. The
+2026-08-18 exact `3fe08ccd` Linux/Monado acceptance run used and validated the
+bundled portable XRizer payload. Set
 `STVR_PASSWORD` in the same command only when the server requires one; do not
 store it in the handoff or logs.
 
@@ -58,12 +59,17 @@ uninstall commands, runtime alternatives, and evidence collection follow.
 ## Authoritative Identity
 
 - `LOCAL-MANIFEST.json` is authoritative for the built source revision, exact
-  gameplay-package and build-evidence hashes, nested build-manifest identity,
-  and configured server endpoint. Do not infer identity from this document,
-  an archive filename, or an older public runtime ZIP.
+  gameplay-package, build-evidence, and gameplay-bootstrap runtime-evidence
+  hashes, nested build-manifest identity, and configured server endpoint. Do
+  not infer identity from this document, an archive filename, or an older
+  public runtime ZIP.
 - `build/` contains the exact installable gameplay package and its paired
   Windows build evidence. The installers verify the manifest records and the
   package/evidence pair before writing target files.
+- `evidence/` contains the accepted one-client live gameplay-bootstrap archive.
+  The handoff finalizer and archive auditor require its gameplay package source
+  revision and canonical build-manifest identity to match `build/`. This proves
+  connection/bootstrap only; it is not two-client gameplay-parity evidence.
 - `dependencies/current-game-overlay/` is a filtered compatibility overlay.
   It deliberately excludes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.*`
   session readout/control files. Those files are per-process state, not
@@ -92,7 +98,9 @@ uninstall commands, runtime alternatives, and evidence collection follow.
   at most `GLIBC_2.14`; XRizer needs at most `GLIBC_2.29`.
 
 The archive intentionally omits base-game BSA/ESM content, Steam, Proton,
-Monado, Docker, raw runtime logs, build trees, PDBs, and Git object databases.
+Monado, Docker, loose raw runtime logs, build trees, PDBs, and Git object
+databases. The scoped runtime-evidence ZIP is retained because it is hashed,
+audited acceptance evidence for the included binary.
 
 ## Windows Client
 

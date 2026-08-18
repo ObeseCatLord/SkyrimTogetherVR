@@ -12,6 +12,7 @@ xrizer_root=${STVR_XRIZER_ROOT:-$state_root/xrizer-reviewed}
 opencomposite_root=${STVR_OPENCOMPOSITE_ROOT:-$HOME/.local/share/envision/opencomposite}
 gameplay_package=''
 build_evidence=''
+runtime_evidence=''
 output=''
 portable_runtime_dir=''
 upload_target=''
@@ -19,10 +20,11 @@ self_test_pins=0
 
 usage() {
     cat >&2 <<EOF
-Usage: ${0##*/} --gameplay-package ZIP --build-evidence ZIP [options]
+Usage: ${0##*/} --gameplay-package ZIP --build-evidence ZIP --runtime-evidence ZIP [options]
 
 Options:
   --output ZIP                  Exact output path (must not exist)
+  --runtime-evidence ZIP        Accepted one-client gameplay-bootstrap evidence
   --portable-runtime-dir DIR    Reuse an already built portable runtime pair
   --xrizer-root DIR             Reviewed XRizer source checkout
   --opencomposite-root DIR      Reviewed OpenComposite source checkout
@@ -40,6 +42,7 @@ while (($#)); do
     case $1 in
         --gameplay-package) gameplay_package=${2:?missing package}; shift 2 ;;
         --build-evidence) build_evidence=${2:?missing evidence}; shift 2 ;;
+        --runtime-evidence) runtime_evidence=${2:?missing runtime evidence}; shift 2 ;;
         --output) output=${2:?missing output}; shift 2 ;;
         --portable-runtime-dir) portable_runtime_dir=${2:?missing runtime directory}; shift 2 ;;
         --xrizer-root) xrizer_root=${2:?missing XRizer root}; shift 2 ;;
@@ -52,7 +55,7 @@ while (($#)); do
 done
 
 if ((self_test_pins == 0)); then
-    [[ -n $gameplay_package && -n $build_evidence ]] || { usage; exit 2; }
+    [[ -n $gameplay_package && -n $build_evidence && -n $runtime_evidence ]] || { usage; exit 2; }
 fi
 command -v git >/dev/null || die 'git is required'
 command -v python3 >/dev/null || die 'python3 is required'
@@ -97,6 +100,9 @@ fi
 [[ -z $(git status --porcelain=v1 --untracked-files=all) ]] || die 'repository must be clean'
 gameplay_package=$(realpath -e -- "$gameplay_package")
 build_evidence=$(realpath -e -- "$build_evidence")
+runtime_evidence=$(realpath -e -- "$runtime_evidence")
+python3 "$repo_root/Tools/SkyrimVR/audit_runtime_evidence_zip.py" \
+    "$runtime_evidence" --require-gameplay-bootstrap
 
 mkdir -p -- "$state_tmp" "$portable_root" "$repo_root/artifacts/SkyrimTogetherVR/review-handoff"
 export TMPDIR=$state_tmp
@@ -172,6 +178,7 @@ python3 "$repo_root/Tools/SkyrimVR/create_local_agent_handoff.py" \
     --opencomposite-root "$opencomposite_root" \
     --gameplay-package "$gameplay_package" \
     --build-evidence "$build_evidence" \
+    --runtime-evidence "$runtime_evidence" \
     --output "$output"
 python3 "$repo_root/Tools/SkyrimVR/audit_local_agent_handoff.py" "$output"
 unzip -tq "$output"
