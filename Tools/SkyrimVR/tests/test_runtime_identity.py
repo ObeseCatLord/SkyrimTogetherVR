@@ -40,7 +40,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         avatar_process: int = 42,
         client_version: str = "fixture",
         server_version: str = "fixture",
-        protocol: int = 14,
+        protocol: int = 15,
         game_root: pathlib.Path | None = None,
     ) -> None:
         root = game_root or self.game
@@ -55,6 +55,15 @@ class RuntimeIdentityTests(unittest.TestCase):
             "lifecycle": f"launchNonce={lifecycle_nonce}\nprocessId=42\ngamePath={root}\n",
             "playercell": common + f"gamePath={root}\n",
             "avatar": f"launchNonce={NONCE}\nprocessId={avatar_process}\ngamePath={root}\n",
+            "gameplay": vr_handoff.gameplay_snapshot_fixture(
+                root,
+                launch_nonce=NONCE,
+                process_id=42,
+                session_id=8,
+                server_instance_nonce=7,
+                connection_generation=9,
+                lifecycle_epoch=3,
+            ),
         }
         for name, text in payloads.items():
             (self.handoff / vr_handoff.READOUT_FILES[name]).write_text(text, encoding="utf-8")
@@ -75,6 +84,44 @@ class RuntimeIdentityTests(unittest.TestCase):
 
     def test_clean_identity_passes(self) -> None:
         self.assertTrue(self.evaluate()["ok"])
+
+    def test_gameplay_snapshot_requires_every_mandatory_canonical_domain(self) -> None:
+        path = self.handoff / vr_handoff.READOUT_FILES["gameplay"]
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "domain.movement.state=active", "domain.movement.state=blocked_capability"
+            ),
+            encoding="utf-8",
+        )
+        self.assert_rejects("mandatory domain movement state=blocked_capability")
+
+    def test_gameplay_snapshot_rejects_mismatched_session_identity(self) -> None:
+        path = self.handoff / vr_handoff.READOUT_FILES["gameplay"]
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("session.id=8", "session.id=99"),
+            encoding="utf-8",
+        )
+        self.assert_rejects("gameplay session.id does not match status sessionId")
+
+    def test_not_ready_gameplay_snapshot_is_valid_for_non_gameplay_profile(self) -> None:
+        path = self.handoff / vr_handoff.READOUT_FILES["gameplay"]
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            .replace("ready=1", "ready=0", 1)
+            .replace("state=ready", "state=unavailable", 1),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.evaluate()["ok"])
+
+    def test_not_ready_gameplay_snapshot_is_rejected_for_gameplay_profile(self) -> None:
+        path = self.handoff / vr_handoff.READOUT_FILES["gameplay"]
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            .replace("ready=1", "ready=0", 1)
+            .replace("state=ready", "state=unavailable", 1),
+            encoding="utf-8",
+        )
+        self.assert_rejects("gameplay snapshot is not ready", require_gameplay_ready=True)
 
     def test_stale_readout_is_rejected(self) -> None:
         path = self.handoff / vr_handoff.READOUT_FILES["avatar"]
@@ -103,7 +150,7 @@ class RuntimeIdentityTests(unittest.TestCase):
 
     def test_protocol_mismatch_is_rejected(self) -> None:
         self.write_readouts(protocol=13)
-        self.assert_rejects("gameplayProtocolRevision is not 14")
+        self.assert_rejects("gameplayProtocolRevision is not 15")
 
     def test_wrong_root_is_rejected(self) -> None:
         self.write_readouts(game_root=self.root / "OtherSkyrimVR")

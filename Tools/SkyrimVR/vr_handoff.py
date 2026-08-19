@@ -39,6 +39,9 @@ READOUT_FILES = {
     "combat": "SkyrimTogetherVR.combat",
     "projectile": "SkyrimTogetherVR.projectile",
     "grab": "SkyrimTogetherVR.grab",
+    # This is the only live gameplay-readiness authority.  The compatibility
+    # readout is deliberately static and must never be used as a substitute.
+    "gameplay": "SkyrimTogetherVR.gameplay",
     "compat": "SkyrimTogetherVR.compatibility",
     "higgs": "SkyrimTogetherVR.higgs",
     "higgsnet": "SkyrimTogetherVR.higgsnet",
@@ -46,8 +49,29 @@ READOUT_FILES = {
     "saveload": "SkyrimTogetherVR.saveload",
 }
 
-GAMEPLAY_PROTOCOL_REVISION = 14
-RUNTIME_IDENTITY_READOUTS = ("status", "lifecycle", "playercell", "avatar")
+GAMEPLAY_PROTOCOL_REVISION = 15
+GAMEPLAY_SNAPSHOT_SCHEMA_VERSION = 1
+GAMEPLAY_MANDATORY_CANONICAL_DOMAINS = (
+    "animation", "appearance", "equipment", "inventory", "actor_state",
+    "object", "combat", "projectile", "magic", "quest", "dialogue",
+    "party", "world_state", "vr_body_pose", "npc_ownership", "movement",
+    "save_load",
+)
+# These are deliberately outside the canonical parity contract.  HIGGS is a
+# separately exercised direct extension; PLANCK has no supported remote replay.
+GAMEPLAY_OPTIONAL_VR_EXTENSION_DOMAINS = ("higgs",)
+GAMEPLAY_UNSUPPORTED_VR_EXTENSION_DOMAINS = ("planck",)
+GAMEPLAY_LOCAL_COUNTER_EVIDENCE = {
+    "evidence.scope": "local_process_counters",
+    "evidence.twoClientProof": "0",
+    "evidence.twoClientState": "unproven_requires_paired_snapshots",
+}
+GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT = {
+    "path": "canonical_lifecycle_rehydration",
+    "evidenceType": "lifecycle_rehydration",
+    "networkTraffic": "not_applicable",
+}
+RUNTIME_IDENTITY_READOUTS = ("status", "lifecycle", "playercell", "avatar", "gameplay")
 RUNTIME_ROOT_IDENTITY_FIELDS = ("gamePath", "gameRoot", "gameRootPath", "rootPath")
 
 SUMMARY_FIELDS = {
@@ -65,6 +89,12 @@ SUMMARY_FIELDS = {
     "combat": ("localCombatHitAvailable", "remoteCombatHitCount"),
     "projectile": ("localProjectileEventAvailable", "remoteProjectileEventCount"),
     "grab": ("localGrabAvailable", "remoteGrabCount"),
+    "gameplay": (
+        "schemaVersion", "ready", "state", "reason", "registration",
+        "bridge.ready", "bridge.localEventSinksActive", "bridge.localCaptureSinksActive", "session.online",
+        "session.id", "session.serverInstanceNonce", "session.connectionGeneration",
+        "session.lifecycleEpoch", "domain.movement.state", "domain.save_load.state",
+    ),
     "compat": ("ready", "higgs.installed", "higgs.loaded", "planck.installed", "planck.loaded", "fbt.installed", "fbt.loaded", "vrPhysicsCompatibilityModInstalled", "hookMode", "gameplayMode", "remoteAvatarPolicy", "remotePlayerProxyPolicy", "discoveryPolicy", "playerCellPolicy", "movementPolicy", "equipmentPolicy", "activationPolicy", "inventoryPolicy", "magicPolicy", "combatPolicy", "projectilePolicy", "grabPolicy", "higgsRelayPolicy", "saveLoadPolicy", "bodyPoseCapturePolicy", "unvalidatedGameplayHooksSuppressed", "higgsPolicy", "planckPolicy", "fbtPolicy"),
     "higgs": ("bridge.loaded", "bridge.sequence", "higgs.detected", "higgs.interfaceAvailable", "higgs.callbacksRegistered", "higgs.snapshotAvailable", "higgs.snapshotSequence", "higgs.twoHanding", "bodyCapture.endpointFaulted", "bodyCapture.attemptCount", "bodyCapture.successCount", "bodyCapture.lastResult", "recentEventCount"),
     "higgsnet": ("ready", "localHiggsAvailable", "remoteHiggsCount"),
@@ -263,6 +293,155 @@ def _nonzero_int(values: dict[str, str], key: str) -> int:
     return value if value > 0 else 0
 
 
+def _bool_field(values: dict[str, str], key: str) -> tuple[bool, bool]:
+    raw = values.get(key)
+    if raw is None:
+        return False, False
+    normalized = raw.strip().lower()
+    if normalized not in {"0", "1", "false", "true", "no", "yes"}:
+        return False, False
+    return True, normalized in {"1", "true", "yes"}
+
+
+def gameplay_snapshot_detail(values: dict[str, str]) -> tuple[bool, str]:
+    """Validate schema v1 without treating counters as gameplay proof.
+
+    Every identity profile requires a fresh, structurally valid snapshot.  A
+    not-ready snapshot is valid outside gameplay/gameplay-bootstrap profiles;
+    those profiles additionally require ready=1 and the strict contract below.
+    """
+    errors: list[str] = []
+    if _nonzero_int(values, "schemaVersion") != GAMEPLAY_SNAPSHOT_SCHEMA_VERSION:
+        errors.append(f"schemaVersion must be {GAMEPLAY_SNAPSHOT_SCHEMA_VERSION}")
+
+    ready_valid, ready = _bool_field(values, "ready")
+    if not ready_valid:
+        errors.append("ready missing/invalid")
+
+    if ready:
+        if values.get("registration") != "registered":
+            errors.append("ready snapshot requires registration=registered")
+        for key in ("bridge.ready", "bridge.localCaptureSinksActive", "session.online"):
+            valid, value = _bool_field(values, key)
+            if not valid or not value:
+                errors.append(f"ready snapshot requires {key}=1")
+        for key in (
+            "session.id", "session.serverInstanceNonce", "session.connectionGeneration",
+            "session.lifecycleEpoch",
+        ):
+            if not _nonzero_int(values, key):
+                errors.append(f"ready snapshot requires nonzero {key}")
+        for domain in GAMEPLAY_MANDATORY_CANONICAL_DOMAINS:
+            path = values.get(f"domain.{domain}.path", "")
+            state = values.get(f"domain.{domain}.state", "")
+            if not path.startswith("canonical"):
+                errors.append(f"mandatory domain {domain} is not canonical")
+            if state != "active":
+                errors.append(f"mandatory domain {domain} state={state or '<missing>'}")
+
+    detail = (
+        "schemaVersion={} ready={} registration={} bridgeReady={} localEventSinks={} localCaptureSinks={} "
+        "online={} session={}/{}/{} epoch={} movement={} saveLoad={}"
+    ).format(
+        values.get("schemaVersion", "<missing>"), values.get("ready", "<missing>"),
+        values.get("registration", "<missing>"), values.get("bridge.ready", "<missing>"),
+        values.get("bridge.localEventSinksActive", "<missing>"),
+        values.get("bridge.localCaptureSinksActive", "<missing>"), values.get("session.online", "<missing>"),
+        values.get("session.id", "<missing>"), values.get("session.serverInstanceNonce", "<missing>"),
+        values.get("session.connectionGeneration", "<missing>"),
+        values.get("session.lifecycleEpoch", "<missing>"),
+        values.get("domain.movement.state", "<missing>"),
+        values.get("domain.save_load.state", "<missing>"),
+    )
+    return not errors, detail if not errors else detail + " errors=" + "; ".join(errors)
+
+
+def gameplay_snapshot_ready(values: dict[str, str]) -> bool:
+    valid, _ = gameplay_snapshot_detail(values)
+    return valid and _bool_field(values, "ready")[1]
+
+
+def gameplay_domain_counters(values: dict[str, str], domain: str) -> dict[str, int]:
+    return {
+        field: _nonzero_int(values, f"domain.{domain}.{field}")
+        for field in ("captured", "sent", "applied", "rejected")
+    }
+
+
+def gameplay_snapshot_fixture(
+    game_path: pathlib.Path,
+    *,
+    ready: bool = True,
+    launch_nonce: str = "0123456789abcdef0123456789abcdef",
+    process_id: int = 42,
+    session_id: int = 123,
+    server_instance_nonce: int = 99,
+    connection_generation: int = 1,
+    lifecycle_epoch: int = 3,
+) -> str:
+    """Return a schema-valid synthetic snapshot for tooling self-tests only."""
+    lines = [
+        f"launchNonce={launch_nonce}",
+        f"processId={process_id}",
+        f"gamePath={game_path}",
+        f"schemaVersion={GAMEPLAY_SNAPSHOT_SCHEMA_VERSION}",
+        f"ready={int(ready)}",
+        "state=ready" if ready else "state=unavailable",
+        "reason=fixture" if ready else "reason=profile_not_gameplay",
+        "registration=registered" if ready else "registration=unavailable",
+        f"bridge.ready={int(ready)}",
+        f"bridge.localEventSinksActive={int(ready)}",
+        f"bridge.localCaptureSinksActive={int(ready)}",
+        "session.online=1",
+        f"session.id={session_id}",
+        f"session.serverInstanceNonce={server_instance_nonce}",
+        f"session.connectionGeneration={connection_generation}",
+        f"session.lifecycleEpoch={lifecycle_epoch}",
+    ]
+    lines.extend(f"{key}={value}" for key, value in GAMEPLAY_LOCAL_COUNTER_EVIDENCE.items())
+    for domain in GAMEPLAY_MANDATORY_CANONICAL_DOMAINS:
+        if domain == "save_load":
+            lines.extend(
+                f"domain.{domain}.{field}={value}"
+                for field, value in GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items()
+            )
+            lines.extend((
+                f"domain.{domain}.state={'active' if ready else 'unavailable'}",
+                f"domain.{domain}.captured=1",
+                f"domain.{domain}.sent=0",
+                f"domain.{domain}.applied=1",
+                f"domain.{domain}.rejected=0",
+            ))
+            continue
+        lines.extend((
+            f"domain.{domain}.path=canonical",
+            f"domain.{domain}.state={'active' if ready else 'unavailable'}",
+            f"domain.{domain}.captured=1",
+            f"domain.{domain}.sent=1",
+            f"domain.{domain}.applied=1",
+            f"domain.{domain}.rejected=0",
+        ))
+    for domain in GAMEPLAY_OPTIONAL_VR_EXTENSION_DOMAINS:
+        lines.extend((
+            f"domain.{domain}.path=direct",
+            f"domain.{domain}.state={'active' if ready else 'unavailable'}",
+            f"domain.{domain}.captured=1",
+            f"domain.{domain}.sent=1",
+            f"domain.{domain}.applied=1",
+            f"domain.{domain}.rejected=0",
+        ))
+    for domain in GAMEPLAY_UNSUPPORTED_VR_EXTENSION_DOMAINS:
+        lines.extend((
+            f"domain.{domain}.path=unsupported",
+            f"domain.{domain}.state=unsupported",
+            f"domain.{domain}.captured=0",
+            f"domain.{domain}.sent=0",
+            f"domain.{domain}.applied=0",
+            f"domain.{domain}.rejected=0",
+        ))
+    return "\n".join(lines) + "\n"
+
+
 def _same_root(readout_root: str, game_path: pathlib.Path) -> bool:
     """Compare declared roots without exposing either host path in diagnostics."""
     try:
@@ -289,6 +468,7 @@ def evaluate_runtime_identity(
     now_ns: int | None = None,
     readout_metadata: dict[str, dict[str, object]] | None = None,
     expected_network_version: str | None = None,
+    require_gameplay_ready: bool = False,
 ) -> dict[str, object]:
     """Validate that live gameplay readouts describe one fresh local process.
 
@@ -364,6 +544,27 @@ def evaluate_runtime_identity(
             reasons.append(f"status {field} is missing or zero")
     if status.get("online", "").strip().lower() not in {"1", "true", "yes"}:
         reasons.append("status online is not enabled")
+
+    gameplay = readouts.get("gameplay", {})
+    gameplay_ok, gameplay_detail = gameplay_snapshot_detail(gameplay)
+    if not gameplay_ok:
+        reasons.append("gameplay snapshot is invalid: " + gameplay_detail)
+    elif require_gameplay_ready and not gameplay_snapshot_ready(gameplay):
+        reasons.append("gameplay snapshot is not ready: " + gameplay_detail)
+    else:
+        gameplay_session_id = _nonzero_int(gameplay, "session.id")
+        gameplay_server_nonce = _nonzero_int(gameplay, "session.serverInstanceNonce")
+        gameplay_generation = _nonzero_int(gameplay, "session.connectionGeneration")
+        gameplay_epoch = _nonzero_int(gameplay, "session.lifecycleEpoch")
+        lifecycle_epoch = _nonzero_int(readouts.get("lifecycle", {}), "epoch")
+        if gameplay_session_id and gameplay_session_id != _nonzero_int(status, "sessionId"):
+            reasons.append("gameplay session.id does not match status sessionId")
+        if gameplay_server_nonce and gameplay_server_nonce != _nonzero_int(status, "serverInstanceNonce"):
+            reasons.append("gameplay server instance does not match status")
+        if gameplay_generation and gameplay_generation != _nonzero_int(status, "connectionGeneration"):
+            reasons.append("gameplay connection generation does not match status")
+        if gameplay_epoch and lifecycle_epoch and gameplay_epoch != lifecycle_epoch:
+            reasons.append("gameplay lifecycle epoch does not match lifecycle readout")
 
     for name, values in readouts.items():
         for field in RUNTIME_ROOT_IDENTITY_FIELDS:
@@ -694,6 +895,8 @@ def build_compatibility_summary(readouts: dict[str, dict[str, str]]) -> dict[str
         return {}
 
     return {
+        "staticReady": bool_summary(values.get("ready")),
+        "readinessSource": values.get("readinessSource", "?"),
         "higgsInstalled": bool_summary(values.get("higgs.installed")),
         "higgsLoaded": bool_summary(values.get("higgs.loaded")),
         "planckInstalled": bool_summary(values.get("planck.installed")),
@@ -722,6 +925,25 @@ def build_compatibility_summary(readouts: dict[str, dict[str, str]]) -> dict[str
         "higgsPolicy": values.get("higgsPolicy", "?"),
         "planckPolicy": values.get("planckPolicy", "?"),
         "fbtPolicy": values.get("fbtPolicy", "?"),
+    }
+
+
+def build_gameplay_summary(readouts: dict[str, dict[str, str]]) -> dict[str, str]:
+    values = readouts.get("gameplay", {})
+    if not values:
+        return {}
+    valid, detail = gameplay_snapshot_detail(values)
+    return {
+        "ready": bool_summary(values.get("ready")),
+        "valid": "yes" if valid else "no",
+        "state": values.get("state", "?"),
+        "reason": values.get("reason", "?"),
+        "session": values.get("session.id", "0"),
+        "generation": values.get("session.connectionGeneration", "0"),
+        "epoch": values.get("session.lifecycleEpoch", "0"),
+        "movement": values.get("domain.movement.state", "?"),
+        "saveLoad": values.get("domain.save_load.state", "?"),
+        "detail": detail,
     }
 
 
@@ -765,6 +987,7 @@ def build_readout_payload(handoff_dir: pathlib.Path, *, all_fields: bool = False
         "readouts": readouts,
         "remotePlayers": build_remote_players_payload(readouts),
         "compatibility": build_compatibility_summary(readouts),
+        "gameplay": build_gameplay_summary(readouts),
         "higgs": build_higgs_summary(readouts),
         "planck": build_planck_summary(readouts),
     }
@@ -935,6 +1158,10 @@ def render_panel_html(default_endpoint: str, default_password: str) -> str:
 	  <p id="notice">Loading handoff files...</p>
   <section id="summaries"></section>
   <section class="players-panel">
+    <h2>Gameplay Readiness</h2>
+    <div id="gameplay"></div>
+  </section>
+  <section class="players-panel">
     <h2>VR Compatibility</h2>
     <div id="compatibility"></div>
   </section>
@@ -955,6 +1182,7 @@ def render_panel_html(default_endpoint: str, default_password: str) -> str:
 const notice = document.getElementById("notice");
 const summaries = document.getElementById("summaries");
 const players = document.getElementById("players");
+const gameplay = document.getElementById("gameplay");
 const compatibility = document.getElementById("compatibility");
 const higgs = document.getElementById("higgs");
 const planck = document.getElementById("planck");
@@ -966,7 +1194,7 @@ function setNotice(text) {{
 function render(payload) {{
   setNotice(`handoffDir=${{payload.handoffDir}}`);
   summaries.replaceChildren();
-  const order = ["status", "lifecycle", "compat", "pose", "avatar", "remoteplayers", "movement", "inventory", "discovery", "playercell", "activation", "magic", "combat", "projectile", "grab", "higgs", "higgsnet", "planck", "saveload"];
+  const order = ["status", "lifecycle", "gameplay", "compat", "pose", "avatar", "remoteplayers", "movement", "inventory", "discovery", "playercell", "activation", "magic", "combat", "projectile", "grab", "higgs", "higgsnet", "planck", "saveload"];
   for (const name of order) {{
     const card = document.createElement("article");
     card.className = "readout";
@@ -977,15 +1205,34 @@ function render(payload) {{
 	    card.append(title, body);
 	    summaries.append(card);
 	  }}
+	  renderGameplay(payload.gameplay || {{}});
 	  renderCompatibility(payload.compatibility || {{}});
 	  renderHiggs(payload.higgs || {{}});
 	  renderPlanck(payload.planck || {{}});
 	  renderPlayers(payload.remotePlayers || []);
 	}}
 
+	function renderGameplay(summary) {{
+	  gameplay.replaceChildren();
+	  const columns = ["ready", "valid", "state", "reason", "session", "generation", "epoch", "movement", "saveLoad", "detail"];
+	  const table = document.createElement("table");
+	  const tbody = document.createElement("tbody");
+	  for (const column of columns) {{
+	    const row = document.createElement("tr");
+	    const key = document.createElement("th");
+	    const value = document.createElement("td");
+	    key.textContent = column;
+	    value.textContent = summary[column] || "-";
+	    row.append(key, value);
+	    tbody.append(row);
+	  }}
+	  table.append(tbody);
+	  gameplay.append(table);
+	}}
+
 	function renderCompatibility(summary) {{
 	  compatibility.replaceChildren();
-	  const columns = ["higgsInstalled", "higgsLoaded", "planckInstalled", "planckLoaded", "physicsCompat", "hookMode", "gameplayMode", "remoteAvatar", "proxy", "movement", "equipment", "activation", "inventory", "magic", "combat", "projectile", "grab", "higgsRelay", "saveLoad", "unvalidatedSuppressed", "higgsPolicy", "planckPolicy"];
+	  const columns = ["staticReady", "readinessSource", "higgsInstalled", "higgsLoaded", "planckInstalled", "planckLoaded", "physicsCompat", "hookMode", "gameplayMode", "remoteAvatar", "proxy", "movement", "equipment", "activation", "inventory", "magic", "combat", "projectile", "grab", "higgsRelay", "saveLoad", "unvalidatedSuppressed", "higgsPolicy", "planckPolicy"];
 	  const table = document.createElement("table");
 	  const tbody = document.createElement("tbody");
 	  for (const column of columns) {{

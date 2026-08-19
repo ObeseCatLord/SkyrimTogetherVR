@@ -25,6 +25,7 @@ import urllib.request
 from collections.abc import Callable
 
 import vr_paths
+import vr_handoff
 
 
 STEAM_APP_ID = "611670"
@@ -766,7 +767,7 @@ def online_status_ready(values: dict[str, str], session_id: str, baseline_genera
         and values.get("launchNonce") == launch_nonce
         and values.get("clientVersion") not in {None, ""}
         and values.get("serverVersion") == values.get("clientVersion")
-        and values.get("gameplayProtocolRevision") == "14"
+        and values.get("gameplayProtocolRevision") == str(vr_handoff.GAMEPLAY_PROTOCOL_REVISION)
         and status_int(values, "serverInstanceNonce") != 0
         and status_int(values, "connectionGeneration") > baseline_generation
     )

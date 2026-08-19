@@ -28,6 +28,8 @@
 #include <VRRuntimeDiagnostics.h>
 #include <Services/DiscordService.h>
 #include <Services/VRLifecycleService.h>
+#include <Services/Generic/VRGameplayDiagnosticsService.h>
+#include <Services/VRHiggsService.h>
 
 // #include <imgui_internal.h>
 
@@ -41,6 +43,10 @@
 
 #ifndef TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
 #define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+#define TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY 0
 #endif
 
 #ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE
@@ -85,6 +91,69 @@ constexpr std::size_t kMaximumOutboundPacketBytes = 1u << 16;
 constexpr std::size_t kMaximumOutboundQueuePackets = 256;
 constexpr std::size_t kMaximumOutboundQueueBytes = 8u << 20;
 constexpr std::uint32_t kGameplayRetirementRetryIntervalFrames = 30;
+
+#if TP_SKYRIM_VR
+[[nodiscard]] SkyrimTogetherVR::GameplayBridge::GameplayDomain GameplayDomainForOpcode(
+    const ClientOpcode aOpcode) noexcept
+{
+    using Domain = SkyrimTogetherVR::GameplayBridge::GameplayDomain;
+    switch (aOpcode)
+    {
+    case kRequestQuestUpdate: return Domain::Quest;
+    case kPartyInviteRequest:
+    case kPartyAcceptInviteRequest:
+    case kPartyLeaveRequest:
+    case kPartyCreateRequest:
+    case kPartyChangeLeaderRequest:
+    case kPartyKickRequest:
+    case kRequestSetWaypoint:
+    case kRequestRemoveWaypoint: return Domain::Party;
+    case kRequestFactionsChanges:
+    case kRequestActorValueChanges:
+    case kRequestActorMaxValueChanges:
+    case kRequestHealthChangeBroadcast:
+    case kRequestDeathStateChange:
+    case kRequestRespawn:
+    case kSyncExperienceRequest:
+    case kPlayerRespawnRequest:
+    case kPlayerLevelRequest:
+    case kRequestPlayerHealthUpdate: return Domain::ActorState;
+    case kActivateRequest:
+    case kLockChangeRequest:
+    case kAssignObjectsRequest:
+    case kRequestObjectInventoryChanges: return Domain::Object;
+    case kRequestOwnershipTransfer:
+    case kRequestOwnershipClaim:
+    case kAssignCharacterRequest:
+    case kCancelAssignmentRequest: return Domain::NpcOwnership;
+    case kRequestInventoryChanges: return Domain::Inventory;
+    case kRequestEquipmentChanges: return Domain::Equipment;
+    case kSpellCastRequest:
+    case kInterruptCastRequest:
+    case kAddTargetRequest:
+    case kRequestRemoveSpell: return Domain::Magic;
+    case kProjectileLaunchRequest: return Domain::Projectile;
+    case kScriptAnimationRequest:
+    case kDrawWeaponRequest:
+    case kMountRequest:
+    case kNewPackageRequest:
+    case kClientActorActionRequest: return Domain::Animation;
+    case kSendChatMessageRequest:
+    case kDialogueRequest:
+    case kSubtitleRequest:
+    case kPlayerDialogueRequest: return Domain::Dialogue;
+    case kTeleportCommandRequest:
+    case kTeleportRequest:
+    case kRequestWeatherChange:
+    case kRequestCurrentWeather:
+    case kSetTimeCommandRequest: return Domain::WorldState;
+    case kRequestVRPoseUpdate: return Domain::VrBodyPose;
+    case kRequestVRHiggsState: return Domain::Higgs;
+    case kRequestVRAppearance: return Domain::Appearance;
+    default: return static_cast<Domain>(0);
+    }
+}
+#endif
 }
 
 TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
@@ -152,6 +221,19 @@ bool TransportService::Send(const ClientMessage& acMessage) noexcept
         packet.ConnectionGeneration = m_connectionGeneration;
         m_outboundQueue.emplace_back(std::move(packet));
         m_outboundQueueBytes += packetBytes;
+#if TP_SKYRIM_VR
+        const auto domain = GameplayDomainForOpcode(acMessage.GetOpcode());
+        if (auto* diagnostics = m_world.ctx().find<VRGameplayDiagnosticsService>())
+        {
+            if (domain != static_cast<SkyrimTogetherVR::GameplayBridge::GameplayDomain>(0))
+                diagnostics->RecordOutboundAccepted(domain);
+            else if (acMessage.GetOpcode() == kClientReferencesMoveRequest ||
+                     acMessage.GetOpcode() == kEnterExteriorCellRequest ||
+                     acMessage.GetOpcode() == kEnterInteriorCellRequest ||
+                     acMessage.GetOpcode() == kShiftGridCellRequest)
+                diagnostics->RecordMovementAccepted();
+        }
+#endif
         return true;
     }
     catch (...)
@@ -436,6 +518,40 @@ void TransportService::RetryGameplayRetirement() noexcept
 #endif
 }
 
+void TransportService::QueueNativeParityContractClose() noexcept
+{
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+    if (m_nativeParityCloseQueued)
+        return;
+
+    const DeferredNativeParityCloseToken token{
+        m_serverInstanceNonce,
+        m_connectionGeneration,
+    };
+    if (!IsCurrentDeferredNativeParityClose(
+            token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
+        return;
+
+    auto closeToken = ++m_nativeParityCloseToken;
+    if (closeToken == 0)
+        closeToken = ++m_nativeParityCloseToken;
+    m_nativeParityCloseQueued = true;
+    m_world.GetRunner().Queue([this, token, closeToken]() {
+        if (!m_nativeParityCloseQueued || m_nativeParityCloseToken != closeToken ||
+            !IsCurrentDeferredNativeParityClose(
+                token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
+            return;
+
+        m_nativeParityCloseQueued = false;
+        Client::Close();
+
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"native_gameplay_contract_lost\"}";
+        m_dispatcher.trigger(errorEvent);
+    });
+#endif
+}
+
 void TransportService::OnConsume(const void* apData, uint32_t aSize)
 {
     ServerMessageFactory factory;
@@ -484,45 +600,67 @@ void TransportService::OnConnected()
     request.Version = BUILD_COMMIT;
     request.GameplayProtocolRevision = SkyrimTogether::Protocol::kGameplayProtocolRevision;
     m_requestedGameplayCapabilities = SkyrimTogether::Protocol::kCoreCapabilities;
-#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+#if TP_SKYRIM_VR
     using SkyrimTogether::Protocol::GameplayCapability;
     using SkyrimTogether::Protocol::ToMask;
-    m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kRemoteAvatarCoreCapabilities |
-                                       ToMask(GameplayCapability::VREquipmentRelay) |
-                                       ToMask(GameplayCapability::VRGrabRelay) |
-                                       ToMask(GameplayCapability::VRAppearanceRelay);
+    using SkyrimTogether::Protocol::VRProductionProfile;
+
+    auto profile = VRProductionProfile::ConnectionOnly;
+    SkyrimTogether::Protocol::GameplayCapabilityMask operationalDirectRelayCapabilities{};
+    bool supportsExactAnimationActions = false;
+#if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
+    profile = VRProductionProfile::AvatarSync;
+    operationalDirectRelayCapabilities |= ToMask(GameplayCapability::VRAppearanceRelay);
 #if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRPoseRelay);
-#endif
-#if TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRMovementRelay);
-#endif
-#if TP_SKYRIM_VR_ENABLE_ACTIVATION_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRActivationRelay);
-#endif
-#if TP_SKYRIM_VR_ENABLE_MAGIC_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRMagicRelay);
-#endif
-#if TP_SKYRIM_VR_ENABLE_COMBAT_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRCombatPlanckRelay);
-#endif
-#if TP_SKYRIM_VR_ENABLE_PROJECTILE_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRProjectileRelay);
+    operationalDirectRelayCapabilities |= ToMask(GameplayCapability::VRPoseRelay);
 #endif
 #if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
-    m_requestedGameplayCapabilities |= ToMask(GameplayCapability::VRHiggsRelay);
+    if (auto* const pHiggs = m_world.ctx().find<VRHiggsService>();
+        pHiggs && pHiggs->RefreshLocalHiggsStateForAuthentication())
+    {
+        operationalDirectRelayCapabilities |= ToMask(GameplayCapability::VRHiggsRelay);
+    }
+    else
+    {
+        spdlog::info(
+            "SkyrimTogetherVR HIGGS relay omitted from authentication because the HIGGS bridge is not operational");
+    }
 #endif
     const auto nativeGameplayCapabilities = SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities();
     if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
+            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions))
+        supportsExactAnimationActions = true;
+#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+    profile = VRProductionProfile::Gameplay;
+    const bool hasNativeGameplayParity =
+        SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
+        (nativeGameplayCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities) ==
+            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities;
+    const bool hasVRNpcOwnershipContract =
+        SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
+        SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::NpcOwnership) &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
-            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions))
-        m_requestedGameplayCapabilities |= SkyrimTogether::Protocol::kVRNpcOwnershipCapabilities;
-    if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
-        SkyrimTogetherVR::GameplayBridge::HasCapability(
-            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions))
-        m_requestedGameplayCapabilities |= ToMask(GameplayCapability::ExactAnimationActions);
+            nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions);
+    if (!hasNativeGameplayParity || !hasVRNpcOwnershipContract)
+    {
+        spdlog::error(
+            "SkyrimTogetherVR native gameplay admission blocked: bridgeReady={}, activeCapabilities={:#x}, requiredParityCapabilities={:#x}, npcOwnershipReady={}",
+            SkyrimTogetherVR::GameplayBridgeClient::IsReady(),
+            nativeGameplayCapabilities,
+            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities,
+            hasVRNpcOwnershipContract);
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"native_gameplay_not_ready\"}";
+        Client::Close();
+        m_dispatcher.trigger(errorEvent);
+        return;
+    }
+#endif
+#endif
+    m_requestedGameplayCapabilities = SkyrimTogether::Protocol::BuildVRProductionCapabilities(
+        profile, operationalDirectRelayCapabilities, supportsExactAnimationActions);
 #endif
     request.GameplayCapabilities = m_requestedGameplayCapabilities;
     request.ClientSessionNonce = m_sessionId;
@@ -670,6 +808,23 @@ void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 {
 #if TP_SKYRIM_VR
     RetryGameplayRetirement();
+#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+    if (m_connected && !m_nativeParityFaultReported)
+    {
+        const auto activeCapabilities = SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities();
+        if (!SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
+            (activeCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities) !=
+                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities)
+        {
+            m_nativeParityFaultReported = true;
+            spdlog::error(
+                "SkyrimTogetherVR native gameplay contract disappeared while connected; scheduling a generation-bound close (active={:#x}, required={:#x})",
+                activeCapabilities,
+                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities);
+            QueueNativeParityContractClose();
+        }
+    }
+#endif
 #endif
     Update();
 }
@@ -684,6 +839,9 @@ void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
 void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     m_localPlayerId = NULL;
+    m_nativeParityFaultReported = false;
+    m_nativeParityCloseQueued = false;
+    ++m_nativeParityCloseToken;
 }
 
 void TransportService::HandleAuthenticationResponse(const AuthenticationResponse& acMessage) noexcept
@@ -701,6 +859,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
             acMessage.NegotiatedCapabilities == expectedNegotiatedCapabilities &&
             (acMessage.NegotiatedCapabilities & ~m_requestedGameplayCapabilities) == 0 &&
             (acMessage.NegotiatedCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) == SkyrimTogether::Protocol::kCoreCapabilities &&
+            SkyrimTogether::Protocol::CanAdmitGameplayClient(acMessage.NegotiatedCapabilities) &&
             acMessage.ServerInstanceNonce != 0 && acMessage.ConnectionGeneration != 0 &&
             acMessage.ClientSessionNonce == m_sessionId && acMessage.ConnectionAttempt == m_connectionAttemptGeneration;
         if (!validProtocol)
@@ -757,6 +916,9 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         }
 
         m_connected = true;
+        m_nativeParityFaultReported = false;
+        m_nativeParityCloseQueued = false;
+        ++m_nativeParityCloseToken;
         m_localPlayerId = acMessage.PlayerId;
         m_connectionGeneration = acMessage.ConnectionGeneration;
         m_serverInstanceNonce = acMessage.ServerInstanceNonce;

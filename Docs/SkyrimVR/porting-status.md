@@ -2,11 +2,19 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
-## 2026-08-15 Current Release Authority
+## 2026-08-18 Current Release Authority
 
 The release remains a **connection/bootstrap alpha**. It is not gameplay-ready
 and must not be described as a gameplay alpha, beta, or parity release until
 matching two-client gameplay evidence exists.
+
+The current worktree is an unbuilt source candidate. It moves the gameplay
+target to protocol revision 15 and bridge capability revision 33, adds an
+explicit full-gameplay client marker and fail-closed native readiness contract,
+implements synchronous native quest mutation, makes save/load rehydration
+finite, and replaces static/legacy readiness claims with one aggregate runtime
+snapshot. These are source-inspection claims only: they have no build, runtime,
+or repair-complete credit yet.
 
 Commit `0fd7a319` passed the disposable WinBoat candidate and clean detached
 WinBoat gameplay builds. Its 503-file package, build evidence, and private
@@ -14,16 +22,19 @@ Linux/Windows handoff audits report zero failures. It has not been installed,
 deployed, or runtime-tested, so this build does not establish loader,
 single-client lifecycle, or two-client gameplay proof.
 
-The built dependency source is upstream alandtse `CommonLibVR` `ng`
+The last built dependency source is upstream alandtse `CommonLibVR` `ng`
 6.3.1 at `108836139ee612651f6c6c4dc4c41e673dcde623`, merged into the project
 branch at `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. This supersedes the former
 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` source description.
+The current unbuilt source merges alandtse `ng` 6.3.4 at `7bdcb9efe` and adds
+the verified Skyrim VR quest-stage relocation.
 
 The startup CRT-bypass, startup-readiness, PE-loader,
 `Movement`-`std::bit_cast`, and projectile-regression repairs are integrated
 and compiled in `0fd7a319`. Build and package rows pass; loader and runtime rows
-remain pending. The complete local source-readiness suite passes all 30 gates,
-which is audit evidence only.
+remain pending. The complete local source-readiness suite passed all 30 gates
+for `0fd7a319`; that historical audit evidence does not validate this unbuilt
+candidate.
 
 `code-review-remediation-20260815.md` is the concise authoritative disposition
 and gate record for this review. All subsequent material is retained as

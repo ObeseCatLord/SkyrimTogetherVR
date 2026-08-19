@@ -2,6 +2,7 @@
 
 #include "AvatarManager.h"
 #include "AnimationGraphDescriptors.h"
+#include "LocalGameplayCapture.h"
 
 #include <algorithm>
 #include <array>
@@ -212,6 +213,7 @@ void HandleSkseMessage(SKSE::MessagingInterface::Message* a_message) noexcept
             return;
         switch (a_message->type) {
         case SKSE::MessagingInterface::kDataLoaded:
+            LocalGameplayCapture::Initialize();
             PublishLifecycle(LifecycleState::DataLoaded, 0);
             break;
         case SKSE::MessagingInterface::kNewGame:

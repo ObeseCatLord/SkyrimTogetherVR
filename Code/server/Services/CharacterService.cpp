@@ -295,7 +295,7 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
                                             const Player& acPlayer) noexcept
 {
     const auto capabilities = acPlayer.GetGameplayCapabilities();
-    const bool isVR = SkyrimTogether::Protocol::IsVrGameplayClient(capabilities);
+    const bool isVR = SkyrimTogether::Protocol::IsVrClient(capabilities);
     const bool supportsVRAppearance = SkyrimTogether::Protocol::HasCapability(
         capabilities, SkyrimTogether::Protocol::GameplayCapability::VRAppearanceRelay);
     const bool isPlayer = acMessage.ReferenceId.ModId == 0 && acMessage.ReferenceId.BaseId == 0x14;
@@ -1317,7 +1317,7 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     const auto isPlayer = (gameId.ModId == 0 && gameId.BaseId == 0x14);
 
     const auto capabilities = acMessage.pPlayer->GetGameplayCapabilities();
-    const bool supportsVRAppearance = SkyrimTogether::Protocol::IsVrGameplayClient(capabilities) &&
+    const bool supportsVRAppearance = SkyrimTogether::Protocol::IsVrClient(capabilities) &&
                                       SkyrimTogether::Protocol::HasCapability(
                                           capabilities,
                                           SkyrimTogether::Protocol::GameplayCapability::VRAppearanceRelay);
@@ -1507,7 +1507,7 @@ bool CharacterService::TransferOwnership(Player* apPlayer, const uint32_t acServ
 {
     if (!apPlayer || !IsValidActorData(
                          acActorData,
-                         SkyrimTogether::Protocol::IsVrGameplayClient(apPlayer->GetGameplayCapabilities())))
+                         SkyrimTogether::Protocol::IsVrClient(apPlayer->GetGameplayCapabilities())))
         return false;
     auto view = m_world.view<OwnerComponent>();
     const auto it = view.find(static_cast<entt::entity>(acServerId));

@@ -23,8 +23,7 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::WorldReferences) |
     static_cast<CapabilityMask>(Capability::CombatAndMagic) |
     static_cast<CapabilityMask>(Capability::QuestAndDialogue) |
-    // Quest mutation is intentionally unavailable until its completion can be
-    // observed synchronously with sound suppression and ordering semantics.
+    static_cast<CapabilityMask>(Capability::QuestMutation) |
     static_cast<CapabilityMask>(Capability::WorldState) |
     static_cast<CapabilityMask>(Capability::VrBodyPose) |
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |
@@ -32,7 +31,9 @@ constexpr CapabilityMask kAvailableCapabilities =
     static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
     static_cast<CapabilityMask>(Capability::InventoryStackTransactions);
 constexpr CapabilityMask kOptionalCapabilities =
-    static_cast<CapabilityMask>(Capability::ExactAnimationActions);
+    static_cast<CapabilityMask>(Capability::ExactAnimationActions) |
+    static_cast<CapabilityMask>(Capability::LocalEventSinks) |
+    static_cast<CapabilityMask>(Capability::LocalCaptureSinks);
 constexpr CapabilityMask kAllowedCapabilities = kAvailableCapabilities | kOptionalCapabilities;
 
 [[nodiscard]] bool ParseMappingHandle(HANDLE& a_handle) noexcept

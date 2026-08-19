@@ -83,7 +83,149 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         self.assertTrue(args.require_remote_player)
         self.assertTrue(args.require_gameplay_relays)
         self.assertTrue(args.require_movement_relay)
-        self.assertTrue(args.require_higgs_relay)
+        self.assertTrue(args.require_saveload_observer)
+        self.assertFalse(args.require_grab_relay)
+        self.assertFalse(args.require_higgs_relay)
+
+    def test_full_gameplay_paired_requirements_cover_every_canonical_domain(self) -> None:
+        canonical, optional = ARCHIVE_AUDIT.paired_domain_requirements(
+            require_gameplay=True,
+            require_movement_relay=False,
+            require_equipment_relay=False,
+            require_activation_relay=False,
+            require_magic_relay=False,
+            require_combat_relay=False,
+            require_projectile_relay=False,
+            require_grab_relay=False,
+            require_higgs_relay=False,
+            require_saveload_observer=False,
+        )
+        self.assertEqual(canonical, COLLECT.vr_handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS)
+        self.assertEqual(optional, ())
+        primary = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        )
+        peer = dict(primary)
+        peer["domain.quest.applied"] = "0"
+        failures: list[str] = []
+        ARCHIVE_AUDIT.require_paired_domain_evidence(
+            primary,
+            peer,
+            canonical,
+            failures,
+            scope="mandatory canonical",
+        )
+        self.assertIn(
+            "paired mandatory canonical domain quest lacks primary captured/sent and peer applied counters",
+            failures,
+        )
+
+    def test_paired_save_load_accepts_local_lifecycle_rehydration_evidence(self) -> None:
+        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
+        peer = dict(primary)
+
+        self.assertEqual(primary["domain.save_load.sent"], "0")
+        for field, expected in COLLECT.vr_handoff.GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items():
+            self.assertEqual(primary[f"domain.save_load.{field}"], expected)
+
+        failures: list[str] = []
+        ARCHIVE_AUDIT.require_paired_domain_evidence(
+            primary,
+            peer,
+            ("save_load",),
+            failures,
+            scope="mandatory canonical",
+        )
+        self.assertEqual(failures, [])
+
+    def test_paired_save_load_requires_exact_contract_on_both_peers(self) -> None:
+        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
+        peer = dict(primary)
+
+        for label in ("primary", "peer"):
+            for field, expected in COLLECT.vr_handoff.GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items():
+                with self.subTest(label=label, field=field):
+                    altered_primary = dict(primary)
+                    altered_peer = dict(peer)
+                    altered = altered_primary if label == "primary" else altered_peer
+                    altered[f"domain.save_load.{field}"] = "wrong"
+                    failures: list[str] = []
+                    ARCHIVE_AUDIT.require_paired_domain_evidence(
+                        altered_primary,
+                        altered_peer,
+                        ("save_load",),
+                        failures,
+                        scope="mandatory canonical",
+                    )
+                    self.assertIn(
+                        "paired mandatory canonical domain save_load "
+                        f"{label} requires domain.save_load.{field}={expected}",
+                        failures,
+                    )
+
+    def test_paired_save_load_requires_each_peer_captured_and_applied(self) -> None:
+        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
+        peer = dict(primary)
+
+        for label in ("primary", "peer"):
+            for counter in ("captured", "applied"):
+                with self.subTest(label=label, counter=counter):
+                    altered_primary = dict(primary)
+                    altered_peer = dict(peer)
+                    altered = altered_primary if label == "primary" else altered_peer
+                    altered[f"domain.save_load.{counter}"] = "0"
+                    failures: list[str] = []
+                    ARCHIVE_AUDIT.require_paired_domain_evidence(
+                        altered_primary,
+                        altered_peer,
+                        ("save_load",),
+                        failures,
+                        scope="mandatory canonical",
+                    )
+                    self.assertIn(
+                        "paired mandatory canonical domain save_load "
+                        f"{label} lacks captured/applied lifecycle evidence",
+                        failures,
+                    )
+
+    def test_paired_counters_require_complementary_peer_session_evidence(self) -> None:
+        game = pathlib.Path("/fixture")
+        primary = COLLECT.vr_handoff.parse_key_value_text(COLLECT.vr_handoff.gameplay_snapshot_fixture(game))
+        peer = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(
+                game,
+                launch_nonce="fedcba9876543210fedcba9876543210",
+                process_id=43,
+            )
+        )
+        primary_status = {
+            "online": "1",
+            "playerId": "4",
+            "launchNonce": primary["launchNonce"],
+            "processId": primary["processId"],
+            "sessionId": primary["session.id"],
+            "serverInstanceNonce": primary["session.serverInstanceNonce"],
+            "connectionGeneration": primary["session.connectionGeneration"],
+        }
+        peer_status = dict(primary_status)
+        peer_status.update(
+            {
+                "launchNonce": peer["launchNonce"],
+                "processId": peer["processId"],
+            }
+        )
+        failures: list[str] = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
+        self.assertIn("paired evidence must originate from distinct players", failures)
 
     def test_bootstrap_accepts_live_startup_breadcrumbs_without_shutdown(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stvr-live-log-") as temp:
@@ -184,12 +326,15 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         identity_readouts = {
             "status": (
                 "online=1\nlaunchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=14\n"
+                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=15\n"
                 "serverInstanceNonce=1\nsessionId=1\nconnectionGeneration=1\ngamePath=/fixture\n"
             ),
             "lifecycle": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
             "playercell": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
             "avatar": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
+            "gameplay": COLLECT.vr_handoff.gameplay_snapshot_fixture(
+                pathlib.Path("/fixture"), session_id=1, server_instance_nonce=1, connection_generation=1
+            ),
         }
         with tempfile.TemporaryDirectory(prefix="stvr-offline-network-version-") as temp:
             archive = pathlib.Path(temp) / "evidence.zip"
@@ -250,7 +395,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 "status": (
                     "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
                     "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\n"
+                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=15\n"
                     "serverInstanceNonce=99\ngamePath={}\n".format(game)
                 ),
                 "lifecycle": (
@@ -259,6 +404,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                     "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
                     "gamePath={}\n".format(game)
                 ),
+                "gameplay": COLLECT.vr_handoff.gameplay_snapshot_fixture(game),
                 "pose": (
                     "localPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\n"
                     "local.rightHand.valid=1\nlocal.vrik.detected=1\nlocal.vrik.interfaceAvailable=1\n"

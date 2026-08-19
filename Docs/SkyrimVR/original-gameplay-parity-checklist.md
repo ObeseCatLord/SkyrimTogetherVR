@@ -1,6 +1,6 @@
 # Skyrim Together VR Gameplay Parity Checklist
 
-Updated: 2026-08-15
+Updated: 2026-08-18
 
 ## Status Rules
 
@@ -15,6 +15,9 @@ The target is original `original-skyrim-together` gameplay on Skyrim VR
   the matching dedicated server revision.
 - `[~] Source pending` means a repair is designed or partially implemented but
   not yet integrated; build and runtime are necessarily pending.
+- Source completion is implementation evidence only. It never transfers a
+  prior revision's build checkbox, proves the current unbuilt worktree, or
+  supplies one-client or paired runtime credit.
 - A diagnostic relay is not gameplay parity. It may supplement, but cannot
   replace, the original canonical message that owns mutation.
 
@@ -28,6 +31,14 @@ Windows tests, package/evidence audits, and private Linux/Windows handoff audit.
 It has not been deployed or runtime-tested. Build checkboxes below apply only
 to that exact revision; no runtime checkbox below is evidence for it.
 
+The current worktree is a newer, intentionally unbuilt source candidate. Its
+`[x] Source` rows are limited to inspected implementation evidence. It
+adds fail-closed native gameplay admission, synchronous native quest mutation,
+finite lifecycle rehydration, truthful aggregate gameplay diagnostics, and
+single-producer HIGGS mutation handling. None of those changes has build or
+runtime credit; source completion does not mark the candidate repaired or
+release-ready.
+
 `Docs/SkyrimVR/code-review-remediation-20260815.md` is the current authority
 for the review disposition and gates. `parity-safety-stage-20260802.md` remains
 dated historical context, not current build or runtime proof.
@@ -39,9 +50,9 @@ not check off the two-client gameplay runtime items below. See
 
 ## Native Boundary
 
-- [x] Source: the built CommonLib source is alandtse `CommonLibVR`
-  `ng` 6.3.1 at upstream `108836139ee612651f6c6c4dc4c41e673dcde623`, merged
-  into the project branch by `e74c63b8dd9cebb84a3dc1386cfaf40059ec3d65`. The
+- [x] Source: the current CommonLib source merges alandtse `CommonLibVR`
+  `ng` 6.3.4 at upstream `7bdcb9efe` into project branch commit `586eac1f4`.
+  The last compiled candidate used 6.3.1 at `108836139`; the
   former 6.1.1 / `612394bda3e2674da585831702308d571cf991b6` pin is historical.
   The dependency remains pinned by repository, commit, runtime, SKSEVR,
   executable hash, and Address Library hash.
@@ -59,14 +70,23 @@ not check off the two-client gameplay runtime items below. See
 - [x] Source: mapping ABI is 22. ABI 20 introduced
   `CommandStatus::Degraded`; later assignment/bootstrap records raised it again,
   so readers reject every incompatible fixed bridge layout.
-- [x] Source: exact-match gameplay protocol revision 14 gates token-bound NPC
-  ownership, final-equipment, version-3 full-body/finger-pose wire layouts, and
+- [x] Source: exact-match gameplay protocol revision 15 separates VR process
+  identity, full gameplay-client intent, and mandatory native-parity admission.
+  It retains token-bound NPC ownership, final-equipment, version-3
+  full-body/finger-pose wire layouts, and
   bounded ordered HIGGS mutation batches
   before either endpoint decodes them. Body formats 1 and 2 remain decodable
-  inside a revision-14 endpoint for fixture and persisted-data compatibility.
+  inside a revision-15 endpoint for fixture and persisted-data compatibility.
+- [x] Source: bridge capability revision 33 requires aggregate local capture
+  event-sink registration and native quest mutation before a gameplay client
+  can authenticate. Optional direct relays cannot masquerade as canonical
+  gameplay readiness.
 - [x] Source: HIGGS authority is transactional and post-fanout, receiver replay
   tails publish atomically, conflict/unresolvable skips are bounded, reconnect
   rebases retained events, and direct VRGrab does not throttle discrete edges.
+- [x] Source: HIGGS callbacks are the sole transient physical-mutation producer;
+  ambiguous Bethesda grab events cannot duplicate the same gesture, while
+  stash/consume remain canonical inventory mutations.
 - [x] Source: generated CommonLib aliases and curated VR overrides are
   collision-aware and fail closed on unverified addresses or prologues.
 - [x] Build: `0fd7a319` compiled and audited mapping ABI 22, capability
@@ -200,10 +220,11 @@ not check off the two-client gameplay runtime items below. See
 
 ### Quests, Dialogue, Party, And World State
 
-- [x] Source: quest synchronization is intentionally disabled and fail-closed.
-  The bridge maps the `Quest` domain to the unadvertised `QuestMutation`
-  capability and returns `Unsupported`; it does not start, stop, or set quest
-  stages. This is an explicit safety boundary, not completed quest parity.
+- [x] Source: quest start, stage, and terminal stopped transitions use the
+  synchronous Skyrim VR native stage function mapped by alandtse from desktop
+  ID 24482/25004 to VR RVA `0x03803D0`. Exact bounded start/stage suppression
+  tokens prevent echo, desktop mutation ordering is preserved, and success is
+  reported only after native postconditions hold.
 - [x] Source: dialogue and party/waypoint handling remain separately available
   in the bridge; disabling `QuestMutation` does not disable those domains.
 - [x] Source: dialogue voice, subtitle metadata/text, player dialogue, chat,

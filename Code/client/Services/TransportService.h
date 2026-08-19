@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+#include <Services/DeferredNativeParityClose.h>
+
 struct ImguiService;
 struct UpdateEvent;
 struct ClientMessage;
@@ -113,6 +115,7 @@ private:
         std::uint64_t aOriginLifecycleEpoch) noexcept;
     void CompleteGameplayRetirement() noexcept;
     void RetryGameplayRetirement() noexcept;
+    void QueueNativeParityContractClose() noexcept;
     [[nodiscard]] bool IsGameplayRetirementRequestCurrent() const noexcept;
     [[nodiscard]] bool AttemptGameplayRetirement() noexcept;
     [[nodiscard]] OutboundPacketPreflightResult SerializeOutboundPacket(
@@ -133,6 +136,9 @@ private:
     GameplayRetirementRequest m_gameplayRetirement{};
     bool m_gameplayCleanupRequired = false;
     bool m_gameplayIdentityClearPending = false;
+    bool m_nativeParityFaultReported = false;
+    bool m_nativeParityCloseQueued = false;
+    std::uint64_t m_nativeParityCloseToken{};
     std::deque<PendingOutboundPacket> m_outboundQueue{};
     std::size_t m_outboundQueueBytes{};
     bool m_drainingOutboundQueue{};

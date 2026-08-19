@@ -14,7 +14,6 @@ namespace SkyrimTogetherVR::GameplayAdapter
 {
 namespace
 {
-constexpr std::uint32_t kMeleeHitPlanckAlreadyApplied = 1u << 0;
 constexpr std::uint32_t kMagicCastNoHitEffectArt = 1u << 0;
 constexpr std::uint32_t kMagicCastHostileEffectivenessOnly = 1u << 1;
 constexpr std::uint32_t kMagicCastDual = 1u << 2;
@@ -79,9 +78,8 @@ template <class T>
 
     switch (domain) {
     case GameplayDomain::Combat:
-        if (action == GameplayAction::MeleeHit)
-            return CommandStatus::Success;
-        return action == GameplayAction::SetCombatTarget ? CommandStatus::Unsupported : CommandStatus::Malformed;
+        return action == GameplayAction::MeleeHit || action == GameplayAction::SetCombatTarget ?
+                   CommandStatus::Unsupported : CommandStatus::Malformed;
     case GameplayDomain::Projectile:
         return action == GameplayAction::LaunchProjectile ? CommandStatus::Success : CommandStatus::Malformed;
     case GameplayDomain::Magic:
@@ -127,13 +125,7 @@ template <class T>
 {
     switch (static_cast<GameplayAction>(a_payload.Action)) {
     case GameplayAction::MeleeHit:
-        return a_payload.LocalFormIdA != 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
-                   a_payload.SecondaryHandle.Value == 0 &&
-                   a_payload.ValueB == 0 && a_payload.ScalarB == 0.0f && a_payload.ScalarC == 0.0f &&
-                   a_payload.ScalarD == 0.0f && a_payload.ScalarA >= 0.0f &&
-                   HasOnlyFlags(a_payload.ActionFlags, kMeleeHitPlanckAlreadyApplied) ?
-                   CommandStatus::Success :
-                   CommandStatus::Malformed;
+        return CommandStatus::Unsupported;
     case GameplayAction::LaunchProjectile:
         return a_payload.SecondaryHandle.Value == 0 && IsCastingSource(a_payload.ValueA) &&
                    a_payload.ValueB >= 0 && a_payload.ScalarD >= 0.0f &&
@@ -178,30 +170,6 @@ template <class T>
     default:
         return CommandStatus::Malformed;
     }
-}
-
-[[nodiscard]] CommandStatus ExecuteMeleeHit(const GameplayActionPayload& a_payload, RE::Actor& a_source) noexcept
-{
-    if (a_payload.LocalFormIdA == 0 || a_payload.LocalFormIdC != 0 || a_payload.LocalFormIdD != 0 ||
-        a_payload.ValueB != 0 || a_payload.ScalarB != 0.0f || a_payload.ScalarC != 0.0f || a_payload.ScalarD != 0.0f ||
-        a_payload.ScalarA < 0.0f || !HasOnlyFlags(a_payload.ActionFlags, kMeleeHitPlanckAlreadyApplied))
-        return CommandStatus::Malformed;
-
-    auto* target = ResolveLocalForm<RE::Actor>(a_payload.LocalFormIdA);
-    if (!target)
-        return CommandStatus::MissingForm;
-    if (a_payload.LocalFormIdB != 0 && !ResolveLocalForm<RE::TESObjectWEAP>(a_payload.LocalFormIdB))
-        return CommandStatus::MissingForm;
-
-    // PLANCK (or the native collision path) is authoritative when it already
-    // applied this action. The canonical action-id ledger prevents replaying a
-    // second direct-health mutation for the same remote hit.
-    if ((a_payload.ActionFlags & kMeleeHitPlanckAlreadyApplied) != 0)
-        return CommandStatus::Success;
-
-    target->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -a_payload.ScalarA);
-    (void)a_source;
-    return CommandStatus::Success;
 }
 
 [[nodiscard]] CommandStatus ExecuteCastSpell(const CommandRecord& a_command, RE::Actor& a_actor) noexcept
@@ -368,7 +336,6 @@ CommandStatus ExecuteCombatMagicAction(const CommandRecord& a_command) noexcept
         const auto& payload = a_command.Payload.ApplyGameplayAction;
         switch (static_cast<GameplayAction>(payload.Action)) {
         case GameplayAction::MeleeHit:
-            return ExecuteMeleeHit(payload, *actor);
         case GameplayAction::SetCombatTarget:
             return CommandStatus::Unsupported;
         case GameplayAction::LaunchProjectile:

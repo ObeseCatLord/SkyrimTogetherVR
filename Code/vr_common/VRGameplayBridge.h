@@ -19,7 +19,7 @@ namespace SkyrimTogetherVR::GameplayBridge
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
 inline constexpr std::uint16_t kMappingAbiVersion = 22;
-inline constexpr std::uint32_t kCapabilityRevision = 31;
+inline constexpr std::uint32_t kCapabilityRevision = 33;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -133,6 +133,11 @@ enum class Capability : std::uint64_t
     AssignmentBootstrap = 1ull << 21,
     InventoryStackTransactions = 1ull << 22,
     QuestMutation = 1ull << 23,
+    // Script event sinks alone are insufficient for local gameplay capture.
+    // This aggregate is active only while those sinks and the current local
+    // player's animation graph sink are both registered.
+    LocalEventSinks = 1ull << 24,
+    LocalCaptureSinks = 1ull << 25,
 };
 
 using CapabilityMask = std::uint64_t;
@@ -158,8 +163,40 @@ inline constexpr CapabilityMask kInitialCapabilities =
     static_cast<CapabilityMask>(Capability::HiggsInteraction) |
     static_cast<CapabilityMask>(Capability::PlanckInteraction) |
     static_cast<CapabilityMask>(Capability::NpcOwnership) |
+    static_cast<CapabilityMask>(Capability::ExactAnimationActions) |
     static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
-    static_cast<CapabilityMask>(Capability::InventoryStackTransactions);
+    static_cast<CapabilityMask>(Capability::InventoryStackTransactions) |
+    static_cast<CapabilityMask>(Capability::QuestMutation) |
+    static_cast<CapabilityMask>(Capability::LocalEventSinks) |
+    static_cast<CapabilityMask>(Capability::LocalCaptureSinks);
+
+// Admission to a gameplay session is fail-closed on this contract. Optional
+// integrations (HIGGS and PLANCK) are deliberately excluded; every capability
+// below is implemented by the native bridge and is required for desktop
+// gameplay parity in Skyrim VR.
+inline constexpr CapabilityMask kMandatoryNativeParityCapabilities =
+    static_cast<CapabilityMask>(Capability::Lifecycle) |
+    static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
+    static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
+    static_cast<CapabilityMask>(Capability::RemoteAvatarLifecycle) |
+    static_cast<CapabilityMask>(Capability::RemoteRootTransform) |
+    static_cast<CapabilityMask>(Capability::RemoteSpatialTransfer) |
+    static_cast<CapabilityMask>(Capability::LocalAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::RemoteAnimationGraphSnapshot) |
+    static_cast<CapabilityMask>(Capability::AnimationEvents) |
+    static_cast<CapabilityMask>(Capability::Appearance) |
+    static_cast<CapabilityMask>(Capability::EquipmentAndInventory) |
+    static_cast<CapabilityMask>(Capability::ActorState) |
+    static_cast<CapabilityMask>(Capability::WorldReferences) |
+    static_cast<CapabilityMask>(Capability::CombatAndMagic) |
+    static_cast<CapabilityMask>(Capability::QuestAndDialogue) |
+    static_cast<CapabilityMask>(Capability::QuestMutation) |
+    static_cast<CapabilityMask>(Capability::WorldState) |
+    static_cast<CapabilityMask>(Capability::VrBodyPose) |
+    static_cast<CapabilityMask>(Capability::NpcOwnership) |
+    static_cast<CapabilityMask>(Capability::AssignmentBootstrap) |
+    static_cast<CapabilityMask>(Capability::InventoryStackTransactions) |
+    static_cast<CapabilityMask>(Capability::LocalCaptureSinks);
 
 [[nodiscard]] constexpr bool HasCapability(const CapabilityMask a_mask, const Capability a_capability) noexcept
 {
@@ -676,8 +713,10 @@ enum class CommandStatus : std::uint32_t
     MissingCell = 10,
     EngineRejected = 11,
     QueueOverflow = 12,
-    // The command committed every ABI-proven field, but intentionally omitted
-    // a non-critical field for which this runtime has no verified native API.
+    // The command made a terminal, observable partial application. It must
+    // never be retried: callers reconcile from the captured post-state. The
+    // status is successful only for action types explicitly whitelisted by
+    // IsSuccessfulCommandResult.
     Degraded = 13,
 };
 
@@ -1107,9 +1146,14 @@ struct alignas(8) CommandRecord
     const GameplayDomain a_domain,
     const GameplayAction a_action) noexcept
 {
-    return a_status == CommandStatus::Success ||
-           (a_status == CommandStatus::Degraded && a_domain == GameplayDomain::Appearance &&
-            a_action == GameplayAction::CommitAppearance);
+    if (a_status == CommandStatus::Success)
+        return true;
+    if (a_status != CommandStatus::Degraded)
+        return false;
+
+    return (a_domain == GameplayDomain::Appearance && a_action == GameplayAction::CommitAppearance) ||
+           (a_domain == GameplayDomain::Quest &&
+            (a_action == GameplayAction::SetQuestState || a_action == GameplayAction::SetQuestStage));
 }
 
 [[nodiscard]] constexpr bool IsSuccessfulCommandResult(

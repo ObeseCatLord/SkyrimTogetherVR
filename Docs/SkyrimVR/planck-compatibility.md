@@ -61,10 +61,10 @@ SkyrimTogetherVR now treats PLANCK the same way it treats HIGGS for hook safety:
 - detects installed `Data/SKSE/Plugins/activeragdoll.dll` at startup
 - refuses to install the unvalidated flat-Skyrim gameplay hook batch when HIGGS or PLANCK is installed
 - logs when PLANCK is loaded
-- writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.compatibility` with `planck.installed`, `planck.loaded`, `vrPhysicsCompatibilityModInstalled`, `hookMode`, `unvalidatedGameplayHooksSuppressed`, and `planckPolicy=observation_only`
+- writes the static `Data/SkyrimTogetherReborn/SkyrimTogetherVR.compatibility` report with `planck.installed`, `planck.loaded`, `vrPhysicsCompatibilityModInstalled`, `hookMode`, `unvalidatedGameplayHooksSuppressed`, `higgsPolicy=direct_optional_external_bridge`, and `planckPolicy=unsupported_no_remote_physical_replay`; operational readiness belongs to `SkyrimTogetherVR.gameplay`
 - exposes the same compatibility state in the desktop companion panel, `vr_handoff.py status`, runtime evidence checklist, and the in-game Papyrus telemetry message
 
-The current PLANCK policy is observation-only. The main client does not request `IPlanckInterface001`, does not call `AddIgnoredActor`, `RemoveIgnoredActor`, `SetSettingDouble`, `GetLastHitData`, or `GetCurrentHitEvent`, and does not replay PLANCK physical hits.
+The static PLANCK policy is `unsupported_no_remote_physical_replay`. The main client does not request `IPlanckInterface001`, does not call `AddIgnoredActor`, `RemoveIgnoredActor`, `SetSettingDouble`, `GetLastHitData`, or `GetCurrentHitEvent`, and does not replay PLANCK physical hits. The separately reported bridge telemetry remains observation-only.
 
 `SkyrimTogetherVRPlanckBridge` is a separate SKSEVR plugin for the narrow API heartbeat. It requests `IPlanckInterface001` with message `0x92F38745` at SKSE `PostPostLoad`, writes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.planck`, and exposes:
 

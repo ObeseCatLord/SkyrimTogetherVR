@@ -1,10 +1,13 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
+#include <Structs/VRHiggsRelayState.h>
 #include <Structs/VRHiggsState.h>
 #include <TiltedCore/Stl.hpp>
 
@@ -23,6 +26,14 @@ struct VRHiggsService
     TP_NOCOPYMOVE(VRHiggsService);
 
     [[nodiscard]] bool HasLocalHiggsState() const noexcept { return m_hasLocalState; }
+    // Authentication reads the already authoritative HIGGS bridge snapshot.
+    // It fails closed until HIGGS exposed its interface, callbacks, and a
+    // nonzero snapshot sequence for this process.
+    [[nodiscard]] bool RefreshLocalHiggsStateForAuthentication() noexcept;
+    [[nodiscard]] bool IsLocalHiggsRelayOperational() const noexcept
+    {
+        return m_hasLocalState && IsVRHiggsRelayOperational(m_lastLocalState);
+    }
     [[nodiscard]] const VRHiggsState& GetLocalHiggsState() const noexcept { return m_lastLocalState; }
     [[nodiscard]] size_t GetRemoteHiggsStateCount() const noexcept { return m_remoteStates.size(); }
     [[nodiscard]] const TiltedPhoques::Map<uint32_t, VRHiggsState>& GetRemoteHiggsStates() const noexcept { return m_remoteStates; }
@@ -34,6 +45,8 @@ private:
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
     void PruneRemoteStates(double aDelta) noexcept;
     [[nodiscard]] bool CaptureLocalHiggsState(VRHiggsState& aState) noexcept;
+    void ReportHiggsBridgeReadoutRejection(std::uint8_t aRejection, const char* apReason) noexcept;
+    void ReportHiggsBridgeReadoutAccepted() noexcept;
     void MergeMutationReplayWindow(VRHiggsState& arState, const std::string& acBridgeEpoch,
                                    bool aOnline) noexcept;
     void RebaseMutationReplayFloor(const std::string& acBridgeEpoch,
@@ -64,6 +77,8 @@ private:
     double m_sendTimer{0.0};
     double m_statusTimer{0.0};
     double m_bridgeReadTimer{0.0};
+    std::uint8_t m_lastBridgeReadoutRejection{0};
+    std::chrono::steady_clock::time_point m_lastBridgeReadoutLogTime{};
     bool m_statusDirty{true};
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_vrHiggsStateConnection;

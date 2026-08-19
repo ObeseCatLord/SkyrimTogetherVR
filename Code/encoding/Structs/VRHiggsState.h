@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include <Structs/GameId.h>
+#include <Structs/VRHiggsRelayState.h>
 #include <Structs/Vector3_NetQuantize.h>
 #include <TiltedCore/Buffer.hpp>
 #include <glm/vec3.hpp>
@@ -117,7 +118,19 @@ struct VRHiggsState
     std::array<VRHiggsEventSnapshot, kMaximumHiggsMutationEvents> MutationEvents{};
     uint8_t MutationEventCount{0};
     // Decode-only validity. It is intentionally not serialized so protocol
-    // revision 14 stays wire-compatible while malformed bounded counts are
+    // The negotiated wire format stays stable while malformed bounded counts are
     // rejected by both relay endpoints.
     bool IsDecodedValid{true};
 };
+
+[[nodiscard]] constexpr bool IsVRHiggsRelayOperational(const VRHiggsState& acState) noexcept
+{
+    return IsVRHiggsRelayOperational(VRHiggsRelayState{
+        acState.BridgeLoaded,
+        acState.Detected,
+        acState.InterfaceAvailable,
+        acState.CallbacksRegistered,
+        acState.SnapshotAvailable,
+        acState.SnapshotSequence,
+    });
+}

@@ -908,7 +908,7 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
 #endif
 
     if (acRequest->GameplayProtocolRevision != SkyrimTogether::Protocol::kGameplayProtocolRevision ||
-        (acRequest->GameplayCapabilities & SkyrimTogether::Protocol::kCoreCapabilities) != SkyrimTogether::Protocol::kCoreCapabilities ||
+        !SkyrimTogether::Protocol::CanAdmitGameplayClient(acRequest->GameplayCapabilities) ||
         acRequest->ClientSessionNonce == 0 || acRequest->ConnectionAttempt == 0)
     {
         spdlog::info(

@@ -57,7 +57,7 @@ REQUIRED_TOKENS = {
         "SkyrimVR-FBT.dll",
         "fbt.installed",
         "fbt.loaded",
-        "fbtPolicy=local_post_higgs_capture_and_network_cache_only",
+        "fbtPolicy=canonical_pose_optional_extension",
     ),
     "Docs/SkyrimVR/fbt-compatibility.md": (
         "AllowTimestampMismatch=1",

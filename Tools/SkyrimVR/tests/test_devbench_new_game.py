@@ -135,7 +135,7 @@ class ReleaseAdmissionTests(unittest.TestCase):
             "launchNonce": "a" * 32,
             "clientVersion": "1.0.0",
             "serverVersion": "1.0.0",
-            "gameplayProtocolRevision": "14",
+            "gameplayProtocolRevision": str(DEV_BENCH.vr_handoff.GAMEPLAY_PROTOCOL_REVISION),
             "serverInstanceNonce": "1",
             "connectionGeneration": "2",
         }

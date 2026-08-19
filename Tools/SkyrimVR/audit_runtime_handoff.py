@@ -31,6 +31,7 @@ BASE_REQUIRED_HANDOFF_FILES = (
     "lifecycle",
     "discovery",
     "playercell",
+    "gameplay",
     "compat",
     "planck",
 )
@@ -729,6 +730,7 @@ def audit_default_runtime(
     discovery = readouts.get("discovery", {})
     playercell = readouts.get("playercell", {})
     remoteplayers = readouts.get("remoteplayers", {})
+    gameplay = readouts.get("gameplay", {})
     compat = readouts.get("compat", {})
     planck = readouts.get("planck", {})
     saveload = readouts.get("saveload", {})
@@ -738,90 +740,40 @@ def audit_default_runtime(
     physics_compat_installed = get_bool(compat, "vrPhysicsCompatibilityModInstalled")
     unvalidated_hooks_compiled = get_bool(compat, "unvalidatedHooksCompiled")
     unvalidated_hooks_suppressed = get_bool(compat, "unvalidatedGameplayHooksSuppressed")
-    lane_policy_keys = (
-        "gameplayMode",
-        "remoteAvatarPolicy",
-        "remotePlayerProxyPolicy",
-        "discoveryPolicy",
-        "playerCellPolicy",
-        "posePolicy",
-        "movementPolicy",
-        "equipmentPolicy",
-        "activationPolicy",
-        "inventoryPolicy",
-        "magicPolicy",
-        "combatPolicy",
-        "projectilePolicy",
-        "grabPolicy",
-        "higgsRelayPolicy",
-        "saveLoadPolicy",
-    )
-    lane_policies_available = (
-        compat.get("gameplayMode") in {"connection_only", "gameplay_services"}
-        and all(compat.get(key) for key in lane_policy_keys)
-    )
+    gameplay_ok, gameplay_detail = vr_handoff.gameplay_snapshot_detail(gameplay)
+    gameplay_ready = vr_handoff.gameplay_snapshot_ready(gameplay)
     compatibility_ok = (
-        get_bool(compat, "ready")
-        and compat.get("higgsPolicy") == "observation_only"
-        and compat.get("planckPolicy") == "observation_only"
-        and lane_policies_available
+        compat.get("schemaVersion") == "2"
+        and not get_bool(compat, "ready")
+        and compat.get("readinessSource") == "SkyrimTogetherVR.gameplay"
+        and compat.get("higgsPolicy") == "direct_optional_external_bridge"
+        and compat.get("planckPolicy") == "unsupported_no_remote_physical_replay"
         and (not (physics_compat_installed and unvalidated_hooks_compiled) or unvalidated_hooks_suppressed)
     )
 
     add_check(results, "connection status", bool(status.get("state")), f"state={status.get('state', '<missing>')}")
     add_check(results, "lifecycle schema", lifecycle_ok, lifecycle_detail)
-    if not args.avatar_sync:
-        disabled_policies = {
-            key: compat.get(key)
-            for key in (
-                "posePolicy",
-                "remotePlayerProxyPolicy",
-                "movementPolicy",
-                "equipmentPolicy",
-                "activationPolicy",
-                "inventoryPolicy",
-                "magicPolicy",
-                "combatPolicy",
-                "projectilePolicy",
-                "grabPolicy",
-                "higgsRelayPolicy",
-                "saveLoadPolicy",
-            )
-        }
-        add_check(
-            results,
-            "default optional service boundary",
-            all(value == "disabled" for value in disabled_policies.values()),
-            " ".join(f"{key}={value or '<missing>'}" for key, value in disabled_policies.items()),
-        )
+    add_check(
+        results,
+        "authoritative gameplay readiness",
+        gameplay_ok and (not args.gameplay or gameplay_ready),
+        gameplay_detail,
+    )
     add_check(results, "discovery schema", discovery_ok, discovery_detail)
     add_check(results, "player-cell schema", playercell_ok, playercell_detail)
     if args.avatar_sync or args.require_remote_player:
         add_check(results, "remote-player proxy", get_bool(remoteplayers, "ready"), f"ready={remoteplayers.get('ready', '<missing>')}")
     add_check(
         results,
-        "HIGGS/PLANCK compatibility policy",
+        "static HIGGS/PLANCK compatibility report",
         compatibility_ok,
-        "ready={} physicsCompat={} hookMode={} gameplayMode={} avatarPolicy={} proxyPolicy={} discoveryPolicy={} playerCellPolicy={} posePolicy={} movementPolicy={} equipmentPolicy={} activationPolicy={} inventoryPolicy={} magicPolicy={} combatPolicy={} projectilePolicy={} grabPolicy={} higgsRelayPolicy={} saveLoadPolicy={} unvalidatedHooks={} suppressed={} higgsPolicy={} planckPolicy={}".format(
+        "schema={} staticReady={} readinessSource={} physicsCompat={} hookMode={} gameplayMode={} unvalidatedHooks={} suppressed={} higgsPolicy={} planckPolicy={}".format(
+            compat.get("schemaVersion", "<missing>"),
             compat.get("ready", "<missing>"),
+            compat.get("readinessSource", "<missing>"),
             compat.get("vrPhysicsCompatibilityModInstalled", "<missing>"),
             compat.get("hookMode", "<missing>"),
             compat.get("gameplayMode", "<missing>"),
-            compat.get("remoteAvatarPolicy", "<missing>"),
-            compat.get("remotePlayerProxyPolicy", "<missing>"),
-            compat.get("discoveryPolicy", "<missing>"),
-            compat.get("playerCellPolicy", "<missing>"),
-            compat.get("posePolicy", "<missing>"),
-            compat.get("movementPolicy", "<missing>"),
-            compat.get("equipmentPolicy", "<missing>"),
-            compat.get("activationPolicy", "<missing>"),
-            compat.get("inventoryPolicy", "<missing>"),
-            compat.get("magicPolicy", "<missing>"),
-            compat.get("combatPolicy", "<missing>"),
-            compat.get("projectilePolicy", "<missing>"),
-            compat.get("grabPolicy", "<missing>"),
-            compat.get("higgsRelayPolicy", "<missing>"),
-            compat.get("saveLoadPolicy", "<missing>"),
             compat.get("unvalidatedHooksCompiled", "<missing>"),
             compat.get("unvalidatedGameplayHooksSuppressed", "<missing>"),
             compat.get("higgsPolicy", "<missing>"),
@@ -1027,6 +979,23 @@ def audit_pose_context(
 
 
 def audit_gameplay_relay_lanes(args: argparse.Namespace, results: list[tuple[str, bool, str]], readouts: dict[str, dict[str, str]]) -> None:
+    requested = any(
+        getattr(args, name, False)
+        for name in (
+            "require_movement_relay", "require_equipment_relay", "require_activation_relay",
+            "require_magic_relay", "require_combat_relay", "require_projectile_relay",
+            "require_grab_relay", "require_higgs_relay", "require_saveload_observer",
+        )
+    )
+    if requested:
+        add_check(
+            results,
+            "two-client canonical relay proof",
+            False,
+            "use audit_runtime_evidence_zip.py with two --peer-archive evidence archives; legacy readouts are supplemental only",
+        )
+        return
+
     movement = readouts.get("movement", {})
     inventory = readouts.get("inventory", {})
     activation = readouts.get("activation", {})
@@ -1280,6 +1249,7 @@ def run_audit(args: argparse.Namespace) -> int:
         args.game_path.expanduser().resolve(),
         max_age_seconds=getattr(args, "max_readout_age_seconds", 30.0),
         run_start_marker=getattr(args, "run_start_marker", None),
+        require_gameplay_ready=getattr(args, "gameplay", False),
     )
     if live_identity_required:
         add_check(
@@ -1337,6 +1307,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "state=ready\nready=1\nepoch=3\nownerThreadId=42\nstableTickCount=5\n"
             "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n",
         )
+        write("gameplay", vr_handoff.gameplay_snapshot_fixture(game, ready=False))
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
@@ -1461,7 +1432,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         )
         write(
             "compat",
-            "ready=1\n"
+            "schemaVersion=2\nready=0\nreadinessSource=SkyrimTogetherVR.gameplay\n"
             "higgs.installed=1\nhiggs.loaded=1\n"
             "planck.installed=1\nplanck.loaded=1\n"
             "vrPhysicsCompatibilityModInstalled=1\n"
@@ -1485,7 +1456,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
             "posePolicy=observation_only\n"
-            "higgsPolicy=observation_only\nplanckPolicy=observation_only\n",
+            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=unsupported_no_remote_physical_replay\n",
         )
         write(
             "higgs",
@@ -1560,7 +1531,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         identity_suffixes = {
             "status": (
                 "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\nserverInstanceNonce=99\n"
+                "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=15\nserverInstanceNonce=99\n"
                 f"gamePath={game}\n"
             ),
             "lifecycle": f"launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={game}\n",
@@ -1584,15 +1555,15 @@ def command_self_test(_: argparse.Namespace) -> int:
             require_magic_pose=True,
             require_projectile_pose=True,
             require_vr_pose_context=True,
-            require_movement_relay=True,
-            require_equipment_relay=True,
-            require_activation_relay=True,
-            require_magic_relay=True,
-            require_combat_relay=True,
-            require_projectile_relay=True,
-            require_grab_relay=True,
-            require_higgs_relay=True,
-            require_saveload_observer=True,
+            require_movement_relay=False,
+            require_equipment_relay=False,
+            require_activation_relay=False,
+            require_magic_relay=False,
+            require_combat_relay=False,
+            require_projectile_relay=False,
+            require_grab_relay=False,
+            require_higgs_relay=False,
+            require_saveload_observer=False,
             avatar_sync=True,
             gameplay=False,
             max_readout_age_seconds=30.0,
@@ -1674,23 +1645,21 @@ def main() -> int:
     parser.add_argument("--require-magic-relay", action="store_true", help="require magic-effect relay evidence")
     parser.add_argument("--require-combat-relay", action="store_true", help="require combat-hit relay evidence")
     parser.add_argument("--require-projectile-relay", action="store_true", help="require projectile intent relay evidence")
-    parser.add_argument("--require-grab-relay", action="store_true", help="require grab/release relay evidence")
-    parser.add_argument("--require-higgs-relay", action="store_true", help="require HIGGS relay evidence")
+    parser.add_argument("--require-grab-relay", action="store_true", help="require optional direct HIGGS grab/release evidence")
+    parser.add_argument("--require-higgs-relay", action="store_true", help="require optional direct HIGGS relay evidence")
     parser.add_argument("--require-saveload-observer", action="store_true", help="require save/load observer evidence")
-    parser.add_argument("--require-gameplay-relays", action="store_true", help="require all staged gameplay relay evidence")
+    parser.add_argument("--require-gameplay-relays", action="store_true", help="require every mandatory canonical gameplay relay lane")
     parser.add_argument("--max-readout-age-seconds", type=float, default=30.0, help="maximum age for live identity readouts (default: 30)")
     parser.add_argument("--run-start-marker", type=pathlib.Path, help="optional marker file that live readouts must not predate")
     parser.add_argument("--avatar-sync", action="store_true", help="require explicit avatar-sync runtime handoff data")
-    parser.add_argument("--gameplay", action="store_true", help="require full gameplay runtime handoff data")
+    parser.add_argument("--gameplay", action="store_true", help="require local canonical gameplay readiness; paired proof requires the evidence-zip audit")
     parser.add_argument("--self-test", action="store_true", help="run a temp-directory runtime audit fixture")
     args = parser.parse_args()
 
     if args.gameplay:
-        args.avatar_sync = True
         args.require_connected = True
         args.require_remote_player = True
         args.require_vrik = True
-        args.require_higgs = True
         args.require_vr_pose_context = True
         args.require_gameplay_relays = True
     if args.require_vr_pose_context:
@@ -1704,8 +1673,6 @@ def main() -> int:
         args.require_magic_relay = True
         args.require_combat_relay = True
         args.require_projectile_relay = True
-        args.require_grab_relay = True
-        args.require_higgs_relay = True
         args.require_saveload_observer = True
 
     if args.self_test:

@@ -1,6 +1,8 @@
 #include "QuestDialogueManager.h"
 
 #include "AvatarManager.h"
+#include "LocalGameplayCapture.h"
+#include "QuestNativeAccess.h"
 
 #include <vr_common/VRCanonicalEntity.h>
 
@@ -8,12 +10,16 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 
 namespace SkyrimTogetherVR::GameplayAdapter
 {
 namespace
 {
+constexpr std::int32_t kQuestStatusStarted = 1;
+constexpr std::int32_t kQuestStatusStopped = 2;
+constexpr std::uint32_t kMaximumQuestType = 11;
 constexpr std::uint64_t kSetWaypointVrRva = 0x06C74D0;
 constexpr std::uint64_t kRemoveWaypointVrRva = 0x06C7630;
 constexpr std::uint64_t kMoveToVrRva = 0x09E90E0;
@@ -72,6 +78,11 @@ template <class T>
            a_payload.ActionFlags == 0;
 }
 
+[[nodiscard]] bool IsQuestStage(const std::int32_t a_stage) noexcept
+{
+    return a_stage >= 0 && a_stage <= std::numeric_limits<std::uint16_t>::max();
+}
+
 [[nodiscard]] CommandStatus ValidateBaseCommand(const CommandRecord& a_command) noexcept
 {
     const auto& identity = a_command.Header.Identity;
@@ -86,6 +97,188 @@ template <class T>
         return CommandStatus::Malformed;
 
     return CommandStatus::Success;
+}
+
+[[nodiscard]] CommandStatus ResolveQuest(const GameplayActionPayload& a_payload, RE::TESQuest*& ar_quest) noexcept
+{
+    ar_quest = LookupLocalForm<RE::TESQuest>(a_payload.TargetLocalFormId);
+    return ar_quest ? CommandStatus::Success : CommandStatus::MissingForm;
+}
+
+struct QuestState
+{
+    std::uint16_t Stage{};
+    bool Active{};
+    bool Stopped{};
+
+    [[nodiscard]] bool operator==(const QuestState&) const noexcept = default;
+};
+
+[[nodiscard]] QuestState ObserveQuestState(const RE::TESQuest& a_quest) noexcept
+{
+    return {
+        .Stage = a_quest.GetCurrentStageID(),
+        .Active = a_quest.IsActive(),
+        .Stopped = a_quest.IsStopped(),
+    };
+}
+
+[[nodiscard]] bool ReconcilePartialQuestMutation(RE::TESQuest& a_quest) noexcept
+{
+    // The engine event may already have consumed a suppression token before a
+    // later postcondition failed. Retain the actual synchronous post-state so
+    // the server can converge instead of replaying the original command.
+    return LocalGameplayCapture::PublishQuestReconciliation(a_quest);
+}
+
+[[nodiscard]] CommandStatus ReconcilePartialOrReject(
+    RE::TESQuest& a_quest, const QuestState& a_before) noexcept
+{
+    if (ObserveQuestState(a_quest) == a_before)
+        return CommandStatus::EngineRejected;
+
+    return ReconcilePartialQuestMutation(a_quest) ?
+               CommandStatus::Degraded :
+               CommandStatus::QueueOverflow;
+}
+
+struct QuestStageResult
+{
+    CommandStatus Status{CommandStatus::EngineRejected};
+    LocalGameplayCapture::QuestSuppressionToken StartStopSuppression{};
+    LocalGameplayCapture::QuestSuppressionToken StageSuppression{};
+};
+
+void CancelQuestSuppressions(const QuestStageResult& a_result) noexcept
+{
+    LocalGameplayCapture::CancelQuestSuppression(a_result.StartStopSuppression);
+    LocalGameplayCapture::CancelQuestSuppression(a_result.StageSuppression);
+}
+
+[[nodiscard]] QuestStageResult SetQuestStage(RE::TESQuest& a_quest, const std::uint16_t a_stage) noexcept
+{
+    const auto before = ObserveQuestState(a_quest);
+    // A matching current stage on a running quest is an idempotent replay.
+    // Do not arm a suppression token when the engine will not emit an event.
+    if (before.Stage == a_stage && !before.Stopped)
+        return {.Status = CommandStatus::Success};
+
+    // Native SetStage can start a stopped quest as well as emit its stage
+    // event. This applies to both Started and StageUpdate packets. The
+    // bridge-owned relocation pins its audited VR RVA and desktop IDs; this
+    // path still accepts only the observed native postcondition.
+    QuestStageResult result{};
+    result.StartStopSuppression = before.Stopped ?
+                                      LocalGameplayCapture::ArmQuestStartStopSuppression(a_quest.GetFormID(), true) :
+                                      0;
+    if (before.Stopped && result.StartStopSuppression == 0)
+        return result;
+
+    result.StageSuppression = LocalGameplayCapture::ArmQuestStageSuppression(a_quest.GetFormID(), a_stage);
+    if (result.StageSuppression == 0) {
+        CancelQuestSuppressions(result);
+        return result;
+    }
+
+    bool stageApplied{};
+    try {
+        stageApplied = QuestNativeAccess::SetStage(a_quest, a_stage);
+    } catch (...) {
+        CancelQuestSuppressions(result);
+        result.Status = ReconcilePartialOrReject(a_quest, before);
+        return result;
+    }
+    if (!stageApplied || a_quest.GetCurrentStageID() != a_stage) {
+        CancelQuestSuppressions(result);
+        result.Status = ReconcilePartialOrReject(a_quest, before);
+        return result;
+    }
+
+    // SetStage executes on the game thread and emits the matching event during
+    // native mutation. Leave the exact token armed for that event; it expires
+    // if the engine legitimately produces no event.
+    result.Status = CommandStatus::Success;
+    return result;
+}
+
+[[nodiscard]] CommandStatus ExecuteQuestState(const CommandRecord& a_command) noexcept
+{
+    const auto& identity = a_command.Header.Identity;
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    if (!HasNoEntity(identity) || payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 ||
+        payload.TargetLocalFormId == 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+        payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || !IsQuestStage(payload.ValueA) ||
+        (payload.ValueB != kQuestStatusStarted && payload.ValueB != kQuestStatusStopped) ||
+        payload.ScalarA != 0.0f || payload.ScalarB != 0.0f || payload.ScalarC != 0.0f ||
+        payload.ScalarD != 0.0f || payload.ActionFlags > kMaximumQuestType)
+        return CommandStatus::Malformed;
+
+    RE::TESQuest* quest{};
+    const auto questStatus = ResolveQuest(payload, quest);
+    if (questStatus != CommandStatus::Success)
+        return questStatus;
+
+    if (payload.ValueB == kQuestStatusStopped) {
+        if (!quest->IsActive() && quest->IsStopped())
+            return CommandStatus::Success;
+
+        const auto before = ObserveQuestState(*quest);
+
+        const auto suppression = LocalGameplayCapture::ArmQuestStartStopSuppression(quest->GetFormID(), false);
+        if (suppression == 0)
+            return CommandStatus::EngineRejected;
+
+        // Preserve desktop ordering: journal active state first, then stop.
+        try {
+            QuestNativeAccess::SetActive(*quest, false);
+            quest->Stop();
+        } catch (...) {
+            LocalGameplayCapture::CancelQuestSuppression(suppression);
+            return ReconcilePartialOrReject(*quest, before);
+        }
+        if (!quest->IsActive() && quest->IsStopped())
+            return CommandStatus::Success;
+
+        LocalGameplayCapture::CancelQuestSuppression(suppression);
+        return ReconcilePartialOrReject(*quest, before);
+    }
+
+    // Preserve desktop ordering: stage mutation first, then journal active.
+    const auto beforeStart = ObserveQuestState(*quest);
+    const auto stageResult = SetQuestStage(*quest, static_cast<std::uint16_t>(payload.ValueA));
+    if (stageResult.Status != CommandStatus::Success)
+        return stageResult.Status;
+
+    try {
+        QuestNativeAccess::SetActive(*quest, true);
+    } catch (...) {
+        CancelQuestSuppressions(stageResult);
+        return ReconcilePartialOrReject(*quest, beforeStart);
+    }
+    if (quest->GetCurrentStageID() == static_cast<std::uint16_t>(payload.ValueA) &&
+        quest->IsActive() && !quest->IsStopped())
+        return CommandStatus::Success;
+
+    CancelQuestSuppressions(stageResult);
+    return ReconcilePartialOrReject(*quest, beforeStart);
+}
+
+[[nodiscard]] CommandStatus ExecuteQuestStage(const CommandRecord& a_command) noexcept
+{
+    const auto& identity = a_command.Header.Identity;
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    if (!HasNoEntity(identity) || payload.TargetHandle.Value != 0 || payload.SecondaryHandle.Value != 0 ||
+        payload.TargetLocalFormId == 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+        payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || !IsQuestStage(payload.ValueA) ||
+        payload.ValueB != 0 || payload.ScalarA != 0.0f || payload.ScalarB != 0.0f ||
+        payload.ScalarC != 0.0f || payload.ScalarD != 0.0f || payload.ActionFlags > kMaximumQuestType)
+        return CommandStatus::Malformed;
+
+    RE::TESQuest* quest{};
+    const auto questStatus = ResolveQuest(payload, quest);
+    return questStatus == CommandStatus::Success ?
+               SetQuestStage(*quest, static_cast<std::uint16_t>(payload.ValueA)).Status :
+               questStatus;
 }
 
 [[nodiscard]] CommandStatus ResolveRemoteActor(const CommandRecord& a_command, RE::NiPointer<RE::Actor>& ar_actor) noexcept
@@ -288,7 +481,9 @@ CommandStatus QuestDialogueManager::Execute(const CommandRecord& a_command) noex
         const auto& payload = a_command.Payload.ApplyGameplayAction;
         switch (static_cast<GameplayDomain>(payload.Domain)) {
         case GameplayDomain::Quest:
-            return QuestSynchronizationStatus();
+            return static_cast<GameplayAction>(payload.Action) == GameplayAction::SetQuestState ?
+                       ExecuteQuestState(a_command) :
+                       ExecuteQuestStage(a_command);
         case GameplayDomain::Dialogue:
             return ExecuteDialogue(a_command);
         case GameplayDomain::Party:

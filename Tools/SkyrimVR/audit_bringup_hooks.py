@@ -186,7 +186,12 @@ REQUIRED_TOKENS = {
         "TP_SKYRIM_VR_ENABLE_POSE_SERVICE",
         "status.PoseService = TP_SKYRIM_VR_ENABLE_POSE_SERVICE != 0;",
         "status.BodyPoseCapture = TP_SKYRIM_VR_ENABLE_BODY_POSE_CAPTURE != 0;",
-        'file << "fbtPolicy=local_post_higgs_capture_and_network_cache_only',
+        'file << "schemaVersion=2',
+        'file << "ready=0',
+        'file << "readinessSource=SkyrimTogetherVR.gameplay',
+        'file << "higgsPolicy=direct_optional_external_bridge',
+        'file << "planckPolicy=unsupported_no_remote_physical_replay',
+        'file << "fbtPolicy=canonical_pose_optional_extension',
         'file << "posePolicy=" << GetObservationPolicy(acStatus.PoseService)',
     ),
     "Code/immersive_launcher/stubs/DllBlocklist.cpp": (

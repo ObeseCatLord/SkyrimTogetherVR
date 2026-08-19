@@ -1,6 +1,9 @@
 #include <TiltedOnlinePCH.h>
 
 #include <VRCompatibilityStatus.h>
+#include <Services/Generic/VRGameplayDiagnosticsService.h>
+
+#include <vr_common/VRGameplayBridge.h>
 
 #include <cstddef>
 #include <cwctype>
@@ -172,12 +175,9 @@ const char* GetGameplayMode(const VRCompatibilityStatus& acStatus) noexcept
     return acStatus.RemoteAvatarSkeletonWrites ? "connection_only+avatar_actors" : "connection_only+avatar_actor_targets_suppressed";
 }
 
-const char* GetGameplayServicePolicy(const VRCompatibilityStatus& acStatus, bool aObserverEnabled) noexcept
+const char* GetCanonicalGameplayPolicy(const VRCompatibilityStatus& acStatus) noexcept
 {
-    if (!aObserverEnabled)
-        return "disabled";
-
-    return acStatus.ConnectionOnly ? "observation_only" : "normal_service_enabled_with_vr_relay";
+    return acStatus.NativeCanonicalGameplay ? "canonical_commonlib_bridge_runtime_gated" : "disabled";
 }
 
 const char* GetObservationPolicy(bool aObserverEnabled) noexcept
@@ -212,13 +212,6 @@ const char* GetRemotePlayerProxyPolicy(const VRCompatibilityStatus& acStatus) no
     return acStatus.RemotePlayerProxyService ? "readout_only" : "disabled";
 }
 
-const char* GetInventoryPolicy(const VRCompatibilityStatus& acStatus) noexcept
-{
-    if (!acStatus.InventoryObservationService)
-        return "disabled";
-
-    return acStatus.ConnectionOnly ? "equipment_snapshot_only" : "normal_inventory_service_enabled_with_vr_equipment_snapshot";
-}
 }
 
 VRCompatibilityStatus BuildVRCompatibilityStatus(
@@ -258,6 +251,14 @@ VRCompatibilityStatus BuildVRCompatibilityStatus(
     status.HiggsObservationService = TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE != 0;
     status.SaveLoadObservationService = TP_SKYRIM_VR_ENABLE_SAVELOAD_OBSERVATION_SERVICE != 0;
     status.RemotePlayerProxyService = TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE != 0;
+    status.NativeCanonicalGameplay = !status.ConnectionOnly && status.RemoteAvatarSync;
+    // The gameplay target deliberately does not use the legacy direct relay
+    // services. Their compile-time state cannot establish native readiness.
+    status.DirectRelayGameplay = false;
+    status.QuestMutationAvailable = SkyrimTogetherVR::GameplayBridge::HasCapability(
+        SkyrimTogetherVR::GameplayBridge::kInitialCapabilities,
+        SkyrimTogetherVR::GameplayBridge::Capability::QuestMutation);
+    status.PlanckRemoteReplayAvailable = false;
 
     return status;
 }
@@ -266,6 +267,8 @@ void WriteVRCompatibilityStatusFile(
     const std::filesystem::path& acGamePath,
     const VRCompatibilityStatus& acStatus) noexcept
 {
+    VRGameplayDiagnosticsService::PublishBootstrapSnapshot(acGamePath, acStatus);
+
     std::error_code ec;
     const auto handoffDir = acGamePath / L"Data" / L"SkyrimTogetherReborn";
     std::filesystem::create_directories(handoffDir, ec);
@@ -274,7 +277,11 @@ void WriteVRCompatibilityStatusFile(
     if (!file)
         return;
 
-    file << "ready=1\n";
+    // This is a static target/configuration report, not proof that the bridge
+    // has initialized or that a session has reached gameplay readiness.
+    file << "schemaVersion=2\n";
+    file << "ready=0\n";
+    file << "readinessSource=SkyrimTogetherVR.gameplay\n";
     file << "higgs.installed=" << BoolValue(acStatus.HiggsInstalled) << "\n";
     file << "higgs.loaded=" << BoolValue(acStatus.HiggsLoaded) << "\n";
     file << "planck.installed=" << BoolValue(acStatus.PlanckInstalled) << "\n";
@@ -299,17 +306,21 @@ void WriteVRCompatibilityStatusFile(
     file << "posePolicy=" << GetObservationPolicy(acStatus.PoseService) << "\n";
     file << "bodyPoseCapturePolicy=" << GetObservationPolicy(acStatus.BodyPoseCapture) << "\n";
     file << "remotePlayerProxyPolicy=" << GetRemotePlayerProxyPolicy(acStatus) << "\n";
-    file << "movementPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.MovementObservationService) << "\n";
-    file << "equipmentPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.InventoryObservationService) << "\n";
-    file << "activationPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.ActivationObservationService) << "\n";
-    file << "inventoryPolicy=" << GetInventoryPolicy(acStatus) << "\n";
-    file << "magicPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.MagicObservationService) << "\n";
-    file << "combatPolicy=" << GetGameplayServicePolicy(acStatus, acStatus.CombatObservationService) << "\n";
-    file << "projectilePolicy=" << GetGameplayServicePolicy(acStatus, acStatus.ProjectileObservationService) << "\n";
-    file << "grabPolicy=" << GetObservationPolicy(acStatus.GrabObservationService) << "\n";
-    file << "higgsRelayPolicy=" << GetObservationPolicy(acStatus.HiggsObservationService) << "\n";
-    file << "saveLoadPolicy=" << GetObservationPolicy(acStatus.SaveLoadObservationService) << "\n";
-    file << "higgsPolicy=observation_only\n";
-    file << "planckPolicy=observation_only\n";
-    file << "fbtPolicy=local_post_higgs_capture_and_network_cache_only\n";
+    file << "nativeCanonicalGameplay=" << BoolValue(acStatus.NativeCanonicalGameplay) << "\n";
+    file << "directRelayGameplay=" << BoolValue(acStatus.DirectRelayGameplay) << "\n";
+    file << "movementPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "equipmentPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "activationPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "inventoryPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "magicPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "combatPolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "projectilePolicy=" << GetCanonicalGameplayPolicy(acStatus) << "\n";
+    file << "grabPolicy=higgs_callback_extension_not_core_readiness\n";
+    file << "higgsRelayPolicy=direct_optional_extension_not_core_readiness\n";
+    file << "saveLoadPolicy=canonical_lifecycle_reconnect_runtime_gated\n";
+    file << "higgsPolicy=direct_optional_external_bridge\n";
+    file << "planckPolicy=unsupported_no_remote_physical_replay\n";
+    file << "questPolicy=" << (acStatus.QuestMutationAvailable ? "canonical_runtime_gated" : "unsupported_quest_mutation_disabled") << "\n";
+    file << "fbtPolicy=canonical_pose_optional_extension\n";
+
 }

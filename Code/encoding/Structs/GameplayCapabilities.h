@@ -8,10 +8,12 @@ namespace SkyrimTogether::Protocol
 // pelvis/legs, spine, neck, clavicles, arms, and sparse named finger rotations.
 // Revision 14 replaces the retained single HIGGS event with a bounded ordered
 // mutation batch, keeping mutation delivery independent from HIGGS telemetry.
+// Revision 15 separates VR client identity from optional direct relays and
+// makes the mandatory native gameplay-parity contract explicit at admission.
 // Exact matching prevents older endpoints from decoding the changed layout.
 // Additive negotiated capability bits do not change this revision because
 // endpoints already intersect the advertised masks.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 14;
+inline constexpr std::uint32_t kGameplayProtocolRevision = 15;
 
 enum class GameplayCapability : std::uint64_t
 {
@@ -41,6 +43,9 @@ enum class GameplayCapability : std::uint64_t
     NpcOwnership = 1ull << 21,
     ExactAnimationActions = 1ull << 22,
     InventoryStackTransactions = 1ull << 23,
+    VrClient = 1ull << 24,
+    NativeGameplayParity = 1ull << 25,
+    VrGameplayClient = 1ull << 26,
 };
 
 using GameplayCapabilityMask = std::uint64_t;
@@ -59,8 +64,8 @@ inline constexpr GameplayCapabilityMask kCoreCapabilities =
     ToMask(GameplayCapability::CanonicalEntityIdentity) |
     ToMask(GameplayCapability::SessionIdentity);
 
-// This bundle is requested with the VR remote-avatar feature gate. Every
-// member has a matching client service and server relay implementation.
+// Complete direct-packet vocabulary. Presence here means the packet has a
+// schema and relay, not that it is safe to negotiate as gameplay.
 inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
     ToMask(GameplayCapability::VRPoseRelay) |
     ToMask(GameplayCapability::VRMovementRelay) |
@@ -70,6 +75,15 @@ inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
     ToMask(GameplayCapability::VRCombatPlanckRelay) |
     ToMask(GameplayCapability::VRProjectileRelay) |
     ToMask(GameplayCapability::VRGrabRelay) |
+    ToMask(GameplayCapability::VRHiggsRelay) |
+    ToMask(GameplayCapability::VRAppearanceRelay);
+
+// Direct packets are optional VR extensions. Only handlers that perform a
+// complete receive/apply operation are advertised. Equipment, magic, combat,
+// and projectile diagnostics remain protocol-defined but cannot be negotiated
+// as gameplay capabilities.
+inline constexpr GameplayCapabilityMask kFunctionalVRRelayCapabilities =
+    ToMask(GameplayCapability::VRPoseRelay) |
     ToMask(GameplayCapability::VRHiggsRelay) |
     ToMask(GameplayCapability::VRAppearanceRelay);
 
@@ -93,30 +107,132 @@ inline constexpr GameplayCapabilityMask kRemoteAvatarCoreCapabilities =
 // semantics. Merely having message types or telemetry does not advertise them.
 // This aggregate is the existing client-side VR feature-gate request.
 inline constexpr GameplayCapabilityMask kRemoteAvatarCapabilities =
-    kRemoteAvatarCoreCapabilities | kVRRelayCapabilities;
+    kRemoteAvatarCoreCapabilities | kFunctionalVRRelayCapabilities;
+
+enum class VRProductionProfile : std::uint8_t
+{
+    ConnectionOnly,
+    AvatarSync,
+    Gameplay,
+};
+
+// These profile baselines are the complete non-relay contracts emitted by the
+// three production VR targets. Direct relays are intentionally added only
+// after their corresponding runtime service has proved operational.
+inline constexpr GameplayCapabilityMask kVRConnectionOnlyProfileCapabilities =
+    kCoreCapabilities | ToMask(GameplayCapability::VrClient);
+inline constexpr GameplayCapabilityMask kVRAvatarSyncProfileCapabilities =
+    kVRConnectionOnlyProfileCapabilities | kRemoteAvatarCoreCapabilities;
+inline constexpr GameplayCapabilityMask kVRGameplayProfileCapabilities =
+    kVRAvatarSyncProfileCapabilities | kVRNpcOwnershipCapabilities |
+    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::VrGameplayClient);
+
+[[nodiscard]] constexpr GameplayCapabilityMask BuildVRProductionCapabilities(
+    const VRProductionProfile aProfile,
+    const GameplayCapabilityMask aOperationalDirectRelayCapabilities = 0,
+    const bool aSupportsExactAnimationActions = false) noexcept
+{
+    auto capabilities = kVRConnectionOnlyProfileCapabilities;
+    if (aProfile == VRProductionProfile::ConnectionOnly)
+        return capabilities;
+
+    capabilities = kVRAvatarSyncProfileCapabilities;
+    capabilities |= aOperationalDirectRelayCapabilities & kFunctionalVRRelayCapabilities;
+    if (aSupportsExactAnimationActions)
+        capabilities |= kVRExactAnimationActionCapabilities;
+    if (aProfile == VRProductionProfile::Gameplay)
+        capabilities |= kVRGameplayProfileCapabilities & ~kVRAvatarSyncProfileCapabilities;
+    return capabilities;
+}
 
 inline constexpr GameplayCapabilityMask kServerCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
-    kVRExactAnimationActionCapabilities;
+    kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
+    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::VrGameplayClient);
 inline constexpr GameplayCapabilityMask kClientCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
-    kVRExactAnimationActionCapabilities;
+    kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
+    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::VrGameplayClient);
+
+[[nodiscard]] constexpr bool IsVrClient(const GameplayCapabilityMask aMask) noexcept
+{
+    return HasCapability(aMask, GameplayCapability::VrClient);
+}
 
 [[nodiscard]] constexpr bool IsVrGameplayClient(const GameplayCapabilityMask aMask) noexcept
 {
-    return (aMask & kVRRelayCapabilities) != 0;
+    return IsVrClient(aMask) && HasCapability(aMask, GameplayCapability::VrGameplayClient);
+}
+
+[[nodiscard]] constexpr bool HasNativeGameplayParity(const GameplayCapabilityMask aMask) noexcept
+{
+    return HasCapability(aMask, GameplayCapability::NativeGameplayParity);
+}
+
+inline constexpr GameplayCapabilityMask kVRIdentityRequiredCapabilities =
+    kVRRelayCapabilities | kVRNpcOwnershipCapabilities |
+    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::VrGameplayClient);
+
+[[nodiscard]] constexpr bool HasVrGameplayIntent(const GameplayCapabilityMask aMask) noexcept
+{
+    return HasCapability(aMask, GameplayCapability::VrGameplayClient);
+}
+
+[[nodiscard]] constexpr bool HasVRNpcOwnershipContract(const GameplayCapabilityMask aMask) noexcept
+{
+    return (aMask & kVRNpcOwnershipCapabilities) == kVRNpcOwnershipCapabilities;
+}
+
+[[nodiscard]] constexpr bool HasCompleteVRGameplayContract(const GameplayCapabilityMask aMask) noexcept
+{
+    return (aMask & kVRGameplayProfileCapabilities) == kVRGameplayProfileCapabilities;
+}
+
+[[nodiscard]] constexpr bool CanAdmitGameplayClient(const GameplayCapabilityMask aMask) noexcept
+{
+    if ((aMask & kCoreCapabilities) != kCoreCapabilities)
+        return false;
+
+    // These capabilities alter VR-only routing and actor-data semantics. They
+    // must never be accepted as an otherwise indistinguishable desktop peer.
+    if (!IsVrClient(aMask))
+        return (aMask & kVRIdentityRequiredCapabilities) == 0;
+
+    if ((aMask & (kVRRelayCapabilities & ~kFunctionalVRRelayCapabilities)) != 0)
+        return false;
+
+    const auto avatarCoreCapabilities = aMask & kRemoteAvatarCoreCapabilities;
+    if (avatarCoreCapabilities != 0 && avatarCoreCapabilities != kRemoteAvatarCoreCapabilities)
+        return false;
+    if ((aMask & kVRRelayCapabilities) != 0 &&
+        avatarCoreCapabilities != kRemoteAvatarCoreCapabilities)
+        return false;
+
+    if (HasVrGameplayIntent(aMask))
+        return HasCompleteVRGameplayContract(aMask);
+
+    return !HasNativeGameplayParity(aMask) && !HasVRNpcOwnershipContract(aMask) &&
+           (aMask & kVRNpcOwnershipCapabilities) == 0;
 }
 
 // Assignment rejection uses ServerId 0 as an explicit wire sentinel. Only VR
 // gameplay clients negotiate support for that sparse assignment semantics.
 [[nodiscard]] constexpr bool CanReceiveAssignmentRejection(const GameplayCapabilityMask aMask) noexcept
 {
-    return IsVrGameplayClient(aMask);
+    return IsVrGameplayClient(aMask) && CanAdmitGameplayClient(aMask);
 }
 
 [[nodiscard]] constexpr bool CanOwnNpc(const GameplayCapabilityMask aMask) noexcept
 {
-    return !IsVrGameplayClient(aMask) ||
-           (aMask & kVRNpcOwnershipCapabilities) == kVRNpcOwnershipCapabilities;
+    // Desktop clients retain their existing ownership semantics, while an
+    // unmarked VR tuple cannot fall through this branch as a desktop client.
+    if (!IsVrClient(aMask))
+        return (aMask & kVRIdentityRequiredCapabilities) == 0;
+    return IsVrGameplayClient(aMask) && HasVRNpcOwnershipContract(aMask) &&
+           CanAdmitGameplayClient(aMask);
 }
 } // namespace SkyrimTogether::Protocol

@@ -65,7 +65,7 @@ REQUIRED_TOKENS = {
         'L"activeragdoll.dll"',
         "planck.installed",
         "planck.loaded",
-        "planckPolicy=observation_only",
+        "planckPolicy=unsupported_no_remote_physical_replay",
         "unvalidatedGameplayHooksSuppressed",
     ),
     "Code/client/TiltedOnlineApp.cpp": (
@@ -186,6 +186,7 @@ REQUIRED_TOKENS = {
         "IPlanckInterface001",
         "HIGGS",
         "observation-only",
+        "unsupported_no_remote_physical_replay",
         "SkyrimTogetherVR.planck",
         "planck.currentHitEventObservationOnly",
         "planck.lastHitDataProbeEnabled",

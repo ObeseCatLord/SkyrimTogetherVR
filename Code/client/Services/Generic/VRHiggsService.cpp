@@ -7,14 +7,18 @@
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyVRHiggsState.h>
 #include <Messages/RequestVRHiggsState.h>
+#include <Structs/GameplayCapabilities.h>
 #include <Services/TransportService.h>
 #include <World.h>
 #include <vr_common/VRHandoffPath.h>
 
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -24,35 +28,55 @@ constexpr double kHiggsSendInterval = 0.25;
 constexpr double kHiggsBridgeReadInterval = 1.0 / 20.0;
 constexpr double kHiggsStatusWriteInterval = 0.25;
 constexpr double kRemoteHiggsStaleSeconds = 10.0;
-constexpr double kHiggsBridgeStaleSeconds = 1.0;
+constexpr std::uint64_t kHiggsBridgeStaleMilliseconds = 1000;
+constexpr std::uint64_t kHiggsBridgeMaximumFutureSkewMilliseconds = 5000;
+constexpr auto kHiggsBridgeReadoutLogInterval = std::chrono::seconds(5);
 constexpr char kHiggsBridgeStatusFileName[] = "SkyrimTogetherVR.higgs";
 constexpr char kHiggsNetworkStatusFileName[] = "SkyrimTogetherVR.higgsnet";
 
 using KeyValueMap = std::unordered_map<std::string, std::string>;
+
+enum class HiggsBridgeReadoutRejection : std::uint8_t
+{
+    None,
+    Unavailable,
+    MissingIdentity,
+    MalformedIdentity,
+    CurrentIdentityUnavailable,
+    LaunchNonceMismatch,
+    PriorProcess,
+    GameRootMismatch,
+    MissingFreshness,
+    MalformedFreshness,
+    Stale,
+    FutureSkewed,
+    MalformedState,
+};
 
 std::filesystem::path GetHandoffDirectory()
 {
     return SkyrimTogetherVR::Handoff::GetDirectory();
 }
 
-KeyValueMap ReadKeyValueFile(const std::filesystem::path& acPath)
+bool ReadKeyValueFile(const std::filesystem::path& acPath, KeyValueMap& arValues)
 {
-    KeyValueMap values;
+    arValues.clear();
     std::ifstream file(acPath);
     if (!file)
-        return values;
+        return false;
 
     std::string line;
     while (std::getline(file, line))
     {
         const auto separator = line.find('=');
         if (separator == std::string::npos || separator == 0)
-            continue;
+            return false;
 
-        values.emplace(line.substr(0, separator), line.substr(separator + 1));
+        if (!arValues.emplace(line.substr(0, separator), line.substr(separator + 1)).second)
+            return false;
     }
 
-    return values;
+    return !arValues.empty() && !file.bad();
 }
 
 const std::string* FindValue(const KeyValueMap& acValues, const std::string& acKey)
@@ -61,68 +85,242 @@ const std::string* FindValue(const KeyValueMap& acValues, const std::string& acK
     return it != acValues.end() ? &it->second : nullptr;
 }
 
-bool HasKey(const KeyValueMap& acValues, const std::string& acKey) noexcept
-{
-    return acValues.find(acKey) != acValues.end();
-}
-
-bool ParseBool(const std::string* apValue, bool aDefault = false) noexcept
+bool TryParseBool(const std::string* apValue, bool& arValue) noexcept
 {
     if (!apValue)
-        return aDefault;
+        return false;
 
-    return *apValue == "1" || *apValue == "true" || *apValue == "True";
+    if (*apValue == "1" || *apValue == "true" || *apValue == "True")
+    {
+        arValue = true;
+        return true;
+    }
+    if (*apValue == "0" || *apValue == "false" || *apValue == "False")
+    {
+        arValue = false;
+        return true;
+    }
+
+    return false;
 }
 
-uint32_t ParseUInt32(const std::string* apValue, uint32_t aDefault = 0) noexcept
+bool TryParseUInt32(const std::string* apValue, uint32_t& arValue) noexcept
 {
     if (!apValue || apValue->empty())
-        return aDefault;
+        return false;
 
-    char* pEnd = nullptr;
-    const auto value = std::strtoul(apValue->c_str(), &pEnd, 0);
-    if (pEnd == apValue->c_str())
-        return aDefault;
-
-    return static_cast<uint32_t>(value & 0xFFFFFFFFu);
+    const auto [pEnd, error] = std::from_chars(apValue->data(), apValue->data() + apValue->size(), arValue);
+    return error == std::errc{} && pEnd == apValue->data() + apValue->size();
 }
 
-float ParseFloat(const std::string* apValue, float aDefault = 0.0f) noexcept
+bool TryParseUInt64(const std::string* apValue, uint64_t& arValue) noexcept
 {
     if (!apValue || apValue->empty())
-        return aDefault;
+        return false;
+
+    const auto [pEnd, error] = std::from_chars(apValue->data(), apValue->data() + apValue->size(), arValue);
+    return error == std::errc{} && pEnd == apValue->data() + apValue->size();
+}
+
+bool TryParseFloat(const std::string* apValue, float& arValue) noexcept
+{
+    if (!apValue || apValue->empty())
+        return false;
 
     char* pEnd = nullptr;
     const auto value = std::strtof(apValue->c_str(), &pEnd);
-    if (pEnd == apValue->c_str())
-        return aDefault;
+    if (pEnd == apValue->c_str() || *pEnd != '\0' || !std::isfinite(value))
+        return false;
 
-    return value;
+    arValue = value;
+    return true;
 }
 
-glm::vec3 ParseVector3(const std::string* apValue, const glm::vec3& acDefault) noexcept
+bool TryParseVector3(const std::string* apValue, glm::vec3& arValue) noexcept
 {
     if (!apValue || apValue->empty())
-        return acDefault;
+        return false;
 
     const char* pCursor = apValue->c_str();
     char* pEnd = nullptr;
 
     const float x = std::strtof(pCursor, &pEnd);
     if (pEnd == pCursor || *pEnd != ',')
-        return acDefault;
+        return false;
 
     pCursor = pEnd + 1;
     const float y = std::strtof(pCursor, &pEnd);
     if (pEnd == pCursor || *pEnd != ',')
-        return acDefault;
+        return false;
 
     pCursor = pEnd + 1;
     const float z = std::strtof(pCursor, &pEnd);
-    if (pEnd == pCursor)
-        return acDefault;
+    if (pEnd == pCursor || *pEnd != '\0' || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+        return false;
 
-    return {x, y, z};
+    arValue = {x, y, z};
+    return true;
+}
+
+bool ParseBool(const std::string* apValue, bool aDefault = false) noexcept
+{
+    bool value{};
+    return TryParseBool(apValue, value) ? value : aDefault;
+}
+
+uint32_t ParseUInt32(const std::string* apValue, uint32_t aDefault = 0) noexcept
+{
+    uint32_t value{};
+    return TryParseUInt32(apValue, value) ? value : aDefault;
+}
+
+float ParseFloat(const std::string* apValue, float aDefault = 0.0f) noexcept
+{
+    float value{};
+    return TryParseFloat(apValue, value) ? value : aDefault;
+}
+
+glm::vec3 ParseVector3(const std::string* apValue, const glm::vec3& acDefault) noexcept
+{
+    glm::vec3 value{};
+    return TryParseVector3(apValue, value) ? value : acDefault;
+}
+
+bool HasStrictBool(const KeyValueMap& acValues, const std::string& acKey) noexcept
+{
+    bool value{};
+    return TryParseBool(FindValue(acValues, acKey), value);
+}
+
+bool HasStrictUInt32(const KeyValueMap& acValues, const std::string& acKey) noexcept
+{
+    uint32_t value{};
+    return TryParseUInt32(FindValue(acValues, acKey), value);
+}
+
+bool HasStrictFloat(const KeyValueMap& acValues, const std::string& acKey) noexcept
+{
+    float value{};
+    return TryParseFloat(FindValue(acValues, acKey), value);
+}
+
+bool HasStrictVector3(const KeyValueMap& acValues, const std::string& acKey) noexcept
+{
+    glm::vec3 value{};
+    return TryParseVector3(FindValue(acValues, acKey), value);
+}
+
+std::filesystem::path CanonicalizeHandoffGamePath(const std::filesystem::path& acPath)
+{
+    std::error_code ec;
+    auto canonicalPath = std::filesystem::weakly_canonical(acPath, ec);
+    if (!ec)
+        return canonicalPath.lexically_normal();
+
+    ec.clear();
+    canonicalPath = std::filesystem::absolute(acPath, ec);
+    return ec ? std::filesystem::path{} : canonicalPath.lexically_normal();
+}
+
+bool IsSameHandoffGamePath(const std::filesystem::path& acExpected,
+                           const std::filesystem::path& acCandidate) noexcept
+{
+#if defined(_WIN32)
+    return _wcsicmp(acExpected.c_str(), acCandidate.c_str()) == 0;
+#else
+    return acExpected == acCandidate;
+#endif
+}
+
+uint64_t CurrentUnixMilliseconds() noexcept
+{
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return now > 0 ? static_cast<uint64_t>(now) : 0;
+}
+
+HiggsBridgeReadoutRejection ValidateHiggsBridgeIdentity(
+    const KeyValueMap& acValues, const uint64_t aNowUnixMilliseconds) noexcept
+{
+    const auto* pReadoutNonce = FindValue(acValues, "launchNonce");
+    const auto* pReadoutProcessId = FindValue(acValues, "processId");
+    const auto* pReadoutGamePath = FindValue(acValues, "gamePath");
+    if (!pReadoutNonce || !pReadoutProcessId || !pReadoutGamePath || pReadoutGamePath->empty())
+        return HiggsBridgeReadoutRejection::MissingIdentity;
+
+    const auto currentLaunchNonce = SkyrimTogetherVR::Handoff::GetLaunchNonce();
+    if (currentLaunchNonce.empty())
+        return HiggsBridgeReadoutRejection::CurrentIdentityUnavailable;
+
+    std::string readoutLaunchNonce;
+    if (!SkyrimTogetherVR::Handoff::NormalizeLaunchNonce(*pReadoutNonce, readoutLaunchNonce))
+        return HiggsBridgeReadoutRejection::MalformedIdentity;
+    if (readoutLaunchNonce != currentLaunchNonce)
+        return HiggsBridgeReadoutRejection::LaunchNonceMismatch;
+
+    uint32_t readoutProcessId{};
+    if (!TryParseUInt32(pReadoutProcessId, readoutProcessId) || readoutProcessId == 0)
+        return HiggsBridgeReadoutRejection::MalformedIdentity;
+    if (readoutProcessId != SkyrimTogetherVR::Handoff::GetProcessId())
+        return HiggsBridgeReadoutRejection::PriorProcess;
+
+    const auto currentGamePath = CanonicalizeHandoffGamePath(SkyrimTogetherVR::Handoff::GetGameDirectory());
+    const auto readoutGamePath = CanonicalizeHandoffGamePath(std::filesystem::path(*pReadoutGamePath));
+    if (currentGamePath.empty() || readoutGamePath.empty())
+        return HiggsBridgeReadoutRejection::MalformedIdentity;
+    if (!IsSameHandoffGamePath(currentGamePath, readoutGamePath))
+        return HiggsBridgeReadoutRejection::GameRootMismatch;
+
+    const auto* pWriteTime = FindValue(acValues, "bridge.writeUnixMilliseconds");
+    if (!pWriteTime)
+        return HiggsBridgeReadoutRejection::MissingFreshness;
+
+    uint64_t writeUnixMilliseconds{};
+    if (!TryParseUInt64(pWriteTime, writeUnixMilliseconds) || writeUnixMilliseconds == 0 ||
+        aNowUnixMilliseconds == 0)
+        return HiggsBridgeReadoutRejection::MalformedFreshness;
+    if (writeUnixMilliseconds > aNowUnixMilliseconds &&
+        writeUnixMilliseconds - aNowUnixMilliseconds > kHiggsBridgeMaximumFutureSkewMilliseconds)
+        return HiggsBridgeReadoutRejection::FutureSkewed;
+    if (aNowUnixMilliseconds >= writeUnixMilliseconds &&
+        aNowUnixMilliseconds - writeUnixMilliseconds > kHiggsBridgeStaleMilliseconds)
+        return HiggsBridgeReadoutRejection::Stale;
+
+    return HiggsBridgeReadoutRejection::None;
+}
+
+const char* DescribeHiggsBridgeReadoutRejection(const HiggsBridgeReadoutRejection aRejection) noexcept
+{
+    switch (aRejection)
+    {
+    case HiggsBridgeReadoutRejection::Unavailable:
+        return "readout is unavailable or has duplicate/malformed key-value data";
+    case HiggsBridgeReadoutRejection::MissingIdentity:
+        return "readout is missing launch identity";
+    case HiggsBridgeReadoutRejection::MalformedIdentity:
+        return "readout launch identity is malformed";
+    case HiggsBridgeReadoutRejection::CurrentIdentityUnavailable:
+        return "current launch identity is unavailable";
+    case HiggsBridgeReadoutRejection::LaunchNonceMismatch:
+        return "readout launch nonce does not match the current launch";
+    case HiggsBridgeReadoutRejection::PriorProcess:
+        return "readout process ID belongs to an earlier or different process";
+    case HiggsBridgeReadoutRejection::GameRootMismatch:
+        return "readout game path does not match the current game root";
+    case HiggsBridgeReadoutRejection::MissingFreshness:
+        return "readout is missing its write freshness field";
+    case HiggsBridgeReadoutRejection::MalformedFreshness:
+        return "readout write freshness is malformed";
+    case HiggsBridgeReadoutRejection::Stale:
+        return "readout write freshness is stale";
+    case HiggsBridgeReadoutRejection::FutureSkewed:
+        return "readout write freshness exceeds the allowed future clock skew";
+    case HiggsBridgeReadoutRejection::MalformedState:
+        return "readout HIGGS state is malformed";
+    case HiggsBridgeReadoutRejection::None:
+    default:
+        return "readout is valid";
+    }
 }
 
 bool GetBool(const KeyValueMap& acValues, const std::string& acKey, bool aDefault = false) noexcept
@@ -249,11 +447,12 @@ void ParseHandState(World& aWorld, const KeyValueMap& acValues, const std::strin
 
 bool IsMutationEvent(const VRHiggsEventSnapshot::Kind aKind) noexcept
 {
+    // HIGGS callbacks own transient pull/grab/drop replay. Stash and consume
+    // change durable inventory and therefore remain exclusively on the
+    // canonical inventory transaction path.
     return aKind == VRHiggsEventSnapshot::Kind::kPulled ||
            aKind == VRHiggsEventSnapshot::Kind::kGrabbed ||
-           aKind == VRHiggsEventSnapshot::Kind::kDropped ||
-           aKind == VRHiggsEventSnapshot::Kind::kStashed ||
-           aKind == VRHiggsEventSnapshot::Kind::kConsumed;
+           aKind == VRHiggsEventSnapshot::Kind::kDropped;
 }
 
 bool IsNewerSequence(uint32_t aCandidate, uint32_t aCurrent) noexcept
@@ -282,7 +481,8 @@ bool ParseMutationEvents(World& aWorld, const KeyValueMap& acValues, VRHiggsStat
         event.Mass = GetFloat(acValues, prefix + ".mass");
         event.SeparatingVelocity = GetFloat(acValues, prefix + ".separatingVelocity");
 
-        // Collisions and two-handing callbacks remain snapshot telemetry. Only
+        // Collisions and two-handing callbacks remain snapshot telemetry.
+        // Stash/consume are inventory-authoritative. Only transient physical
         // object mutations enter the reliable replay window.
         if (!IsMutationEvent(event.EventKind))
             continue;
@@ -303,50 +503,56 @@ bool ParseMutationEvents(World& aWorld, const KeyValueMap& acValues, VRHiggsStat
 
 bool HasCoherentHiggsFingerState(const KeyValueMap& acValues, const std::string& acPrefix) noexcept
 {
-    if (!HasKey(acValues, acPrefix + ".fingers.valid"))
+    if (!HasStrictBool(acValues, acPrefix + ".fingers.valid"))
         return false;
 
     if (!GetBool(acValues, acPrefix + ".fingers.valid"))
         return true;
 
-    return HasKey(acValues, acPrefix + ".fingers.thumb") && HasKey(acValues, acPrefix + ".fingers.index") &&
-           HasKey(acValues, acPrefix + ".fingers.middle") && HasKey(acValues, acPrefix + ".fingers.ring") &&
-           HasKey(acValues, acPrefix + ".fingers.pinky");
+    return HasStrictFloat(acValues, acPrefix + ".fingers.thumb") &&
+           HasStrictFloat(acValues, acPrefix + ".fingers.index") &&
+           HasStrictFloat(acValues, acPrefix + ".fingers.middle") &&
+           HasStrictFloat(acValues, acPrefix + ".fingers.ring") &&
+           HasStrictFloat(acValues, acPrefix + ".fingers.pinky");
 }
 
 bool HasCoherentHiggsGrabTransform(const KeyValueMap& acValues, const std::string& acPrefix) noexcept
 {
     const auto transformPrefix = acPrefix + ".grabTransform";
-    if (!HasKey(acValues, transformPrefix + ".valid"))
+    if (!HasStrictBool(acValues, transformPrefix + ".valid"))
         return false;
 
     if (!GetBool(acValues, transformPrefix + ".valid"))
         return true;
 
-    return HasKey(acValues, transformPrefix + ".translate") && HasKey(acValues, transformPrefix + ".axisX") &&
-           HasKey(acValues, transformPrefix + ".axisY") && HasKey(acValues, transformPrefix + ".axisZ") &&
-           HasKey(acValues, transformPrefix + ".scale");
+    return HasStrictVector3(acValues, transformPrefix + ".translate") &&
+           HasStrictVector3(acValues, transformPrefix + ".axisX") &&
+           HasStrictVector3(acValues, transformPrefix + ".axisY") &&
+           HasStrictVector3(acValues, transformPrefix + ".axisZ") &&
+           HasStrictFloat(acValues, transformPrefix + ".scale");
 }
 
 bool HasCoherentHiggsHandState(const KeyValueMap& acValues, const std::string& acPrefix) noexcept
 {
-    if (!HasKey(acValues, acPrefix + ".valid"))
+    if (!HasStrictBool(acValues, acPrefix + ".valid"))
         return false;
 
     if (!GetBool(acValues, acPrefix + ".valid"))
         return true;
 
-    return HasKey(acValues, acPrefix + ".holdingObject") && HasKey(acValues, acPrefix + ".canGrabObject") &&
-           HasKey(acValues, acPrefix + ".handInGrabbableState") && HasKey(acValues, acPrefix + ".disabled") &&
-           HasKey(acValues, acPrefix + ".weaponCollisionDisabled") &&
-           HasKey(acValues, acPrefix + ".grabbedObjectFormId") &&
+    return HasStrictBool(acValues, acPrefix + ".holdingObject") &&
+           HasStrictBool(acValues, acPrefix + ".canGrabObject") &&
+           HasStrictBool(acValues, acPrefix + ".handInGrabbableState") &&
+           HasStrictBool(acValues, acPrefix + ".disabled") &&
+           HasStrictBool(acValues, acPrefix + ".weaponCollisionDisabled") &&
+           HasStrictUInt32(acValues, acPrefix + ".grabbedObjectFormId") &&
            HasCoherentHiggsFingerState(acValues, acPrefix) &&
            HasCoherentHiggsGrabTransform(acValues, acPrefix);
 }
 
 bool HasCoherentHiggsEventState(const KeyValueMap& acValues) noexcept
 {
-    if (!HasKey(acValues, "recentEventCount"))
+    if (!HasStrictUInt32(acValues, "recentEventCount"))
         return false;
 
     const auto eventCount = GetUInt32(acValues, "recentEventCount");
@@ -355,10 +561,15 @@ bool HasCoherentHiggsEventState(const KeyValueMap& acValues) noexcept
     for (std::uint32_t index = 0; index < eventCount; ++index)
     {
         const auto prefix = std::string("recentEvent.") + std::to_string(index);
-        if (!HasKey(acValues, prefix + ".sequence") || !HasKey(acValues, prefix + ".type") ||
-            !HasKey(acValues, prefix + ".hasHand") || !HasKey(acValues, prefix + ".hand") ||
-            !HasKey(acValues, prefix + ".formId") || !HasKey(acValues, prefix + ".mass") ||
-            !HasKey(acValues, prefix + ".separatingVelocity"))
+        const auto* pType = FindValue(acValues, prefix + ".type");
+        const auto* pHand = FindValue(acValues, prefix + ".hand");
+        if (!HasStrictUInt32(acValues, prefix + ".sequence") || !pType ||
+            ParseEventKind(pType) == VRHiggsEventSnapshot::Kind::kUnknown ||
+            !HasStrictBool(acValues, prefix + ".hasHand") || !pHand ||
+            (*pHand != "left" && *pHand != "right") ||
+            !HasStrictUInt32(acValues, prefix + ".formId") ||
+            !HasStrictFloat(acValues, prefix + ".mass") ||
+            !HasStrictFloat(acValues, prefix + ".separatingVelocity"))
             return false;
     }
     return true;
@@ -366,13 +577,19 @@ bool HasCoherentHiggsEventState(const KeyValueMap& acValues) noexcept
 
 bool HasCoherentHiggsBridgeData(const KeyValueMap& acValues) noexcept
 {
-    if (!GetBool(acValues, "bridge.loaded"))
+    if (!HasStrictBool(acValues, "bridge.loaded") || !GetBool(acValues, "bridge.loaded"))
         return false;
 
-    return HasKey(acValues, "bridge.sequence") && HasKey(acValues, "higgs.detected") &&
-           HasKey(acValues, "higgs.interfaceAvailable") && HasKey(acValues, "higgs.callbacksRegistered") &&
-           HasKey(acValues, "higgs.snapshotAvailable") && HasKey(acValues, "higgs.snapshotSequence") &&
-           HasKey(acValues, "higgs.twoHanding") && HasCoherentHiggsHandState(acValues, "left") &&
+    uint64_t bridgeEpoch{};
+    uint32_t bridgeSequence{};
+    return TryParseUInt64(FindValue(acValues, "bridge.epoch"), bridgeEpoch) && bridgeEpoch != 0 &&
+           TryParseUInt32(FindValue(acValues, "bridge.sequence"), bridgeSequence) && bridgeSequence != 0 &&
+           HasStrictBool(acValues, "higgs.detected") &&
+           HasStrictBool(acValues, "higgs.interfaceAvailable") &&
+           HasStrictBool(acValues, "higgs.callbacksRegistered") &&
+           HasStrictBool(acValues, "higgs.snapshotAvailable") &&
+           HasStrictUInt32(acValues, "higgs.snapshotSequence") &&
+           HasStrictBool(acValues, "higgs.twoHanding") && HasCoherentHiggsHandState(acValues, "left") &&
            HasCoherentHiggsHandState(acValues, "right") && HasCoherentHiggsEventState(acValues);
 }
 
@@ -473,6 +690,59 @@ VRHiggsService::VRHiggsService(World& aWorld, entt::dispatcher& aDispatcher, Tra
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&VRHiggsService::OnDisconnected>(this);
 }
 
+bool VRHiggsService::RefreshLocalHiggsStateForAuthentication() noexcept
+{
+    VRHiggsState state{};
+    if (!CaptureLocalHiggsState(state))
+    {
+        if (m_hasLocalState)
+        {
+            m_lastLocalState = {};
+            m_hasLocalState = false;
+            m_statusDirty = true;
+        }
+        return false;
+    }
+
+    if (!m_hasLocalState || state != m_lastLocalState)
+    {
+        m_lastLocalState = state;
+        m_hasLocalState = true;
+        m_statusDirty = true;
+    }
+
+    return IsLocalHiggsRelayOperational();
+}
+
+void VRHiggsService::ReportHiggsBridgeReadoutRejection(
+    const std::uint8_t aRejection, const char* apReason) noexcept
+{
+    if (m_lastBridgeReadoutRejection == aRejection)
+        return;
+
+    m_lastBridgeReadoutRejection = aRejection;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_lastBridgeReadoutLogTime < kHiggsBridgeReadoutLogInterval)
+        return;
+
+    spdlog::warn("SkyrimTogetherVR rejected HIGGS bridge readout: {}", apReason);
+    m_lastBridgeReadoutLogTime = now;
+}
+
+void VRHiggsService::ReportHiggsBridgeReadoutAccepted() noexcept
+{
+    if (m_lastBridgeReadoutRejection == 0)
+        return;
+
+    m_lastBridgeReadoutRejection = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_lastBridgeReadoutLogTime < kHiggsBridgeReadoutLogInterval)
+        return;
+
+    spdlog::info("SkyrimTogetherVR accepted a fresh HIGGS bridge readout for the current launch");
+    m_lastBridgeReadoutLogTime = now;
+}
+
 void VRHiggsService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
     const bool online = m_transport.IsOnline();
@@ -485,22 +755,7 @@ void VRHiggsService::OnUpdate(const UpdateEvent& acEvent) noexcept
         m_bridgeReadTimer = 0.0;
         m_bridgeReadInitialized = true;
 
-        VRHiggsState state{};
-        if (CaptureLocalHiggsState(state))
-        {
-            if (!m_hasLocalState || state != m_lastLocalState)
-            {
-                m_lastLocalState = state;
-                m_hasLocalState = true;
-                m_statusDirty = true;
-            }
-        }
-        else if (m_hasLocalState)
-        {
-            m_lastLocalState = {};
-            m_hasLocalState = false;
-            m_statusDirty = true;
-        }
+        TP_UNUSED(RefreshLocalHiggsStateForAuthentication());
     }
 
     PruneRemoteStates(acEvent.Delta);
@@ -593,56 +848,35 @@ void VRHiggsService::PruneRemoteStates(double aDelta) noexcept
 
 bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
 {
-    using Clock = std::chrono::steady_clock;
-
-    static VRHiggsState s_cachedBridgeState{};
-    static uint32_t s_cachedBridgeSequence = 0;
-    static std::string s_cachedBridgeEpoch;
-    static Clock::time_point s_cachedBridgeTime{};
-    static bool s_hasCachedBridgeState = false;
-
-    const auto values = ReadKeyValueFile(m_bridgeStatusPath);
-    const auto now = Clock::now();
-    const auto cachedFresh =
-        s_hasCachedBridgeState &&
-        std::chrono::duration<double>(now - s_cachedBridgeTime).count() <= kHiggsBridgeStaleSeconds;
-
-    if (values.empty() || !HasCoherentHiggsBridgeData(values))
+    KeyValueMap values;
+    if (!ReadKeyValueFile(m_bridgeStatusPath, values))
     {
-        if (cachedFresh)
-        {
-            aState = s_cachedBridgeState;
-            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
-            return true;
-        }
+        ReportHiggsBridgeReadoutRejection(
+            static_cast<std::uint8_t>(HiggsBridgeReadoutRejection::Unavailable),
+            DescribeHiggsBridgeReadoutRejection(HiggsBridgeReadoutRejection::Unavailable));
+        return false;
+    }
+
+    const auto identityRejection = ValidateHiggsBridgeIdentity(values, CurrentUnixMilliseconds());
+    if (identityRejection != HiggsBridgeReadoutRejection::None)
+    {
+        ReportHiggsBridgeReadoutRejection(
+            static_cast<std::uint8_t>(identityRejection),
+            DescribeHiggsBridgeReadoutRejection(identityRejection));
+        return false;
+    }
+
+    if (!HasCoherentHiggsBridgeData(values))
+    {
+        ReportHiggsBridgeReadoutRejection(
+            static_cast<std::uint8_t>(HiggsBridgeReadoutRejection::MalformedState),
+            DescribeHiggsBridgeReadoutRejection(HiggsBridgeReadoutRejection::MalformedState));
         return false;
     }
 
     const auto bridgeSequence = GetUInt32(values, "bridge.sequence");
     const auto* pBridgeEpoch = FindValue(values, "bridge.epoch");
-    const std::string bridgeEpoch = pBridgeEpoch ? *pBridgeEpoch : "legacy";
-    if (bridgeSequence == 0)
-    {
-        if (cachedFresh)
-        {
-            aState = s_cachedBridgeState;
-            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
-            return true;
-        }
-        return false;
-    }
-
-    const bool sameBridgeEpoch = s_hasCachedBridgeState && bridgeEpoch == s_cachedBridgeEpoch;
-    if (sameBridgeEpoch && !IsNewerSequence(bridgeSequence, s_cachedBridgeSequence))
-    {
-        if (cachedFresh)
-        {
-            aState = s_cachedBridgeState;
-            MergeMutationReplayWindow(aState, s_cachedBridgeEpoch, m_transport.IsOnline());
-            return true;
-        }
-        return false;
-    }
+    const std::string bridgeEpoch = *pBridgeEpoch;
 
     aState.Sequence = bridgeSequence;
     aState.BridgeLoaded = GetBool(values, "bridge.loaded");
@@ -655,23 +889,19 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
     ParseHandState(m_world, values, "left", aState.Left);
     ParseHandState(m_world, values, "right", aState.Right);
     if (!ParseMutationEvents(m_world, values, aState))
+    {
+        ReportHiggsBridgeReadoutRejection(
+            static_cast<std::uint8_t>(HiggsBridgeReadoutRejection::MalformedState),
+            DescribeHiggsBridgeReadoutRejection(HiggsBridgeReadoutRejection::MalformedState));
         return false;
+    }
 
     const bool hasState = aState.BridgeLoaded || aState.Detected || aState.InterfaceAvailable ||
                           aState.CallbacksRegistered || aState.SnapshotAvailable || aState.Left.Valid ||
                           aState.Right.Valid;
-    if (hasState)
-    {
-        // Cache bridge output before replay-floor processing. The cache must
-        // remain a source snapshot, never an already filtered session packet.
-        s_cachedBridgeState = aState;
-        s_cachedBridgeSequence = bridgeSequence;
-        s_cachedBridgeEpoch = bridgeEpoch;
-        s_cachedBridgeTime = now;
-        s_hasCachedBridgeState = true;
-    }
 
     MergeMutationReplayWindow(aState, bridgeEpoch, m_transport.IsOnline());
+    ReportHiggsBridgeReadoutAccepted();
 
     return hasState;
 }
@@ -770,7 +1000,10 @@ void VRHiggsService::ClearLocalStateAtConnectionBoundary() noexcept
 
 void VRHiggsService::SendHiggsState() noexcept
 {
-    if (!m_transport.IsOnline() || !m_hasLocalState)
+    if (!m_transport.IsOnline() || !IsLocalHiggsRelayOperational() ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::VRHiggsRelay))
         return;
 
     RequestVRHiggsState request{};
@@ -787,10 +1020,11 @@ void VRHiggsService::WriteHiggsNetworkStatusFile() noexcept
     if (!file)
         return;
 
-    file << "ready=" << (m_hasLocalState ? "1" : "0") << "\n";
+    file << "ready=" << (IsLocalHiggsRelayOperational() ? "1" : "0") << "\n";
     file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
     file << "localPlayerId=" << m_transport.GetLocalPlayerId() << "\n";
     file << "localHiggsAvailable=" << (m_hasLocalState ? "1" : "0") << "\n";
+    file << "localHiggsRelayOperational=" << (IsLocalHiggsRelayOperational() ? "1" : "0") << "\n";
     file << "remoteHiggsCount=" << m_remoteStates.size() << "\n";
 
     if (m_hasLocalState)

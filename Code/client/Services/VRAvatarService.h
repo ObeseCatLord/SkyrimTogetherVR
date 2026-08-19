@@ -10,6 +10,7 @@
 #include <entt/entt.hpp>
 
 #include <Services/AssignmentCookie.h>
+#include <Services/VRConnectionService.h>
 #include <vr_common/VRGameplayBridge.h>
 #include <Messages/AssignCharacterRequest.h>
 #include <Messages/CharacterSpawnRequest.h>
@@ -67,6 +68,8 @@ struct VRAvatarService
         std::uint32_t aLocalReferenceFormId) const noexcept;
     [[nodiscard]] std::uint32_t GetLocalServerId() const noexcept { return m_localServerId.value_or(0); }
     [[nodiscard]] bool QueueLocalAnimationEvent(std::uint32_t aEventId) noexcept;
+    [[nodiscard]] VRRehydrationState GetRehydrationState() const noexcept { return m_rehydrationState; }
+    [[nodiscard]] const char* GetRehydrationFailure() const noexcept { return m_rehydrationFailure; }
 
 private:
     using AnimationSnapshot = SkyrimTogetherVR::AnimationGraphProtocol::SnapshotBuffer;
@@ -239,6 +242,9 @@ private:
     [[nodiscard]] bool StageRemoteAnimationSnapshot(RemoteAvatar& arAvatar, const AnimationVariables& acVariables,
                                                     float aDirection) noexcept;
     void RetireAvatarLifecycle(const char* apReason) noexcept;
+    void AdvanceRehydration() noexcept;
+    void SetRehydrationState(VRRehydrationState aState) noexcept;
+    void FailRehydration(const char* apReason) noexcept;
     void ResetStatusCounters() noexcept;
     void WriteStatus() noexcept;
 
@@ -317,6 +323,7 @@ private:
     AssignmentBootstrapGate m_assignmentBootstrapGate{AssignmentBootstrapGate::Idle};
     AssignmentGate m_assignmentGate{AssignmentGate::Idle};
     AssignmentBootstrapFailure m_assignmentBootstrapFailure{AssignmentBootstrapFailure::None};
+    VRRehydrationState m_rehydrationState{VRRehydrationState::Offline};
     AssignmentBootstrapEndFailureTelemetry m_assignmentBootstrapEndFailureTelemetry{};
     std::uint16_t m_assignmentBootstrapFailureRecordKind{0};
     std::int32_t m_assignmentBootstrapFailureBridgeStatus{0};
@@ -355,6 +362,7 @@ private:
         m_assignmentBootstrapHeadParts{};
     bool m_assignmentBootstrapHasAppearanceCore{false};
     bool m_capabilityWarningLogged{false};
+    const char* m_rehydrationFailure{nullptr};
     bool m_statusDirty{true};
     std::filesystem::path m_statusPath{};
     entt::scoped_connection m_updateConnection;

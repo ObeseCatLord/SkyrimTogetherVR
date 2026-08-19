@@ -1,7 +1,9 @@
 #include <catch2/catch.hpp>
 
+#include "../higgs_bridge/HiggsMutationDedup.h"
 #include "../vr_common/VRGameplayBridge.h"
 #include "../vr_gameplay_bridge/QuestDialogueManager.h"
+#include "../vr_gameplay_bridge/QuestNativeAccess.h"
 #include <Structs/MovementOrdering.h>
 
 #include <atomic>
@@ -82,7 +84,7 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
 {
     REQUIRE(kMappingMagic == 0x42564753);
     REQUIRE(kMappingAbiVersion == 22);
-    REQUIRE(kCapabilityRevision == 31);
+    REQUIRE(kCapabilityRevision == 33);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
@@ -99,6 +101,9 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
         static_cast<std::int32_t>(AssignmentBootstrapFailureReason::Tint)));
     REQUIRE_FALSE(IsKnownAssignmentBootstrapFailureReason(0));
     REQUIRE(static_cast<std::uint32_t>(CommandStatus::Degraded) == 13);
+    REQUIRE(SkyrimTogetherVR::GameplayAdapter::QuestNativeAccess::kSetStageSeId == 24482);
+    REQUIRE(SkyrimTogetherVR::GameplayAdapter::QuestNativeAccess::kSetStageAeId == 25004);
+    REQUIRE(SkyrimTogetherVR::GameplayAdapter::QuestNativeAccess::kSetStageVrRva == 0x03803D0);
     REQUIRE(kFixedPayloadBytes == 80);
     REQUIRE(kDefaultEventRingCapacity == 2048);
     REQUIRE(kDefaultCommandRingCapacity == 2048);
@@ -133,12 +138,15 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::RemoteAnimationGraphSnapshot));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::QuestAndDialogue));
-    REQUIRE_FALSE(HasCapability(kInitialCapabilities, Capability::QuestMutation));
-    // Exact action events stay protocol-defined but are not activated by the
-    // VR bridge until ForceAction-equivalent replay is validated.
-    REQUIRE_FALSE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::QuestMutation));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::ExactAnimationActions));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalEventSinks));
+    REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalCaptureSinks));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::InventoryStackTransactions));
     REQUIRE(static_cast<CapabilityMask>(Capability::QuestMutation) == (1ull << 23));
+    REQUIRE(static_cast<CapabilityMask>(Capability::LocalCaptureSinks) == (1ull << 25));
+    REQUIRE(HasCapability(kMandatoryNativeParityCapabilities, Capability::LocalCaptureSinks));
+    REQUIRE_FALSE(HasCapability(kMandatoryNativeParityCapabilities, Capability::LocalEventSinks));
     REQUIRE(CapabilityForDomain(GameplayDomain::Quest) == Capability::QuestMutation);
     REQUIRE(CapabilityForDomain(GameplayDomain::Dialogue) == Capability::QuestAndDialogue);
     REQUIRE(CapabilityForDomain(GameplayDomain::Party) == Capability::QuestAndDialogue);
@@ -179,6 +187,48 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(kInventoryTransactionBeginKnownFlags == kInventoryTransactionReset);
 }
 
+TEST_CASE("HIGGS physical mutations have one callback producer", "[skyrim-vr][higgs][grab]")
+{
+    using SkyrimTogetherVR::HiggsBridge::MutationDeduplicator;
+    using SkyrimTogetherVR::HiggsBridge::MutationKind;
+
+    MutationDeduplicator deduplicator;
+    constexpr std::uint32_t kFormId = 0x1234;
+    constexpr std::uint64_t kNow = 1000;
+
+    REQUIRE(deduplicator.Accept(MutationKind::Grabbed, true, kFormId, kNow));
+    REQUIRE_FALSE(deduplicator.Accept(MutationKind::Grabbed, true, kFormId,
+                                      kNow + MutationDeduplicator::kWindowMilliseconds));
+    REQUIRE(deduplicator.Accept(MutationKind::Grabbed, false, kFormId, kNow));
+    REQUIRE(deduplicator.Accept(MutationKind::Dropped, true, kFormId, kNow));
+    REQUIRE(deduplicator.Accept(MutationKind::Grabbed, true, kFormId,
+                                kNow + MutationDeduplicator::kWindowMilliseconds + 1));
+    REQUIRE(deduplicator.Accept(MutationKind::Grabbed, true, 0, kNow));
+    REQUIRE(deduplicator.Accept(MutationKind::Grabbed, true, 0, kNow));
+
+    const auto localCapture = ReadRepositorySource("Code/vr_gameplay_bridge/LocalGameplayCapture.cpp");
+    const auto higgsService = ReadRepositorySource("Code/client/Services/Generic/VRHiggsService.cpp");
+    REQUIRE_FALSE(localCapture.empty());
+    REQUIRE_FALSE(higgsService.empty());
+
+    const auto genericGrab = localCapture.find("void OnGrabReleaseEvent(");
+    const auto genericGrabEnd = localCapture.find("// TESMagicEffectApplyEvent", genericGrab);
+    REQUIRE(genericGrab != std::string::npos);
+    REQUIRE(genericGrabEnd != std::string::npos);
+    REQUIRE(localCapture.substr(genericGrab, genericGrabEnd - genericGrab).find("Publish(") == std::string::npos);
+
+    const auto mutationFilter = higgsService.find("bool IsMutationEvent(");
+    const auto mutationFilterEnd = higgsService.find("bool IsNewerSequence(", mutationFilter);
+    REQUIRE(mutationFilter != std::string::npos);
+    REQUIRE(mutationFilterEnd != std::string::npos);
+    const auto filter = higgsService.substr(mutationFilter, mutationFilterEnd - mutationFilter);
+    REQUIRE(filter.find("kPulled") != std::string::npos);
+    REQUIRE(filter.find("kGrabbed") != std::string::npos);
+    REQUIRE(filter.find("kDropped") != std::string::npos);
+    REQUIRE(filter.find("kStashed") == std::string::npos);
+    REQUIRE(filter.find("kConsumed") == std::string::npos);
+}
+
 TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-vr][gameplay-bridge]")
 {
     const auto appearanceCommit = MakeGameplayCommand(
@@ -198,17 +248,92 @@ TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-
     const auto wrongAction = MakeGameplayCommand(
         CommandKind::ApplyGameplayAction, GameplayDomain::Appearance, GameplayAction::SetTint);
     REQUIRE_FALSE(IsSuccessfulCommandResult(CommandStatus::Degraded, wrongAction));
+
+    const auto questState = MakeGameplayCommand(
+        CommandKind::ApplyGameplayAction, GameplayDomain::Quest, GameplayAction::SetQuestState);
+    const auto questStage = MakeGameplayCommand(
+        CommandKind::ApplyGameplayAction, GameplayDomain::Quest, GameplayAction::SetQuestStage);
+    REQUIRE(IsSuccessfulCommandResult(CommandStatus::Degraded, questState));
+    REQUIRE(IsSuccessfulCommandResult(CommandStatus::Degraded, questStage));
 }
 
-TEST_CASE("VR quest synchronization is fail-closed", "[skyrim-vr][gameplay-bridge][quest]")
+TEST_CASE("VR quest synchronization uses synchronous native mutation", "[skyrim-vr][gameplay-bridge][quest]")
 {
-    using SkyrimTogetherVR::GameplayAdapter::QuestDialogueManager;
+    const auto manager = ReadRepositorySource("Code/vr_gameplay_bridge/QuestDialogueManager.cpp");
+    const auto executor = ReadRepositorySource("Code/vr_gameplay_bridge/CommandExecutor.cpp");
+    const auto questNativeAccess = ReadRepositorySource("Code/vr_gameplay_bridge/QuestNativeAccess.cpp");
+    REQUIRE_FALSE(manager.empty());
+    REQUIRE_FALSE(executor.empty());
+    REQUIRE_FALSE(questNativeAccess.empty());
+    REQUIRE(manager.find("QuestNativeAccess::SetStage(a_quest, a_stage)") != std::string::npos);
+    REQUIRE(manager.find("a_quest.SetStage(a_stage)") == std::string::npos);
+    REQUIRE(questNativeAccess.find("REL::VariantID(kSetStageSeId, kSetStageAeId, kSetStageVrRva)") != std::string::npos);
+    REQUIRE(questNativeAccess.find("using SetStageFn = bool(__fastcall*)(RE::TESQuest*, std::uint16_t);") != std::string::npos);
+    REQUIRE(manager.find("ArmQuestStageSuppression") != std::string::npos);
+    REQUIRE(manager.find("ArmQuestStartStopSuppression") != std::string::npos);
+    REQUIRE(manager.find("CommandStatus::Degraded") != std::string::npos);
+    REQUIRE(manager.find("CommandStatus::QueueOverflow") != std::string::npos);
+    REQUIRE(manager.find("CancelQuestSuppressions(stageResult)") != std::string::npos);
+    REQUIRE(manager.find("ReconcilePartialQuestMutation") != std::string::npos);
+    REQUIRE(manager.find("QuestNativeAccess::SetActive(*quest, false);") < manager.find("quest->Stop();"));
+    REQUIRE(manager.find("SetQuestStage(*quest") < manager.find("QuestNativeAccess::SetActive(*quest, true);"));
+    REQUIRE(executor.find("QuestSynchronizationStatus") == std::string::npos);
 
-    REQUIRE(QuestDialogueManager::QuestSynchronizationStatus() == CommandStatus::Unsupported);
-    REQUIRE_FALSE(IsSuccessfulCommandResult(QuestDialogueManager::QuestSynchronizationStatus(),
-                                            GameplayDomain::Quest, GameplayAction::SetQuestState));
-    REQUIRE_FALSE(IsSuccessfulCommandResult(QuestDialogueManager::QuestSynchronizationStatus(),
-                                            GameplayDomain::Quest, GameplayAction::SetQuestStage));
+    const auto capture = ReadRepositorySource("Code/vr_gameplay_bridge/LocalGameplayCapture.cpp");
+    REQUIRE_FALSE(capture.empty());
+    REQUIRE(capture.find("Capability::LocalCaptureSinks") != std::string::npos);
+    REQUIRE(capture.find("ScriptSinkRegistration") != std::string::npos);
+    REQUIRE(capture.find("AnimationSinkRegistration") != std::string::npos);
+    REQUIRE(capture.find("ProbeAnimationSink") != std::string::npos);
+    REQUIRE(capture.find("g_scriptSinksRegistered") == std::string::npos);
+    REQUIRE(capture.find("g_animationSinkRegistered") == std::string::npos);
+    REQUIRE(capture.find("PendingQuestReconciliation") != std::string::npos);
+    REQUIRE(capture.find("QueueQuestReconciliation") != std::string::npos);
+    REQUIRE(capture.find("FlushPendingQuestReconciliations") != std::string::npos);
+    REQUIRE(capture.find("pending = a_pending;") != std::string::npos);
+    REQUIRE(capture.find("TryPushEvents(records.data(), recordCount)") != std::string::npos);
+    REQUIRE(capture.find("PublishQuestReconciliation") != std::string::npos);
+}
+
+TEST_CASE("VR animation sink readiness requires current graph evidence", "[skyrim-vr][gameplay-bridge][capture]")
+{
+    const auto capture = ReadRepositorySource("Code/vr_gameplay_bridge/LocalGameplayCapture.cpp");
+    REQUIRE_FALSE(capture.empty());
+    REQUIRE(capture.find("RetainedUnverified") != std::string::npos);
+
+    const auto registerBegin = capture.find("[[nodiscard]] bool RegisterAnimationSink(");
+    const auto registerEnd = capture.find("[[nodiscard]] bool InitializeLocalCaptureSinksUnlocked()", registerBegin);
+    REQUIRE(registerBegin != std::string::npos);
+    REQUIRE(registerEnd != std::string::npos);
+    const auto registration = capture.substr(registerBegin, registerEnd - registerBegin);
+
+    const auto unavailableBegin = registration.find("presence == AnimationSinkPresence::Unavailable");
+    const auto presentBegin = registration.find("presence == AnimationSinkPresence::Present", unavailableBegin);
+    REQUIRE(unavailableBegin != std::string::npos);
+    REQUIRE(presentBegin != std::string::npos);
+    const auto unavailable = registration.substr(unavailableBegin, presentBegin - unavailableBegin);
+    REQUIRE(unavailable.find("RetainAnimationSinkOwnershipUnverified();") != std::string::npos);
+    REQUIRE(unavailable.find("return false;") != std::string::npos);
+    REQUIRE(CountOccurrences(registration, "SinkRegistrationState::Registered") == 2);
+
+    const auto resetBegin = capture.find("void Reset() noexcept", registerEnd);
+    REQUIRE(resetBegin != std::string::npos);
+    REQUIRE(capture.substr(resetBegin).find("RetainAnimationSinkOwnershipUnverified();") != std::string::npos);
+}
+
+TEST_CASE("VR root-transform results are distinct from avatar lifecycle", "[skyrim-vr][gameplay-bridge][movement]")
+{
+    const auto executor = ReadRepositorySource("Code/vr_gameplay_bridge/CommandExecutor.cpp");
+    const auto diagnostics = ReadRepositorySource("Code/client/Services/Generic/VRGameplayDiagnosticsService.cpp");
+    REQUIRE_FALSE(executor.empty());
+    REQUIRE_FALSE(diagnostics.empty());
+    REQUIRE(executor.find("PublishAvatarCommandResult(a_command, result);") != std::string::npos);
+    REQUIRE(diagnostics.find("record.Header.Identity.SequenceId == 0") != std::string::npos);
+    const auto resultHandler = diagnostics.find("void VRGameplayDiagnosticsService::OnGameplayResult");
+    const auto refreshIdentity = diagnostics.find("void VRGameplayDiagnosticsService::RefreshSessionIdentity", resultHandler);
+    REQUIRE(resultHandler != std::string::npos);
+    REQUIRE(refreshIdentity != std::string::npos);
+    REQUIRE(diagnostics.substr(resultHandler, refreshIdentity - resultHandler).find("RemoteSpatialTransferState") == std::string::npos);
 }
 
 TEST_CASE("VR combat and projectile ownership source audit", "[skyrim-vr][gameplay-bridge][source-audit]")
@@ -217,10 +342,12 @@ TEST_CASE("VR combat and projectile ownership source audit", "[skyrim-vr][gamepl
     const auto combatMagic = ReadRepositorySource("Code/vr_gameplay_bridge/CombatMagicManager.cpp");
     const auto magicHooks = ReadRepositorySource("Code/vr_gameplay_bridge/MagicHooks.cpp");
     const auto localGameplay = ReadRepositorySource("Code/client/Services/Generic/VRLocalGameplayService.cpp");
+    const auto localCapture = ReadRepositorySource("Code/vr_gameplay_bridge/LocalGameplayCapture.cpp");
     REQUIRE_FALSE(projectileHooks.empty());
     REQUIRE_FALSE(combatMagic.empty());
     REQUIRE_FALSE(magicHooks.empty());
     REQUIRE_FALSE(localGameplay.empty());
+    REQUIRE_FALSE(localCapture.empty());
 
     const auto launchHook = projectileHooks.find("RE::ProjectileHandle* HookLaunch(");
     const auto concentrationBypass = projectileHooks.find(
@@ -260,10 +387,13 @@ TEST_CASE("VR combat and projectile ownership source audit", "[skyrim-vr][gamepl
 
     const auto localTargetRejection = localGameplay.find("IsUnsupportedLocalGameplayAction(domain, action)");
     const auto targetConsumer = combatMagic.find(
-        "return action == GameplayAction::SetCombatTarget ? CommandStatus::Unsupported : CommandStatus::Malformed;");
+        "return action == GameplayAction::MeleeHit || action == GameplayAction::SetCombatTarget ?");
     REQUIRE(localTargetRejection != std::string::npos);
     REQUIRE(targetConsumer != std::string::npos);
     REQUIRE(combatMagic.find("ExecuteCombatTarget") == std::string::npos);
+    REQUIRE(combatMagic.find("ExecuteMeleeHit") == std::string::npos);
+    REQUIRE(combatMagic.find("ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage") == std::string::npos);
+    REQUIRE(localCapture.find("GameplayAction::MeleeHit") == std::string::npos);
 }
 
 TEST_CASE("VR pose snapshot diagnostics use a bounded log cadence", "[skyrim-vr][pose][source-audit]")

@@ -65,7 +65,10 @@ before enabling the hook.
 
 ## Runtime Evidence
 
-- `SkyrimTogetherVR.compatibility`: `fbt.installed`, `fbt.loaded`, and `fbtPolicy`
+- `SkyrimTogetherVR.compatibility`: static coexistence/configuration fields
+  `fbt.installed`, `fbt.loaded`, and
+  `fbtPolicy=canonical_pose_optional_extension`; operational readiness belongs
+  to `SkyrimTogetherVR.gameplay`
 - `SkyrimTogetherVR.higgs`: endpoint fault state, capture attempts, successes, and last callback result
 - `SkyrimTogetherVR.pose`: local body version, validity, sequence, generation,
   joint mask, and pelvis/leg/spine/neck/clavicle/arm nodes

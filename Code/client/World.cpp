@@ -41,6 +41,7 @@
 #include <Services/VRLocalGameplayService.h>
 #include <Services/VRNpcOwnershipService.h>
 #include <Services/VRWorldReplicationService.h>
+#include <Services/Generic/VRGameplayDiagnosticsService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -178,6 +179,8 @@ World::World()
     ctx().emplace<DiscordService>(m_dispatcher);
     ctx().emplace<StringCacheService>(m_dispatcher);
     ctx().emplace<VRConnectionService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<VRGameplayDiagnosticsService>(
+        m_dispatcher, m_transport, ctx().at<VRConnectionService>());
 #if TP_SKYRIM_VR_ENABLE_POSE_SERVICE
     ctx().emplace<VRPoseService>(m_dispatcher, m_transport);
 #endif
@@ -262,6 +265,7 @@ void World::Shutdown() noexcept
     ctx().erase<VRAvatarService>();
     ctx().erase<PartyService>();
 #endif
+    ctx().erase<VRGameplayDiagnosticsService>();
 #if TP_SKYRIM_VR_ENABLE_REMOTE_PLAYER_PROXY_SERVICE
     ctx().erase<VRRemotePlayerService>();
 #endif

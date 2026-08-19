@@ -278,8 +278,6 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
 
     if (!IsActionInDomain(domain, action))
         return CommandStatus::Malformed;
-    if (domain == GameplayDomain::Quest)
-        return QuestDialogueManager::QuestSynchronizationStatus();
     if (action == GameplayAction::ArmLocalCapture) {
         if (static_cast<CommandKind>(a_command.Header.Kind) != CommandKind::ApplyGameplayAction)
             return CommandStatus::Malformed;
@@ -458,8 +456,7 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
         if (kind == CommandKind::UpdateRemoteRootTransform &&
             (a_command.Payload.UpdateRemoteRootTransform.UpdateFlags & GameplayBridge::SpatialTransfer) != 0)
             PublishSpatialTransferResult(a_command, result);
-        if (kind != CommandKind::UpdateRemoteRootTransform || result.Status != CommandStatus::Success)
-            PublishAvatarCommandResult(a_command, result);
+        PublishAvatarCommandResult(a_command, result);
         return result.Status;
     }
     case CommandKind::ApplyRemoteAnimationGraphChunk:
@@ -602,7 +599,8 @@ CommandPumpResult ProcessCommands(
     static_cast<void>(endpoint.FlushCommandResultEvents());
     const auto limit = a_maxCommands > kDefaultCommandRingCapacity ? kDefaultCommandRingCapacity : a_maxCommands;
     for (std::uint32_t index = 0; index < limit; ++index) {
-        // A failed spatial transfer can emit both spatial and avatar results.
+        // A spatial transfer emits its spatial outcome and the root-transform
+        // outcome, regardless of success. Reserve both before engine work.
         // Reserve enough fixed backlog capacity before any engine mutation.
         if (!endpoint.CanQueueCommandResultEvents(2))
             break;
@@ -623,6 +621,7 @@ CommandPumpResult ProcessCommands(
     ActorWorldManager::ProcessPeriodic();
     PublishCurrentLocalPlayerState();
     PublishCurrentLocalAnimationState();
+    LocalGameplayCapture::Initialize();
     LocalGameplayCapture::CapturePeriodic();
     return CommandPumpResult::Success;
 }

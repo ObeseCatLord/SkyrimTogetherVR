@@ -34,6 +34,13 @@ struct VRCompatibilityStatus
     bool HiggsObservationService{false};
     bool SaveLoadObservationService{false};
     bool RemotePlayerProxyService{false};
+    // These describe compiled target topology only. Runtime readiness belongs
+    // exclusively to SkyrimTogetherVR.gameplay, produced by the diagnostics
+    // service after it has observed the CommonLib bridge and transport.
+    bool NativeCanonicalGameplay{false};
+    bool DirectRelayGameplay{false};
+    bool QuestMutationAvailable{false};
+    bool PlanckRemoteReplayAvailable{false};
 };
 
 VRCompatibilityStatus BuildVRCompatibilityStatus(

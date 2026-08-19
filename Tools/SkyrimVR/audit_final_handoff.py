@@ -24,8 +24,6 @@ GAMEPLAY_RELAY_FLAGS = (
     "requiredMagicRelay",
     "requiredCombatRelay",
     "requiredProjectileRelay",
-    "requiredGrabRelay",
-    "requiredHiggsRelay",
     "requiredSaveloadObserver",
 )
 
@@ -76,9 +74,9 @@ def runtime_manifest_matches(manifest: dict[str, object], role: str) -> bool:
     return False
 
 
-def latest_runtime_evidence(runtime_dir: pathlib.Path, role: str) -> pathlib.Path | None:
+def matching_runtime_evidence(runtime_dir: pathlib.Path, role: str) -> list[pathlib.Path]:
     if not runtime_dir.exists():
-        return None
+        return []
     matches: list[pathlib.Path] = []
     for path in sorted(runtime_dir.glob("SkyrimTogetherVR-evidence-*.zip")):
         if not zipfile.is_zipfile(path):
@@ -89,7 +87,20 @@ def latest_runtime_evidence(runtime_dir: pathlib.Path, role: str) -> pathlib.Pat
             continue
         if runtime_manifest_matches(manifest, role):
             matches.append(path)
-    return latest_zip(matches)
+    return sorted(matches, key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
+
+
+def latest_runtime_evidence(
+    runtime_dir: pathlib.Path,
+    role: str,
+    *,
+    exclude: pathlib.Path | None = None,
+) -> pathlib.Path | None:
+    excluded = exclude.expanduser().resolve() if exclude is not None else None
+    for path in matching_runtime_evidence(runtime_dir, role):
+        if excluded is None or not same_existing_path(path, excluded):
+            return path
+    return None
 
 
 def same_existing_path(left: pathlib.Path | None, right: pathlib.Path | None) -> bool:
@@ -121,7 +132,17 @@ def discover_missing_evidence(args: argparse.Namespace) -> None:
     if args.runtime_avatar_sync is None:
         args.runtime_avatar_sync = latest_runtime_evidence(runtime_dir, "avatar-sync")
     if args.runtime_gameplay is None:
-        args.runtime_gameplay = latest_runtime_evidence(runtime_dir, "gameplay")
+        args.runtime_gameplay = latest_runtime_evidence(
+            runtime_dir,
+            "gameplay",
+            exclude=getattr(args, "runtime_gameplay_peer", None),
+        )
+    if getattr(args, "runtime_gameplay_peer", None) is None:
+        args.runtime_gameplay_peer = latest_runtime_evidence(
+            runtime_dir,
+            "gameplay",
+            exclude=args.runtime_gameplay,
+        )
 
 
 def role_path(path: pathlib.Path | None, role: str, failures: list[str]) -> pathlib.Path | None:
@@ -179,6 +200,7 @@ def audit_runtime_bundle(
     require_remote_player: bool,
     require_pose_context: bool,
     require_gameplay_relays: bool,
+    peer_gameplay: pathlib.Path | None = None,
 ) -> None:
     print(f"\n== Runtime Evidence: {role} ==")
     result = audit_runtime_evidence_zip.audit_archive(
@@ -195,10 +217,11 @@ def audit_runtime_bundle(
         require_magic_relay=require_gameplay_relays,
         require_combat_relay=require_gameplay_relays,
         require_projectile_relay=require_gameplay_relays,
-        require_grab_relay=require_gameplay_relays,
-        require_higgs_relay=require_gameplay_relays,
+        require_grab_relay=False,
+        require_higgs_relay=False,
         require_saveload_observer=require_gameplay_relays,
         allow_failed_checks=False,
+        peer_archive=peer_gameplay,
     )
     if result != 0:
         failures.append(f"{role} runtime evidence audit failed")
@@ -218,8 +241,8 @@ def audit_runtime_bundle(
         "requiredMagicRelay": require_gameplay_relays,
         "requiredCombatRelay": require_gameplay_relays,
         "requiredProjectileRelay": require_gameplay_relays,
-        "requiredGrabRelay": require_gameplay_relays,
-        "requiredHiggsRelay": require_gameplay_relays,
+        "requiredGrabRelay": False,
+        "requiredHiggsRelay": False,
         "requiredSaveloadObserver": require_gameplay_relays,
     }
     require_manifest_flags(path, role, expected_flags, failures)
@@ -259,24 +282,33 @@ def build_manifest(avatar_sync: bool, gameplay: bool = False) -> dict[str, objec
     }
 
 
-def checklist(pass_all: bool = True) -> dict[str, object]:
+def checklist(*, gameplay_ready: bool) -> dict[str, object]:
     checks = []
     for check_id in audit_runtime_evidence_zip.REQUIRED_CHECK_IDS:
+        status = (
+            collect_runtime_evidence.CHECK_NOT_REQUIRED
+            if check_id == "gameplay_readiness" and not gameplay_ready
+            else collect_runtime_evidence.CHECK_PASS
+        )
         checks.append(
             {
                 "id": check_id,
                 "objective": "self-test",
                 "label": check_id.replace("_", " "),
-                "status": collect_runtime_evidence.CHECK_PASS if pass_all else collect_runtime_evidence.CHECK_NOT_REQUIRED,
+                "status": status,
                 "detail": "self-test",
             }
         )
     return {
         "schema": "skyrim_together_vr_runtime_checklist_v1",
         "summary": {
-            collect_runtime_evidence.CHECK_PASS: len(checks) if pass_all else 0,
+            collect_runtime_evidence.CHECK_PASS: sum(
+                1 for check in checks if check["status"] == collect_runtime_evidence.CHECK_PASS
+            ),
             collect_runtime_evidence.CHECK_FAIL: 0,
-            collect_runtime_evidence.CHECK_NOT_REQUIRED: 0 if pass_all else len(checks),
+            collect_runtime_evidence.CHECK_NOT_REQUIRED: sum(
+                1 for check in checks if check["status"] == collect_runtime_evidence.CHECK_NOT_REQUIRED
+            ),
         },
         "checks": checks,
     }
@@ -300,23 +332,41 @@ def write_runtime_evidence_entry(
 def fixture_runtime_identity(
     game_path: str,
     network_version: str,
+    *,
+    launch_nonce: str = "0123456789abcdef0123456789abcdef",
+    process_id: int = 42,
+    player_id: int = 4,
+    session_id: int = 8,
+    server_instance_nonce: int = 7,
+    connection_generation: int = 9,
+    lifecycle_epoch: int = 3,
+    gameplay_ready: bool,
 ) -> tuple[dict[str, object], dict[str, bytes], int]:
     """Build sealed, mutually consistent readouts for a trusted live fixture."""
-    nonce = "0123456789abcdef0123456789abcdef"
     evaluated_at_ns = 1_767_225_600_000_000_000
     readout_mtime_ns = evaluated_at_ns - 1_000_000_000
-    common = f"launchNonce={nonce}\nprocessId=42\n"
+    common = f"launchNonce={launch_nonce}\nprocessId={process_id}\n"
     payloads = {
         "status": (
             common
-            + f"online=1\nclientVersion={network_version}\nserverVersion={network_version}\n"
+            + f"online=1\nplayerId={player_id}\nclientVersion={network_version}\nserverVersion={network_version}\n"
             + f"gameplayProtocolRevision={collect_runtime_evidence.vr_handoff.GAMEPLAY_PROTOCOL_REVISION}\n"
-            + "serverInstanceNonce=7\nsessionId=8\n"
-            + f"connectionGeneration=9\ngamePath={game_path}\n"
+            + f"serverInstanceNonce={server_instance_nonce}\nsessionId={session_id}\n"
+            + f"connectionGeneration={connection_generation}\ngamePath={game_path}\n"
         ).encode("utf-8"),
-        "lifecycle": f"{common}gamePath={game_path}\n".encode("utf-8"),
+        "lifecycle": f"{common}epoch={lifecycle_epoch}\ngamePath={game_path}\n".encode("utf-8"),
         "playercell": f"{common}gamePath={game_path}\n".encode("utf-8"),
         "avatar": f"{common}gamePath={game_path}\n".encode("utf-8"),
+        "gameplay": collect_runtime_evidence.vr_handoff.gameplay_snapshot_fixture(
+            pathlib.Path(game_path),
+            ready=gameplay_ready,
+            launch_nonce=launch_nonce,
+            process_id=process_id,
+            session_id=session_id,
+            server_instance_nonce=server_instance_nonce,
+            connection_generation=connection_generation,
+            lifecycle_epoch=lifecycle_epoch,
+        ).encode("utf-8"),
     }
     identity_readouts = {
         name: collect_runtime_evidence.vr_handoff.parse_key_value_bytes(payload)
@@ -334,6 +384,7 @@ def fixture_runtime_identity(
         now_ns=evaluated_at_ns,
         readout_metadata=readout_metadata,
         expected_network_version=network_version,
+        require_gameplay_ready=gameplay_ready,
     )
     if not runtime_identity["ok"]:
         raise ValueError("self-test runtime identity fixture is invalid")
@@ -348,13 +399,21 @@ def create_runtime_evidence_zip(
     pose_context: bool,
     gameplay_relays: bool,
     live_admission: bool = True,
+    launch_nonce: str = "0123456789abcdef0123456789abcdef",
+    process_id: int = 42,
+    player_id: int = 4,
 ) -> pathlib.Path:
     package_manifest = build_manifest(avatar_sync, gameplay=gameplay)
     avatar_runtime_checks = avatar_sync or gameplay
+    runtime_checklist = checklist(gameplay_ready=gameplay)
     game_path = "self-test"
     runtime_identity, identity_payloads, identity_mtime_ns = fixture_runtime_identity(
         game_path,
         str(package_manifest["networkVersion"]),
+        launch_nonce=launch_nonce,
+        process_id=process_id,
+        player_id=player_id,
+        gameplay_ready=gameplay,
     )
     runtime_trust = "trusted" if live_admission and bool(runtime_identity["ok"]) else "untrusted"
     runtime_manifest = {
@@ -380,18 +439,14 @@ def create_runtime_evidence_zip(
         "requiredMagicRelay": gameplay_relays,
         "requiredCombatRelay": gameplay_relays,
         "requiredProjectileRelay": gameplay_relays,
-        "requiredGrabRelay": gameplay_relays,
-        "requiredHiggsRelay": gameplay_relays,
+        "requiredGrabRelay": False,
+        "requiredHiggsRelay": False,
         "requiredSaveloadObserver": gameplay_relays,
         "runtimeIdentity": runtime_identity,
         "runtimeEvidenceTrust": runtime_trust,
         "liveAdmissionRequested": live_admission,
         "runtimeAuditExitCode": 0,
-        "runtimeChecklist": {
-            collect_runtime_evidence.CHECK_PASS: len(audit_runtime_evidence_zip.REQUIRED_CHECK_IDS),
-            collect_runtime_evidence.CHECK_FAIL: 0,
-            collect_runtime_evidence.CHECK_NOT_REQUIRED: 0,
-        },
+        "runtimeChecklist": runtime_checklist["summary"],
         "missingRequired": [],
         "files": [
             {
@@ -421,7 +476,6 @@ def create_runtime_evidence_zip(
             ],
         ],
     }
-    runtime_checklist = checklist(pass_all=True)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         write_runtime_evidence_entry(
             archive,
@@ -497,6 +551,16 @@ def run_self_test() -> int:
             pose_context=True,
             gameplay_relays=True,
         )
+        runtime_gameplay_peer = create_runtime_evidence_zip(
+            runtime_out / "SkyrimTogetherVR-evidence-gameplay-peer.zip",
+            avatar_sync=False,
+            gameplay=True,
+            pose_context=True,
+            gameplay_relays=True,
+            launch_nonce="fedcba9876543210fedcba9876543210",
+            process_id=43,
+            player_id=5,
+        )
         untrusted_runtime_default = create_runtime_evidence_zip(
             runtime_out / "SkyrimTogetherVR-evidence-default-generic.zip",
             avatar_sync=False,
@@ -535,6 +599,7 @@ def run_self_test() -> int:
             runtime_default=None,
             runtime_avatar_sync=None,
             runtime_gameplay=None,
+            runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=False,
@@ -548,7 +613,6 @@ def run_self_test() -> int:
             build_dll,
             runtime_default,
             runtime_avatar,
-            runtime_gameplay,
         )
         discovered_paths = (
             args.build_default,
@@ -557,16 +621,36 @@ def run_self_test() -> int:
             args.build_dll_only,
             args.runtime_default,
             args.runtime_avatar_sync,
-            args.runtime_gameplay,
         )
-        if not path_lists_match(expected_paths, discovered_paths):
+        discovered_gameplay_paths = {args.runtime_gameplay, args.runtime_gameplay_peer}
+        expected_gameplay_paths = {runtime_gameplay, runtime_gameplay_peer}
+        if not path_lists_match(expected_paths, discovered_paths) or discovered_gameplay_paths != expected_gameplay_paths:
             print("Final handoff self-test discovery mismatch.")
             for expected, discovered in zip(expected_paths, discovered_paths):
                 print(f"expected={expected} discovered={discovered}")
+            print(f"expected gameplay evidence={expected_gameplay_paths} discovered={discovered_gameplay_paths}")
             return 1
         positive_result = run_audit(args)
         if positive_result != 0:
             return positive_result
+
+        missing_peer_args = argparse.Namespace(
+            build_default=build_default,
+            build_avatar_sync=build_avatar,
+            build_gameplay=build_gameplay,
+            build_dll_only=build_dll,
+            runtime_default=runtime_default,
+            runtime_avatar_sync=runtime_avatar,
+            runtime_gameplay=runtime_gameplay,
+            runtime_gameplay_peer=None,
+            build_evidence_dir=build_out,
+            runtime_evidence_dir=runtime_out,
+            no_auto_discover=True,
+            require_gameplay_runtime=True,
+        )
+        if run_audit(missing_peer_args) == 0:
+            print("Final handoff self-test failed: gameplay runtime evidence unexpectedly passed without a peer archive.")
+            return 1
 
         untrusted_runtime_args = argparse.Namespace(
             build_default=build_default,
@@ -576,6 +660,7 @@ def run_self_test() -> int:
             runtime_default=untrusted_runtime_default,
             runtime_avatar_sync=runtime_avatar,
             runtime_gameplay=runtime_gameplay,
+            runtime_gameplay_peer=runtime_gameplay_peer,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
@@ -599,6 +684,7 @@ def run_self_test() -> int:
             runtime_default=runtime_default,
             runtime_avatar_sync=runtime_avatar,
             runtime_gameplay=runtime_gameplay,
+            runtime_gameplay_peer=runtime_gameplay_peer,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
@@ -617,6 +703,7 @@ def run_self_test() -> int:
             runtime_default=runtime_avatar,
             runtime_avatar_sync=runtime_avatar,
             runtime_gameplay=runtime_gameplay,
+            runtime_gameplay_peer=runtime_gameplay_peer,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
@@ -635,6 +722,7 @@ def run_self_test() -> int:
             runtime_default=runtime_default,
             runtime_avatar_sync=runtime_gameplay,
             runtime_gameplay=runtime_gameplay,
+            runtime_gameplay_peer=runtime_gameplay_peer,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
@@ -657,10 +745,28 @@ def run_audit(args: argparse.Namespace) -> int:
     runtime_default = role_path(args.runtime_default, "default runtime", failures)
     runtime_avatar = role_path(args.runtime_avatar_sync, "avatar-sync runtime", failures)
     runtime_gameplay = args.runtime_gameplay.expanduser().resolve() if args.runtime_gameplay else None
-    if args.require_gameplay_runtime and runtime_gameplay is None:
+    runtime_gameplay_peer_value = getattr(args, "runtime_gameplay_peer", None)
+    runtime_gameplay_peer = (
+        runtime_gameplay_peer_value.expanduser().resolve()
+        if runtime_gameplay_peer_value is not None
+        else None
+    )
+    gameplay_runtime_requested = args.require_gameplay_runtime or runtime_gameplay is not None
+    if gameplay_runtime_requested and runtime_gameplay is None:
         failures.append("missing required evidence path: gameplay runtime")
+    if gameplay_runtime_requested and runtime_gameplay_peer is None:
+        failures.append("missing required evidence path: gameplay runtime peer")
     if runtime_gameplay is not None and not runtime_gameplay.exists():
         failures.append(f"gameplay runtime evidence does not exist: {runtime_gameplay}")
+    if runtime_gameplay_peer is not None and not runtime_gameplay_peer.exists():
+        failures.append(f"gameplay runtime peer evidence does not exist: {runtime_gameplay_peer}")
+    if runtime_gameplay is None and runtime_gameplay_peer is not None:
+        failures.append("gameplay runtime peer was supplied without gameplay runtime evidence")
+    elif runtime_gameplay is not None and runtime_gameplay_peer is not None and same_existing_path(
+        runtime_gameplay,
+        runtime_gameplay_peer,
+    ):
+        failures.append("gameplay runtime and peer evidence archives must be distinct")
 
     if build_default:
         audit_build_bundle(build_default, "default", "default", failures)
@@ -702,6 +808,7 @@ def run_audit(args: argparse.Namespace) -> int:
             require_remote_player=True,
             require_pose_context=True,
             require_gameplay_relays=True,
+            peer_gameplay=runtime_gameplay_peer,
         )
 
     print("\n== Final Handoff Summary ==")
@@ -720,6 +827,11 @@ def main() -> int:
     parser.add_argument("--runtime-default", type=pathlib.Path, help="default runtime evidence zip")
     parser.add_argument("--runtime-avatar-sync", type=pathlib.Path, help="avatar-sync runtime evidence zip")
     parser.add_argument("--runtime-gameplay", type=pathlib.Path, help="strict gameplay relay runtime evidence zip")
+    parser.add_argument(
+        "--runtime-gameplay-peer",
+        type=pathlib.Path,
+        help="second distinct strict gameplay runtime evidence zip for paired proof",
+    )
     parser.add_argument(
         "--build-evidence-dir",
         type=pathlib.Path,
@@ -740,7 +852,7 @@ def main() -> int:
     parser.add_argument(
         "--require-gameplay-runtime",
         action="store_true",
-        help="fail if --runtime-gameplay is not supplied",
+        help="fail unless both --runtime-gameplay and --runtime-gameplay-peer are supplied or discovered",
     )
     parser.add_argument("--self-test", action="store_true", help="run temporary final-handoff evidence fixtures")
     args = parser.parse_args()

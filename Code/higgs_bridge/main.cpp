@@ -16,6 +16,8 @@
 #include <vr_common/VRHandoffPath.h>
 #include <vr_common/VRTickBridge.h>
 
+#include "HiggsMutationDedup.h"
+
 using PluginHandle = std::uint32_t;
 
 static constexpr PluginHandle kPluginHandleInvalid = static_cast<PluginHandle>(-1);
@@ -222,8 +224,10 @@ std::atomic_uint64_t g_bodyCaptureAttemptCount{0};
 std::atomic_uint64_t g_bodyCaptureSuccessCount{0};
 std::atomic_uint32_t g_bodyCaptureLastResult{static_cast<std::uint32_t>(SkyrimTogetherVR::TickBridge::DispatchResult::Inactive)};
 std::atomic_bool g_endpointFaulted{false};
+std::atomic_uint32_t g_deduplicatedMutationEvents{0};
 std::mutex g_eventLock;
 std::deque<HiggsEvent> g_recentEvents;
+SkyrimTogetherVR::HiggsBridge::MutationDeduplicator g_mutationDeduplicator;
 std::mutex g_snapshotLock;
 HiggsSnapshot g_latestSnapshot;
 std::atomic<SkyrimTogetherVR::TickBridge::Endpoint*> g_endpoint{nullptr};
@@ -372,6 +376,20 @@ std::filesystem::path GetHandoffPath()
     return SkyrimTogetherVR::Handoff::GetFile("SkyrimTogetherVR.higgs");
 }
 
+std::uint64_t GetUnixMilliseconds() noexcept
+{
+    FILETIME fileTime{};
+    GetSystemTimeAsFileTime(&fileTime);
+
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = fileTime.dwLowDateTime;
+    ticks.HighPart = fileTime.dwHighDateTime;
+    constexpr std::uint64_t kWindowsToUnixEpochTicks = 116444736000000000ull;
+    constexpr std::uint64_t kTicksPerMillisecond = 10000ull;
+    return ticks.QuadPart > kWindowsToUnixEpochTicks ?
+        (ticks.QuadPart - kWindowsToUnixEpochTicks) / kTicksPerMillisecond : 0;
+}
+
 bool EqualsFilenameInsensitive(const std::wstring& acName, const wchar_t* apExpected) noexcept
 {
     if (!apExpected)
@@ -437,59 +455,73 @@ std::uint32_t ReadFormId(const void* apForm) noexcept
 
 void PushEvent(HiggsEvent aEvent)
 {
-    aEvent.Sequence = NextNonZeroSequence(g_eventSequence);
-
     std::lock_guard lock(g_eventLock);
+    aEvent.Sequence = NextNonZeroSequence(g_eventSequence);
     g_recentEvents.push_back(aEvent);
     while (g_recentEvents.size() > kMaxRecentEvents)
         g_recentEvents.pop_front();
 }
 
-void PushReferenceEvent(const char* apType, bool aIsLeft, TESObjectREFR* apReference)
+const char* ToEventType(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind) noexcept
 {
-    HiggsEvent event{};
-    event.Type = apType;
-    event.IsLeft = aIsLeft;
-    event.HasHand = true;
-    event.ObjectAddress = ToAddress(apReference);
-    event.FormId = ReadFormId(apReference);
-    PushEvent(event);
+    using MutationKind = SkyrimTogetherVR::HiggsBridge::MutationKind;
+    switch (aKind)
+    {
+    case MutationKind::Pulled: return "pulled";
+    case MutationKind::Grabbed: return "grabbed";
+    case MutationKind::Dropped: return "dropped";
+    case MutationKind::Stashed: return "stashed";
+    case MutationKind::Consumed: return "consumed";
+    }
+    return "unknown";
 }
 
-void PushFormEvent(const char* apType, bool aIsLeft, TESForm* apForm)
+void PushMutationEvent(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind,
+                       const bool aIsLeft, const void* apForm)
 {
+    const auto formId = ReadFormId(apForm);
+    const auto now = static_cast<std::uint64_t>(GetTickCount64());
+    std::lock_guard lock(g_eventLock);
+    if (!g_mutationDeduplicator.Accept(aKind, aIsLeft, formId, now)) {
+        g_deduplicatedMutationEvents.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
     HiggsEvent event{};
-    event.Type = apType;
+    event.Sequence = NextNonZeroSequence(g_eventSequence);
+    event.Type = ToEventType(aKind);
     event.IsLeft = aIsLeft;
     event.HasHand = true;
     event.ObjectAddress = ToAddress(apForm);
-    event.FormId = ReadFormId(apForm);
-    PushEvent(event);
+    event.FormId = formId;
+    g_recentEvents.push_back(event);
+    while (g_recentEvents.size() > kMaxRecentEvents)
+        g_recentEvents.pop_front();
 }
 
 void OnPulled(bool aIsLeft, TESObjectREFR* apReference)
 {
-    PushReferenceEvent("pulled", aIsLeft, apReference);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Pulled, aIsLeft, apReference);
 }
 
 void OnGrabbed(bool aIsLeft, TESObjectREFR* apReference)
 {
-    PushReferenceEvent("grabbed", aIsLeft, apReference);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Grabbed, aIsLeft, apReference);
 }
 
 void OnDropped(bool aIsLeft, TESObjectREFR* apReference)
 {
-    PushReferenceEvent("dropped", aIsLeft, apReference);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Dropped, aIsLeft, apReference);
 }
 
 void OnStashed(bool aIsLeft, TESForm* apForm)
 {
-    PushFormEvent("stashed", aIsLeft, apForm);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Stashed, aIsLeft, apForm);
 }
 
 void OnConsumed(bool aIsLeft, TESForm* apForm)
 {
-    PushFormEvent("consumed", aIsLeft, apForm);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Consumed, aIsLeft, apForm);
 }
 
 void OnCollision(bool aIsLeft, float aMass, float aSeparatingVelocity)
@@ -676,9 +708,10 @@ HiggsSnapshot CopyLatestSnapshot(bool& aAvailable)
 void WriteBridgeFile(const std::uint32_t aSequence)
 {
     const auto path = GetHandoffPath();
+    const auto writeUnixMilliseconds = GetUnixMilliseconds();
     SkyrimTogetherVR::Handoff::WriteFileAtomically(
         path,
-        [aSequence](std::ofstream& file)
+        [aSequence, writeUnixMilliseconds](std::ofstream& file)
         {
             auto* const pHiggs = g_higgs.load(std::memory_order_acquire);
             bool snapshotAvailable = false;
@@ -687,10 +720,14 @@ void WriteBridgeFile(const std::uint32_t aSequence)
             file << "bridge.loaded=1\n";
             file << "bridge.sequence=" << aSequence << "\n";
             file << "bridge.epoch=" << g_bridgeEpoch.load(std::memory_order_acquire) << "\n";
+            SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
+            file << "bridge.writeUnixMilliseconds=" << writeUnixMilliseconds << "\n";
             file << "higgs.detected=" << (IsHiggsInstalled() || pHiggs ? "1" : "0") << "\n";
             file << "higgs.interfaceAvailable=" << (pHiggs ? "1" : "0") << "\n";
             file << "higgs.callbacksRegistered=" << (g_callbacksRegistered.load(std::memory_order_acquire) ? "1" : "0") << "\n";
             file << "higgs.eventSequence=" << g_eventSequence.load(std::memory_order_acquire) << "\n";
+            file << "higgs.mutationProducer=higgsCallbacks\n";
+            file << "higgs.deduplicatedMutationEvents=" << g_deduplicatedMutationEvents.load(std::memory_order_relaxed) << "\n";
             file << "higgs.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
             file << "higgs.snapshotSequence=" << snapshot.Sequence << "\n";
             file << "bodyCapture.endpointFaulted=" << (g_endpointFaulted.load(std::memory_order_acquire) ? "1" : "0") << "\n";

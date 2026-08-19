@@ -20,6 +20,7 @@ REQUIRED_ARCHIVE_ENTRIES = (
     "runtime_checklist.json",
     "runtime_checklist.txt",
     "logs/tp_client.log",
+    "handoff/SkyrimTogetherVR.gameplay",
 )
 
 REQUIRED_CHECK_IDS = (
@@ -27,6 +28,7 @@ REQUIRED_CHECK_IDS = (
     "startup_breadcrumbs",
     "lifecycle_schema",
     "connection_status",
+    "gameplay_readiness",
     "local_pose",
     "local_vrik_api",
     "weapon_pose_context",
@@ -63,20 +65,12 @@ MANIFEST_FLAG_REQUIRED_CHECKS = (
     ("requiredWeaponPose", "weapon_pose_context", "weapon pose context"),
     ("requiredMagicPose", "magic_pose_context", "magic pose context"),
     ("requiredProjectilePose", "projectile_pose_context", "projectile pose context"),
-    ("requiredMovementRelay", "movement_relay", "movement relay"),
-    ("requiredEquipmentRelay", "equipment_relay", "equipment relay"),
-    ("requiredActivationRelay", "activation_relay", "activation relay"),
-    ("requiredMagicRelay", "magic_relay", "magic relay"),
-    ("requiredCombatRelay", "combat_relay", "combat relay"),
-    ("requiredProjectileRelay", "projectile_relay", "projectile relay"),
-    ("requiredGrabRelay", "grab_relay", "grab relay"),
-    ("requiredHiggsRelay", "higgs_relay", "HIGGS relay"),
-    ("requiredSaveloadObserver", "saveload_observer", "save/load observer"),
 )
 
 GAMEPLAY_BOOTSTRAP_CHECKS = (
     ("runtime_identity", "fresh same-process runtime identity"),
     ("connection_status", "connection status"),
+    ("gameplay_readiness", "aggregate gameplay readiness"),
     ("live_lifecycle", "live lifecycle readiness"),
     ("live_player_cell", "live player-cell readiness"),
     ("local_pose", "local avatar pose"),
@@ -96,6 +90,201 @@ def load_json(zf: zipfile.ZipFile, name: str, failures: list[str]) -> dict[str, 
     except UnicodeDecodeError as exc:
         failures.append(f"{name} is not UTF-8: {exc}")
     return {}
+
+
+def load_gameplay_snapshot(zf: zipfile.ZipFile, failures: list[str]) -> dict[str, str]:
+    name = "handoff/SkyrimTogetherVR.gameplay"
+    try:
+        return collect_runtime_evidence.vr_handoff.parse_key_value_bytes(zf.read(name))
+    except KeyError:
+        failures.append(f"missing archive entry: {name}")
+    return {}
+
+
+def _nonzero_int(value: str | None) -> bool:
+    try:
+        return int(value or "", 0) > 0
+    except ValueError:
+        return False
+
+
+def require_paired_session_evidence(
+    primary: dict[str, str],
+    peer: dict[str, str],
+    primary_status: dict[str, str],
+    peer_status: dict[str, str],
+    failures: list[str],
+) -> None:
+    """Require independent client and matching-session evidence before counters.
+
+    The gameplay snapshots state that their counters are local-process
+    observations.  A paired claim therefore needs a second admitted snapshot,
+    distinct client identity, and each snapshot's matching transport status.
+    """
+    handoff = collect_runtime_evidence.vr_handoff
+    for label, values, status in (
+        ("primary", primary, primary_status),
+        ("peer", peer, peer_status),
+    ):
+        if not handoff.gameplay_snapshot_ready(values):
+            failures.append(f"{label} aggregate gameplay snapshot is not ready")
+        for field, expected in handoff.GAMEPLAY_LOCAL_COUNTER_EVIDENCE.items():
+            if values.get(field) != expected:
+                failures.append(f"{label} gameplay snapshot lacks {field}={expected}")
+        for snapshot_field, status_field in (
+            ("launchNonce", "launchNonce"),
+            ("processId", "processId"),
+            ("session.id", "sessionId"),
+            ("session.serverInstanceNonce", "serverInstanceNonce"),
+            ("session.connectionGeneration", "connectionGeneration"),
+        ):
+            if values.get(snapshot_field) != status.get(status_field):
+                failures.append(
+                    f"{label} gameplay {snapshot_field} does not match status {status_field}"
+                )
+        if status.get("online", "").strip().lower() not in {"1", "true", "yes"}:
+            failures.append(f"{label} paired status is not online")
+        if not _nonzero_int(status.get("playerId")):
+            failures.append(f"{label} paired status lacks nonzero playerId")
+
+    identity_fields = ("session.id", "session.serverInstanceNonce")
+    for field in identity_fields:
+        value = primary.get(field)
+        if value:
+            if value != peer.get(field):
+                failures.append(f"paired evidence {field} differs")
+        else:
+            failures.append(f"primary paired evidence lacks {field}")
+    for field in ("launchNonce", "processId"):
+        if primary.get(field) == peer.get(field):
+            failures.append(f"paired evidence must originate from distinct clients ({field})")
+
+    if primary_status.get("playerId") == peer_status.get("playerId"):
+        failures.append("paired evidence must originate from distinct players")
+
+
+def require_paired_domain_evidence(
+    primary: dict[str, str],
+    peer: dict[str, str],
+    domains: tuple[str, ...],
+    failures: list[str],
+    *,
+    scope: str,
+) -> None:
+    """Require domain proof after paired client/session correlation."""
+    handoff = collect_runtime_evidence.vr_handoff
+    for domain in domains:
+        primary_counts = handoff.gameplay_domain_counters(primary, domain)
+        peer_counts = handoff.gameplay_domain_counters(peer, domain)
+        if domain == "save_load":
+            for label, values, counts in (
+                ("primary", primary, primary_counts),
+                ("peer", peer, peer_counts),
+            ):
+                for field, expected in handoff.GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items():
+                    key = f"domain.save_load.{field}"
+                    if values.get(key) != expected:
+                        failures.append(
+                            f"paired {scope} domain save_load {label} requires {key}={expected}"
+                        )
+                if not (counts["captured"] and counts["applied"]):
+                    failures.append(
+                        f"paired {scope} domain save_load {label} lacks captured/applied "
+                        "lifecycle evidence"
+                    )
+            continue
+        if not (primary_counts["captured"] and primary_counts["sent"] and peer_counts["applied"]):
+            failures.append(
+                f"paired {scope} domain {domain} lacks primary captured/sent and peer applied counters"
+            )
+        if not (peer_counts["captured"] and peer_counts["sent"] and primary_counts["applied"]):
+            failures.append(
+                f"paired {scope} domain {domain} lacks peer captured/sent and primary applied counters"
+            )
+
+
+def paired_domain_requirements(
+    *,
+    require_gameplay: bool,
+    require_movement_relay: bool,
+    require_equipment_relay: bool,
+    require_activation_relay: bool,
+    require_magic_relay: bool,
+    require_combat_relay: bool,
+    require_projectile_relay: bool,
+    require_grab_relay: bool,
+    require_higgs_relay: bool,
+    require_saveload_observer: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return canonical and optional extension domains required by this audit."""
+    handoff = collect_runtime_evidence.vr_handoff
+    canonical: list[str] = list(handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS) if require_gameplay else []
+    for requested, domain in (
+        (require_movement_relay, "movement"),
+        (require_equipment_relay, "equipment"),
+        (require_activation_relay, "object"),
+        (require_magic_relay, "magic"),
+        (require_combat_relay, "combat"),
+        (require_projectile_relay, "projectile"),
+        (require_saveload_observer, "save_load"),
+    ):
+        if requested:
+            canonical.append(domain)
+    optional: list[str] = []
+    if require_grab_relay or require_higgs_relay:
+        optional.append("higgs")
+    return tuple(dict.fromkeys(canonical)), tuple(dict.fromkeys(optional))
+
+
+def require_paired_peer_archive(
+    peer_zf: zipfile.ZipFile,
+    peer_names: set[str],
+    primary_package_manifest: dict[str, object],
+    failures: list[str],
+    *,
+    require_gameplay: bool,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Validate the peer archive's live identity and exact package provenance."""
+    peer_failures: list[str] = []
+    peer_manifest = load_json(peer_zf, "manifest.json", peer_failures)
+    peer_package_manifest = load_json(
+        peer_zf,
+        "package/SkyrimTogetherVR_BuildManifest.json",
+        peer_failures,
+    )
+    if peer_manifest.get("schema") != "skyrim_together_vr_runtime_evidence_v1":
+        peer_failures.append("manifest schema is invalid")
+    if require_gameplay and not peer_manifest.get("gameplayAudit"):
+        peer_failures.append("archive was not collected with --gameplay")
+    if not peer_manifest.get("liveAdmissionRequested") or peer_manifest.get("runtimeEvidenceTrust") != "trusted":
+        peer_failures.append("archive is not trusted live gameplay evidence")
+    for field in ("networkVersion", "sourceRevision", "sourceProvenance"):
+        if peer_package_manifest.get(field) != primary_package_manifest.get(field):
+            peer_failures.append(f"package {field} does not match primary evidence")
+    runtime_identity = peer_manifest.get("runtimeIdentity")
+    expected_network_version = peer_package_manifest.get("networkVersion")
+    if not isinstance(runtime_identity, dict) or not isinstance(expected_network_version, str):
+        peer_failures.append("runtime identity or package networkVersion is unavailable")
+    else:
+        audit_archived_runtime_identity(
+            peer_zf,
+            peer_names,
+            peer_manifest,
+            runtime_identity,
+            expected_network_version,
+            peer_failures,
+        )
+    peer_status_name = f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES['status']}"
+    peer_status = (
+        collect_runtime_evidence.vr_handoff.parse_key_value_bytes(peer_zf.read(peer_status_name))
+        if peer_status_name in peer_names
+        else {}
+    )
+    if not peer_status:
+        peer_failures.append("status readout is missing")
+    for failure in peer_failures:
+        failures.append("peer evidence " + failure)
+    return load_gameplay_snapshot(peer_zf, failures), peer_status
 
 
 def require_check_pass(
@@ -206,6 +395,9 @@ def audit_archived_runtime_identity(
         now_ns=evaluated_at_ns,
         readout_metadata=readout_metadata,
         expected_network_version=expected_network_version,
+        require_gameplay_ready=bool(
+            manifest.get("gameplayAudit") or manifest.get("gameplayBootstrapAudit")
+        ),
     )
     if not evaluated["ok"]:
         failures.append("archived runtime identity fields are invalid: " + "; ".join(map(str, evaluated["reasons"])))
@@ -256,6 +448,7 @@ def audit_archive(
     require_saveload_observer: bool,
     allow_failed_checks: bool,
     require_gameplay_bootstrap: bool = False,
+    peer_archive: pathlib.Path | None = None,
 ) -> int:
     failures: list[str] = []
     warnings: list[str] = []
@@ -275,6 +468,12 @@ def audit_archive(
                 failures.append(f"missing archive entry: {entry}")
 
         manifest = load_json(zf, "manifest.json", failures) if "manifest.json" in names else {}
+        gameplay_snapshot = load_gameplay_snapshot(zf, failures)
+        gameplay_snapshot_ok, gameplay_snapshot_detail = collect_runtime_evidence.vr_handoff.gameplay_snapshot_detail(
+            gameplay_snapshot
+        )
+        if not gameplay_snapshot_ok:
+            failures.append("invalid aggregate gameplay snapshot: " + gameplay_snapshot_detail)
         package_manifest = (
             load_json(zf, "package/SkyrimTogetherVR_BuildManifest.json", failures)
             if "package/SkyrimTogetherVR_BuildManifest.json" in names
@@ -301,6 +500,16 @@ def audit_archive(
         manifest_avatar_sync = bool(manifest.get("avatarSyncAudit"))
         manifest_gameplay = bool(manifest.get("gameplayAudit"))
         manifest_gameplay_bootstrap = bool(manifest.get("gameplayBootstrapAudit"))
+        effective_require_gameplay = require_gameplay or manifest_gameplay
+        effective_require_movement_relay = require_movement_relay or bool(manifest.get("requiredMovementRelay"))
+        effective_require_equipment_relay = require_equipment_relay or bool(manifest.get("requiredEquipmentRelay"))
+        effective_require_activation_relay = require_activation_relay or bool(manifest.get("requiredActivationRelay"))
+        effective_require_magic_relay = require_magic_relay or bool(manifest.get("requiredMagicRelay"))
+        effective_require_combat_relay = require_combat_relay or bool(manifest.get("requiredCombatRelay"))
+        effective_require_projectile_relay = require_projectile_relay or bool(manifest.get("requiredProjectileRelay"))
+        effective_require_grab_relay = require_grab_relay or bool(manifest.get("requiredGrabRelay"))
+        effective_require_higgs_relay = require_higgs_relay or bool(manifest.get("requiredHiggsRelay"))
+        effective_require_saveload_observer = require_saveload_observer or bool(manifest.get("requiredSaveloadObserver"))
         if not manifest_gameplay_bootstrap and "logs/tp_client.log" not in names:
             failures.append("missing archive entry: logs/tp_client.log")
         if require_avatar_sync and not require_gameplay and (not manifest_avatar_sync or manifest_gameplay):
@@ -428,6 +637,8 @@ def audit_archive(
         require_manifest_requested_checks(manifest, checks_by_id, failures)
         if live_admission_requested:
             require_check_pass(checks_by_id, "runtime_identity", "manifest live runtime identity", failures)
+        if manifest_gameplay or manifest_gameplay_bootstrap:
+            require_check_pass(checks_by_id, "gameplay_readiness", "aggregate gameplay readiness", failures)
 
         avatar_check = checks_by_id.get("avatar_sync_actor_targets", {})
         if require_avatar_sync and avatar_check.get("status") != collect_runtime_evidence.CHECK_PASS:
@@ -451,24 +662,67 @@ def audit_archive(
             require_check_pass(checks_by_id, "magic_pose_context", "magic pose context", failures)
         if require_projectile_pose:
             require_check_pass(checks_by_id, "projectile_pose_context", "projectile pose context", failures)
-        if require_movement_relay:
-            require_check_pass(checks_by_id, "movement_relay", "movement relay", failures)
-        if require_equipment_relay:
-            require_check_pass(checks_by_id, "equipment_relay", "equipment relay", failures)
-        if require_activation_relay:
-            require_check_pass(checks_by_id, "activation_relay", "activation relay", failures)
-        if require_magic_relay:
-            require_check_pass(checks_by_id, "magic_relay", "magic relay", failures)
-        if require_combat_relay:
-            require_check_pass(checks_by_id, "combat_relay", "combat relay", failures)
-        if require_projectile_relay:
-            require_check_pass(checks_by_id, "projectile_relay", "projectile relay", failures)
-        if require_grab_relay:
-            require_check_pass(checks_by_id, "grab_relay", "grab relay", failures)
-        if require_higgs_relay:
-            require_check_pass(checks_by_id, "higgs_relay", "HIGGS relay", failures)
-        if require_saveload_observer:
-            require_check_pass(checks_by_id, "saveload_observer", "save/load observer", failures)
+        # Legacy per-service readouts remain useful diagnostics, but their
+        # absence cannot label a canonical gameplay domain disabled. Requested
+        # relay proof is checked below from paired aggregate snapshots.
+
+        canonical_domains, optional_extension_domains = paired_domain_requirements(
+            require_gameplay=effective_require_gameplay,
+            require_movement_relay=effective_require_movement_relay,
+            require_equipment_relay=effective_require_equipment_relay,
+            require_activation_relay=effective_require_activation_relay,
+            require_magic_relay=effective_require_magic_relay,
+            require_combat_relay=effective_require_combat_relay,
+            require_projectile_relay=effective_require_projectile_relay,
+            require_grab_relay=effective_require_grab_relay,
+            require_higgs_relay=effective_require_higgs_relay,
+            require_saveload_observer=effective_require_saveload_observer,
+        )
+        if canonical_domains or optional_extension_domains:
+            if not live_admission_requested or runtime_trust != "trusted":
+                failures.append("paired gameplay proof requires trusted live primary evidence")
+            if peer_archive is None:
+                failures.append("two-client relay proof requires --peer-archive")
+            elif not peer_archive.exists() or not zipfile.is_zipfile(peer_archive):
+                failures.append("peer evidence archive does not exist or is not a zip file")
+            else:
+                with zipfile.ZipFile(peer_archive) as peer_zf:
+                    peer_snapshot, peer_status = require_paired_peer_archive(
+                        peer_zf,
+                        set(peer_zf.namelist()),
+                        package_manifest,
+                        failures,
+                        require_gameplay=effective_require_gameplay,
+                    )
+                primary_status_name = f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES['status']}"
+                primary_status = (
+                    collect_runtime_evidence.vr_handoff.parse_key_value_bytes(zf.read(primary_status_name))
+                    if primary_status_name in names
+                    else {}
+                )
+                require_paired_session_evidence(
+                    gameplay_snapshot,
+                    peer_snapshot,
+                    primary_status,
+                    peer_status,
+                    failures,
+                )
+                if canonical_domains:
+                    require_paired_domain_evidence(
+                        gameplay_snapshot,
+                        peer_snapshot,
+                        canonical_domains,
+                        failures,
+                        scope="mandatory canonical",
+                    )
+                if optional_extension_domains:
+                    require_paired_domain_evidence(
+                        gameplay_snapshot,
+                        peer_snapshot,
+                        optional_extension_domains,
+                        failures,
+                        scope="optional VR extension",
+                    )
 
         manifest_files = manifest.get("files", [])
         if isinstance(manifest_files, list):
@@ -564,7 +818,7 @@ def command_self_test() -> int:
             "status",
             "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
             "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=14\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=15\n"
             "serverInstanceNonce=99\ngamePath={}\n".format(game),
         )
         write(
@@ -573,6 +827,7 @@ def command_self_test() -> int:
             "playerFormId=20\nplayerBaseFormId=7\nplayerCellFormId=100\n"
             "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={}\n".format(game),
         )
+        write("gameplay", collect_runtime_evidence.vr_handoff.gameplay_snapshot_fixture(game))
         write(
             "pose",
             "online=1\nlocalPoseAvailable=1\nlocal.hmd.valid=1\nlocal.leftHand.valid=1\nlocal.rightHand.valid=1\n"
@@ -698,7 +953,7 @@ def command_self_test() -> int:
         )
         write(
             "compat",
-            "ready=1\n"
+            "schemaVersion=2\nready=0\nreadinessSource=SkyrimTogetherVR.gameplay\n"
             "higgs.installed=1\nhiggs.loaded=1\n"
             "planck.installed=1\nplanck.loaded=1\n"
             "vrPhysicsCompatibilityModInstalled=1\n"
@@ -722,7 +977,7 @@ def command_self_test() -> int:
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
             "posePolicy=observation_only\n"
-            "higgsPolicy=observation_only\nplanckPolicy=observation_only\n",
+            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=unsupported_no_remote_physical_replay\n",
         )
         write(
             "higgs",
@@ -787,12 +1042,12 @@ def command_self_test() -> int:
             "mode": "releasedbg",
             "platform": "windows",
             "arch": "x64",
-            "avatarSync": True,
-            "gameplay": False,
-            "packageFlavor": "avatar-sync",
-            "targets": list(collect_runtime_evidence.AVATAR_SYNC_EXPECTED_MANIFEST_TARGETS),
-            "copiedArtifacts": list(collect_runtime_evidence.AVATAR_SYNC_EXPECTED_RUNTIME_ARTIFACTS),
-            "expectedArtifacts": list(collect_runtime_evidence.AVATAR_SYNC_EXPECTED_RUNTIME_ARTIFACTS),
+            "avatarSync": False,
+            "gameplay": True,
+            "packageFlavor": "gameplay",
+            "targets": list(collect_runtime_evidence.GAMEPLAY_EXPECTED_MANIFEST_TARGETS),
+            "copiedArtifacts": list(collect_runtime_evidence.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS),
+            "expectedArtifacts": list(collect_runtime_evidence.GAMEPLAY_EXPECTED_RUNTIME_ARTIFACTS),
             "packageRoot": str(game),
             "stagedGameFiles": True,
             "companionPanel": True,
@@ -837,17 +1092,59 @@ def command_self_test() -> int:
             require_magic_relay=True,
             require_combat_relay=True,
             require_projectile_relay=True,
-            require_grab_relay=True,
-            require_higgs_relay=True,
+            require_grab_relay=False,
+            require_higgs_relay=False,
             require_saveload_observer=True,
-            avatar_sync=True,
-            gameplay=False,
+            require_gameplay_relays=True,
+            avatar_sync=False,
+            gameplay=True,
         )
         archive = collect_runtime_evidence.collect(args)
+        peer_archive = out_dir / "peer-runtime-evidence.zip"
+        with zipfile.ZipFile(archive) as source_zip, zipfile.ZipFile(peer_archive, "w", compression=zipfile.ZIP_DEFLATED) as peer_zip:
+            peer_manifest = json.loads(source_zip.read("manifest.json").decode("utf-8"))
+            peer_identity_readouts = {
+                f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES[name]}"
+                for name in collect_runtime_evidence.vr_handoff.RUNTIME_IDENTITY_READOUTS
+            }
+            peer_payloads: dict[str, bytes] = {}
+            for name in source_zip.namelist():
+                if name == "manifest.json":
+                    continue
+                if name == "handoff/SkyrimTogetherVR.gameplay":
+                    payload = collect_runtime_evidence.vr_handoff.gameplay_snapshot_fixture(
+                        game,
+                        launch_nonce="fedcba9876543210fedcba9876543210",
+                        process_id=43,
+                    )
+                    peer_payloads[name] = payload.encode("utf-8")
+                    peer_zip.writestr(name, payload)
+                elif name in peer_identity_readouts:
+                    payload = source_zip.read(name).decode("utf-8").replace(
+                        "0123456789abcdef0123456789abcdef",
+                        "fedcba9876543210fedcba9876543210",
+                    ).replace("processId=42", "processId=43")
+                    if name == f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES['status']}":
+                        payload = payload.replace("playerId=4", "playerId=5")
+                    peer_payloads[name] = payload.encode("utf-8")
+                    peer_zip.writestr(name, payload)
+                else:
+                    peer_zip.writestr(name, source_zip.read(name))
+            for record in peer_manifest["files"]:
+                if not isinstance(record, dict):
+                    continue
+                archive_name = str(record.get("archiveName", ""))
+                payload = peer_payloads.get(archive_name)
+                if payload is None:
+                    continue
+                record["size"] = len(payload)
+                record["sha256"] = hashlib.sha256(payload).hexdigest()
+            peer_zip.writestr("manifest.json", json.dumps(peer_manifest, indent=2, sort_keys=True) + "\n")
         result = audit_archive(
             archive,
+            peer_archive=peer_archive,
             require_avatar_sync=True,
-            require_gameplay=False,
+            require_gameplay=True,
             require_remote_player=True,
             require_weapon_pose=True,
             require_magic_pose=True,
@@ -858,8 +1155,8 @@ def command_self_test() -> int:
             require_magic_relay=True,
             require_combat_relay=True,
             require_projectile_relay=True,
-            require_grab_relay=True,
-            require_higgs_relay=True,
+            require_grab_relay=False,
+            require_higgs_relay=False,
             require_saveload_observer=True,
             allow_failed_checks=False,
         )
@@ -868,6 +1165,7 @@ def command_self_test() -> int:
 
         relaxed_result = audit_archive(
             archive,
+            peer_archive=peer_archive,
             require_avatar_sync=False,
             require_gameplay=False,
             require_remote_player=False,
@@ -900,6 +1198,7 @@ def command_self_test() -> int:
                     weakened_zip.writestr(name, source_zip.read(name))
         missing_inventory_result = audit_archive(
             missing_inventory_archive,
+            peer_archive=peer_archive,
             require_avatar_sync=False,
             require_gameplay=False,
             require_remote_player=False,
@@ -928,32 +1227,20 @@ def command_self_test() -> int:
             compression=zipfile.ZIP_DEFLATED,
         ) as weakened_zip:
             manifest = json.loads(source_zip.read("manifest.json").decode("utf-8"))
-            checklist = json.loads(source_zip.read("runtime_checklist.json").decode("utf-8"))
-            for check in checklist.get("checks", []):
-                if isinstance(check, dict) and check.get("id") == "movement_relay":
-                    check["status"] = collect_runtime_evidence.CHECK_NOT_REQUIRED
-                    check["detail"] = "self-test intentionally weakened"
-            checklist["summary"] = {
-                collect_runtime_evidence.CHECK_PASS: sum(
-                    1
-                    for check in checklist.get("checks", [])
-                    if isinstance(check, dict) and check.get("status") == collect_runtime_evidence.CHECK_PASS
-                ),
-                collect_runtime_evidence.CHECK_FAIL: sum(
-                    1
-                    for check in checklist.get("checks", [])
-                    if isinstance(check, dict) and check.get("status") == collect_runtime_evidence.CHECK_FAIL
-                ),
-                collect_runtime_evidence.CHECK_NOT_REQUIRED: sum(
-                    1
-                    for check in checklist.get("checks", [])
-                    if isinstance(check, dict) and check.get("status") == collect_runtime_evidence.CHECK_NOT_REQUIRED
-                ),
-            }
-            manifest["runtimeChecklist"] = checklist["summary"]
+            gameplay_name = "handoff/SkyrimTogetherVR.gameplay"
+            weakened_gameplay = source_zip.read(gameplay_name).replace(
+                b"domain.movement.sent=1\n",
+                b"domain.movement.sent=0\n",
+                1,
+            )
+            for record in manifest["files"]:
+                if isinstance(record, dict) and record.get("archiveName") == gameplay_name:
+                    record["size"] = len(weakened_gameplay)
+                    record["sha256"] = hashlib.sha256(weakened_gameplay).hexdigest()
+                    break
             for name in source_zip.namelist():
-                if name == "runtime_checklist.json":
-                    weakened_zip.writestr(name, json.dumps(checklist, indent=2, sort_keys=True) + "\n")
+                if name == gameplay_name:
+                    weakened_zip.writestr(name, weakened_gameplay)
                 elif name == "manifest.json":
                     weakened_zip.writestr(name, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
                 else:
@@ -961,6 +1248,7 @@ def command_self_test() -> int:
 
         weakened_result = audit_archive(
             weakened_archive,
+            peer_archive=peer_archive,
             require_avatar_sync=False,
             require_gameplay=False,
             require_remote_player=False,
@@ -979,7 +1267,7 @@ def command_self_test() -> int:
             allow_failed_checks=False,
         )
         if weakened_result == 0:
-            print("Evidence zip audit self-test did not reject a manifest-required movement relay checklist downgrade.")
+            print("Evidence zip audit self-test did not reject a weakened paired movement proof.")
             return 1
 
         weakened_avatar_archive = out_dir / "weakened-avatar-runtime-evidence.zip"
@@ -1027,6 +1315,7 @@ def command_self_test() -> int:
 
         weakened_avatar_result = audit_archive(
             weakened_avatar_archive,
+            peer_archive=peer_archive,
             require_avatar_sync=False,
             require_gameplay=False,
             require_remote_player=False,
@@ -1055,8 +1344,13 @@ def command_self_test() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=pathlib.Path, nargs="?", help="runtime evidence zip to audit")
+    parser.add_argument(
+        "--peer-archive",
+        type=pathlib.Path,
+        help="second trusted --gameplay evidence zip required for paired gameplay proof",
+    )
     parser.add_argument("--require-avatar-sync", action="store_true", help="require the archive to come from --avatar-sync collection")
-    parser.add_argument("--require-gameplay", action="store_true", help="require the archive to come from --gameplay collection")
+    parser.add_argument("--require-gameplay", action="store_true", help="require trusted paired proof for every mandatory canonical gameplay domain")
     parser.add_argument(
         "--require-gameplay-bootstrap",
         action="store_true",
@@ -1073,10 +1367,10 @@ def main() -> int:
     parser.add_argument("--require-magic-relay", action="store_true", help="require magic relay evidence to pass")
     parser.add_argument("--require-combat-relay", action="store_true", help="require combat relay evidence to pass")
     parser.add_argument("--require-projectile-relay", action="store_true", help="require projectile relay evidence to pass")
-    parser.add_argument("--require-grab-relay", action="store_true", help="require grab/release relay evidence to pass")
-    parser.add_argument("--require-higgs-relay", action="store_true", help="require HIGGS relay evidence to pass")
+    parser.add_argument("--require-grab-relay", action="store_true", help="require optional direct HIGGS grab/release evidence to pass")
+    parser.add_argument("--require-higgs-relay", action="store_true", help="require optional direct HIGGS relay evidence to pass")
     parser.add_argument("--require-saveload-observer", action="store_true", help="require save/load observer evidence to pass")
-    parser.add_argument("--require-gameplay-relays", action="store_true", help="require all staged gameplay relay evidence to pass")
+    parser.add_argument("--require-gameplay-relays", action="store_true", help="require every mandatory canonical gameplay relay evidence lane")
     parser.add_argument("--allow-failed-checks", action="store_true", help="report checklist failures without returning a failing exit code")
     parser.add_argument("--self-test", action="store_true", help="run a temp-directory evidence zip audit fixture")
     args = parser.parse_args()
@@ -1090,7 +1384,6 @@ def main() -> int:
     if args.require_avatar_sync:
         args.require_remote_player = True
     if args.require_gameplay:
-        args.require_avatar_sync = True
         args.require_remote_player = True
         args.require_weapon_pose = True
         args.require_magic_pose = True
@@ -1103,8 +1396,6 @@ def main() -> int:
         args.require_magic_relay = True
         args.require_combat_relay = True
         args.require_projectile_relay = True
-        args.require_grab_relay = True
-        args.require_higgs_relay = True
         args.require_saveload_observer = True
 
     if args.self_test:
@@ -1113,6 +1404,7 @@ def main() -> int:
         parser.error("archive is required unless --self-test is used")
     return audit_archive(
         args.archive.expanduser().resolve(),
+        peer_archive=args.peer_archive.expanduser().resolve() if args.peer_archive else None,
         require_avatar_sync=args.require_avatar_sync,
         require_gameplay=args.require_gameplay,
         require_remote_player=args.require_remote_player,

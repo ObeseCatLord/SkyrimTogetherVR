@@ -166,6 +166,46 @@ POWERSHELL
     "$winboat_powershell" "$guest_cleanup" >/dev/null 2>&1 || true
 }
 
+retain_failed_guest_report() {
+    if [[ -z $guest_report_file || ! -f $guest_report_file || $candidate_build_success == true ]]; then
+        return
+    fi
+
+    local state_dir repo_root_physical retained_report stale_report
+    state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-together-vr/winboat-candidate-failures"
+    if ! (umask 077; mkdir -p -- "$state_dir" && chmod 700 -- "$state_dir"); then
+        echo "Unable to retain failed WinBoat candidate log under: $state_dir" >&2
+        return
+    fi
+    state_dir=$(cd "$state_dir" && pwd -P) || return 0
+    repo_root_physical=$(cd "$repo_root" && pwd -P) || return 0
+    case "$state_dir/" in
+        "$repo_root_physical/"*)
+            echo "Refusing to retain failed WinBoat candidate log inside the repository: $state_dir" >&2
+            return
+            ;;
+    esac
+
+    retained_report="$state_dir/stvr-winboat-candidate-failure-${short_commit}-${timestamp}.log"
+    local collision_suffix=1
+    while [[ -e $retained_report ]]; do
+        retained_report="$state_dir/stvr-winboat-candidate-failure-${short_commit}-${timestamp}-${collision_suffix}.log"
+        collision_suffix=$((collision_suffix + 1))
+    done
+    if ! mv -T -- "$guest_report_file" "$retained_report"; then
+        echo "Unable to retain failed WinBoat candidate log: $retained_report" >&2
+        return
+    fi
+    guest_report_file=""
+    chmod 600 -- "$retained_report" || true
+    printf 'STVR_CANDIDATE_FAILURE_LOG=%s\n' "$retained_report" >&2
+
+    while IFS= read -r stale_report; do
+        rm -f -- "$state_dir/$stale_report" || true
+    done < <(find "$state_dir" -maxdepth 1 -type f -name 'stvr-winboat-candidate-failure-*.log' -printf '%T@ %f\n' |
+        LC_ALL=C sort -nr | awk 'NR > 5 { sub(/^[^ ]+ /, ""); print }')
+}
+
 cleanup_runtime() {
     local status=$?
     trap - EXIT
@@ -179,6 +219,7 @@ cleanup_runtime() {
     [[ -z $candidate_bundle_file ]] || rm -f -- "$candidate_bundle_file"
     [[ -z $patch_file ]] || rm -f -- "$patch_file"
     [[ -z $patch_verify_file ]] || rm -f -- "$patch_verify_file"
+    retain_failed_guest_report
     [[ -z $guest_report_file ]] || rm -f -- "$guest_report_file"
     if [[ $candidate_result_transferred != true && -n $linux_result_path ]]; then
         rm -rf -- "$linux_result_path"

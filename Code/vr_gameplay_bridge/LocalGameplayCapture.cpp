@@ -66,8 +66,11 @@ constexpr auto kPackageRefreshInterval = std::chrono::seconds{5};
 constexpr auto kQuestSuppressionLifetime = std::chrono::seconds{2};
 constexpr auto kExperienceSuppressionLifetime = std::chrono::seconds{2};
 constexpr std::size_t kMaximumQuestSuppressions = 32;
+constexpr std::size_t kMaximumPendingQuestReconciliations = 32;
 constexpr std::uint32_t kMapWeatherFormId = 0x000A6858;
 constexpr std::uint32_t kMaximumQuestType = 11;
+constexpr std::int32_t kQuestStatusStarted = 1;
+constexpr std::int32_t kQuestStatusStopped = 2;
 constexpr std::array<std::uint32_t, 4> kNonSyncableQuestIds{
     0x0002BA16,
     0x020071D0,
@@ -261,9 +264,32 @@ thread_local std::uint32_t g_remoteInventorySuppressionDepth{};
 bool g_initialized{};
 bool g_periodicCaptureActive{};
 bool g_periodicCaptureFailed{};
-bool g_scriptSinksRegistered{};
-bool g_animationSinkRegistered{};
-RE::PlayerCharacter* g_animationSinkPlayer{};
+bool g_localCaptureSinksReady{};
+
+enum class SinkRegistrationState : std::uint8_t
+{
+    Unregistered,
+    RetainedUnverified,
+    Registered,
+};
+
+struct ScriptSinkRegistration
+{
+    RE::ScriptEventSourceHolder* Owner{};
+    SinkRegistrationState State{SinkRegistrationState::Unregistered};
+};
+
+struct AnimationSinkRegistration
+{
+    RE::PlayerCharacter* Owner{};
+    SinkRegistrationState State{SinkRegistrationState::Unregistered};
+};
+
+// Ownership is explicit because both native sources can disappear while a
+// load is rebuilding them. A null singleton is not proof that a registered
+// source removed the sink.
+ScriptSinkRegistration g_scriptSinkRegistration{};
+AnimationSinkRegistration g_animationSinkRegistration{};
 std::uint32_t g_lastObjectCellFormId{};
 
 using ObjectSnapshotItem = CapturedInventoryStack;
@@ -339,6 +365,20 @@ struct QuestSuppression
 
 std::mutex g_questSuppressionLock;
 std::array<QuestSuppression, kMaximumQuestSuppressions> g_questSuppressions{};
+
+struct PendingQuestReconciliation
+{
+    std::uint64_t ServerInstanceNonce{};
+    std::uint64_t ConnectionGeneration{};
+    std::uint64_t LifecycleEpoch{};
+    std::uint32_t QuestFormId{};
+    std::uint16_t Stage{};
+    std::uint8_t QuestType{};
+    bool Stopped{};
+    bool Occupied{};
+};
+
+std::array<PendingQuestReconciliation, kMaximumPendingQuestReconciliations> g_pendingQuestReconciliations{};
 
 struct LockSuppression
 {
@@ -843,6 +883,102 @@ void RecordPeriodicPublication(const bool a_accepted) noexcept
     const auto accepted = endpoint.TryPushEvent(record);
     RecordPeriodicPublication(accepted);
     return accepted;
+}
+
+[[nodiscard]] bool MatchesCurrentQuestReconciliationSession(
+    const PendingQuestReconciliation& a_pending) noexcept
+{
+    const auto identity = BridgeEndpoint::Get().SnapshotIdentity(0);
+    return identity.ServerInstanceNonce == a_pending.ServerInstanceNonce &&
+           identity.ConnectionGeneration == a_pending.ConnectionGeneration &&
+           identity.LifecycleEpoch == a_pending.LifecycleEpoch;
+}
+
+[[nodiscard]] bool TryPublishQuestReconciliation(
+    const PendingQuestReconciliation& a_pending) noexcept
+{
+    if (!a_pending.Occupied || !CanPublish(GameplayDomain::Quest) ||
+        !MatchesCurrentQuestReconciliationSession(a_pending))
+        return false;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player)
+        return false;
+
+    GameplayActionPayload payload{};
+    if (!PreparePlayerPayload(payload, *player))
+        return false;
+    payload.LocalFormIdA = a_pending.QuestFormId;
+    payload.ValueA = a_pending.Stage;
+    payload.ValueB = a_pending.Stopped ? kQuestStatusStopped : kQuestStatusStarted;
+    payload.ActionFlags = a_pending.QuestType;
+
+    std::array<EventRecord, 2> records{};
+    const auto populate = [&](EventRecord& ar_record, const GameplayAction a_action) noexcept {
+        ar_record.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalGameplayAction);
+        ar_record.Header.PayloadSize = kFixedPayloadBytes;
+        ar_record.Header.Identity.ServerInstanceNonce = a_pending.ServerInstanceNonce;
+        ar_record.Header.Identity.ConnectionGeneration = a_pending.ConnectionGeneration;
+        ar_record.Header.Identity.LifecycleEpoch = a_pending.LifecycleEpoch;
+        ar_record.Header.Identity.ActionId = g_nextActionId.fetch_add(1, std::memory_order_relaxed) + 1;
+        ar_record.Payload.LocalGameplayAction = payload;
+        ar_record.Payload.LocalGameplayAction.Domain = static_cast<std::uint16_t>(GameplayDomain::Quest);
+        ar_record.Payload.LocalGameplayAction.Action = static_cast<std::uint16_t>(a_action);
+    };
+
+    populate(records[0], GameplayAction::SetQuestState);
+    const auto recordCount = a_pending.Stopped ? std::size_t{1} : std::size_t{2};
+    if (!a_pending.Stopped) {
+        payload.ValueB = 0;
+        populate(records[1], GameplayAction::SetQuestStage);
+    }
+
+    const auto accepted = BridgeEndpoint::Get().TryPushEvents(records.data(), recordCount);
+    RecordPeriodicPublication(accepted);
+    return accepted;
+}
+
+[[nodiscard]] bool QueueQuestReconciliation(const PendingQuestReconciliation& a_pending) noexcept
+{
+    PendingQuestReconciliation* empty{};
+    for (auto& pending : g_pendingQuestReconciliations) {
+        if (!pending.Occupied) {
+            if (!empty)
+                empty = &pending;
+            continue;
+        }
+        if (pending.ServerInstanceNonce == a_pending.ServerInstanceNonce &&
+            pending.ConnectionGeneration == a_pending.ConnectionGeneration &&
+            pending.LifecycleEpoch == a_pending.LifecycleEpoch &&
+            pending.QuestFormId == a_pending.QuestFormId) {
+            // A later authoritative observation supersedes every unsent
+            // intermediate state for this quest in the same lifecycle.
+            pending = a_pending;
+            return true;
+        }
+    }
+    if (!empty)
+        return false;
+    *empty = a_pending;
+    return true;
+}
+
+void FlushPendingQuestReconciliations() noexcept
+{
+    for (auto& pending : g_pendingQuestReconciliations) {
+        if (!pending.Occupied)
+            continue;
+        if (!MatchesCurrentQuestReconciliationSession(pending)) {
+            // Never leak a post-state from a retired lifecycle into a new
+            // session. Reset also clears these entries, but this protects the
+            // transition window before periodic capture sees that reset.
+            pending = {};
+            continue;
+        }
+        if (!TryPublishQuestReconciliation(pending))
+            return;
+        pending = {};
+    }
 }
 
 struct NpcFactionEntry
@@ -2260,81 +2396,12 @@ void OnDeathEvent(const RE::TESDeathEvent& a_event) noexcept
     }
 }
 
-void OnCombatEvent(const RE::TESCombatEvent& a_event) noexcept
+void OnGrabReleaseEvent(const RE::TESGrabReleaseEvent&) noexcept
 {
-    try {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || a_event.actor.get() != player)
-            return;
-
-        GameplayActionPayload payload{};
-        if (!PreparePlayerPayload(payload, *player))
-            return;
-        if (a_event.newState != RE::ACTOR_COMBAT_STATE::kNone) {
-            const auto* target = a_event.targetActor.get();
-            if (!target || !IsValidFormId(target->GetFormID()) || !RE::TESForm::LookupByID<RE::Actor>(target->GetFormID()))
-                return;
-            payload.LocalFormIdA = target->GetFormID();
-        }
-        Publish(GameplayDomain::Combat, GameplayAction::SetCombatTarget, payload);
-    } catch (...) {
-    }
-}
-
-void OnHitEvent(const RE::TESHitEvent& a_event) noexcept
-{
-    try {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        const auto* target = a_event.target.get();
-        if (!player || a_event.cause.get() != player || !target || !IsValidFormId(target->GetFormID()) ||
-            !RE::TESForm::LookupByID<RE::Actor>(target->GetFormID()))
-            return;
-
-        GameplayActionPayload payload{};
-        if (!PreparePlayerPayload(payload, *player))
-            return;
-        payload.LocalFormIdA = target->GetFormID();
-        if (a_event.source != 0 && RE::TESForm::LookupByID<RE::TESObjectWEAP>(a_event.source))
-            payload.LocalFormIdB = a_event.source;
-        Publish(GameplayDomain::Combat, GameplayAction::MeleeHit, payload);
-    } catch (...) {
-    }
-}
-
-void OnGrabReleaseEvent(const RE::TESGrabReleaseEvent& a_event) noexcept
-{
-    try {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* reference = a_event.ref.get();
-        if (!player || !reference || !IsValidFormId(reference->GetFormID()))
-            return;
-
-        auto* base = reference->GetBaseObject();
-        auto* cell = reference->GetParentCell();
-        auto* worldspace = reference->GetWorldspace();
-        if (!base || !cell || !IsValidFormId(cell->GetFormID()) ||
-            (worldspace && !IsValidFormId(worldspace->GetFormID())))
-            return;
-
-        const auto position = reference->GetPosition();
-        if (!IsFinite(position.x) || !IsFinite(position.y) || !IsFinite(position.z))
-            return;
-
-        GameplayActionPayload payload{};
-        if (!PreparePlayerPayload(payload, *player))
-            return;
-        payload.LocalFormIdA = reference->GetFormID();
-        payload.LocalFormIdB = cell->GetFormID();
-        payload.LocalFormIdC = worldspace ? worldspace->GetFormID() : 0;
-        payload.ValueA = static_cast<std::int32_t>(base->GetFormType());
-        payload.ScalarA = position.x;
-        payload.ScalarB = position.y;
-        payload.ScalarC = position.z;
-        Publish(GameplayDomain::Higgs,
-                a_event.grabbed ? GameplayAction::HiggsGrab : GameplayAction::HiggsDrop,
-                payload);
-    } catch (...) {
-    }
+    // HIGGS callbacks carry the hand and the exact physical transition. This
+    // Bethesda event has neither identity and can describe the same gesture,
+    // so it must not produce a second HIGGS physics mutation. Activation and
+    // inventory sinks remain independently canonical.
 }
 
 // TESMagicEffectApplyEvent exposes an MGEF form, while ApplyMagicEffect's
@@ -2416,29 +2483,57 @@ LocalSink<RE::TESContainerChangedEvent, OnContainerChangedEvent> g_containerChan
 LocalSink<RE::TESEquipEvent, OnEquipEvent> g_equipSink;
 LocalSink<RE::TESLockChangedEvent, OnLockChangedEvent> g_lockChangedSink;
 LocalSink<RE::TESDeathEvent, OnDeathEvent> g_deathSink;
-LocalSink<RE::TESCombatEvent, OnCombatEvent> g_combatSink;
-LocalSink<RE::TESHitEvent, OnHitEvent> g_hitSink;
 LocalSink<RE::TESGrabReleaseEvent, OnGrabReleaseEvent> g_grabReleaseSink;
 LocalSink<RE::TESMagicEffectApplyEvent, OnMagicEffectApplyEvent> g_magicEffectSink;
 LocalSink<RE::TESPlayerBowShotEvent, OnPlayerBowShotEvent> g_playerBowShotSink;
 LocalSink<RE::TESQuestStartStopEvent, OnQuestStartStopEvent> g_questStartStopSink;
 LocalSink<RE::TESQuestStageEvent, OnQuestStageEvent> g_questStageSink;
 
-void RegisterScriptSinks() noexcept
+void PublishLocalCaptureSinkReadiness() noexcept
 {
-    if (g_scriptSinksRegistered)
+    const bool ready = g_scriptSinkRegistration.State == SinkRegistrationState::Registered &&
+                       g_scriptSinkRegistration.Owner == RE::ScriptEventSourceHolder::GetSingleton() &&
+                       g_animationSinkRegistration.State == SinkRegistrationState::Registered &&
+                       g_animationSinkRegistration.Owner == RE::PlayerCharacter::GetSingleton();
+    if (ready == g_localCaptureSinksReady)
         return;
+
+    g_localCaptureSinksReady = ready;
+    BridgeEndpoint::Get().SetOptionalCapability(Capability::LocalCaptureSinks, ready);
+}
+
+void RetainAnimationSinkOwnershipUnverified() noexcept
+{
+    if (g_animationSinkRegistration.Owner)
+        g_animationSinkRegistration.State = SinkRegistrationState::RetainedUnverified;
+}
+
+[[nodiscard]] bool RegisterScriptSinks() noexcept
+{
     auto* holder = RE::ScriptEventSourceHolder::GetSingleton();
-    if (!holder)
-        return;
+    if (!holder) {
+        BridgeEndpoint::Get().SetOptionalCapability(Capability::LocalEventSinks, false);
+        PublishLocalCaptureSinkReadiness();
+        return false;
+    }
+
+    if (g_scriptSinkRegistration.State == SinkRegistrationState::Registered &&
+        g_scriptSinkRegistration.Owner == holder) {
+        BridgeEndpoint::Get().SetOptionalCapability(Capability::LocalEventSinks, true);
+        PublishLocalCaptureSinkReadiness();
+        return true;
+    }
+    if (g_scriptSinkRegistration.State == SinkRegistrationState::Registered) {
+        // The singleton changed. That is the only retirement proof available
+        // without dereferencing the old event holder during a load.
+        g_scriptSinkRegistration = {};
+    }
 
     holder->AddEventSink(&g_activateSink);
     holder->AddEventSink(&g_containerChangedSink);
     holder->AddEventSink(&g_equipSink);
     holder->AddEventSink(&g_lockChangedSink);
     holder->AddEventSink(&g_deathSink);
-    holder->AddEventSink(&g_combatSink);
-    holder->AddEventSink(&g_hitSink);
     holder->AddEventSink(&g_grabReleaseSink);
     // MagicHooks owns exact cast, interrupt, desired-target, and AddTarget
     // production. The script events omit fields required by the original wire
@@ -2446,19 +2541,98 @@ void RegisterScriptSinks() noexcept
     holder->AddEventSink(&g_playerBowShotSink);
     holder->AddEventSink(&g_questStartStopSink);
     holder->AddEventSink(&g_questStageSink);
-    g_scriptSinksRegistered = true;
+    g_scriptSinkRegistration = {holder, SinkRegistrationState::Registered};
+    BridgeEndpoint::Get().SetOptionalCapability(Capability::LocalEventSinks, true);
+    PublishLocalCaptureSinkReadiness();
+    return true;
 }
 
-void RegisterAnimationSink(const RE::PlayerCharacter& a_player) noexcept
+enum class AnimationSinkPresence : std::uint8_t
 {
-    if (g_animationSinkRegistered && g_animationSinkPlayer == &a_player)
-        return;
-    if (g_animationSinkRegistered)
-        return;
-    if (a_player.AddAnimationGraphEventSink(&g_animationSink)) {
-        g_animationSinkPlayer = const_cast<RE::PlayerCharacter*>(&a_player);
-        g_animationSinkRegistered = true;
+    Unavailable,
+    Absent,
+    Present,
+};
+
+[[nodiscard]] AnimationSinkPresence ProbeAnimationSink(const RE::PlayerCharacter& a_player) noexcept
+{
+    RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
+    if (!a_player.GetAnimationGraphManager(manager) || !manager || manager->graphs.size() == 0)
+        return AnimationSinkPresence::Unavailable;
+
+    for (const auto& graph : manager->graphs) {
+        if (!graph)
+            continue;
+        const auto eventSource = graph->GetEventSource<RE::BSAnimationGraphEvent>();
+        if (!eventSource)
+            continue;
+        for (const auto* sink : eventSource->sinks) {
+            if (sink == &g_animationSink)
+                return AnimationSinkPresence::Present;
+        }
     }
+    return AnimationSinkPresence::Absent;
+}
+
+[[nodiscard]] bool RegisterAnimationSink(const RE::PlayerCharacter& a_player) noexcept
+{
+    if (g_animationSinkRegistration.Owner && g_animationSinkRegistration.Owner != &a_player) {
+        // A replacement singleton proves the former owner was retired from
+        // local-player duty. Do not touch its potentially dead graph.
+        g_animationSinkRegistration = {};
+    }
+
+    const auto presence = ProbeAnimationSink(a_player);
+    if (presence == AnimationSinkPresence::Unavailable) {
+        // A transient null action graph is not evidence that a previously
+        // registered sink was removed. Preserve ownership without advertising
+        // readiness until the graph can verify the sink again.
+        RetainAnimationSinkOwnershipUnverified();
+        PublishLocalCaptureSinkReadiness();
+        return false;
+    }
+
+    if (presence == AnimationSinkPresence::Present) {
+        g_animationSinkRegistration = {
+            const_cast<RE::PlayerCharacter*>(&a_player), SinkRegistrationState::Registered};
+        PublishLocalCaptureSinkReadiness();
+        return true;
+    }
+
+    // An available graph without the sink proves any retained registration
+    // has retired. Clear it before attempting a fresh registration so failure
+    // cannot leave stale readiness behind.
+    g_animationSinkRegistration = {};
+    if (!a_player.AddAnimationGraphEventSink(&g_animationSink)) {
+        // The graph was present but the source did not accept a new sink. Do
+        // not claim registration; the next periodic probe can recover.
+        PublishLocalCaptureSinkReadiness();
+        return false;
+    }
+    g_animationSinkRegistration = {
+        const_cast<RE::PlayerCharacter*>(&a_player), SinkRegistrationState::Registered};
+    PublishLocalCaptureSinkReadiness();
+    return true;
+}
+
+[[nodiscard]] bool InitializeLocalCaptureSinksUnlocked() noexcept
+{
+    const bool scriptSinks = RegisterScriptSinks();
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player) {
+        // A load can temporarily hide the singleton while retaining the same
+        // player object and its sink registration. Revoke aggregate readiness
+        // without forgetting that registration; otherwise the same source can
+        // receive the global sink twice when the singleton reappears.
+        RetainAnimationSinkOwnershipUnverified();
+        PublishLocalCaptureSinkReadiness();
+        return false;
+    }
+
+    const bool animationSink = RegisterAnimationSink(*player);
+    const bool ready = scriptSinks && animationSink;
+    PublishLocalCaptureSinkReadiness();
+    return ready;
 }
 
 void CaptureAppearance(RE::PlayerCharacter& a_player, Snapshot& a_current)
@@ -3257,8 +3431,7 @@ void CapturePlayerDialogue(const RE::PlayerCharacter& a_player) noexcept
 
 void InitializeUnlocked() noexcept
 {
-    RegisterScriptSinks();
-    g_initialized = true;
+    g_initialized = InitializeLocalCaptureSinksUnlocked();
 }
 
 void ResetCaptureBaselinesUnlocked() noexcept
@@ -3385,7 +3558,11 @@ void Initialize() noexcept
 {
     try {
         const std::scoped_lock lock{g_captureLock};
-        InitializeUnlocked();
+        if (!InitializeLocalCaptureSinksUnlocked()) {
+            g_initialized = false;
+            return;
+        }
+        g_initialized = true;
     } catch (...) {
     }
 }
@@ -3902,6 +4079,10 @@ void CapturePeriodic() noexcept
 {
     try {
         const std::scoped_lock lock{g_captureLock};
+        // A partial inbound quest mutation may have queued its synchronous
+        // post-state while the event ring was full. Retry that bounded,
+        // coalesced authority before ordinary periodic traffic.
+        FlushPendingQuestReconciliations();
         // Keep pages contiguous and give bootstrap priority over ordinary
         // capture so the ring can always make forward progress.
         if (g_assignmentBootstrapPublication.Active) {
@@ -3910,8 +4091,11 @@ void CapturePeriodic() noexcept
         }
         if (!g_armed.load(std::memory_order_acquire))
             return;
-        if (!g_initialized)
-            InitializeUnlocked();
+        if (!InitializeLocalCaptureSinksUnlocked()) {
+            g_initialized = false;
+            return;
+        }
+        g_initialized = true;
 
         const auto now = std::chrono::steady_clock::now();
         if (g_lastSnapshotAt != std::chrono::steady_clock::time_point{} &&
@@ -3922,7 +4106,6 @@ void CapturePeriodic() noexcept
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player)
             return;
-        RegisterAnimationSink(*player);
         g_periodicCaptureActive = true;
         g_periodicCaptureFailed = false;
 
@@ -4017,38 +4200,56 @@ bool CaptureDialogueVoice(
     }
 }
 
+bool PublishQuestReconciliation(RE::TESQuest& a_quest) noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        if (!IsSyncableQuest(a_quest) || !BridgeEndpoint::Get().IsOperational())
+            return false;
+
+        const auto identity = BridgeEndpoint::Get().SnapshotIdentity(0);
+        if (identity.ServerInstanceNonce == 0 || identity.ConnectionGeneration == 0)
+            return false;
+
+        const PendingQuestReconciliation pending{
+            .ServerInstanceNonce = identity.ServerInstanceNonce,
+            .ConnectionGeneration = identity.ConnectionGeneration,
+            .LifecycleEpoch = identity.LifecycleEpoch,
+            .QuestFormId = a_quest.GetFormID(),
+            .Stage = a_quest.GetCurrentStageID(),
+            .QuestType = static_cast<std::uint8_t>(a_quest.GetType()),
+            .Stopped = a_quest.IsStopped(),
+            .Occupied = true,
+        };
+        if (TryPublishQuestReconciliation(pending))
+            return true;
+
+        // Queue exhaustion is fail-closed: the caller must not report a
+        // terminal partial mutation unless this authoritative state is held.
+        return QueueQuestReconciliation(pending);
+    } catch (...) {
+        return false;
+    }
+}
+
 void Reset() noexcept
 {
     try {
         g_armed.store(false, std::memory_order_release);
         const std::scoped_lock lock{g_captureLock};
-        if (g_animationSinkRegistered) {
-            if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player == g_animationSinkPlayer)
-                player->RemoveAnimationGraphEventSink(&g_animationSink);
-            g_animationSinkRegistered = false;
-            g_animationSinkPlayer = nullptr;
-        }
-
-        if (g_scriptSinksRegistered) {
-            if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
-                holder->RemoveEventSink(&g_activateSink);
-                holder->RemoveEventSink(&g_containerChangedSink);
-                holder->RemoveEventSink(&g_equipSink);
-                holder->RemoveEventSink(&g_lockChangedSink);
-                holder->RemoveEventSink(&g_deathSink);
-                holder->RemoveEventSink(&g_combatSink);
-                holder->RemoveEventSink(&g_hitSink);
-                holder->RemoveEventSink(&g_grabReleaseSink);
-                holder->RemoveEventSink(&g_playerBowShotSink);
-                holder->RemoveEventSink(&g_questStartStopSink);
-                holder->RemoveEventSink(&g_questStageSink);
-            }
-            g_scriptSinksRegistered = false;
-        }
 
         g_initialized = false;
+        RetainAnimationSinkOwnershipUnverified();
+        g_localCaptureSinksReady = false;
+        BridgeEndpoint::Get().SetOptionalCapability(Capability::LocalCaptureSinks, false);
+
+        // Registrations are process-lifetime unless a source replacement
+        // proves retirement. A reset can coincide with a null graph, where a
+        // removal call gives no evidence and would create a duplicate-bind
+        // deadlock on the same player.
         g_assignmentBootstrapPublication.Reset();
         g_assignmentInventorySeed = {};
+        g_pendingQuestReconciliations = {};
         ResetCaptureBaselinesUnlocked();
     } catch (...) {
     }

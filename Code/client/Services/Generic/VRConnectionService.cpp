@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 
 #include <Events/ConnectedEvent.h>
 #include <Events/ConnectionErrorEvent.h>
@@ -21,6 +22,7 @@
 #include <Messages/TeleportRequest.h>
 #include <Services/PartyService.h>
 #include <Services/TransportService.h>
+#include <Services/VRAvatarService.h>
 #include <Services/VRLifecycleService.h>
 #include <Structs/GameplayCapabilities.h>
 #include <VRRuntimeDiagnostics.h>
@@ -169,6 +171,10 @@ void VRConnectionService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
     m_commandQueuedThisUpdate = false;
 
+    // Resolve lifecycle retirement before accepting queued commands. A load can
+    // become ready between frames while retaining a reconnect command.
+    AdvanceRehydration(acEvent.Delta);
+
     m_commandPollTimer += acEvent.Delta;
     if (m_commandPollTimer >= kCommandPollInterval)
     {
@@ -197,33 +203,47 @@ void VRConnectionService::OnUpdate(const UpdateEvent& acEvent) noexcept
 void VRConnectionService::OnConnected(const ConnectedEvent&) noexcept
 {
     SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.begin");
-    if (!IsVrPlayerReadyForConnection(m_world))
+    if (!IsVrPlayerReadyForConnection(m_world) || m_waitingForRetirementDisconnect)
     {
-        spdlog::warn("SkyrimTogetherVR connection completed outside a ready lifecycle epoch; closing it");
+        spdlog::warn("SkyrimTogetherVR connection completed before the current lifecycle epoch was stable; closing it");
         m_transport.Close();
         SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.closed_not_ready");
         return;
     }
 
     m_connectInFlight = false;
-    SetStatus("online");
+    SetRehydrationState(VRRehydrationState::Authenticated);
+    SetRehydrationStatus();
     SkyrimTogetherVR::LogRuntimeCheckpoint("connected.connection_service.done");
 }
 
 void VRConnectionService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_connectInFlight = false;
-    SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+    {
+        SetRehydrationStatus();
+    }
+    else if (m_waitingForRetirementDisconnect)
+    {
+        m_waitingForRetirementDisconnect = false;
+        SetRehydrationState(VRRehydrationState::Stable);
+        SetRehydrationStatus();
+    }
+    else
+    {
+        SetRehydrationState(VRRehydrationState::Offline);
+        SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+    }
     WriteStatusFile();
 }
 
 void VRConnectionService::OnConnectionError(const ConnectionErrorEvent& acEvent) noexcept
 {
     m_connectInFlight = false;
-    if (m_hasPendingCommand)
-        SetStatus("waiting_for_gameplay");
-    else
-        SetStatus("error", acEvent.ErrorDetail.c_str());
+    if (m_waitingForRetirementDisconnect)
+        return;
+    FailRehydration(acEvent.ErrorDetail.empty() ? "connection error" : acEvent.ErrorDetail.c_str());
 }
 
 bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept
@@ -237,8 +257,13 @@ bool VRConnectionService::RequestConnect(const std::string& acEndpoint, const st
 
     if (m_transport.IsOnline())
     {
-        SetStatus("online");
+        SetRehydrationStatus();
         return false;
+    }
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+    {
+        m_rehydrationFailure.clear();
+        SetRehydrationState(VRRehydrationState::Stable);
     }
     if (m_connectInFlight)
     {
@@ -276,11 +301,15 @@ bool VRConnectionService::RequestDisconnect() noexcept
 
 void VRConnectionService::BeginTeardown() noexcept
 {
+    InvalidateQueuedConnect();
     m_hasPendingCommand = false;
     m_pendingCommand = {};
     m_retainedEndpoint.clear();
     m_retainedPassword.clear();
     m_connectInFlight = false;
+    m_waitingForRetirementDisconnect = false;
+    m_rehydrationFailure.clear();
+    SetRehydrationState(VRRehydrationState::Offline);
     SetStatus("offline");
     WriteStatusFile();
 }
@@ -294,10 +323,16 @@ void VRConnectionService::HandleLifecycleBoundary() noexcept
 
     m_lastLifecycleEpoch = epoch;
     m_statusDirty = true;
-    if (lifecycle.IsReady())
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+    {
+        SetRehydrationStatus();
         return;
+    }
+    SetRehydrationState(VRRehydrationState::Retiring);
 
-    if (m_transport.IsOnline() || m_connectInFlight)
+    const bool authenticatedTransport = m_transport.IsOnline();
+    const bool unauthenticatedConnectInFlight = !authenticatedTransport && m_connectInFlight;
+    if (authenticatedTransport || unauthenticatedConnectInFlight)
     {
         if (!m_retainedEndpoint.empty())
         {
@@ -306,16 +341,33 @@ void VRConnectionService::HandleLifecycleBoundary() noexcept
             m_pendingCommand.Password = m_retainedPassword;
             m_hasPendingCommand = true;
         }
+        InvalidateQueuedConnect();
         m_connectInFlight = false;
-        SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+        m_waitingForRetirementDisconnect = authenticatedTransport;
+        SetRehydrationStatus();
         spdlog::info(
-            "SkyrimTogetherVR lifecycle epoch {} invalidated the connection; reconnectRetained={}", epoch,
-            m_hasPendingCommand);
+            "SkyrimTogetherVR lifecycle epoch {} invalidated a {} connection; reconnectRetained={}", epoch,
+            authenticatedTransport ? "authenticated" : "pre-authentication", m_hasPendingCommand);
         m_transport.Close();
+
+        // Client::Close cancels DNS resolution, but the resolver may never
+        // dispatch a Disconnect callback while World::Update is suspended.
+        // An unauthenticated attempt owns no gameplay session, so retirement
+        // completes now.  Authenticated sessions retain close-before-reconnect.
+        if (!authenticatedTransport)
+        {
+            SetRehydrationState(lifecycle.IsReady() ? VRRehydrationState::Stable : VRRehydrationState::Retiring);
+            SetRehydrationStatus();
+        }
     }
-    else if (m_hasPendingCommand)
+    else if (lifecycle.IsReady())
     {
-        SetStatus("waiting_for_gameplay");
+        SetRehydrationState(VRRehydrationState::Stable);
+        SetRehydrationStatus();
+    }
+    else
+    {
+        SetRehydrationStatus();
     }
 }
 
@@ -545,6 +597,9 @@ void VRConnectionService::TryRunPendingCommand() noexcept
     if (!m_hasPendingCommand)
         return;
 
+    if (m_waitingForRetirementDisconnect || IsVRRehydrationTerminal(m_rehydrationState))
+        return;
+
     if (m_pendingCommand.Action == CommandAction::Connect && !IsVrPlayerReadyForConnection(m_world))
         return;
 
@@ -584,9 +639,9 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
 {
     if (m_transport.IsOnline())
     {
-        spdlog::warn("SkyrimTogetherVR connection request ignored because the client is already online");
+        spdlog::warn("SkyrimTogetherVR connection request ignored because the client already has an authenticated socket");
         m_connectInFlight = false;
-        SetStatus("online");
+        SetRehydrationStatus();
         return;
     }
     if (m_connectInFlight)
@@ -596,14 +651,29 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
         return;
     }
 
+    if (m_rehydrationState == VRRehydrationState::Offline ||
+        (m_rehydrationState == VRRehydrationState::Retiring && !m_waitingForRetirementDisconnect &&
+         IsVrPlayerReadyForConnection(m_world)))
+        SetRehydrationState(VRRehydrationState::Stable);
+
     spdlog::info("SkyrimTogetherVR queueing connection to {}", acEndpoint);
     m_retainedEndpoint = acEndpoint;
     m_retainedPassword = acPassword;
     m_connectInFlight = true;
+    SetRehydrationState(VRRehydrationState::Connecting);
     SetStatus("connecting");
 
     const auto lifecycleEpoch = m_world.ctx().at<VRLifecycleService>().GetEpoch();
-    m_world.GetRunner().Queue([this, endpoint = acEndpoint, password = acPassword, lifecycleEpoch]() {
+    auto connectToken = ++m_connectRequestToken;
+    if (connectToken == 0)
+        connectToken = ++m_connectRequestToken;
+    m_world.GetRunner().Queue([this, endpoint = acEndpoint, password = acPassword, lifecycleEpoch, connectToken]() {
+        if (connectToken != m_connectRequestToken)
+        {
+            spdlog::info("SkyrimTogetherVR discarded a superseded queued connect token {}", connectToken);
+            return;
+        }
+
         auto& world = World::Get();
         const auto& lifecycle = world.ctx().at<VRLifecycleService>();
         if (!lifecycle.IsReady() || lifecycle.GetEpoch() != lifecycleEpoch)
@@ -616,7 +686,8 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
                 m_pendingCommand.Password = m_retainedPassword;
                 m_hasPendingCommand = true;
             }
-            SetStatus(m_hasPendingCommand ? "waiting_for_gameplay" : "offline");
+            SetRehydrationState(lifecycle.IsReady() ? VRRehydrationState::Stable : VRRehydrationState::Retiring);
+            SetRehydrationStatus();
             spdlog::info(
                 "SkyrimTogetherVR discarded a stale queued connect from lifecycle epoch {}; current epoch={} state={}",
                 lifecycleEpoch, lifecycle.GetEpoch(), lifecycle.GetStateName());
@@ -633,18 +704,20 @@ void VRConnectionService::QueueConnect(const std::string& acEndpoint, const std:
 void VRConnectionService::QueueDisconnect() noexcept
 {
     spdlog::info("SkyrimTogetherVR queueing disconnect");
+    InvalidateQueuedConnect();
     m_hasPendingCommand = false;
     m_pendingCommand = {};
     m_retainedEndpoint.clear();
     m_retainedPassword.clear();
     m_connectInFlight = false;
+    m_waitingForRetirementDisconnect = false;
     SetStatus("disconnecting");
     m_world.GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
 }
 
 bool VRConnectionService::SendChat(const std::string& acMessage) noexcept
 {
-    if (!m_transport.IsOnline() || acMessage.empty() || acMessage.size() > kMaximumChatBytes || HasControlCharacter(acMessage))
+    if (!HasStableAuthenticatedTransport() || acMessage.empty() || acMessage.size() > kMaximumChatBytes || HasControlCharacter(acMessage))
     {
         SetStatus(m_transport.IsOnline() ? "error" : "offline", "chat command requires an online connection and a valid message");
         spdlog::warn("SkyrimTogetherVR chat command rejected because the client is offline or the message is invalid");
@@ -660,15 +733,28 @@ bool VRConnectionService::SendChat(const std::string& acMessage) noexcept
         return false;
     }
 
-    SetStatus("online");
+    SetRehydrationStatus();
     return true;
 }
 
 bool VRConnectionService::HasStableAuthenticatedTransport() const noexcept
 {
-    return IsVrPlayerReadyForConnection(m_world) && m_transport.IsOnline() && m_transport.GetLocalPlayerId() != 0 &&
+    return IsReadyForGameplay() && HasAuthenticatedTransportIdentity();
+}
+
+bool VRConnectionService::HasAuthenticatedTransportIdentity() const noexcept
+{
+    return IsVrPlayerReadyForConnection(m_world) && m_transport.IsOnline() &&
+           m_transport.GetLocalPlayerId() != 0 &&
            m_transport.GetSessionId() != 0 && m_transport.GetConnectionGeneration() != 0 &&
            m_transport.GetServerInstanceNonce() != 0;
+}
+
+void VRConnectionService::InvalidateQueuedConnect() noexcept
+{
+    ++m_connectRequestToken;
+    if (m_connectRequestToken == 0)
+        ++m_connectRequestToken;
 }
 
 bool VRConnectionService::SendSetTimeCommand(const Command& acCommand) noexcept
@@ -696,7 +782,7 @@ bool VRConnectionService::SendSetTimeCommand(const Command& acCommand) noexcept
         return false;
     }
 
-    SetStatus("online");
+    SetRehydrationStatus();
     return true;
 }
 
@@ -723,7 +809,7 @@ bool VRConnectionService::SendTeleportToPlayerCommand(const Command& acCommand) 
         return false;
     }
 
-    SetStatus("online");
+    SetRehydrationStatus();
     return true;
 }
 
@@ -750,13 +836,13 @@ bool VRConnectionService::SendAdminTeleportCommand(const Command& acCommand) noe
         return false;
     }
 
-    SetStatus("online");
+    SetRehydrationStatus();
     return true;
 }
 
 bool VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
 {
-    if (!m_transport.IsOnline())
+    if (!HasStableAuthenticatedTransport())
     {
         SetStatus("offline", "party command requires an online connection");
         spdlog::warn("SkyrimTogetherVR party command rejected because the client is offline");
@@ -776,6 +862,175 @@ bool VRConnectionService::RunPartyCommand(const Command& acCommand) noexcept
     }
 
     return true;
+}
+
+void VRConnectionService::AdvanceRehydration(const double aDelta) noexcept
+{
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+        return;
+
+    const auto& lifecycle = m_world.ctx().at<VRLifecycleService>();
+    if (!lifecycle.IsReady())
+    {
+        SetRehydrationState(VRRehydrationState::Retiring);
+        SetRehydrationStatus();
+        return;
+    }
+
+    if (m_rehydrationState == VRRehydrationState::Retiring && !m_waitingForRetirementDisconnect)
+    {
+        SetRehydrationState(VRRehydrationState::Stable);
+        SetRehydrationStatus();
+    }
+    else if (m_rehydrationState == VRRehydrationState::Retiring)
+    {
+        m_rehydrationStageElapsed += std::clamp(aDelta, 0.0, 1.0);
+        if (m_rehydrationStageElapsed >= VRRehydrationDeadlineSeconds(VRRehydrationState::Retiring))
+            FailRehydration("the prior lifecycle connection did not close before its retirement deadline");
+        return;
+    }
+
+    if (m_rehydrationState == VRRehydrationState::Stable)
+    {
+        if (m_connectInFlight)
+        {
+            SetRehydrationState(VRRehydrationState::Connecting);
+            SetRehydrationStatus();
+        }
+        return;
+    }
+
+    if (m_rehydrationState == VRRehydrationState::Offline)
+        return;
+
+    if (!HasAuthenticatedTransportIdentity())
+    {
+        if (m_rehydrationState != VRRehydrationState::Connecting)
+        {
+            SetRehydrationState(VRRehydrationState::Offline);
+            SetRehydrationStatus();
+        }
+        return;
+    }
+
+    if (m_rehydrationState == VRRehydrationState::Connecting)
+    {
+        SetRehydrationState(VRRehydrationState::Authenticated);
+        SetRehydrationStatus();
+    }
+
+    if (m_rehydrationState == VRRehydrationState::Authenticated &&
+        !VRRehydrationProfileRequiresAvatar(GetBuildRehydrationProfile()))
+    {
+        SetRehydrationState(VRRehydrationState::Ready);
+        SetRehydrationStatus();
+        return;
+    }
+
+    if (VRRehydrationProfileRequiresAvatar(GetBuildRehydrationProfile()) &&
+        m_rehydrationState >= VRRehydrationState::Authenticated &&
+        m_rehydrationState < VRRehydrationState::Ready)
+    {
+        const auto* avatar = m_world.ctx().find<VRAvatarService>();
+        if (!avatar)
+        {
+            FailRehydration("the VR avatar rehydration service is unavailable");
+            return;
+        }
+
+        const auto avatarState = avatar->GetRehydrationState();
+        if (avatarState == VRRehydrationState::Failed)
+        {
+            FailRehydration(avatar->GetRehydrationFailure());
+            return;
+        }
+
+        if (avatarState > m_rehydrationState && avatarState < VRRehydrationState::Failed)
+        {
+            const auto next = static_cast<VRRehydrationState>(
+                static_cast<std::underlying_type_t<VRRehydrationState>>(m_rehydrationState) + 1);
+            SetRehydrationState(next);
+            SetRehydrationStatus();
+        }
+    }
+
+    const auto deadline = VRRehydrationDeadlineSeconds(m_rehydrationState);
+    if (deadline <= 0.0)
+        return;
+
+    m_rehydrationStageElapsed += std::clamp(aDelta, 0.0, 1.0);
+    if (m_rehydrationStageElapsed >= deadline)
+    {
+        std::string reason{"rehydration state "};
+        reason += VRRehydrationStateName(m_rehydrationState);
+        reason += " exceeded its deadline";
+        FailRehydration(reason.c_str());
+    }
+}
+
+void VRConnectionService::SetRehydrationState(const VRRehydrationState aState) noexcept
+{
+    if (m_rehydrationState == aState)
+        return;
+
+    if (!CanTransitionVRRehydrationState(m_rehydrationState, aState))
+    {
+        if (aState != VRRehydrationState::Failed)
+        {
+            FailRehydration("invalid VR lifecycle rehydration state transition");
+            return;
+        }
+    }
+
+    const auto previous = m_rehydrationState;
+    m_rehydrationState = aState;
+    m_rehydrationStageElapsed = 0.0;
+    m_statusDirty = true;
+    spdlog::info("SkyrimTogetherVR lifecycle rehydration transition: {} -> {}",
+                 VRRehydrationStateName(previous), VRRehydrationStateName(aState));
+
+}
+
+void VRConnectionService::SetRehydrationStatus() noexcept
+{
+    if (m_rehydrationState == VRRehydrationState::Ready)
+    {
+        SetStatus("online");
+        return;
+    }
+    if (m_rehydrationState == VRRehydrationState::Failed)
+    {
+        SetStatus("rehydration_failed", m_rehydrationFailure);
+        return;
+    }
+    SetStatus(VRRehydrationStateName(m_rehydrationState));
+}
+
+void VRConnectionService::FailRehydration(const char* const apReason) noexcept
+{
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+        return;
+
+    m_rehydrationFailure = apReason && apReason[0] != '\0' ? apReason : "unknown VR lifecycle rehydration failure";
+    for (auto& character : m_rehydrationFailure)
+    {
+        const auto value = static_cast<unsigned char>(character);
+        if (value < 0x20 || value == 0x7f)
+            character = ' ';
+    }
+    if (m_rehydrationFailure.size() > kMaximumStatusErrorBytes)
+        m_rehydrationFailure.resize(kMaximumStatusErrorBytes);
+
+    m_connectInFlight = false;
+    m_waitingForRetirementDisconnect = false;
+    m_hasPendingCommand = false;
+    m_pendingCommand = {};
+    InvalidateQueuedConnect();
+    SetRehydrationState(VRRehydrationState::Failed);
+    SetRehydrationStatus();
+    spdlog::error("SkyrimTogetherVR lifecycle rehydration failed: {}", m_rehydrationFailure);
+    if (m_transport.IsOnline())
+        m_transport.Close();
 }
 
 void VRConnectionService::ArchiveCommandFile(const char* apSuffix) noexcept
@@ -821,7 +1076,14 @@ void VRConnectionService::WriteStatusFile() noexcept
         {
             SkyrimTogetherVR::Handoff::WriteLaunchIdentity(file);
             file << "state=" << m_state << "\n";
-            file << "online=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
+            file << "online=" << (IsReadyForGameplay() ? "1" : "0") << "\n";
+            file << "transportOnline=" << (m_transport.IsOnline() ? "1" : "0") << "\n";
+            file << "rehydrationState=" << VRRehydrationStateName(m_rehydrationState) << "\n";
+            file << "rehydrationProfile=" << VRRehydrationProfileName(GetBuildRehydrationProfile()) << "\n";
+            file << "rehydrationReady=" << (IsReadyForGameplay() ? "1" : "0") << "\n";
+            file << "rehydrationStageElapsedMs=" << static_cast<std::uint64_t>(m_rehydrationStageElapsed * 1000.0) << "\n";
+            file << "rehydrationStageDeadlineMs=" << static_cast<std::uint64_t>(
+                VRRehydrationDeadlineSeconds(m_rehydrationState) * 1000.0) << "\n";
             file << "playerId=" << m_transport.GetLocalPlayerId() << "\n";
             file << "sessionId=" << m_transport.GetSessionId() << "\n";
             file << "connectionGeneration=" << m_transport.GetConnectionGeneration() << "\n";
@@ -833,6 +1095,10 @@ void VRConnectionService::WriteStatusFile() noexcept
             file << "lifecycleState=" << lifecycle.GetStateName() << "\n";
             file << "lifecycleEpoch=" << lifecycle.GetEpoch() << "\n";
             file << "commandFile=" << m_commandPath.string() << "\n";
+            if (const auto* avatar = m_world.ctx().find<VRAvatarService>())
+                file << "avatarRehydrationState=" << VRRehydrationStateName(avatar->GetRehydrationState()) << "\n";
+            if (!m_rehydrationFailure.empty())
+                file << "rehydrationFailure=" << m_rehydrationFailure << "\n";
             if (!m_lastError.empty())
                 file << "error=" << m_lastError << "\n";
         });

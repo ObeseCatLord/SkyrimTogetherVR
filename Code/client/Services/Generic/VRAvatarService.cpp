@@ -302,6 +302,7 @@ void VRAvatarService::OnUpdate(const UpdateEvent& acEvent) noexcept try
     }
 
     UpdateRemoteAvatars(delta);
+    AdvanceRehydration();
 
     m_statusElapsed += delta;
     if (m_statusDirty || m_statusElapsed >= kStatusWriteIntervalSeconds)
@@ -334,6 +335,8 @@ void VRAvatarService::OnConnected(const ConnectedEvent& acEvent) noexcept
     ResetAssignmentBootstrapFailureTelemetry();
     m_assignmentGate = AssignmentGate::Idle;
     m_connected = true;
+    m_rehydrationFailure = nullptr;
+    SetRehydrationState(VRRehydrationState::Bootstrap);
     m_localPlayerId = acEvent.PlayerId;
     m_capabilityWarningLogged = false;
     m_statusDirty = true;
@@ -363,6 +366,7 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
         m_assignmentRejected = true;
         spdlog::warn("VR avatar assignment rejected for local player {}: owner={}, server id={}",
                      m_localPlayerId, acMessage.Owner, acMessage.ServerId);
+        FailRehydration("the server rejected local avatar assignment");
         m_statusDirty = true;
         return;
     }
@@ -384,6 +388,7 @@ void VRAvatarService::OnAssignCharacter(const AssignCharacterResponse& acMessage
     m_localMovementElapsed = 0.0;
     m_assignmentRejected = false;
     SetAssignmentGate(AssignmentGate::Assigned);
+    SetRehydrationState(VRRehydrationState::Assigned);
     m_statusDirty = true;
 }
 
@@ -929,6 +934,8 @@ void VRAvatarService::ResetSessionState() noexcept
     m_assignmentPending = false;
     m_assignmentRejected = false;
     m_assignmentGate = AssignmentGate::Idle;
+    m_rehydrationFailure = nullptr;
+    SetRehydrationState(VRRehydrationState::Offline);
     m_statusDirty = true;
 }
 
@@ -953,6 +960,8 @@ void VRAvatarService::ResetLifecycleState() noexcept
     m_assignmentPending = false;
     m_assignmentRejected = false;
     m_assignmentGate = AssignmentGate::Idle;
+    m_rehydrationFailure = nullptr;
+    SetRehydrationState(m_connected ? VRRehydrationState::Retiring : VRRehydrationState::Offline);
 }
 
 void VRAvatarService::HandleBridgeAssignmentBootstrapText(
@@ -1165,6 +1174,7 @@ void VRAvatarService::ScheduleAssignmentBootstrapRetry() noexcept
     m_assignmentBootstrapPermanentFailure = permanentFailure;
     if (permanentFailure) {
         SetAssignmentBootstrapGate(AssignmentBootstrapGate::PermanentFailure);
+        FailRehydration("the local avatar bootstrap permanently failed");
     } else {
         m_assignmentBootstrapRetryScheduled = true;
         SetAssignmentBootstrapGate(AssignmentBootstrapGate::RetryScheduled);
@@ -2031,6 +2041,7 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
         m_assignmentBootstrapActive = false;
         m_assignmentBootstrapReady = false;
         m_assignmentBootstrapPermanentFailure = true;
+        FailRehydration("the local avatar assignment exceeds the transport packet limit");
         m_statusDirty = true;
         return;
     }
@@ -2459,6 +2470,67 @@ void VRAvatarService::RetireAvatarLifecycle(const char* apReason) noexcept
     ResetLifecycleState();
 }
 
+void VRAvatarService::AdvanceRehydration() noexcept
+{
+    if (!m_connected || !m_transport.IsOnline() || IsVRRehydrationTerminal(m_rehydrationState))
+        return;
+
+    if (m_assignmentBootstrapPermanentFailure)
+    {
+        FailRehydration("the local avatar bootstrap permanently failed");
+        return;
+    }
+    if (m_assignmentRejected)
+    {
+        FailRehydration("the server rejected local avatar assignment");
+        return;
+    }
+    if (!m_localServerId || m_rehydrationState < VRRehydrationState::Assigned)
+        return;
+
+    if (!HasAvatarCapabilities())
+        return;
+
+    if (m_rehydrationState == VRRehydrationState::Assigned)
+    {
+        SetRehydrationState(VRRehydrationState::DomainsActive);
+        return;
+    }
+    if (m_rehydrationState == VRRehydrationState::DomainsActive)
+        SetRehydrationState(VRRehydrationState::Ready);
+}
+
+void VRAvatarService::SetRehydrationState(const VRRehydrationState aState) noexcept
+{
+    if (m_rehydrationState == aState)
+        return;
+
+    if (!CanTransitionVRRehydrationState(m_rehydrationState, aState))
+    {
+        FailRehydration("invalid local avatar rehydration state transition");
+        return;
+    }
+
+    const auto previous = m_rehydrationState;
+    m_rehydrationState = aState;
+    m_statusDirty = true;
+    spdlog::info("SkyrimTogetherVR avatar rehydration transition: {} -> {}",
+                 VRRehydrationStateName(previous), VRRehydrationStateName(aState));
+}
+
+void VRAvatarService::FailRehydration(const char* const apReason) noexcept
+{
+    if (IsVRRehydrationTerminal(m_rehydrationState))
+        return;
+
+    m_rehydrationFailure = apReason && apReason[0] != '\0'
+        ? apReason
+        : "unknown local avatar rehydration failure";
+    SetRehydrationState(VRRehydrationState::Failed);
+    if (auto* connection = m_world.ctx().find<VRConnectionService>())
+        connection->FailRehydration(m_rehydrationFailure);
+}
+
 void VRAvatarService::ResetStatusCounters() noexcept
 {
     m_statusElapsed = 0.0;
@@ -2510,7 +2582,10 @@ void VRAvatarService::WriteStatus() noexcept
                 }
 
                 file << "schema=commonlib_bridge_v2\n";
-                file << "ready=1\n";
+                file << "ready=" << (m_rehydrationState == VRRehydrationState::Ready ? 1 : 0) << "\n";
+                file << "rehydrationState=" << VRRehydrationStateName(m_rehydrationState) << "\n";
+                if (m_rehydrationFailure)
+                    file << "rehydrationFailure=" << m_rehydrationFailure << "\n";
                 file << "connected=" << (m_connected ? 1 : 0) << "\n";
                 file << "bridgeReady=" << (diagnostics.Ready ? 1 : 0) << "\n";
                 file << "actorTargetsEnabled=" << (HasAvatarCapabilities() ? 1 : 0) << "\n";
