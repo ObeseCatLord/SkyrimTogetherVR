@@ -42,6 +42,23 @@ ready, and no bridge ring drops or rejected commands. This does not check off
 the two-client gameplay runtime items below. See
 `runtime-connection-result-20260818-b8305b3b.md`.
 
+## 2026-08-19 Exact-Equivalence Source Update
+
+- [x] Source: activation, calendar, equipment authority, summon authority,
+  remote temporary-save exclusion, local drop capture, and weather native
+  access now have pinned Skyrim VR 1.4.15.0 contracts: direct RVA (or direct
+  Calendar ID 35402), executable fingerprint, text/page span, and entry
+  prologue. These are not new CommonLib aliases; `VersionDb` removes the known
+  false VR IDs for summon, flee, dialogue response, drop, and detection.
+- [ ] Runtime: static source equivalence does not prove final-equipment queued
+  recovery, drop-event synchronicity, weather/save lifecycle targets, or
+  remote AI detection/flee behavior. Two current-revision clients must prove
+  those paths before this release changes classification.
+- [ ] Optional extension: direct remote PLANCK physical grab/ragdoll replay is
+  outside desktop parity pending a stable public API or separate native design.
+  PLANCK damage deduplication and pose/physics non-interference remain runtime
+  gates.
+
 ## Native Boundary
 
 - [x] Source: the current CommonLib source merges alandtse `CommonLibVR`
@@ -61,17 +78,19 @@ the two-client gameplay runtime items below. See
   storage, flat desktop actor construction, or Papyrus-maintained state.
 - [x] Source: the fixed bridge ABI carries nonce, connection generation,
   lifecycle epoch, entity generation, action ID, and sequence ID.
-- [x] Source: mapping ABI is 22. ABI 20 introduced
+- [x] Source: mapping ABI is 23. ABI 20 introduced
   `CommandStatus::Degraded`; later assignment/bootstrap records raised it again,
   so readers reject every incompatible fixed bridge layout.
-- [x] Source: exact-match gameplay protocol revision 15 separates VR process
+- [x] Source: exact-match gameplay protocol revision 17 separates VR process
   identity, full gameplay-client intent, and mandatory native-parity admission.
-  It retains token-bound NPC ownership, final-equipment, version-3
+  It additionally identity-authorizes attacker-originated NPC health deltas
+  against an owned player entity and rejects replayed action nonces while retaining token-bound
+  NPC ownership, final-equipment, version-3
   full-body/finger-pose wire layouts, and
   bounded ordered HIGGS mutation batches
   before either endpoint decodes them. Body formats 1 and 2 remain decodable
-  inside a revision-15 endpoint for fixture and persisted-data compatibility.
-- [x] Source: bridge capability revision 33 requires aggregate local capture
+  inside a revision-17 endpoint for fixture and persisted-data compatibility.
+- [x] Source: bridge capability revision 34 requires aggregate local capture
   event-sink registration and native quest mutation before a gameplay client
   can authenticate. Optional direct relays cannot masquerade as canonical
   gameplay readiness.
@@ -107,6 +126,11 @@ the two-client gameplay runtime items below. See
   ragdoll, furniture, and mount animation events replay through CommonLib.
 - [x] Source: package changes are captured for both owned NPCs and the local
   player; local-player package transport retries until accepted.
+- [x] Source: generated desktop-to-VR actor-AI aliases for desktop IDs 37577,
+  39643, and 42704 are rejected because exact Skyrim VR 1.4.15 disassembly
+  proves that their correlated RVAs are unrelated functions. Remote avatar
+  admission requires observed AI disable; periodic authority reconciliation is
+  defense in depth rather than the first ownership boundary.
 - [x] Source: incoming scripted object animations replay through the Skyrim VM.
   Upstream's outbound producer is compiled out by `OBJECT_ANIM_SYNC=0`; its
   desktop Address Library IDs are registration code in VR, so no guessed hook
@@ -223,6 +247,10 @@ the two-client gameplay runtime items below. See
   in the bridge; disabling `QuestMutation` does not disable those domains.
 - [x] Source: dialogue voice, subtitle metadata/text, player dialogue, chat,
   packages, waypoints, teleport/admin responses, and bounded retries.
+- [x] Source: verified speech and subtitle hooks suppress engine-owned output
+  for managed remote speakers outside explicit network replay. No guessed
+  `ProcessResponse` hook is installed; candidate RVA `0x681F80` remains blocked
+  until its ABI, desktop correspondence, and callers are proven.
 - [x] Source: server calendar, time, timescale, weather, difficulty, greetings,
   and world-encounter settings apply and restore on lifecycle reset.
 - [x] Source: VR command-file producers for `set_time`,
@@ -239,7 +267,8 @@ the two-client gameplay runtime items below. See
 - [x] Build: `b8305b3b` compiled and audited the fail-closed quest lane and the
   dialogue/party/world-state paths.
 - [ ] Runtime: prove quest, dialogue, chat, party, waypoint, teleport, time,
-  weather, server restart, save/load, and reconnect behavior.
+  weather, server restart, save/load, reconnect, remote native-speech
+  suppression, and local speech preservation.
 
 ## VR Embodiment And Mod Compatibility
 

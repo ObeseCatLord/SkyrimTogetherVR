@@ -5,6 +5,8 @@
 
 #include <Services/PlayerService.h>
 #include <Services/CharacterService.h>
+#include <Services/InventoryService.h>
+#include <server/Services/ServerAuthorityPolicy.h>
 #include <GameServer.h>
 
 #include <Messages/ShiftGridCellRequest.h>
@@ -189,24 +191,30 @@ void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnReques
 
                 NotifyInventoryChanges notifyInventoryChanges{};
                 notifyInventoryChanges.ServerId = World::ToInteger(*character);
-                notifyInventoryChanges.Item = entry;
-                notifyInventoryChanges.Drop = false;
-
-                if (!inventoryComponent.Content.AddOrRemoveEntry(entry))
+                notifyInventoryChanges.EventId = m_world.ctx().at<InventoryService>().ReserveInventoryEventId(
+                    notifyInventoryChanges.ServerId);
+                if (SkyrimTogether::ServerAuthorityPolicy::CanCommitEventMutation(
+                        notifyInventoryChanges.EventId))
                 {
-                    spdlog::warn("{}: gold-loss inventory mutation was rejected", __FUNCTION__);
-                }
-                else
-                {
-                    // Exclude respawned player from inventory changes notification...
-                    if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
-                        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+                    notifyInventoryChanges.Item = entry;
+                    notifyInventoryChanges.Drop = false;
 
-                    // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
-                    NotifyPlayerRespawn notifyPlayerRespawn{};
-                    notifyPlayerRespawn.GoldLost = goldToRemove;
+                    if (!inventoryComponent.Content.AddOrRemoveEntry(entry))
+                    {
+                        spdlog::warn("{}: gold-loss inventory mutation was rejected", __FUNCTION__);
+                    }
+                    else
+                    {
+                        // Exclude respawned player from inventory changes notification...
+                        if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
+                            spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 
-                    acMessage.pPlayer->Send(notifyPlayerRespawn);
+                        // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
+                        NotifyPlayerRespawn notifyPlayerRespawn{};
+                        notifyPlayerRespawn.GoldLost = goldToRemove;
+
+                        acMessage.pPlayer->Send(notifyPlayerRespawn);
+                    }
                 }
             }
         }

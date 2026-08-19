@@ -9,6 +9,7 @@
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/ClientActorActionRequest.h>
 #include <Messages/NotifyActorMaxValueChanges.h>
+#include <Messages/NotifyActorResync.h>
 #include <Messages/NotifyActorValueChanges.h>
 #include <Messages/NotifyAddTarget.h>
 #include <Messages/NotifyDeathStateChange.h>
@@ -35,6 +36,7 @@
 #include <Messages/NotifyVRMagicEffectEvent.h>
 #include <Messages/NotifyVRPoseUpdate.h>
 #include <Messages/NotifyVRProjectileEvent.h>
+#include <Messages/RequestActorResync.h>
 #include <Structs/VRInteractionValidation.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Services/TransportService.h>
@@ -42,6 +44,7 @@
 #include <Services/VRNpcOwnershipService.h>
 #include <Structs/GameplayCapabilities.h>
 #include <World.h>
+#include <VRCanonicalEntityIdentity.h>
 #include <VRGameplayBridge.h>
 
 #include <algorithm>
@@ -56,6 +59,7 @@
 #include <vector>
 
 namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
+namespace ActorReplicationRecovery = SkyrimTogetherVR::ActorReplicationRecovery;
 
 namespace
 {
@@ -93,9 +97,11 @@ constexpr std::size_t kMaximumPendingHiggsMutationsPerPlayer = kMaximumHiggsMuta
 constexpr std::uint8_t kMaximumHiggsMutationResolutionAttempts = 20;
 constexpr double kMaximumHiggsMutationResolutionSeconds = 5.0;
 constexpr double kSemanticTombstoneRebaseRetrySeconds = 0.25;
-constexpr std::uint8_t kMaximumGameplayWorkAttempts = 3;
 constexpr double kGameplayAdmissionTimeoutSeconds = 10.0;
 constexpr double kGameplayResultTimeoutSeconds = 10.0;
+constexpr double kCanonicalResyncRetrySeconds = 2.0;
+constexpr std::uint8_t kMaximumCanonicalResyncAttempts = 3;
+constexpr std::size_t kMaximumPendingCanonicalResyncs = 64;
 constexpr std::uint32_t kMagicEffectApplyHealPerkBonus = 1u << 3;
 constexpr std::uint32_t kMagicEffectApplyStaminaPerkBonus = 1u << 4;
 constexpr std::uint32_t kRightHandEquipSlotFormId = 0x00013F42;
@@ -116,6 +122,7 @@ constexpr std::size_t kMaximumPendingInventoryTransactions = 64;
 constexpr double kInventoryTransactionRetryDelaySeconds = 0.25;
 constexpr double kInventoryTransactionResultTimeoutSeconds = 10.0;
 constexpr double kSpawnResultTimeoutSeconds = 2.0;
+constexpr std::uint8_t kMaximumSpawnResyncAttempts = 3;
 constexpr std::size_t kMaximumPendingAppearanceApplications = 128;
 constexpr std::size_t kMaximumTrackedSpawnStates = 128;
 constexpr std::size_t kMaximumSpawnActionOwners = 512;
@@ -323,6 +330,7 @@ VRActorReplicationService::VRActorReplicationService(
     m_inventoryConnection = aDispatcher.sink<NotifyInventoryChanges>().connect<&VRActorReplicationService::OnInventory>(this);
     m_actorValuesConnection = aDispatcher.sink<NotifyActorValueChanges>().connect<&VRActorReplicationService::OnActorValues>(this);
     m_actorMaximumsConnection = aDispatcher.sink<NotifyActorMaxValueChanges>().connect<&VRActorReplicationService::OnActorMaximums>(this);
+    m_actorResyncConnection = aDispatcher.sink<NotifyActorResync>().connect<&VRActorReplicationService::OnActorResync>(this);
     m_healthChangeConnection = aDispatcher.sink<NotifyHealthChangeBroadcast>().connect<&VRActorReplicationService::OnHealthChangeBroadcast>(this);
     m_deathConnection = aDispatcher.sink<NotifyDeathStateChange>().connect<&VRActorReplicationService::OnDeath>(this);
     m_respawnConnection = aDispatcher.sink<NotifyRespawn>().connect<&VRActorReplicationService::OnRespawn>(this);
@@ -424,9 +432,10 @@ catch (...)
 bool VRActorReplicationService::IsSameAcceptance(const AcceptanceToken& acLeft,
                                                   const AcceptanceToken& acRight) const noexcept
 {
-    return acLeft.Valid && acRight.Valid && acLeft.PlayerId == acRight.PlayerId &&
-           acLeft.Domain == acRight.Domain && acLeft.Sequence == acRight.Sequence &&
-           acLeft.Signature == acRight.Signature && acLeft.Channel == acRight.Channel;
+    return acLeft.Valid && acRight.Valid && ActorReplicationRecovery::IsDuplicateAdmissionIdentity(
+           acLeft.PlayerId, static_cast<std::uint16_t>(acLeft.Domain), acLeft.Sequence, acLeft.Signature,
+           acLeft.Channel, acRight.PlayerId, static_cast<std::uint16_t>(acRight.Domain), acRight.Sequence,
+           acRight.Signature, acRight.Channel);
 }
 
 bool VRActorReplicationService::HasSemanticTombstone(const AcceptanceToken& acToken) const noexcept
@@ -784,6 +793,12 @@ bool VRActorReplicationService::QueueReliableGameplayWork(PendingGameplayWork&& 
         });
     if (duplicate != m_pendingGameplayWork.end())
         return true;
+    const auto inventoryDuplicate = std::find_if(m_pendingInventoryTransactions.begin(),
+        m_pendingInventoryTransactions.end(), [this, &arWork](const PendingInventoryTransaction& acExisting) noexcept {
+            return acExisting.HasAcceptance && IsSameAcceptance(acExisting.Acceptance, arWork.Acceptance);
+        });
+    if (inventoryDuplicate != m_pendingInventoryTransactions.end())
+        return true;
 
     if (IsVrBodyPoseWork(arWork)) {
         // Pose work has no externally visible state until it enters the
@@ -812,6 +827,11 @@ bool VRActorReplicationService::QueueReliableGameplayWork(PendingGameplayWork&& 
         m_nextGameplayWorkId = 1;
     if (arWork.WorkId == 0)
         arWork.WorkId = m_nextGameplayWorkId++;
+    arWork.AdmissionOrder = m_nextAdmissionOrder++;
+    if (m_nextAdmissionOrder == 0)
+        m_nextAdmissionOrder = 1;
+    if (arWork.AdmissionOrder == 0)
+        arWork.AdmissionOrder = m_nextAdmissionOrder++;
     m_pendingGameplayWork.push_back(std::move(arWork));
     TP_UNUSED(TrySubmitReliableGameplayWork(m_pendingGameplayWork.size() - 1));
     return true;
@@ -824,6 +844,31 @@ catch (...)
 bool VRActorReplicationService::IsVrBodyPoseWork(const PendingGameplayWork& acWork) noexcept
 {
     return acWork.TargetIsPlayer && acWork.Domain == GameplayBridge::GameplayDomain::VrBodyPose;
+}
+
+bool VRActorReplicationService::IsAdmissionHead(
+    const AcceptanceToken& acAcceptance, const std::uint64_t aAdmissionOrder) const noexcept
+{
+    if (!acAcceptance.Valid || aAdmissionOrder == 0)
+        return false;
+    const auto hasEarlier = [&acAcceptance, aAdmissionOrder](const AcceptanceToken& acOtherAcceptance,
+                                                               const std::uint64_t aOtherOrder,
+                                                               const bool aOtherAdmitted) noexcept {
+        return !aOtherAdmitted && acOtherAcceptance.Valid &&
+               acOtherAcceptance.PlayerId == acAcceptance.PlayerId &&
+               acOtherAcceptance.Domain == acAcceptance.Domain &&
+               acOtherAcceptance.Channel == acAcceptance.Channel &&
+               ActorReplicationRecovery::IsEarlierAdmissionOrder(aAdmissionOrder, aOtherOrder);
+    };
+    for (const auto& work : m_pendingGameplayWork) {
+        if (hasEarlier(work.Acceptance, work.AdmissionOrder, work.Admitted))
+            return false;
+    }
+    for (const auto& pending : m_pendingInventoryTransactions) {
+        if (pending.HasAcceptance && hasEarlier(pending.Acceptance, pending.AdmissionOrder, pending.Admitted))
+            return false;
+    }
+    return true;
 }
 
 bool VRActorReplicationService::HasAdmittedVrBodyPoseWork(
@@ -865,7 +910,8 @@ void VRActorReplicationService::TrySubmitLatestVrBodyPoseWork(const std::uint32_
     if (work == m_pendingGameplayWork.end())
         return;
 
-    if (!CanCommitAccept(work->Acceptance)) {
+    if (ActorReplicationRecovery::CanRefreshUnadmittedAcceptance(work->Admitted) &&
+        IsAdmissionHead(work->Acceptance, work->AdmissionOrder) && !CanCommitAccept(work->Acceptance)) {
         const auto refreshed = PrepareAccept(work->Acceptance.PlayerId, work->Acceptance.Domain,
                                              work->Acceptance.Sequence, work->Acceptance.Signature,
                                              work->Acceptance.Channel);
@@ -883,8 +929,20 @@ bool VRActorReplicationService::TrySubmitReliableGameplayWork(const std::size_t 
     if (aIndex >= m_pendingGameplayWork.size())
         return false;
     auto& work = m_pendingGameplayWork[aIndex];
-    if (work.AwaitingResult || work.Terminal || (!work.Admitted && !CanCommitAccept(work.Acceptance)))
+    if (work.AwaitingResult || work.Terminal || work.Admitted)
         return false;
+    if (!work.Admitted) {
+        if (!IsAdmissionHead(work.Acceptance, work.AdmissionOrder))
+            return false;
+        if (!CanCommitAccept(work.Acceptance)) {
+            const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain,
+                                                 work.Acceptance.Sequence, work.Acceptance.Signature,
+                                                 work.Acceptance.Channel);
+            if (!refreshed.Valid)
+                return false;
+            work.Acceptance = refreshed;
+        }
+    }
     if (IsVrBodyPoseWork(work)) {
         // Never replay an admitted visual batch. Its action IDs may already
         // have reached the bridge even when a result is delayed or lost.
@@ -1354,6 +1412,12 @@ bool VRActorReplicationService::QueueInventoryTransaction(
             });
         if (duplicate != m_pendingInventoryTransactions.end())
             return true;
+        const auto gameplayDuplicate = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+            [this, apAcceptance](const PendingGameplayWork& acPending) noexcept {
+                return IsSameAcceptance(acPending.Acceptance, *apAcceptance);
+            });
+        if (gameplayDuplicate != m_pendingGameplayWork.end())
+            return true;
     }
     if (m_pendingInventoryTransactions.size() >= kMaximumPendingInventoryTransactions)
         return false;
@@ -1367,6 +1431,13 @@ bool VRActorReplicationService::QueueInventoryTransaction(
     if (apAcceptance) {
         pending.Acceptance = *apAcceptance;
         pending.HasAcceptance = true;
+    }
+    if (pending.HasAcceptance) {
+        pending.AdmissionOrder = m_nextAdmissionOrder++;
+        if (m_nextAdmissionOrder == 0)
+            m_nextAdmissionOrder = 1;
+        if (pending.AdmissionOrder == 0)
+            pending.AdmissionOrder = m_nextAdmissionOrder++;
     }
     m_pendingInventoryTransactions.push_back(std::move(pending));
     TP_UNUSED(TrySubmitInventoryTransaction(m_pendingInventoryTransactions.size() - 1));
@@ -1382,18 +1453,22 @@ bool VRActorReplicationService::TrySubmitInventoryTransaction(const std::size_t 
     if (aIndex >= m_pendingInventoryTransactions.size())
         return false;
     auto& arPending = m_pendingInventoryTransactions[aIndex];
-    if (arPending.Terminal || arPending.AwaitingResults || !HasInventoryTransactionCapability() || arPending.ServerId == 0 ||
+    if (arPending.Terminal || arPending.AwaitingResults || arPending.Admitted ||
+        !HasInventoryTransactionCapability() || arPending.ServerId == 0 ||
         arPending.Entries.size() > GameplayBridge::kMaximumInventoryTransactionItems ||
         arPending.Drops.size() != arPending.Entries.size() || (!arPending.Reset && arPending.Entries.empty()))
         return false;
-    if (!arPending.Admitted && arPending.HasAcceptance && !CanCommitAccept(arPending.Acceptance)) {
-        if (arPending.Acceptance.Sequence != 0)
+    if (!arPending.Admitted && arPending.HasAcceptance) {
+        if (!IsAdmissionHead(arPending.Acceptance, arPending.AdmissionOrder))
             return false;
-        const auto refreshed = PrepareAccept(arPending.Acceptance.PlayerId, arPending.Acceptance.Domain, 0,
-                                             arPending.Acceptance.Signature, arPending.Acceptance.Channel);
-        if (!refreshed.Valid)
-            return false;
-        arPending.Acceptance = refreshed;
+        if (!CanCommitAccept(arPending.Acceptance)) {
+            const auto refreshed = PrepareAccept(arPending.Acceptance.PlayerId, arPending.Acceptance.Domain,
+                                                 arPending.Acceptance.Sequence, arPending.Acceptance.Signature,
+                                                 arPending.Acceptance.Channel);
+            if (!refreshed.Valid)
+                return false;
+            arPending.Acceptance = refreshed;
+        }
     }
 
     std::size_t totalEffects{};
@@ -2146,8 +2221,14 @@ void VRActorReplicationService::ForgetPlayer(const std::uint32_t aPlayerId) noex
         if (it->second == aPlayerId) {
             const auto serverId = it->first;
             m_spawnSnapshots.erase(it->first);
+            m_spawnEntityIdentities.erase(it->first);
             m_resyncAttempts.erase(it->first);
+            if (ActorReplicationRecovery::IsRetiredLedgerIdentity(serverId, serverId, aPlayerId))
+                m_ledgers.erase(serverId);
             m_lastEquipmentTransactionByServer.erase(serverId);
+            m_lastActorSnapshotRevisionByServer.erase(serverId);
+            m_pendingActorSnapshotResyncs.erase(serverId);
+            m_pendingEquipmentSnapshotResyncs.erase(serverId);
             ForgetEquipmentApplication(serverId);
             ForgetInventoryTransactions(serverId);
             ForgetSpawnActionIds(serverId);
@@ -2182,18 +2263,31 @@ void VRActorReplicationService::ForgetServer(const std::uint32_t aServerId) noex
     m_appliedAppearanceSequences.erase(npcAppearanceKey);
     m_failedAppearanceSequences.erase(npcAppearanceKey);
     const auto playerId = PlayerForServer(aServerId);
+    // Actor-originated messages use the server ID as their ledger identity;
+    // player-originated messages use the mapped player ID. Retire both before
+    // an ID can be reused for a replacement actor.
+    if (ActorReplicationRecovery::IsRetiredLedgerIdentity(aServerId, aServerId, playerId))
+        m_ledgers.erase(aServerId);
     if (playerId != 0) {
         ForgetAppearanceApplication(playerId);
+        m_latestAppearances.erase(playerId);
+        m_appliedAppearanceSequences.erase(playerId);
+        m_failedAppearanceSequences.erase(playerId);
         ForgetReliableGameplayWorkForPlayer(playerId);
         ForgetSemanticTombstones(playerId);
         m_higgsEventLedgers.erase(playerId);
         m_pendingHiggsMutations.erase(playerId);
-        m_ledgers.erase(playerId);
+        if (ActorReplicationRecovery::IsRetiredLedgerIdentity(playerId, aServerId, playerId))
+            m_ledgers.erase(playerId);
     }
     m_serverPlayers.erase(aServerId);
     m_pendingSpawns.erase(aServerId);
     m_spawnSnapshots.erase(aServerId);
+    m_spawnEntityIdentities.erase(aServerId);
     m_resyncAttempts.erase(aServerId);
+    m_lastActorSnapshotRevisionByServer.erase(aServerId);
+    m_pendingActorSnapshotResyncs.erase(aServerId);
+    m_pendingEquipmentSnapshotResyncs.erase(aServerId);
     ForgetInventoryTransactions(aServerId);
     ForgetSpawnActionIds(aServerId);
     ForgetReliableGameplayWorkForServer(aServerId);
@@ -2232,49 +2326,258 @@ void VRActorReplicationService::OnRemoveCharacter(const NotifyRemoveCharacter& a
     ForgetServer(acMessage.ServerId);
 }
 
-void VRActorReplicationService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept try
+void VRActorReplicationService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept
+{
+    TP_UNUSED(TryStageCharacterSpawn(acMessage));
+}
+
+bool VRActorReplicationService::BuildSpawnEntityIdentity(
+    const std::uint32_t aServerId,
+    GameplayBridge::BridgeIdentity& arIdentity) const noexcept
+{
+    arIdentity = {};
+    SkyrimTogetherVR::CanonicalEntity::BridgeIdentity entityIdentity{};
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    const auto lifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (serverInstanceNonce == 0 || connectionGeneration == 0 || lifecycleEpoch == 0 ||
+        !SkyrimTogetherVR::CanonicalEntity::TrySplitServerId(aServerId, entityIdentity))
+        return false;
+
+    arIdentity.ServerInstanceNonce = serverInstanceNonce;
+    arIdentity.ConnectionGeneration = connectionGeneration;
+    arIdentity.LifecycleEpoch = lifecycleEpoch;
+    arIdentity.EntityId = entityIdentity.EntityId;
+    arIdentity.EntityGeneration = entityIdentity.EntityGeneration;
+    return true;
+}
+
+bool VRActorReplicationService::TryStageCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept try
 {
     if (!acMessage.IsDecodedValid || acMessage.ServerId == 0 ||
         (acMessage.HasVRAppearance &&
          (!acMessage.InitialVRAppearance.IsValid() ||
           (!acMessage.IsPlayer && acMessage.InitialVRAppearance.TintCount != 0))))
-        return;
+        return false;
     if (acMessage.IsPlayer && acMessage.PlayerId == m_transport.GetLocalPlayerId()) {
+        const auto previousLocalServerId = m_localServerId;
+        const bool incomingServerIsTracked =
+            m_serverPlayers.contains(acMessage.ServerId) ||
+            m_pendingSpawns.contains(acMessage.ServerId) ||
+            m_spawnSnapshots.contains(acMessage.ServerId) ||
+            m_spawnEntityIdentities.contains(acMessage.ServerId) ||
+            m_resyncAttempts.contains(acMessage.ServerId) ||
+            m_ledgers.contains(acMessage.ServerId);
+        if (ActorReplicationRecovery::IsLocalServerIdIdentityReplacement(
+                previousLocalServerId, acMessage.ServerId))
+            ForgetServer(previousLocalServerId);
+        if (incomingServerIsTracked)
+            ForgetServer(acMessage.ServerId);
         m_localServerId = acMessage.ServerId;
-        return;
+        return true;
     }
     if (acMessage.IsPlayer && !IsRemotePlayer(m_transport, acMessage.PlayerId))
-        return;
-    if (!m_spawnSnapshots.contains(acMessage.ServerId) &&
-        m_spawnSnapshots.size() >= kMaximumTrackedSpawnStates) {
-        const auto oldest = std::min_element(m_spawnSnapshots.begin(), m_spawnSnapshots.end(),
-            [](const auto& acLeft, const auto& acRight) noexcept { return acLeft.first < acRight.first; });
-        if (oldest != m_spawnSnapshots.end())
-            ForgetServer(oldest->first);
-    }
-    if (!m_pendingSpawns.contains(acMessage.ServerId) &&
-        m_pendingSpawns.size() >= kMaximumTrackedSpawnStates) {
-        const auto oldest = std::min_element(m_pendingSpawns.begin(), m_pendingSpawns.end(),
-            [](const auto& acLeft, const auto& acRight) noexcept { return acLeft.first < acRight.first; });
-        if (oldest != m_pendingSpawns.end())
-            ForgetServer(oldest->first);
-    }
-    m_serverPlayers[acMessage.ServerId] = acMessage.PlayerId;
-    if (acMessage.HasVRAppearance) {
-        const auto targetKey = acMessage.IsPlayer ? static_cast<std::uint64_t>(acMessage.PlayerId) :
-                                                    NpcAppearanceTargetKey(acMessage.ServerId);
-        if (targetKey == 0)
+        return false;
+
+    GameplayBridge::BridgeIdentity incomingEntityIdentity{};
+    if (!BuildSpawnEntityIdentity(acMessage.ServerId, incomingEntityIdentity))
+        return false;
+
+    // Build complete replacement state off to the side. Copying/inserting the
+    // bounded maps is the allocation-fallible part; swaps and cleanup below
+    // are non-allocating, so recovery state changes only after staging works.
+    auto stagedServerPlayers = m_serverPlayers;
+    auto stagedSpawnSnapshots = m_spawnSnapshots;
+    auto stagedPendingSpawns = m_pendingSpawns;
+    auto stagedSpawnEntityIdentities = m_spawnEntityIdentities;
+    auto stagedLatestAppearances = m_latestAppearances;
+    std::vector<std::uint32_t> retiredServerIds;
+    retiredServerIds.reserve(stagedServerPlayers.size() + stagedSpawnEntityIdentities.size() + 2);
+    const auto stageRetirement = [&retiredServerIds, &stagedServerPlayers,
+                                  &stagedSpawnSnapshots, &stagedPendingSpawns,
+                                  &stagedSpawnEntityIdentities,
+                                  &stagedLatestAppearances](const std::uint32_t aServerId) {
+        if (aServerId == 0 || std::find(retiredServerIds.begin(), retiredServerIds.end(), aServerId) !=
+                                  retiredServerIds.end())
             return;
-        if (const auto existing = m_latestAppearances.find(targetKey);
-            existing == m_latestAppearances.end() ||
-            IsNewer(acMessage.InitialVRAppearance.Sequence, existing->second.Sequence))
-            m_latestAppearances[targetKey] = acMessage.InitialVRAppearance;
+        retiredServerIds.push_back(aServerId);
+        if (const auto mapped = stagedServerPlayers.find(aServerId);
+            mapped != stagedServerPlayers.end() && mapped->second != 0)
+            stagedLatestAppearances.erase(mapped->second);
+        stagedServerPlayers.erase(aServerId);
+        stagedSpawnSnapshots.erase(aServerId);
+        stagedPendingSpawns.erase(aServerId);
+        stagedSpawnEntityIdentities.erase(aServerId);
+        stagedLatestAppearances.erase(NpcAppearanceTargetKey(aServerId));
+    };
+
+    // ServerId encodes the canonical entity slot and generation. Retire an
+    // exact key reused across a session/lifecycle identity, or an older key
+    // for the same canonical slot in this lifecycle. An exact identity match
+    // is a canonical refresh of the same entity.
+    for (const auto& [serverId, entityIdentity] : m_spawnEntityIdentities) {
+        if (ActorReplicationRecovery::IsSpawnEntityIdentityReplacement(
+                serverId, entityIdentity, acMessage.ServerId, incomingEntityIdentity))
+            stageRetirement(serverId);
     }
+
+    // A server slot may also change player ownership, and a player may move
+    // to a different canonical entity before the old removal arrives.
+    if (const auto existing = m_serverPlayers.find(acMessage.ServerId);
+        existing != m_serverPlayers.end() &&
+        ActorReplicationRecovery::IsServerIdIdentityReplacement(
+            existing->second, acMessage.PlayerId))
+        stageRetirement(existing->first);
+    if (acMessage.PlayerId != 0) {
+        for (const auto& [serverId, playerId] : m_serverPlayers) {
+            if (playerId == acMessage.PlayerId &&
+                ActorReplicationRecovery::IsPlayerIdIdentityReplacement(
+                    acMessage.PlayerId, serverId, acMessage.ServerId))
+                stageRetirement(serverId);
+        }
+    }
+    if (!stagedSpawnSnapshots.contains(acMessage.ServerId) &&
+        stagedSpawnSnapshots.size() >= kMaximumTrackedSpawnStates) {
+        const auto oldest = std::min_element(stagedSpawnSnapshots.begin(), stagedSpawnSnapshots.end(),
+            [](const auto& acLeft, const auto& acRight) noexcept { return acLeft.first < acRight.first; });
+        if (oldest != stagedSpawnSnapshots.end())
+            stageRetirement(oldest->first);
+    }
+    if (!stagedPendingSpawns.contains(acMessage.ServerId) &&
+        stagedPendingSpawns.size() >= kMaximumTrackedSpawnStates) {
+        const auto oldest = std::min_element(stagedPendingSpawns.begin(), stagedPendingSpawns.end(),
+            [](const auto& acLeft, const auto& acRight) noexcept { return acLeft.first < acRight.first; });
+        if (oldest != stagedPendingSpawns.end())
+            stageRetirement(oldest->first);
+    }
+
+    stagedServerPlayers.insert_or_assign(acMessage.ServerId, acMessage.PlayerId);
+    stagedSpawnSnapshots.insert_or_assign(acMessage.ServerId, acMessage);
+    stagedPendingSpawns.insert_or_assign(acMessage.ServerId, acMessage);
+    stagedSpawnEntityIdentities.insert_or_assign(acMessage.ServerId, incomingEntityIdentity);
+    if (acMessage.HasVRAppearance) {
+        const auto appearanceTargetKey = acMessage.IsPlayer ? static_cast<std::uint64_t>(acMessage.PlayerId) :
+                                                              NpcAppearanceTargetKey(acMessage.ServerId);
+        if (appearanceTargetKey == 0)
+            return false;
+        const auto existing = stagedLatestAppearances.find(appearanceTargetKey);
+        if (existing == stagedLatestAppearances.end() ||
+            IsNewer(acMessage.InitialVRAppearance.Sequence, existing->second.Sequence))
+            stagedLatestAppearances.insert_or_assign(appearanceTargetKey, acMessage.InitialVRAppearance);
+    }
+    for (const auto serverId : retiredServerIds)
+        ForgetServer(serverId);
+    m_serverPlayers.swap(stagedServerPlayers);
+    m_spawnSnapshots.swap(stagedSpawnSnapshots);
+    m_pendingSpawns.swap(stagedPendingSpawns);
+    m_spawnEntityIdentities.swap(stagedSpawnEntityIdentities);
+    m_latestAppearances.swap(stagedLatestAppearances);
     m_quarantinedSpawns.erase(acMessage.ServerId);
     ForgetSpawnActionIds(acMessage.ServerId);
     m_resyncAttempts.erase(acMessage.ServerId);
-    m_spawnSnapshots[acMessage.ServerId] = acMessage;
-    m_pendingSpawns[acMessage.ServerId] = acMessage;
+    return true;
+}
+catch (...)
+{
+    return false;
+}
+
+bool VRActorReplicationService::SendCanonicalResyncRequest(
+    const std::uint32_t aServerId, const std::uint8_t aScope,
+    PendingCanonicalResync& arPending) noexcept
+{
+    if (aServerId == 0 || arPending.RequestId == 0 ||
+        !m_transport.IsOnline() || m_transport.IsGameplayCleanupRequired() ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::CanonicalStateResync))
+        return false;
+
+    RequestActorResync request{};
+    request.ServerId = aServerId;
+    request.RequestId = arPending.RequestId;
+    request.Scope = aScope;
+    if (aScope == RequestActorResync::kActorSnapshot)
+        request.KnownActorRevision = arPending.KnownRevision;
+    else if (aScope == RequestActorResync::kEquipmentSnapshot)
+        request.KnownEquipmentRevision = arPending.KnownRevision;
+    else
+        return false;
+
+    if (!m_transport.Send(request))
+        return false;
+    ++arPending.Attempts;
+    arPending.RetryElapsed = 0.0;
+    return true;
+}
+
+void VRActorReplicationService::RequestActorSnapshotResync(const std::uint32_t aServerId) noexcept
+{
+    if (aServerId == 0 || m_pendingActorSnapshotResyncs.contains(aServerId) ||
+        m_pendingActorSnapshotResyncs.size() >= kMaximumPendingCanonicalResyncs)
+        return;
+    auto& pending = m_pendingActorSnapshotResyncs[aServerId];
+    pending.RequestId = m_nextCanonicalResyncRequestId++;
+    if (m_nextCanonicalResyncRequestId == 0)
+        m_nextCanonicalResyncRequestId = 1;
+    if (pending.RequestId == 0)
+        pending.RequestId = m_nextCanonicalResyncRequestId++;
+    const auto known = m_lastActorSnapshotRevisionByServer.find(aServerId);
+    pending.KnownRevision = known != m_lastActorSnapshotRevisionByServer.end() ? known->second : 0;
+    TP_UNUSED(SendCanonicalResyncRequest(aServerId, RequestActorResync::kActorSnapshot, pending));
+}
+
+void VRActorReplicationService::RequestEquipmentSnapshotResync(const std::uint32_t aServerId) noexcept
+{
+    if (aServerId == 0 || m_pendingEquipmentSnapshotResyncs.contains(aServerId) ||
+        m_pendingEquipmentSnapshotResyncs.size() >= kMaximumPendingCanonicalResyncs)
+        return;
+    auto& pending = m_pendingEquipmentSnapshotResyncs[aServerId];
+    pending.RequestId = m_nextCanonicalResyncRequestId++;
+    if (m_nextCanonicalResyncRequestId == 0)
+        m_nextCanonicalResyncRequestId = 1;
+    if (pending.RequestId == 0)
+        pending.RequestId = m_nextCanonicalResyncRequestId++;
+    const auto known = m_lastEquipmentTransactionByServer.find(aServerId);
+    pending.KnownRevision = known != m_lastEquipmentTransactionByServer.end() ? known->second : 0;
+    TP_UNUSED(SendCanonicalResyncRequest(aServerId, RequestActorResync::kEquipmentSnapshot, pending));
+}
+
+void VRActorReplicationService::OnActorResync(const NotifyActorResync& acMessage) noexcept try
+{
+    if (!acMessage.IsDecodedValid || !acMessage.IsValid())
+        return;
+    std::uint32_t expectedRequestId{};
+    std::uint64_t knownRevision{};
+    {
+        const auto pending = m_pendingActorSnapshotResyncs.find(acMessage.ServerId);
+        if (pending == m_pendingActorSnapshotResyncs.end())
+            return;
+        expectedRequestId = pending->second.RequestId;
+        knownRevision = pending->second.KnownRevision;
+    }
+    if (expectedRequestId != acMessage.RequestId ||
+        acMessage.CanonicalRevision < knownRevision)
+        return;
+
+    // Only a matching response whose replacement snapshot has been retained
+    // may lift quarantine. Keep both quarantine and this request intact when
+    // staging fails, so a later retry/new request remains recoverable.
+    auto stagedActorSnapshotRevisions = m_lastActorSnapshotRevisionByServer;
+    stagedActorSnapshotRevisions.insert_or_assign(acMessage.ServerId, acMessage.CanonicalRevision);
+    if (!ActorReplicationRecovery::CanLiftCanonicalResyncQuarantine(TryStageCharacterSpawn(acMessage.Snapshot)))
+        return;
+    std::erase_if(stagedActorSnapshotRevisions,
+        [this, serverId = acMessage.ServerId](const auto& acEntry) noexcept {
+            return acEntry.first != serverId &&
+                   !m_lastActorSnapshotRevisionByServer.contains(acEntry.first);
+        });
+    m_lastActorSnapshotRevisionByServer.swap(stagedActorSnapshotRevisions);
+    m_failedSpawnInventoryTransactions.erase(acMessage.ServerId);
+    const auto completed = m_pendingActorSnapshotResyncs.find(acMessage.ServerId);
+    if (completed != m_pendingActorSnapshotResyncs.end() &&
+        completed->second.RequestId == expectedRequestId)
+        m_pendingActorSnapshotResyncs.erase(completed);
 }
 catch (...)
 {
@@ -2340,6 +2643,9 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_resyncAttempts.clear();
         m_ledgers.clear();
         m_lastEquipmentTransactionByServer.clear();
+        m_lastActorSnapshotRevisionByServer.clear();
+        m_pendingActorSnapshotResyncs.clear();
+        m_pendingEquipmentSnapshotResyncs.clear();
         m_pendingEquipmentApplications.clear();
         m_equipmentActionOwners.clear();
         m_pendingInventoryTransactions.clear();
@@ -2359,6 +2665,7 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_semanticTombstoneRebaseRequested = false;
         m_semanticTombstoneRebaseEpoch = 0;
         m_semanticTombstoneRebaseElapsed = 0.0;
+        m_nextCanonicalResyncRequestId = 1;
         m_observedLifecycleEpoch = 0;
         m_replayAfterLifecycleBoundary = true;
         return;
@@ -2367,6 +2674,9 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
     {
         m_ledgers.clear();
         m_lastEquipmentTransactionByServer.clear();
+        m_lastActorSnapshotRevisionByServer.clear();
+        m_pendingActorSnapshotResyncs.clear();
+        m_pendingEquipmentSnapshotResyncs.clear();
         m_pendingEquipmentApplications.clear();
         m_equipmentActionOwners.clear();
         m_pendingInventoryTransactions.clear();
@@ -2395,12 +2705,45 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_semanticTombstoneRebaseRequested = false;
         m_semanticTombstoneRebaseEpoch = 0;
         m_semanticTombstoneRebaseElapsed = 0.0;
+        m_nextCanonicalResyncRequestId = 1;
         m_replayAfterLifecycleBoundary = true;
         m_observedLifecycleEpoch = lifecycleEpoch;
         return;
     }
     if (lifecycleEpoch != 0)
         m_observedLifecycleEpoch = lifecycleEpoch;
+
+    const auto retryCanonicalResyncs = [this, reliableDelta](auto& arPending, const std::uint8_t aScope) noexcept {
+        for (auto& [serverId, pending] : arPending) {
+            pending.RetryElapsed += reliableDelta;
+            const auto retryDelay = kCanonicalResyncRetrySeconds *
+                ActorReplicationRecovery::CanonicalResyncBackoffMultiplier(pending.ExhaustedRounds);
+            if (pending.RetryElapsed < retryDelay)
+                continue;
+            if (ActorReplicationRecovery::ShouldRotateCanonicalResyncRequest(
+                    pending.Attempts, kMaximumCanonicalResyncAttempts)) {
+                if (pending.ExhaustedRounds < (std::numeric_limits<std::uint8_t>::max)())
+                    ++pending.ExhaustedRounds;
+                if (ActorReplicationRecovery::ShouldLogCanonicalResyncExhaustion(pending.ExhaustedRounds)) {
+                    spdlog::warn(
+                        "VR canonical resync exhausted request round {} for server actor {}; rotating request identity after bounded backoff",
+                        pending.ExhaustedRounds, serverId);
+                }
+                pending.RequestId = m_nextCanonicalResyncRequestId++;
+                if (m_nextCanonicalResyncRequestId == 0)
+                    m_nextCanonicalResyncRequestId = 1;
+                if (pending.RequestId == 0)
+                    pending.RequestId = m_nextCanonicalResyncRequestId++;
+                pending.Attempts = 0;
+                pending.RetryElapsed = 0.0;
+                continue;
+            }
+            if (!SendCanonicalResyncRequest(serverId, aScope, pending))
+                pending.RetryElapsed = 0.0;
+        }
+    };
+    retryCanonicalResyncs(m_pendingActorSnapshotResyncs, RequestActorResync::kActorSnapshot);
+    retryCanonicalResyncs(m_pendingEquipmentSnapshotResyncs, RequestActorResync::kEquipmentSnapshot);
     if (m_semanticTombstoneRebaseRequested) {
         if (m_semanticTombstoneRebaseEpoch == 0 && lifecycleEpoch != 0)
             m_semanticTombstoneRebaseEpoch = lifecycleEpoch;
@@ -2420,8 +2763,17 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
     }
     if (lifecycleEpoch != 0 && m_replayAfterLifecycleBoundary)
     {
-        m_pendingSpawns = m_spawnSnapshots;
+        const auto discarded = m_spawnSnapshots.size();
+        m_pendingSpawns.clear();
+        m_spawnSnapshots.clear();
+        m_spawnEntityIdentities.clear();
+        m_resyncAttempts.clear();
+        m_quarantinedSpawns.clear();
         m_replayAfterLifecycleBoundary = false;
+        if (discarded != 0)
+            spdlog::warn(
+                "VR lifecycle changed; discarded {} retained spawn snapshots without a canonical revision barrier; awaiting fresh spawn data",
+                discarded);
     }
 
     m_localServerId = m_avatars.GetLocalServerId();
@@ -2446,58 +2798,43 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
                 ++index;
             continue;
         }
-        if (IsVrBodyPoseWork(work) && work.Admitted) {
-            // Result handling never retries a pose batch. This guard keeps a
-            // malformed or late result from turning an admitted visual frame
-            // into a second bridge submission.
+        if (work.Admitted) {
+            // Result ownership normally keeps admitted work awaiting a
+            // result. If that bookkeeping is gone, retire it rather than
+            // creating fresh action IDs for an already admitted payload.
             RetireReliableGameplayWork(workId);
             continue;
         }
-        if (!work.Admitted && !CanCommitAccept(work.Acceptance)) {
-            if (IsVrBodyPoseWork(work)) {
-                // An older admitted pose may have advanced the shared ledger
-                // while this latest frame was waiting for result-owner space.
-                // Refresh only the pre-admission token; the frame itself has
-                // never entered the bridge and can safely retain its payload.
-                const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain,
-                                                     work.Acceptance.Sequence, work.Acceptance.Signature,
-                                                     work.Acceptance.Channel);
-                if (refreshed.Valid) {
-                    work.Acceptance = refreshed;
-                } else {
-                    ForgetReliableGameplayWork(workId);
-                    continue;
-                }
-            } else if (work.Acceptance.Sequence == 0) {
-                const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain, 0,
-                                                     work.Acceptance.Signature, work.Acceptance.Channel);
-                if (refreshed.Valid) {
-                    work.Acceptance = refreshed;
-                } else {
-                    ForgetReliableGameplayWork(workId);
-                    continue;
-                }
-            } else {
+        const auto isAdmissionHead = IsAdmissionHead(work.Acceptance, work.AdmissionOrder);
+        if (!isAdmissionHead) {
+            ++index;
+            continue;
+        }
+        if (!CanCommitAccept(work.Acceptance)) {
+            // An earlier admission may have advanced this shared ledger while
+            // the work waited for bridge capacity. The payload never entered
+            // the bridge, so refresh its reservation without reordering it.
+            const auto refreshed = PrepareAccept(work.Acceptance.PlayerId, work.Acceptance.Domain,
+                                                 work.Acceptance.Sequence, work.Acceptance.Signature,
+                                                 work.Acceptance.Channel);
+            if (!refreshed.Valid) {
                 ForgetReliableGameplayWork(workId);
                 continue;
             }
+            work.Acceptance = refreshed;
         }
-        work.AdmissionWaitElapsed += reliableDelta;
-        if (work.AdmissionWaitElapsed >= kGameplayAdmissionTimeoutSeconds) {
-            if (work.Admitted) {
-                // A pre-mutation result permitted a retry, but a later retry
-                // could not re-enter the bridge. The original semantic work
-                // was still admitted, so retain its no-replay identity.
-                RetireReliableGameplayWork(workId);
-            } else {
-                // The command never entered the bridge, so no semantic state
-                // needs to survive this pre-admission timeout.
-                ForgetReliableGameplayWork(workId);
-            }
+        work.AdmissionAgeElapsed += reliableDelta;
+        if (ActorReplicationRecovery::ShouldRetireUnadmittedAdmissionHead(
+                work.Admitted, isAdmissionHead, work.AdmissionAgeElapsed,
+                kGameplayAdmissionTimeoutSeconds)) {
+            // The command never entered the bridge, so no semantic state
+            // needs to survive this bounded pre-admission retirement.
+            ForgetReliableGameplayWork(workId);
             continue;
         }
-        if (work.AdmissionWaitElapsed >= kMagicActorRetryDelaySeconds) {
-            work.AdmissionWaitElapsed = 0.0;
+        work.RetryWaitElapsed += reliableDelta;
+        if (work.RetryWaitElapsed >= kMagicActorRetryDelaySeconds) {
+            work.RetryWaitElapsed = 0.0;
             TP_UNUSED(TrySubmitReliableGameplayWork(index));
         }
         if (index < m_pendingGameplayWork.size() && m_pendingGameplayWork[index].WorkId == workId)
@@ -2541,14 +2878,17 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
                 timedOutSpawns.insert(tracking.ServerId);
         }
         for (const auto serverId : timedOutSpawns) {
-            ForgetSpawnActionIds(serverId);
+            TerminalizeSpawn(serverId);
             m_pendingSpawns.erase(serverId);
-            RememberBoundedServerId(m_quarantinedSpawns, serverId);
-            spdlog::warn("VR spawn result timed out for server actor {}; quarantining ambiguous spawn", serverId);
+            spdlog::warn(
+                "VR spawn result timed out for server actor {}; terminalized because buffered results make replay ambiguous",
+                serverId);
         }
     }
     std::vector<std::uint32_t> expiredEquipment;
     for (auto& [serverId, pending] : m_pendingEquipmentApplications) {
+        if (pending.Terminal)
+            continue;
         if (pending.AwaitingResult) {
             if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0)
                 pending.ResultWaitElapsed += acEvent.Delta;
@@ -2557,11 +2897,19 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
             expiredEquipment.push_back(serverId);
             continue;
         }
-        if (!pending.AwaitingResult && pending.ResultFailures < kMaximumEquipmentResultFailures)
+        if (!pending.AwaitingResult)
             TP_UNUSED(TrySubmitEquipmentApplication(serverId, pending));
     }
-    for (const auto serverId : expiredEquipment)
+    for (const auto serverId : expiredEquipment) {
+        const auto pending = m_pendingEquipmentApplications.find(serverId);
+        if (pending == m_pendingEquipmentApplications.end())
+            continue;
+        const auto transactionId = pending->second.TransactionId;
         TerminalizeEquipmentApplication(serverId);
+        spdlog::warn(
+            "VR final equipment transaction {} timed out for server actor {}; terminalized because buffered results make replay ambiguous",
+            transactionId, serverId);
+    }
     for (std::size_t index = 0; index < m_pendingInventoryTransactions.size();) {
         auto& pending = m_pendingInventoryTransactions[index];
         if (pending.Terminal) {
@@ -2576,6 +2924,28 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
                 continue;
             }
             spdlog::warn("VR inventory transaction result timed out for server actor {}; suppressing ambiguous replay",
+                         pending.ServerId);
+            TerminalizeInventoryTransaction(index);
+            continue;
+        }
+        if (pending.Admitted) {
+            // An admitted transaction without result ownership is ambiguous;
+            // terminalize it instead of replaying with fresh action IDs.
+            TerminalizeInventoryTransaction(index);
+            continue;
+        }
+        const auto isAdmissionHead = !pending.HasAcceptance ||
+            IsAdmissionHead(pending.Acceptance, pending.AdmissionOrder);
+        if (!isAdmissionHead) {
+            ++index;
+            continue;
+        }
+        if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0)
+            pending.AdmissionAgeElapsed += acEvent.Delta;
+        if (ActorReplicationRecovery::ShouldRetireUnadmittedAdmissionHead(
+                pending.Admitted, isAdmissionHead, pending.AdmissionAgeElapsed,
+                kGameplayAdmissionTimeoutSeconds)) {
+            spdlog::warn("VR inventory transaction could not enter the bridge for server actor {}; retiring FIFO head",
                          pending.ServerId);
             TerminalizeInventoryTransaction(index);
             continue;
@@ -2726,6 +3096,20 @@ bool VRActorReplicationService::SubmitSpawn(const CharacterSpawnRequest& acMessa
                                             GameplayBridge::GameplayAction::InventoryTransactionBegin, probe))
         return false;
 
+    if (const auto recovery = m_resyncAttempts.find(acMessage.ServerId);
+        recovery != m_resyncAttempts.end() && recovery->second.HasEntityIdentity &&
+        !recovery->second.MatchesCurrentEntity(probe.Header.Identity)) {
+        // A recovery must never target a replacement actor generation. The
+        // avatar service owns creation; this service can only replay final
+        // state for the exact actor that admitted the original spawn work.
+        TerminalizeSpawn(acMessage.ServerId);
+        return true;
+    }
+
+    const auto recovery = m_resyncAttempts.find(acMessage.ServerId);
+    const auto resyncAttempts = recovery != m_resyncAttempts.end() ? recovery->second.ResyncAttempts : 0;
+    const auto replayActionHistory = ActorReplicationRecovery::ShouldReplaySpawnActionHistory(resyncAttempts);
+
     struct ScopedSpawnActionRecording
     {
         std::uint32_t& RecordingServerId;
@@ -2821,30 +3205,33 @@ bool VRActorReplicationService::SubmitSpawn(const CharacterSpawnRequest& acMessa
                                                      GameplayBridge::GameplayDomain::ActorState,
                                                      std::move(factionActions), std::move(factionPayloads)));
     }
-    std::uint32_t replayIndex{};
-    for (const auto& action : acMessage.ActionsToReplay.Actions)
+    if (replayActionHistory)
     {
-        if (HasHumanoidActorActionVariables(action) &&
-            SkyrimTogether::Protocol::HasCapability(
-                m_transport.GetNegotiatedGameplayCapabilities(),
-                SkyrimTogether::Protocol::GameplayCapability::ExactAnimationActions)) {
-            if (HasExactActorActionCapability()) {
-                if (!SubmitRemoteActorAction(acMessage.ServerId, action))
+        std::uint32_t replayIndex{};
+        for (const auto& action : acMessage.ActionsToReplay.Actions)
+        {
+            if (HasHumanoidActorActionVariables(action) &&
+                SkyrimTogether::Protocol::HasCapability(m_transport.GetNegotiatedGameplayCapabilities(), SkyrimTogether::Protocol::GameplayCapability::ExactAnimationActions))
+            {
+                if (HasExactActorActionCapability())
+                {
+                    if (!SubmitRemoteActorAction(acMessage.ServerId, action))
+                        QueueRemoteActorAction(acMessage.ServerId, action);
+                }
+                else if (!SubmitLegacyRemoteActorAction(acMessage.ServerId, action))
+                {
                     QueueRemoteActorAction(acMessage.ServerId, action);
-            } else if (!SubmitLegacyRemoteActorAction(acMessage.ServerId, action)) {
-                QueueRemoteActorAction(acMessage.ServerId, action);
+                }
+                continue;
             }
-            continue;
+            const std::string_view eventName{action.EventName.c_str()};
+            if (eventName.empty() || eventName.size() > 127 || !GameplayBridge::IsSupportedLegacyAnimationEvent(eventName))
+                continue;
+            auto textId = Signature(acMessage.ServerId, acMessage.PlayerId, action.Tick, replayIndex++);
+            if (textId == 0)
+                textId = 1;
+            retainAdmission(ApplyTextForServer(acMessage.ServerId, GameplayBridge::GameplayDomain::Animation, GameplayBridge::GameplayAction::AnimationEvent, textId, eventName));
         }
-        const std::string_view eventName{action.EventName.c_str()};
-        if (eventName.empty() || eventName.size() > 127 ||
-            !GameplayBridge::IsSupportedLegacyAnimationEvent(eventName))
-            continue;
-        auto textId = Signature(acMessage.ServerId, acMessage.PlayerId, action.Tick, replayIndex++);
-        if (textId == 0)
-            textId = 1;
-        retainAdmission(ApplyTextForServer(acMessage.ServerId, GameplayBridge::GameplayDomain::Animation,
-                                           GameplayBridge::GameplayAction::AnimationEvent, textId, eventName));
     }
     std::vector<std::pair<std::uint32_t, float>> values(acMessage.InitialActorValues.ActorValuesList.begin(),
                                                           acMessage.InitialActorValues.ActorValuesList.end());
@@ -2890,17 +3277,27 @@ bool VRActorReplicationService::SubmitSpawn(const CharacterSpawnRequest& acMessa
     payload.ValueA = acMessage.IsWeaponDrawn ? 1 : 0;
     retainAdmission(ApplyForServer(acMessage.ServerId, GameplayBridge::GameplayDomain::Animation,
                                    GameplayBridge::GameplayAction::DrawWeapon, payload));
+    if (admitted) {
+        auto& recovery = m_resyncAttempts[acMessage.ServerId];
+        if (!recovery.HasEntityIdentity) {
+            recovery.EntityIdentity = probe.Header.Identity;
+            recovery.HasEntityIdentity = true;
+        }
+    }
     if (!submitted && admitted) {
-        RememberBoundedServerId(m_quarantinedSpawns, acMessage.ServerId);
-        return true;
+        const auto recovery = m_resyncAttempts.find(acMessage.ServerId);
+        const auto attempts = recovery != m_resyncAttempts.end() ?
+            recovery->second.ResyncAttempts : 0;
+        return !ScheduleSpawnRecovery(
+            acMessage.ServerId,
+            ActorReplicationRecovery::ClassifySpawnTimeout(
+                attempts, kMaximumSpawnResyncAttempts));
     }
     return submitted;
 }
 catch (...)
 {
-    ForgetSpawnActionIds(acMessage.ServerId);
-    m_pendingSpawns.erase(acMessage.ServerId);
-    RememberBoundedServerId(m_quarantinedSpawns, acMessage.ServerId);
+    TerminalizeSpawn(acMessage.ServerId);
     return true;
 }
 
@@ -2919,12 +3316,12 @@ void VRActorReplicationService::OnDrawWeapon(const NotifyDrawWeapon& acMessage) 
 bool VRActorReplicationService::TrySubmitEquipmentApplication(
     const std::uint32_t aServerId, PendingEquipmentApplication& arPending) noexcept try
 {
-    if (aServerId == 0 || arPending.TransactionId == 0 || arPending.AwaitingResult ||
-        arPending.ResultFailures >= kMaximumEquipmentResultFailures || arPending.Entries.size() > 64)
+    if (aServerId == 0 || arPending.TransactionId == 0 || arPending.Terminal || arPending.AwaitingResult ||
+        arPending.Entries.size() > 64)
         return false;
     if (m_equipmentActionOwners.size() > kMaximumEquipmentResultOwners - (arPending.Entries.size() + 2))
         return false;
-    if (!CanCommitAccept(arPending.Acceptance)) {
+    if (!arPending.AcceptanceCommitted && !CanCommitAccept(arPending.Acceptance)) {
         if (arPending.Acceptance.Sequence != 0)
             return false;
         const auto refreshed = PrepareAccept(arPending.Acceptance.PlayerId, arPending.Acceptance.Domain, 0,
@@ -3010,12 +3407,13 @@ bool VRActorReplicationService::TrySubmitEquipmentApplication(
             return false;
         }
     }
-    if (!CommitAccept(arPending.Acceptance)) {
+    if (!arPending.AcceptanceCommitted && !CommitAccept(arPending.Acceptance)) {
         // This can only happen after an unexpected ledger change. The bridge
         // batch is already admitted, so leave no replay path.
         TerminalizeEquipmentApplication(aServerId);
         return false;
     }
+    arPending.AcceptanceCommitted = true;
     return true;
 } catch (...) {
     return false;
@@ -3034,6 +3432,34 @@ void VRActorReplicationService::ForgetEquipmentApplication(const std::uint32_t a
     });
 }
 
+bool VRActorReplicationService::RetryEquipmentApplication(
+    const std::uint32_t aServerId,
+    const ActorReplicationRecovery::Disposition aDisposition) noexcept
+{
+    const auto pending = m_pendingEquipmentApplications.find(aServerId);
+    if (pending == m_pendingEquipmentApplications.end())
+        return false;
+    if (pending->second.Terminal || aDisposition != ActorReplicationRecovery::Disposition::Retry ||
+        pending->second.ResultFailures >= kMaximumEquipmentResultFailures) {
+        TerminalizeEquipmentApplication(aServerId);
+        return false;
+    }
+
+    // Begin replaces any bridge-side staged snapshot for this actor and
+    // transaction id. Only this pre-final-commit path is replayable.
+    std::erase_if(m_equipmentActionOwners, [aServerId](const auto& acEntry) noexcept {
+        return acEntry.second.ServerId == aServerId;
+    });
+    auto& application = pending->second;
+    ++application.ResultFailures;
+    application.ActionId = 0;
+    application.ExpectedResults = 0;
+    application.NextResultIndex = 0;
+    application.ResultWaitElapsed = 0.0;
+    application.AwaitingResult = false;
+    return true;
+}
+
 void VRActorReplicationService::TerminalizeEquipmentApplication(const std::uint32_t aServerId) noexcept
 {
     std::erase_if(m_equipmentActionOwners, [aServerId](const auto& acEntry) noexcept {
@@ -3043,8 +3469,9 @@ void VRActorReplicationService::TerminalizeEquipmentApplication(const std::uint3
     if (pending == m_pendingEquipmentApplications.end())
         return;
     pending->second.AwaitingResult = false;
-    pending->second.ResultFailures = kMaximumEquipmentResultFailures;
     pending->second.ResultWaitElapsed = 0.0;
+    pending->second.Terminal = true;
+    RequestEquipmentSnapshotResync(aServerId);
 }
 
 void VRActorReplicationService::ForgetAppearanceApplication(const std::uint64_t aTargetKey) noexcept
@@ -3065,13 +3492,24 @@ void VRActorReplicationService::OnEquipment(const NotifyEquipmentChanges& acMess
     if (acMessage.TransactionId != 0) {
         if (acMessage.ServerId == 0 || acMessage.ItemId || acMessage.EquipSlotId || acMessage.Count != 0 ||
             acMessage.Unequip || acMessage.IsSpell || acMessage.IsShout ||
-            acMessage.FinalEquipment.Entries.size() > 64)
+            acMessage.CanonicalRevision == 0 || acMessage.FinalEquipment.Entries.size() > 64)
             return;
         const auto known = m_lastEquipmentTransactionByServer.find(acMessage.ServerId);
-        if (known != m_lastEquipmentTransactionByServer.end() && acMessage.TransactionId <= known->second)
+        if (known != m_lastEquipmentTransactionByServer.end() &&
+            acMessage.CanonicalRevision <= known->second)
             return;
-        const auto acceptance = PrepareAccept(acMessage.ServerId, GameplayBridge::GameplayDomain::Equipment, 0,
-                                              Signature(acMessage.ServerId, acMessage.TransactionId));
+        const auto pendingResync = m_pendingEquipmentSnapshotResyncs.find(acMessage.ServerId);
+        if (acMessage.ResyncRequestId != 0 &&
+            (pendingResync == m_pendingEquipmentSnapshotResyncs.end() ||
+             pendingResync->second.RequestId != acMessage.ResyncRequestId))
+            return;
+        if (pendingResync != m_pendingEquipmentSnapshotResyncs.end() &&
+            acMessage.CanonicalRevision < pendingResync->second.KnownRevision)
+            return;
+        const auto acceptance = PrepareAccept(acMessage.ServerId, GameplayBridge::GameplayDomain::Equipment,
+                                              acMessage.CanonicalRevision,
+                                              Signature(acMessage.ServerId, acMessage.CanonicalRevision,
+                                                        acMessage.TransactionId));
         if (!acceptance.Valid)
             return;
 
@@ -3119,9 +3557,11 @@ void VRActorReplicationService::OnEquipment(const NotifyEquipmentChanges& acMess
         auto [inserted, created] = m_pendingEquipmentApplications.emplace(
             acMessage.ServerId,
             PendingEquipmentApplication{acMessage.TransactionId, leftSpell, rightSpell, shout,
-                                        std::move(entries), 0, acceptance, 0, 0, 0, 0.0, false});
+                                        std::move(entries), 0, acceptance, 0, 0, 0, 0.0, false, false, false});
         TP_UNUSED(created);
         TP_UNUSED(TrySubmitEquipmentApplication(acMessage.ServerId, inserted->second));
+        if (pendingResync != m_pendingEquipmentSnapshotResyncs.end())
+            m_pendingEquipmentSnapshotResyncs.erase(pendingResync);
         return;
     }
 
@@ -3191,9 +3631,10 @@ void VRActorReplicationService::OnFactionsChanges(const NotifyFactionsChanges& a
 void VRActorReplicationService::OnInventory(const NotifyInventoryChanges& acMessage) noexcept try
 {
     const auto drop = acMessage.Drop && acMessage.Item.Count < 0;
-    const auto acceptance = PrepareAccept(acMessage.ServerId, GameplayBridge::GameplayDomain::Inventory, 0,
-                                          Signature(acMessage.ServerId, InventoryEntrySignature(acMessage.Item, drop)));
-    if (!acMessage.Item.IsValidMutation() || !acceptance.Valid)
+    const auto acceptance = PrepareAccept(
+        acMessage.ServerId, GameplayBridge::GameplayDomain::Inventory, acMessage.EventId,
+        Signature(acMessage.EventId, acMessage.ServerId, InventoryEntrySignature(acMessage.Item, drop)));
+    if (acMessage.EventId == 0 || !acMessage.Item.IsValidMutation() || !acceptance.Valid)
         return;
     const std::vector<Inventory::Entry> entries{acMessage.Item};
     const std::vector<std::uint8_t> drops{static_cast<std::uint8_t>(drop)};
@@ -3250,9 +3691,10 @@ void VRActorReplicationService::OnHealthChangeBroadcast(const NotifyHealthChange
     if (acMessage.Id == 0 || !IsFinite(acMessage.DeltaHealth))
         return;
 
-    const auto acceptance = PrepareAccept(acMessage.Id, GameplayBridge::GameplayDomain::ActorState, 0,
-                                          Signature(acMessage.Id, FloatBits(acMessage.DeltaHealth), 4));
-    if (!acceptance.Valid)
+    const auto acceptance = PrepareAccept(
+        acMessage.Id, GameplayBridge::GameplayDomain::ActorState, acMessage.EventId,
+        Signature(acMessage.EventId, acMessage.Id, FloatBits(acMessage.DeltaHealth), 4));
+    if (acMessage.EventId == 0 || !acceptance.Valid)
         return;
 
     auto payload = Payload();
@@ -3339,10 +3781,11 @@ void VRActorReplicationService::OnProjectile(const NotifyProjectileLaunch& acMes
         acMessage.Area > GameplayBridge::kMaximumProjectileArea)
         return;
 
-    const auto acceptance = PrepareAccept(acMessage.ShooterID, GameplayBridge::GameplayDomain::Projectile, 0,
-                                          Signature(acMessage.ShooterID, projectile, FloatBits(acMessage.OriginX),
+    const auto acceptance = PrepareAccept(acMessage.ShooterID, GameplayBridge::GameplayDomain::Projectile,
+                                          acMessage.EventId,
+                                          Signature(acMessage.EventId, acMessage.ShooterID, projectile, FloatBits(acMessage.OriginX),
                                                     FloatBits(acMessage.OriginY), FloatBits(acMessage.OriginZ)));
-    if (!acceptance.Valid)
+    if (acMessage.EventId == 0 || !acceptance.Valid)
         return;
 
     const auto shooter = m_avatars.GetRemoteAvatarHandleForServerId(acMessage.ShooterID);
@@ -3395,10 +3838,11 @@ void VRActorReplicationService::OnSpawnData(const NotifySpawnData& acMessage) no
 void VRActorReplicationService::OnSpellCast(const NotifySpellCast& acMessage) noexcept
 {
     const auto spell = ToLocal(m_world, acMessage.SpellFormId);
-    const auto acceptance = PrepareAccept(acMessage.CasterId, GameplayBridge::GameplayDomain::Magic, 0,
-                                          Signature(acMessage.CasterId, spell, acMessage.CastingSource,
+    const auto acceptance = PrepareAccept(acMessage.CasterId, GameplayBridge::GameplayDomain::Magic,
+                                          acMessage.EventId,
+                                          Signature(acMessage.EventId, acMessage.CasterId, spell, acMessage.CastingSource,
                                                     acMessage.DesiredTarget, acMessage.IsDualCasting));
-    if (spell == 0 || !acceptance.Valid)
+    if (acMessage.EventId == 0 || spell == 0 || !acceptance.Valid)
         return;
 
     if (SubmitSpellCast(acMessage, acceptance) != SpellCastSubmitResult::AwaitingActor ||
@@ -3477,12 +3921,13 @@ void VRActorReplicationService::OnNotifyRemoveSpell(const NotifyRemoveSpell& acM
 
 void VRActorReplicationService::OnNotifyAddTarget(const NotifyAddTarget& acMessage) noexcept try
 {
-    const auto acceptance = PrepareAccept(acMessage.TargetId, GameplayBridge::GameplayDomain::Magic, 0,
-                                          Signature(acMessage.TargetId, acMessage.CasterId,
+    const auto acceptance = PrepareAccept(acMessage.TargetId, GameplayBridge::GameplayDomain::Magic,
+                                          acMessage.EventId,
+                                          Signature(acMessage.EventId, acMessage.TargetId, acMessage.CasterId,
                                                     acMessage.SpellId.LogFormat(), acMessage.EffectId.LogFormat(),
                                                     FloatBits(acMessage.Magnitude), acMessage.IsDualCasting,
                                                     acMessage.ApplyHealPerkBonus, acMessage.ApplyStaminaPerkBonus));
-    if (!acceptance.Valid || SubmitMagicEffect(acMessage, acceptance) != MagicEffectSubmitResult::AwaitingActor ||
+    if (acMessage.EventId == 0 || !acceptance.Valid || SubmitMagicEffect(acMessage, acceptance) != MagicEffectSubmitResult::AwaitingActor ||
         m_pendingMagicEffects.size() >= kMaximumPendingMagicEffects)
         return;
 
@@ -4089,11 +4534,15 @@ void VRActorReplicationService::OnDisconnected(const DisconnectedEvent& acEvent)
     m_serverPlayers.clear();
     m_pendingSpawns.clear();
     m_spawnSnapshots.clear();
+    m_spawnEntityIdentities.clear();
     m_latestAppearances.clear();
     m_pendingMounts.clear();
     m_resyncAttempts.clear();
     m_ledgers.clear();
     m_lastEquipmentTransactionByServer.clear();
+    m_lastActorSnapshotRevisionByServer.clear();
+    m_pendingActorSnapshotResyncs.clear();
+    m_pendingEquipmentSnapshotResyncs.clear();
     m_pendingEquipmentApplications.clear();
     m_equipmentActionOwners.clear();
     m_pendingInventoryTransactions.clear();
@@ -4123,6 +4572,7 @@ void VRActorReplicationService::OnDisconnected(const DisconnectedEvent& acEvent)
     m_semanticTombstoneRebaseRequested = false;
     m_semanticTombstoneRebaseEpoch = 0;
     m_semanticTombstoneRebaseElapsed = 0.0;
+    m_nextCanonicalResyncRequestId = 1;
 }
 
 void VRActorReplicationService::OnGameplayResult(
@@ -4172,28 +4622,9 @@ void VRActorReplicationService::OnGameplayResult(
             return;
         }
 
-        const bool retryableBeforeMutation = owner.ResultIndex == 0 && work->NextResultIndex == 0 &&
-            (status == GameplayBridge::CommandStatus::Inactive ||
-             status == GameplayBridge::CommandStatus::MissingForm ||
-             status == GameplayBridge::CommandStatus::MissingCell ||
-             status == GameplayBridge::CommandStatus::QueueOverflow);
-        if (retryableBeforeMutation && work->Attempts + 1 < kMaximumGameplayWorkAttempts) {
-            std::erase_if(m_gameplayResultOwners, [workId = owner.WorkId](const auto& acEntry) noexcept {
-                return acEntry.second.WorkId == workId;
-            });
-            work->AwaitingResult = false;
-            if (IsVrBodyPoseWork(*work)) {
-                // Visual pose batches are intentionally non-replayable once
-                // admitted. A later frame is a better recovery than replaying
-                // stale skeleton state with new bridge action IDs.
-                RetireReliableGameplayWork(owner.WorkId);
-                return;
-            }
-            work->ResultWaitElapsed = 0.0;
-            work->AdmissionWaitElapsed = 0.0;
-            ++work->Attempts;
-            return;
-        }
+        // A bridge batch has an admission identity even when its first result
+        // reports a pre-mutation failure. Do not replay it with fresh action
+        // IDs: a reordered retry could overtake a later committed sequence.
         std::erase_if(m_gameplayResultOwners, [workId = owner.WorkId](const auto& acEntry) noexcept {
             return acEntry.second.WorkId == workId;
         });
@@ -4372,9 +4803,11 @@ void VRActorReplicationService::OnGameplayResult(
         const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
         const auto domain = static_cast<GameplayBridge::GameplayDomain>(result.Domain);
         const auto action = static_cast<GameplayBridge::GameplayAction>(result.Action);
-        if (status == GameplayBridge::CommandStatus::Success &&
-            domain == GameplayBridge::GameplayDomain::Equipment &&
-            action == owner.Action) {
+        if (domain != GameplayBridge::GameplayDomain::Equipment || action != owner.Action) {
+            TerminalizeEquipmentApplication(owner.ServerId);
+            return;
+        }
+        if (status == GameplayBridge::CommandStatus::Success) {
             application.ResultWaitElapsed = 0.0;
             m_equipmentActionOwners.erase(equipment);
             ++application.NextResultIndex;
@@ -4382,6 +4815,17 @@ void VRActorReplicationService::OnGameplayResult(
                 return;
             m_lastEquipmentTransactionByServer[owner.ServerId] = owner.TransactionId;
             m_pendingEquipmentApplications.erase(pending);
+            return;
+        }
+        const auto beforeFinalMutation = ActorReplicationRecovery::IsBeforeEquipmentFinalMutation(
+            owner.ResultIndex, application.ExpectedResults);
+        if (RetryEquipmentApplication(
+                owner.ServerId,
+                ActorReplicationRecovery::ClassifyEquipmentResult(
+                    status, beforeFinalMutation, application.ResultFailures,
+                    kMaximumEquipmentResultFailures))) {
+            spdlog::warn("VR final equipment transaction {} failed before commit for server actor {}; retrying",
+                         owner.TransactionId, owner.ServerId);
             return;
         }
         TerminalizeEquipmentApplication(owner.ServerId);
@@ -4393,10 +4837,8 @@ void VRActorReplicationService::OnGameplayResult(
         return;
     const auto serverId = tracked->second.ServerId;
     if (!MatchesTrackedResult(record, tracked->second.Identity, tracked->second.TargetHandle)) {
-        m_spawnActionOwners.erase(tracked);
-        ForgetSpawnActionIds(serverId);
+        TerminalizeSpawn(serverId);
         m_pendingSpawns.erase(serverId);
-        RememberBoundedServerId(m_quarantinedSpawns, serverId);
         return;
     }
 
@@ -4404,10 +4846,8 @@ void VRActorReplicationService::OnGameplayResult(
     const auto domain = static_cast<GameplayBridge::GameplayDomain>(result.Domain);
     const auto action = static_cast<GameplayBridge::GameplayAction>(result.Action);
     if (domain != tracked->second.Domain || action != tracked->second.Action) {
-        m_spawnActionOwners.erase(tracked);
-        ForgetSpawnActionIds(serverId);
+        TerminalizeSpawn(serverId);
         m_pendingSpawns.erase(serverId);
-        RememberBoundedServerId(m_quarantinedSpawns, serverId);
         return;
     }
     if (status == GameplayBridge::CommandStatus::Success) {
@@ -4416,21 +4856,50 @@ void VRActorReplicationService::OnGameplayResult(
             --tracked->second.RemainingResults;
         else
             m_spawnActionOwners.erase(tracked);
-        if (!HasSpawnActionIds(serverId))
+        if (!HasSpawnActionIds(serverId)) {
             m_resyncAttempts.erase(serverId);
+            m_quarantinedSpawns.erase(serverId);
+        }
         return;
     }
-    m_spawnActionOwners.erase(tracked);
-    TP_UNUSED(status);
-    ForgetSpawnActionIds(serverId);
+    TP_UNUSED(ScheduleSpawnRecovery(
+        serverId, ActorReplicationRecovery::ClassifySpawnResult(
+                      status, 0, kMaximumSpawnResyncAttempts)));
     m_pendingSpawns.erase(serverId);
-    RememberBoundedServerId(m_quarantinedSpawns, serverId);
-    spdlog::warn("VR spawn action failed for server actor {}; quarantining ambiguous spawn", serverId);
+    spdlog::warn(
+        "VR spawn action failed for server actor {}; terminalized because retained snapshots lack a canonical revision barrier",
+        serverId);
 }
 catch (...)
 {
     spdlog::error("VR gameplay command result processing failed; rebasing the native capture epoch");
     TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+}
+
+bool VRActorReplicationService::ScheduleSpawnRecovery(
+    const std::uint32_t aServerId,
+    const ActorReplicationRecovery::Disposition aDisposition) noexcept try
+{
+    TP_UNUSED(aDisposition);
+    // m_spawnSnapshots is not revisioned against later canonical actor data.
+    // Never turn a result failure or timeout into a retained-snapshot replay.
+    TerminalizeSpawn(aServerId);
+    return false;
+}
+catch (...)
+{
+    TerminalizeSpawn(aServerId);
+    return false;
+}
+
+void VRActorReplicationService::TerminalizeSpawn(const std::uint32_t aServerId) noexcept
+{
+    if (aServerId == 0)
+        return;
+    ForgetSpawnActionIds(aServerId);
+    m_resyncAttempts.erase(aServerId);
+    RememberBoundedServerId(m_quarantinedSpawns, aServerId);
+    RequestActorSnapshotResync(aServerId);
 }
 
 void VRActorReplicationService::ForgetSpawnActionIds(const std::uint32_t aServerId) noexcept

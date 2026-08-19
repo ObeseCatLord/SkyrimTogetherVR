@@ -9,12 +9,14 @@ and must not be described as a gameplay alpha, beta, or parity release until
 matching two-client gameplay evidence exists.
 
 The current worktree is an unbuilt source candidate. It moves the gameplay
-target to protocol revision 15 and bridge capability revision 33, adds an
-explicit full-gameplay client marker and fail-closed native readiness contract,
-implements synchronous native quest mutation, makes save/load rehydration
-finite, and replaces static/legacy readiness claims with one aggregate runtime
-snapshot. These are source-inspection claims only: they have no build, runtime,
-or repair-complete credit yet.
+target to protocol revision 17, mapping ABI 23, and bridge capability revision 34,
+identity-authorizes attacker-originated NPC health deltas and rejects replayed
+action nonces, separates them from owner health state, and assigns stable
+server event IDs to repeated edge mutations,
+adds fail-closed native readiness and quest-target validation, makes save/load
+rehydration finite, and replaces static/legacy readiness claims with one
+aggregate runtime snapshot. These are source-inspection claims only: they have
+no build, runtime, or repair-complete credit yet.
 
 Commit `0fd7a319` passed the disposable WinBoat candidate and clean detached
 WinBoat gameplay builds. Its 503-file package, build evidence, and private
@@ -756,17 +758,19 @@ Historical result at the stated revision:
 - `SkyrimTogetherServer` builds and includes `VRPoseRelayService`, `VRMovementRelayService`, `VREquipmentRelayService`, `VRActivationRelayService`, `VRMagicRelayService`, `VRCombatRelayService`, `VRProjectileRelayService`, `VRGrabRelayService`, and `VRHiggsRelayService`.
 - `SkyrimTogetherServer` builds with player exterior-cell state updates that do not require a spawned character.
 - Final source-side compile checks pass. The newest clean WinBoat/MSVC gameplay
-  build is `a7b71d90`; its 503-file package and paired evidence archive report
-  zero failures and zero warnings and embed network version
+  build is `a7b71d90`; its 503-file package and paired evidence archive embed network version
   `stvr-v0.1.0-alpha.1-54-ga7b71d90`. The exact ARM64 server starts with the
-  same version. The 2026-07-16 Linux/Monado run passed character finalization,
+  same version. Its operator-supplied paired scenario record is not strict
+  gameplay certification: current audits fail closed with
+  `native-trace-corroboration-missing` until archived native engine/server
+  traces can corroborate action IDs and payload digests. The 2026-07-16 Linux/Monado run passed character finalization,
   ESP activation, authentication, server admission, and current interior-cell
   synchronization. Shutdown reached `endmain.done` and disconnected the server,
   but warned that the CommonLib gameplay session could not be retired and left
   the outer launcher process alive. See
   `runtime-connection-result-20260716-a7b71d90.md`.
 - `Tools/SkyrimVR/vr_handoff.py self-test` passes for temp-directory command writing, readout parsing, remote-player proxy aggregation, and consolidated remote-player table generation.
-- `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, strict staged gameplay relay checks with semantic local and remote payload fields, and avatar-sync handoff validation; rerun it during the final validation phase after the source-only work is complete.
+- `Tools/SkyrimVR/audit_runtime_handoff.py --self-test` covers temp-directory log breadcrumb, local pose/movement, VRIK detection plus VRIK API availability, HIGGS, per-player remote avatar blocker with VRIK API state, explicit avatar file presence, remote-player, strict weapon/magic/projectile pose-context checks, staged gameplay relay shape checks with semantic local and remote payload fields, and avatar-sync handoff validation; paired gameplay certification remains unavailable without native trace corroboration.
 - `Tools/SkyrimVR/collect_runtime_evidence.py --self-test` and `Tools/SkyrimVR/audit_runtime_evidence_zip.py --self-test` are included in `audit_vr_readiness.py`; their fixtures now require `SkyrimTogetherVR_BuildManifest.json`, validate the package build manifest against avatar-sync mode, embed it in `manifest.json`, include it under `package/` in the evidence zip, and enforce manifest-requested runtime checklist lanes such as `requiredRemotePlayer`, `requiredWeaponPose`, `requiredMovementRelay`, and `avatarSyncAudit` even when the zip audit is run without repeating strict CLI flags. `avatarSyncAudit` itself now requires connection, local VRIK API, HIGGS bridge, remote-player proxy, remote VRIK avatar readiness, remote VRIK/HIGGS avatar readiness, and actor-target checklist lanes, so a two-client VRIK/HIGGS avatar evidence zip cannot be relaxed by omitting `requiredRemotePlayer`.
 - `Tools/SkyrimVR/collect_build_evidence.py --self-test` and `Tools/SkyrimVR/audit_build_evidence_zip.py --self-test` pass and are included in `audit_vr_readiness.py`; they create and audit a no-build handoff archive with xmake/Python metadata, visible target output, Windows build-script audit output, built-package audit output when a package exists, copied text package metadata, copied Windows build wrappers such as `source\SetupSkyrimTogetherVRBuildEnv-Windows.bat` and `source\BuildSkyrimTogetherVR-Windows.ps1`, copied VR xmake target files such as `source\Code\client\xmake.lua`, copied source evidence for `inline-patch-manifest.json`, `inline-patch-audit.md`, `address-audit.json`, and `address-audit.md`, SHA-256 package file listings, manifest mode validation, runtime artifact listing checks, Windows build wrapper/target graph drift checks, zero default-active/default-enableable inline patch validation, positive disassembly context for every active inline patch site, zero missing core non-RTTI address validation, and command-failure reporting.
 - Baseline runtime evidence now reports remote-player proxy, remote-avatar readiness, and HIGGS-aware remote-avatar readiness as `not_required` unless collected or audited with `--require-remote-player` or `--avatar-sync`, so single-client startup/pose/prerequisite evidence can be reviewed without falsely failing the two-client VRIK/HIGGS avatar lane.
@@ -834,7 +838,7 @@ omissions when that checklist marks their source path complete.
 
 - Run `PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat --all` from Windows with Visual Studio/MSVC available and verify the default, avatar-sync, gameplay, and DLL-only artifacts compile plus their package audits and build-evidence audits pass, then run `VerifySkyrimTogetherVRWindowsPackages-Windows.bat --skyrim-vr "C:\Path\To\SkyrimVR"` before copying any package into Skyrim VR.
 - Run the explicit VRIK/HIGGS remote-avatar validation package from `artifacts\SkyrimTogetherVR\packages\avatar-sync`, then collect strict avatar-sync runtime evidence with `CollectSkyrimTogetherVRAvatarSyncEvidence-Windows.bat --require-vr-pose-context`.
-- Run the staged gameplay package from `artifacts\SkyrimTogetherVR\packages\gameplay`, then collect strict gameplay runtime evidence with `CollectSkyrimTogetherVRGameplayEvidence-Windows.bat`.
+- Run the staged gameplay package from `artifacts\SkyrimTogetherVR\packages\gameplay`, then collect gameplay runtime evidence with `CollectSkyrimTogetherVRGameplayEvidence-Windows.bat`; strict paired certification remains fail-closed until native trace corroboration is implemented.
 - Validate every inline patch against Skyrim VR disassembly before enabling gameplay hooks.
 - Validate `SkyrimTogetherVR.discovery` in-game for the default, avatar-sync, and gameplay packages so actor discovery evidence is available before promoting any package to a recommended runtime path.
 - Validate VR player cell/grid/level request flow against a server in the default, avatar-sync, and gameplay packages so the shared network-only `PlayerService` path is covered by the same evidence.

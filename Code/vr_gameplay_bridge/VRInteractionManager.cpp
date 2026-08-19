@@ -1,10 +1,13 @@
 #include "VRInteractionManager.h"
 
 #include "AvatarManager.h"
+#include "CalendarHooks.h"
 #include "QuestDialogueManager.h"
+#include "WeatherNativeAccess.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <string_view>
 
@@ -30,6 +33,7 @@ struct ServerSettingsState
 };
 
 ServerSettingsState g_serverSettings{};
+std::atomic<bool> g_pvpEnabledSnapshot{};
 bool g_weatherOverrideActive{};
 
 [[nodiscard]] RE::Setting* GreetDistanceSetting() noexcept
@@ -124,16 +128,9 @@ template <class T>
     return a_payload.ScalarA <= static_cast<float>(RE::Calendar::DAYS_IN_MONTH[month]);
 }
 
-[[nodiscard]] float DaysPassed(const std::int32_t a_year, const std::int32_t a_month, const float a_day, const float a_hour) noexcept
+[[nodiscard]] CommandStatus ApplyCalendar(const CommandRecord& a_command) noexcept
 {
-    float days = static_cast<float>(a_year) * 365.0f + a_day + a_hour / 24.0f;
-    for (std::int32_t month = 0; month < a_month; ++month)
-        days += static_cast<float>(RE::Calendar::DAYS_IN_MONTH[month]);
-    return days;
-}
-
-[[nodiscard]] CommandStatus ApplyCalendar(const GameplayActionPayload& a_payload) noexcept
-{
+    const auto& a_payload = a_command.Payload.ApplyGameplayAction;
     if (!IsCalendarPayloadValid(a_payload))
         return CommandStatus::Malformed;
 
@@ -142,17 +139,57 @@ template <class T>
         !calendar->gameDaysPassed || !calendar->timeScale)
         return CommandStatus::Inactive;
 
+    const auto currentGameDaysPassed = calendar->gameDaysPassed->value;
+    if (!std::isfinite(currentGameDaysPassed) || currentGameDaysPassed < 0.0F)
+        return CommandStatus::EngineRejected;
+
+    // The game derives GameDaysPassed from rawDaysPassed and hour. A server
+    // calendar snapshot must not reconstruct a new elapsed-day count from its
+    // displayed date, because that changes save/quest timing history.
+    const auto rawDaysPassed = std::floor(currentGameDaysPassed);
+    const auto expectedGameDaysPassed = rawDaysPassed + a_payload.ScalarB / 24.0F;
+    const auto previousYear = calendar->gameYear->value;
+    const auto previousMonth = calendar->gameMonth->value;
+    const auto previousDay = calendar->gameDay->value;
+    const auto previousHour = calendar->gameHour->value;
+    const auto previousTimeScale = calendar->timeScale->value;
+    const auto previousRawDaysPassed = calendar->rawDaysPassed;
+
+    const auto restorePrevious = [&calendar, previousYear, previousMonth, previousDay, previousHour,
+                                  currentGameDaysPassed, previousTimeScale, previousRawDaysPassed]() noexcept {
+        calendar->gameYear->value = previousYear;
+        calendar->gameMonth->value = previousMonth;
+        calendar->gameDay->value = previousDay;
+        calendar->gameHour->value = previousHour;
+        calendar->gameDaysPassed->value = currentGameDaysPassed;
+        calendar->timeScale->value = previousTimeScale;
+        calendar->rawDaysPassed = previousRawDaysPassed;
+    };
+
     if ((a_payload.ActionFlags & kPreserveCalendarDate) == 0) {
         calendar->gameYear->value = static_cast<float>(a_payload.ValueA);
         calendar->gameMonth->value = static_cast<float>(a_payload.ValueB);
         calendar->gameDay->value = a_payload.ScalarA;
     }
     calendar->gameHour->value = a_payload.ScalarB;
-    calendar->gameDaysPassed->value = DaysPassed(
-        static_cast<std::int32_t>(calendar->gameYear->value),
-        static_cast<std::int32_t>(calendar->gameMonth->value),
-        calendar->gameDay->value, a_payload.ScalarB);
     calendar->timeScale->value = a_payload.ScalarC;
+    calendar->rawDaysPassed = rawDaysPassed;
+    calendar->gameDaysPassed->value = expectedGameDaysPassed;
+
+    if (!CalendarHooks::IsCalendarSnapshotInvariant(
+            calendar->gameDaysPassed->value, calendar->rawDaysPassed, calendar->gameHour->value,
+            calendar->timeScale->value)) {
+        restorePrevious();
+        return CommandStatus::EngineRejected;
+    }
+
+    const auto& identity = a_command.Header.Identity;
+    if (!CalendarHooks::ActivateAuthoritativeTick(
+            identity.ServerInstanceNonce, identity.ConnectionGeneration, a_payload.ScalarC)) {
+        restorePrevious();
+        return CommandStatus::StaleSession;
+    }
+
     return CommandStatus::Success;
 }
 
@@ -170,9 +207,9 @@ template <class T>
     if (!sky)
         return CommandStatus::Inactive;
 
-    // SetWeather is the typed CommonLib weather path. Override and acceleration
-    // match the existing client weather synchronizer's authoritative handoff.
-    sky->SetWeather(weather, true, true);
+    if (!WeatherNativeAccess::ForceWeather(*sky, *weather))
+        return CommandStatus::EngineRejected;
+
     g_weatherOverrideActive = true;
     return CommandStatus::Success;
 }
@@ -212,6 +249,7 @@ template <class T>
     greetDistance->SetFloat(g_serverSettings.GreetingsEnabled ? g_serverSettings.PreviousGreetDistance : 0.0F);
     worldEncounters->value = g_serverSettings.WorldEncountersEnabled ? 1.0F : 0.0F;
     killMoveFrequency->value = 0.0F;
+    g_pvpEnabledSnapshot.store(g_serverSettings.PvpEnabled, std::memory_order_release);
     return CommandStatus::Success;
 }
 
@@ -225,7 +263,9 @@ template <class T>
     auto* sky = RE::Sky::GetSingleton();
     if (!sky)
         return CommandStatus::Inactive;
-    sky->ReleaseWeatherOverride();
+    if (!WeatherNativeAccess::ReleaseWeatherOverride(*sky))
+        return CommandStatus::EngineRejected;
+
     g_weatherOverrideActive = false;
     return CommandStatus::Success;
 }
@@ -390,7 +430,7 @@ CommandStatus VRInteractionManager::Execute(const CommandRecord& a_command) noex
         case GameplayDomain::WorldState:
             switch (action) {
             case GameplayAction::SetCalendar:
-                return ApplyCalendar(payload);
+                return ApplyCalendar(a_command);
             case GameplayAction::SetWeather:
                 return ApplyWeather(payload);
             case GameplayAction::ApplyServerSettings:
@@ -425,7 +465,7 @@ CommandStatus VRInteractionManager::Execute(const CommandRecord& a_command) noex
 
 bool VRInteractionManager::IsPvpEnabled() noexcept
 {
-    return g_serverSettings.Active && g_serverSettings.PvpEnabled;
+    return g_pvpEnabledSnapshot.load(std::memory_order_acquire);
 }
 
 void VRInteractionManager::ProcessPeriodic() noexcept
@@ -451,6 +491,8 @@ void VRInteractionManager::ProcessPeriodic() noexcept
 
 void VRInteractionManager::Reset() noexcept
 {
+    CalendarHooks::ResetAuthoritativeTick();
+    g_pvpEnabledSnapshot.store(false, std::memory_order_release);
     try {
         if (g_serverSettings.Active) {
             if (auto* player = RE::PlayerCharacter::GetSingleton())
@@ -463,14 +505,17 @@ void VRInteractionManager::Reset() noexcept
                 killMoveFrequency->value = g_serverSettings.PreviousKillMoveFrequency;
         }
         g_serverSettings = {};
-        if (g_weatherOverrideActive) {
-            if (auto* sky = RE::Sky::GetSingleton())
-                sky->ReleaseWeatherOverride();
-        }
-        g_weatherOverrideActive = false;
     } catch (...) {
         g_serverSettings = {};
-        g_weatherOverrideActive = false;
+    }
+
+    if (!g_weatherOverrideActive)
+        return;
+
+    try {
+        if (auto* sky = RE::Sky::GetSingleton(); sky && WeatherNativeAccess::ReleaseWeatherOverride(*sky))
+            g_weatherOverrideActive = false;
+    } catch (...) {
     }
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

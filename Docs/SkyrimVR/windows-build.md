@@ -31,16 +31,33 @@ host with:
 Tools/SkyrimVR/install_build_cleanup_timer.sh
 ```
 
-The timer cleans only generated Skyrim Together worktrees, package output,
-bounded project temporary files, and explicitly rebuildable caches, then asks
-Windows to TRIM its virtual disk when worktrees were removed. Cleanup is
-process-locked, and the WinBoat build helper holds that activity lock for its
-entire build and performs cleanup before and after each build. Under root-disk
+The timer explicitly applies cleanup to generated Skyrim Together worktrees,
+bounded project temporary files, explicitly rebuildable caches, and expired
+archive-level build artifacts, then asks Windows to TRIM its virtual disk when
+worktrees were removed. It keeps the newest completed local handoff and one
+rollback handoff, plus the package/build-evidence ZIPs referenced by either;
+the same two-entry retention applies to candidate results and guest build
+results. Cleanup is process-locked, and the WinBoat build helper holds that
+activity lock for its entire build and performs its explicitly applied
+rebuildable-output cleanup before and after each build. Under root-disk
 pressure (93% used or less than 160 GiB free), the scheduled pass tightens
-generated-output retention automatically. Run
-`Tools/SkyrimVR/cleanup_build_storage.sh --max-age-days 0 --trim` for an
-immediate manual cleanup. If WinBoat is offline, scheduled cleanup skips the VM
-without treating that as a failure.
+generated-output retention automatically without dropping that current/rollback
+pair. Manual cleanup is a dry run by default; review the plan, then run
+`Tools/SkyrimVR/cleanup_build_storage.sh --apply --max-age-days 0 --trim` to
+perform it. The cleanup helper never deletes package directories wholesale,
+runtime evidence, game installs, server data, or a retained handoff. If
+WinBoat is offline, scheduled cleanup skips the VM without treating that as a
+failure.
+
+For an uncommitted tracked change, run the candidate gate before committing.
+When the exact CommonLib gitlink and checked-out source state were already
+verified, the candidate helper reuses a private user-state verification record
+instead of repeating its Linux CommonLib network probes. A cache hit still
+checks local commit objects and ancestry; WinBoat independently fetches the
+trusted upstream and verifies the exact target before the candidate build. A
+changed gitlink, source Git directory, upstream URL, malformed cache, or failed
+local check falls back to full network verification. This changes no
+candidate-before-commit, clean-after-push, or exact source-identity gate.
 
 On native Windows, the equivalent audited command is:
 
@@ -53,9 +70,10 @@ Caprica is discovered from an explicit `-PapyrusCompiler`, `CAPRICA`, `PATH`,
 
 ## CommonLib Gameplay Adapter
 
-The VR gameplay adapter uses the maintained alandtse `CommonLibVR` `ng` branch,
-pinned as `Libraries\CommonLibSSE-NG` at release `v4.37.0`. The exact commit,
-Skyrim VR runtime, SKSEVR SDK, and VR Address Library hashes are recorded in
+The VR gameplay adapter uses alandtse `CommonLibVR` release 6.3.4 from the
+`ng` branch, pinned as `Libraries\CommonLibSSE-NG` at project commit
+`586eac1f4c3aa4122519e18d66eabd1c5ef1ce3e`. The exact commit, Skyrim VR
+runtime, SKSEVR SDK, and VR Address Library hashes are recorded in
 `Dependencies\SkyrimVR.lock.json`.
 
 The PowerShell build initializes this submodule recursively whenever

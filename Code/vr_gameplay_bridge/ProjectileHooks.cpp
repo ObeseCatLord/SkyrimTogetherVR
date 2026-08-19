@@ -3,6 +3,7 @@
 #include "AvatarManager.h"
 #include "BridgeEndpoint.h"
 #include "VrHookDetachPolicy.h"
+#include "VrNoThrow.h"
 
 #include <MinHook.h>
 
@@ -37,8 +38,8 @@ thread_local std::uint32_t g_remoteLaunchAllowance{};
         return VrHookDetachPolicy::OperationResult::AlreadyDisabled;
     if (status == MH_ERROR_NOT_CREATED)
         return VrHookDetachPolicy::OperationResult::NotCreated;
-    SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook disable failed ({})",
-                     static_cast<int>(status));
+    NoThrow::BestEffort([&] { SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook disable failed ({})",
+                                                static_cast<int>(status)); });
     return VrHookDetachPolicy::OperationResult::Failed;
 }
 
@@ -49,8 +50,8 @@ thread_local std::uint32_t g_remoteLaunchAllowance{};
         return VrHookDetachPolicy::OperationResult::Complete;
     if (status == MH_ERROR_NOT_CREATED)
         return VrHookDetachPolicy::OperationResult::NotCreated;
-    SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook remove failed ({})",
-                     static_cast<int>(status));
+    NoThrow::BestEffort([&] { SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook remove failed ({})",
+                                                static_cast<int>(status)); });
     return VrHookDetachPolicy::OperationResult::Failed;
 }
 
@@ -69,11 +70,11 @@ void ForgetDetachedHook() noexcept
 
 void LogRetainedHook(const char* a_operation) noexcept
 {
-    BridgeEndpoint::Get().Fault("Projectile::Launch hook rollback could not prove detachment");
-    SKSE::log::error(
+    NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("Projectile::Launch hook rollback could not prove detachment"); });
+    NoThrow::BestEffort([&] { SKSE::log::error(
         "SkyrimTogetherVRGameplayBridge: Projectile::Launch {} could not prove detachment; retaining target and "
         "trampoline so a possible live detour remains callable and the bridge stays loaded",
-        a_operation);
+        a_operation); });
 }
 
 [[nodiscard]] bool IsBounded(const float a_value, const float a_limit) noexcept
@@ -144,6 +145,7 @@ RE::ProjectileHandle* HookLaunch(
     RE::ProjectileHandle* a_result,
     RE::Projectile::LaunchData& a_data) noexcept
 {
+    try {
     // Concentration spells are replicated by the spell-cast path. Preserve
     // the original launch hook ordering and do not suppress them here.
     if (a_data.spell && a_data.spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
@@ -183,6 +185,9 @@ RE::ProjectileHandle* HookLaunch(
     record.Payload.LocalProjectileLaunch = payload;
     endpoint.TryPushEvent(record);
     return result;
+    } catch (...) {
+        return a_result;
+    }
 }
 } // namespace
 
@@ -199,6 +204,7 @@ ScopedRemoteLaunch::~ScopedRemoteLaunch() noexcept
 
 bool Install() noexcept
 {
+    try {
     bool expected = false;
     if (!g_installAttempted.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
         return g_hookState.Created && g_originalLaunch != nullptr;
@@ -252,10 +258,20 @@ bool Install() noexcept
 
     SKSE::log::info("SkyrimTogetherVRGameplayBridge: installed exact Projectile::Launch hook at VR address ID 42928");
     return true;
+    } catch (...) {
+        if (g_hookState.Created && !DetachHook()) {
+            LogRetainedHook("exception rollback");
+            return false;
+        }
+        ForgetDetachedHook();
+        g_installAttempted.store(false, std::memory_order_release);
+        return false;
+    }
 }
 
 bool Uninstall() noexcept
 {
+    try {
     if (!g_hookState.Created) {
         ForgetDetachedHook();
         g_installAttempted.store(false, std::memory_order_release);
@@ -268,5 +284,8 @@ bool Uninstall() noexcept
     ForgetDetachedHook();
     g_installAttempted.store(false, std::memory_order_release);
     return true;
+    } catch (...) {
+        return false;
+    }
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::ProjectileHooks

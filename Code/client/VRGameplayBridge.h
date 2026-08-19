@@ -7,6 +7,26 @@
 
 namespace SkyrimTogetherVR::GameplayBridgeClient
 {
+struct ActorAuthorityDiagnostics
+{
+    std::uint64_t SuppressedDamageCount{0};
+    std::uint64_t SuppressedDeathItemsCount{0};
+    std::uint64_t SuppressedPositiveActiveEffectHealthCount{0};
+    std::uint64_t SuppressedRestoreHealthCount{0};
+    std::uint64_t SuppressedReferenceSetPositionCount{0};
+    std::uint64_t SuppressedActorSetPositionCount{0};
+    std::uint64_t SuppressedMoveToCount{0};
+    std::uint64_t SuppressedActorProcessCount{0};
+    std::uint64_t PublishedRemoteNpcHealthDeltaCount{0};
+    std::uint64_t FailedRemoteNpcHealthDeltaPublicationCount{0};
+    std::uint64_t LeaseFailureCount{0};
+    std::uint64_t RetirementFailureCount{0};
+    std::uint64_t RetirementTimeoutCount{0};
+    std::uint64_t RegistryInconsistencyCount{0};
+
+    [[nodiscard]] bool operator==(const ActorAuthorityDiagnostics&) const noexcept = default;
+};
+
 struct Diagnostics
 {
     bool Initialized{false};
@@ -25,9 +45,16 @@ struct Diagnostics
     std::uint64_t RejectedCommandCount{0};
     std::uint64_t StaleCommandCount{0};
     std::uint64_t DiscardedEventCount{0};
+    std::uint64_t DiscardedEventPreReadyCount{0};
+    std::uint64_t DiscardedEventLifecycleRetiredCount{0};
+    std::uint64_t DiscardedEventOtherCount{0};
     std::uint64_t RejectedSubmissionCount{0};
+    std::uint64_t RejectedSubmissionPreReadyCount{0};
+    std::uint64_t RejectedSubmissionLifecycleRetiredCount{0};
+    std::uint64_t RejectedSubmissionOtherCount{0};
     std::uint64_t EventRingDroppedPushCount{0};
     std::uint64_t CommandRingDroppedPushCount{0};
+    ActorAuthorityDiagnostics ActorAuthority{};
 };
 
 bool Initialize() noexcept;

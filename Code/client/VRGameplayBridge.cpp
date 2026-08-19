@@ -25,7 +25,13 @@ std::atomic<std::uint32_t> s_ownerThreadId{0};
 std::atomic<std::uint64_t> s_lastBridgeSequence{0};
 std::atomic<std::uint64_t> s_lastBridgeAction{0};
 std::atomic<std::uint64_t> s_discardedEventCount{0};
+std::atomic<std::uint64_t> s_discardedEventPreReadyCount{0};
+std::atomic<std::uint64_t> s_discardedEventLifecycleRetiredCount{0};
+std::atomic<std::uint64_t> s_discardedEventOtherCount{0};
 std::atomic<std::uint64_t> s_rejectedSubmissionCount{0};
+std::atomic<std::uint64_t> s_rejectedSubmissionPreReadyCount{0};
+std::atomic<std::uint64_t> s_rejectedSubmissionLifecycleRetiredCount{0};
+std::atomic<std::uint64_t> s_rejectedSubmissionOtherCount{0};
 
 constexpr CapabilityMask kRequestedCapabilities =
     static_cast<CapabilityMask>(Capability::Lifecycle)
@@ -421,10 +427,9 @@ constexpr CapabilityMask kRequestedCapabilities =
     case CommandKind::CreateRemoteAvatar:
     {
         const auto& payload = acCommand.Payload.CreateRemoteAvatar;
-        const auto knownFlags = GameplayBridge::UseExistingReference | GameplayBridge::PlayerAvatar;
         return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.SequenceId == 0 &&
                payload.LocalActorBaseFormId != 0 && payload.LocalCellFormId != 0 && IsFinite(payload.InitialRoot) &&
-               (payload.CreateFlags & ~knownFlags) == 0 &&
+               GameplayBridge::IsValidRemoteAvatarCreateFlags(payload.CreateFlags) &&
                (((payload.CreateFlags & GameplayBridge::UseExistingReference) != 0) ==
                 (payload.LocalReferenceFormId != 0)) &&
                IsZero(payload.Reserved, sizeof(payload.Reserved));
@@ -586,6 +591,40 @@ constexpr CapabilityMask kRequestedCapabilities =
 void RejectSubmission() noexcept
 {
     s_rejectedSubmissionCount.fetch_add(1, std::memory_order_relaxed);
+    s_rejectedSubmissionOtherCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void RejectSubmission(const WorkAttribution a_attribution) noexcept
+{
+    s_rejectedSubmissionCount.fetch_add(1, std::memory_order_relaxed);
+    if (a_attribution == WorkAttribution::PreReady)
+        s_rejectedSubmissionPreReadyCount.fetch_add(1, std::memory_order_relaxed);
+    else if (a_attribution == WorkAttribution::LifecycleRetired)
+        s_rejectedSubmissionLifecycleRetiredCount.fetch_add(1, std::memory_order_relaxed);
+    else
+        s_rejectedSubmissionOtherCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void RecordDiscardedEvent(const WorkAttribution a_attribution) noexcept
+{
+    s_discardedEventCount.fetch_add(1, std::memory_order_relaxed);
+    if (a_attribution == WorkAttribution::PreReady)
+        s_discardedEventPreReadyCount.fetch_add(1, std::memory_order_relaxed);
+    else if (a_attribution == WorkAttribution::LifecycleRetired)
+        s_discardedEventLifecycleRetiredCount.fetch_add(1, std::memory_order_relaxed);
+    else
+        s_discardedEventOtherCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[nodiscard]] WorkAttribution CurrentWorkAttribution(const BridgeIdentity& ac_identity) noexcept
+{
+    if (!s_mapping)
+        return WorkAttribution::PreReady;
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(s_mapping->Header, session))
+        return WorkAttribution::PreReady;
+    return ClassifyWorkAttribution(
+        ReadState(), session, s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire), ac_identity);
 }
 
 [[nodiscard]] std::uint64_t ClaimNextCounter(std::atomic<std::uint64_t>& arCounter) noexcept
@@ -726,7 +765,13 @@ bool Initialize() noexcept
     s_lastBridgeSequence.store(0, std::memory_order_release);
     s_lastBridgeAction.store(0, std::memory_order_release);
     s_discardedEventCount.store(0, std::memory_order_release);
+    s_discardedEventPreReadyCount.store(0, std::memory_order_release);
+    s_discardedEventLifecycleRetiredCount.store(0, std::memory_order_release);
+    s_discardedEventOtherCount.store(0, std::memory_order_release);
     s_rejectedSubmissionCount.store(0, std::memory_order_release);
+    s_rejectedSubmissionPreReadyCount.store(0, std::memory_order_release);
+    s_rejectedSubmissionLifecycleRetiredCount.store(0, std::memory_order_release);
+    s_rejectedSubmissionOtherCount.store(0, std::memory_order_release);
     return true;
 }
 
@@ -831,10 +876,41 @@ Diagnostics GetDiagnostics() noexcept
     diagnostics.ExecutedCommandCount = s_mapping->Header.ExecutedCommandCount.load(std::memory_order_acquire);
     diagnostics.RejectedCommandCount = s_mapping->Header.RejectedCommandCount.load(std::memory_order_acquire);
     diagnostics.StaleCommandCount = s_mapping->Header.StaleCommandCount.load(std::memory_order_acquire);
-    diagnostics.DiscardedEventCount = s_discardedEventCount.load(std::memory_order_relaxed);
-    diagnostics.RejectedSubmissionCount = s_rejectedSubmissionCount.load(std::memory_order_relaxed);
+    diagnostics.DiscardedEventPreReadyCount = s_discardedEventPreReadyCount.load(std::memory_order_relaxed);
+    diagnostics.DiscardedEventLifecycleRetiredCount = s_discardedEventLifecycleRetiredCount.load(std::memory_order_relaxed);
+    diagnostics.DiscardedEventOtherCount = s_discardedEventOtherCount.load(std::memory_order_relaxed);
+    diagnostics.DiscardedEventCount = ReconciledAttributionTotal(
+        diagnostics.DiscardedEventPreReadyCount,
+        diagnostics.DiscardedEventLifecycleRetiredCount,
+        diagnostics.DiscardedEventOtherCount);
+    diagnostics.RejectedSubmissionPreReadyCount = s_rejectedSubmissionPreReadyCount.load(std::memory_order_relaxed);
+    diagnostics.RejectedSubmissionLifecycleRetiredCount = s_rejectedSubmissionLifecycleRetiredCount.load(std::memory_order_relaxed);
+    diagnostics.RejectedSubmissionOtherCount = s_rejectedSubmissionOtherCount.load(std::memory_order_relaxed);
+    diagnostics.RejectedSubmissionCount = ReconciledAttributionTotal(
+        diagnostics.RejectedSubmissionPreReadyCount,
+        diagnostics.RejectedSubmissionLifecycleRetiredCount,
+        diagnostics.RejectedSubmissionOtherCount);
     diagnostics.EventRingDroppedPushCount = s_mapping->Events.DroppedPushCount.load(std::memory_order_acquire);
     diagnostics.CommandRingDroppedPushCount = s_mapping->Commands.DroppedPushCount.load(std::memory_order_acquire);
+    auto& authority = diagnostics.ActorAuthority;
+    authority.SuppressedDamageCount = s_mapping->Header.AuthoritySuppressedDamageCount.load(std::memory_order_acquire);
+    authority.SuppressedDeathItemsCount = s_mapping->Header.AuthoritySuppressedDeathItemsCount.load(std::memory_order_acquire);
+    authority.SuppressedPositiveActiveEffectHealthCount =
+        s_mapping->Header.AuthoritySuppressedPositiveActiveEffectHealthCount.load(std::memory_order_acquire);
+    authority.SuppressedRestoreHealthCount = s_mapping->Header.AuthoritySuppressedRestoreHealthCount.load(std::memory_order_acquire);
+    authority.SuppressedReferenceSetPositionCount =
+        s_mapping->Header.AuthoritySuppressedReferenceSetPositionCount.load(std::memory_order_acquire);
+    authority.SuppressedActorSetPositionCount = s_mapping->Header.AuthoritySuppressedActorSetPositionCount.load(std::memory_order_acquire);
+    authority.SuppressedMoveToCount = s_mapping->Header.AuthoritySuppressedMoveToCount.load(std::memory_order_acquire);
+    authority.SuppressedActorProcessCount = s_mapping->Header.AuthoritySuppressedActorProcessCount.load(std::memory_order_acquire);
+    authority.PublishedRemoteNpcHealthDeltaCount =
+        s_mapping->Header.AuthorityPublishedRemoteNpcHealthDeltaCount.load(std::memory_order_acquire);
+    authority.FailedRemoteNpcHealthDeltaPublicationCount =
+        s_mapping->Header.AuthorityFailedRemoteNpcHealthDeltaPublicationCount.load(std::memory_order_acquire);
+    authority.LeaseFailureCount = s_mapping->Header.AuthorityLeaseFailureCount.load(std::memory_order_acquire);
+    authority.RetirementFailureCount = s_mapping->Header.AuthorityRetirementFailureCount.load(std::memory_order_acquire);
+    authority.RetirementTimeoutCount = s_mapping->Header.AuthorityRetirementTimeoutCount.load(std::memory_order_acquire);
+    authority.RegistryInconsistencyCount = s_mapping->Header.AuthorityRegistryInconsistencyCount.load(std::memory_order_acquire);
     return diagnostics;
 }
 
@@ -871,23 +947,37 @@ bool TryConsumeEvent(EventRecord& arEvent) noexcept
     EventRecord event{};
     while (TryPop(s_mapping->Events, event))
     {
+        SessionIdentitySnapshot session{};
+        const auto attribution = TrySnapshotSessionIdentity(s_mapping->Header, session) ?
+            ClassifyWorkAttribution(ReadState(), session,
+                                    s_mapping->Header.LifecycleEpoch.load(std::memory_order_acquire), event.Header.Identity) :
+            WorkAttribution::PreReady;
+        if (attribution != WorkAttribution::Current) {
+            RecordDiscardedEvent(attribution);
+            continue;
+        }
         if (ValidateEvent(event))
         {
             s_mapping->Header.ConsumedEventCount.fetch_add(1, std::memory_order_relaxed);
             arEvent = event;
             return true;
         }
-        s_discardedEventCount.fetch_add(1, std::memory_order_relaxed);
+        RecordDiscardedEvent(WorkAttribution::Current);
     }
     return false;
 }
 
 bool TrySubmitCommand(CommandRecord& arCommand) noexcept
 {
-    if (!IsOperational() || arCommand.Header.PayloadSize != kFixedPayloadBytes || arCommand.Header.Flags != 0 ||
+    if (!IsOperational())
+    {
+        RejectSubmission(CurrentWorkAttribution(arCommand.Header.Identity));
+        return false;
+    }
+    if (arCommand.Header.PayloadSize != kFixedPayloadBytes || arCommand.Header.Flags != 0 ||
         !IdentityIsCurrentOrUnspecified(arCommand.Header.Identity))
     {
-        RejectSubmission();
+        RejectSubmission(CurrentWorkAttribution(arCommand.Header.Identity));
         return false;
     }
 
@@ -951,7 +1041,12 @@ bool TrySubmitCommand(CommandRecord& arCommand) noexcept
 
 bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept try
 {
-    if (!apCommands || aCommandCount == 0 || aCommandCount > kDefaultCommandRingCapacity || !IsOperational())
+    if (!IsOperational())
+    {
+        RejectSubmission(CurrentWorkAttribution(apCommands && aCommandCount != 0 ? apCommands[0].Header.Identity : BridgeIdentity{}));
+        return false;
+    }
+    if (!apCommands || aCommandCount == 0 || aCommandCount > kDefaultCommandRingCapacity)
     {
         RejectSubmission();
         return false;
@@ -983,12 +1078,14 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
         auto command = apCommands[index];
         const auto kind = static_cast<CommandKind>(command.Header.Kind);
         const bool remoteAnimationGraph = kind == CommandKind::ApplyRemoteAnimationGraphChunk;
+        const auto identityCurrent = IdentityIsCurrentOrUnspecified(command.Header.Identity);
         if (!IsBatchCommand(kind) || command.Header.PayloadSize != kFixedPayloadBytes || command.Header.Flags != 0 ||
             command.Header.Identity.ActionId != 0 ||
             (remoteAnimationGraph && command.Header.Identity.SequenceId != 0) ||
-            !IdentityIsCurrentOrUnspecified(command.Header.Identity))
+            !identityCurrent)
         {
-            RejectSubmission();
+            RejectSubmission(identityCurrent ? WorkAttribution::Current :
+                                               CurrentWorkAttribution(command.Header.Identity));
             return false;
         }
 
@@ -1143,7 +1240,11 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
 
 bool TrySubmitAppearanceBatch(CommandRecord* apCommands, const std::size_t aCommandCount) noexcept try
 {
-    if (!apCommands || aCommandCount < 3 || aCommandCount > kDefaultCommandRingCapacity || !IsOperational()) {
+    if (!IsOperational()) {
+        RejectSubmission(CurrentWorkAttribution(apCommands && aCommandCount != 0 ? apCommands[0].Header.Identity : BridgeIdentity{}));
+        return false;
+    }
+    if (!apCommands || aCommandCount < 3 || aCommandCount > kDefaultCommandRingCapacity) {
         RejectSubmission();
         return false;
     }
@@ -1164,11 +1265,13 @@ bool TrySubmitAppearanceBatch(CommandRecord* apCommands, const std::size_t aComm
     for (std::size_t index = 0; index < aCommandCount; ++index) {
         auto command = apCommands[index];
         const auto kind = static_cast<CommandKind>(command.Header.Kind);
+        const auto identityCurrent = IdentityIsCurrentOrUnspecified(command.Header.Identity);
         if ((kind != CommandKind::ApplyGameplayAction && kind != CommandKind::ApplyGameplayTextChunk) ||
             command.Header.PayloadSize != kFixedPayloadBytes || command.Header.Flags != 0 ||
-            command.Header.Identity.ActionId != 0 || !IdentityIsCurrentOrUnspecified(command.Header.Identity) ||
+            command.Header.Identity.ActionId != 0 || !identityCurrent ||
             !ValidateCommandPayload(command)) {
-            RejectSubmission();
+            RejectSubmission(identityCurrent ? WorkAttribution::Current :
+                                               CurrentWorkAttribution(command.Header.Identity));
             return false;
         }
 

@@ -1,4 +1,5 @@
 #include <Services/ObjectService.h>
+#include <server/Services/ServerAuthorityPolicy.h>
 
 #include <GameServer.h>
 #include <World.h>
@@ -17,12 +18,56 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <type_traits>
 
 namespace
 {
 constexpr std::int32_t kMaximumObjectItemCount = 1'000'000;
 constexpr std::int32_t kMaximumGridCoordinate = 1'000'000;
+constexpr std::uint64_t kAuthorityRejectionLogInterval = 128;
+
+enum class ObjectInteractionRejection : std::size_t
+{
+    MissingSender,
+    MissingOwnedCharacter,
+    UnknownTarget,
+    SpoofedTarget,
+    SpoofedCell,
+    SpoofedActivator,
+    OutOfInterestRange,
+    Count,
+};
+
+constexpr std::array<const char*, static_cast<std::size_t>(ObjectInteractionRejection::Count)>
+    kObjectInteractionRejectionNames{
+        "missing sender",
+        "missing authenticated player character",
+        "unassigned target",
+        "spoofed target",
+        "spoofed cell",
+        "spoofed activator",
+        "target outside canonical interest range",
+    };
+std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(ObjectInteractionRejection::Count)>
+    g_objectInteractionRejections{};
+
+void LogObjectInteractionRejection(const ObjectInteractionRejection aReason) noexcept
+{
+    const auto index = static_cast<std::size_t>(aReason);
+    const auto aggregate = g_objectInteractionRejections[index].fetch_add(1, std::memory_order_relaxed) + 1;
+    if (aggregate != 1 && aggregate % kAuthorityRejectionLogInterval != 0)
+        return;
+    try
+    {
+        spdlog::warn("Object interaction rejected: {} (aggregate={})",
+                     kObjectInteractionRejectionNames[index], aggregate);
+    }
+    catch (...)
+    {
+    }
+}
 
 [[nodiscard]] bool IsValidObjectInventory(const Inventory& acInventory) noexcept
 {
@@ -83,6 +128,76 @@ struct CreatedObjectRollback
     std::size_t Count{};
     bool Committed{};
 };
+
+template <class TMessage>
+[[nodiscard]] bool ResolveAuthorizedObjectInteraction(
+    World& arWorld, const PacketEvent<TMessage>& acMessage, const bool aCheckActivator,
+    entt::entity& arTarget, std::uint32_t& arActivatorId) noexcept
+{
+    if (!acMessage.pPlayer)
+    {
+        LogObjectInteractionRejection(ObjectInteractionRejection::MissingSender);
+        return false;
+    }
+
+    const auto character = acMessage.pPlayer->GetCharacter();
+    if (!character || !arWorld.valid(*character) ||
+        !arWorld.all_of<OwnerComponent, CharacterComponent, CellIdComponent>(*character) ||
+        arWorld.get<OwnerComponent>(*character).GetOwner() != acMessage.pPlayer ||
+        !arWorld.get<CharacterComponent>(*character).IsPlayer())
+    {
+        LogObjectInteractionRejection(ObjectInteractionRejection::MissingOwnedCharacter);
+        return false;
+    }
+
+    auto objectView = arWorld.view<FormIdComponent, ObjectComponent, CellIdComponent>();
+    const auto object = std::find_if(
+        objectView.begin(), objectView.end(), [&objectView, id = acMessage.Packet.Id](const entt::entity aEntity) {
+            return objectView.get<FormIdComponent>(aEntity).Id == id;
+        });
+    if (object == objectView.end())
+    {
+        LogObjectInteractionRejection(ObjectInteractionRejection::UnknownTarget);
+        return false;
+    }
+
+    arTarget = *object;
+    arActivatorId = World::ToInteger(*character);
+    if (arActivatorId == 0)
+    {
+        LogObjectInteractionRejection(ObjectInteractionRejection::MissingOwnedCharacter);
+        return false;
+    }
+    const auto& senderCell = acMessage.pPlayer->GetCellComponent();
+    const auto& characterCell = arWorld.get<CellIdComponent>(*character);
+    const auto& targetCell = objectView.get<CellIdComponent>(arTarget);
+    const auto authority = SkyrimTogether::ServerAuthorityPolicy::ObjectInteractionAuthority{
+        true,
+        true,
+        objectView.get<FormIdComponent>(arTarget).Id == acMessage.Packet.Id,
+        targetCell.Cell == acMessage.Packet.CellId,
+        [&]() noexcept {
+            if constexpr (std::is_same_v<TMessage, ActivateRequest>)
+                return !aCheckActivator || arActivatorId == acMessage.Packet.ActivatorId;
+            return true;
+        }(),
+        senderCell.IsInRange(characterCell, false),
+        senderCell.IsInRange(targetCell, false),
+        characterCell.IsInRange(targetCell, false),
+    };
+    if (SkyrimTogether::ServerAuthorityPolicy::IsAuthorizedObjectInteraction(authority))
+        return true;
+
+    if (!authority.RequestedTargetIsCanonical)
+        LogObjectInteractionRejection(ObjectInteractionRejection::SpoofedTarget);
+    else if (!authority.RequestedCellIsCanonical)
+        LogObjectInteractionRejection(ObjectInteractionRejection::SpoofedCell);
+    else if (!authority.RequestedActivatorIsCanonical)
+        LogObjectInteractionRejection(ObjectInteractionRejection::SpoofedActivator);
+    else
+        LogObjectInteractionRejection(ObjectInteractionRejection::OutOfInterestRange);
+    return false;
+}
 } // namespace
 
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
@@ -217,18 +332,18 @@ catch (...)
 
 void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept try
 {
+    entt::entity target{};
+    std::uint32_t activatorId{};
+    if (!ResolveAuthorizedObjectInteraction(m_world, acMessage, true, target, activatorId))
+        return;
+
     NotifyActivate notifyActivate;
     notifyActivate.Id = acMessage.Packet.Id;
-    notifyActivate.ActivatorId = acMessage.Packet.ActivatorId;
+    notifyActivate.ActivatorId = activatorId;
     notifyActivate.PreActivationOpenState = acMessage.Packet.PreActivationOpenState;
 
-    for (auto pPlayer : m_world.GetPlayerManager())
-    {
-        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
-        {
-            pPlayer->Send(notifyActivate);
-        }
-    }
+    if (!GameServer::Get()->SendToPlayersInRange(notifyActivate, target, acMessage.pPlayer))
+        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
 catch (...)
 {
@@ -237,36 +352,22 @@ catch (...)
 
 void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) const noexcept try
 {
+    entt::entity target{};
+    std::uint32_t ignoredActivatorId{};
+    if (!ResolveAuthorizedObjectInteraction(m_world, acMessage, false, target, ignoredActivatorId))
+        return;
+
     NotifyLockChange notifyLockChange;
     notifyLockChange.Id = acMessage.Packet.Id;
     notifyLockChange.IsLocked = acMessage.Packet.IsLocked;
     notifyLockChange.LockLevel = acMessage.Packet.LockLevel;
 
-    auto objectView = m_world.view<FormIdComponent, ObjectComponent>();
+    auto& objectComponent = m_world.get<ObjectComponent>(target);
+    objectComponent.CurrentLockData.IsLocked = acMessage.Packet.IsLocked;
+    objectComponent.CurrentLockData.LockLevel = acMessage.Packet.LockLevel;
 
-    const auto iter = std::find_if(
-        std::begin(objectView), std::end(objectView),
-        [objectView, id = acMessage.Packet.Id](auto entity)
-        {
-            const auto& formIdComponent = objectView.get<FormIdComponent>(entity);
-            return formIdComponent.Id == id;
-        });
-
-    if (iter != std::end(objectView))
-    {
-        auto& objectComponent = objectView.get<ObjectComponent>(*iter);
-        objectComponent.CurrentLockData.IsLocked = acMessage.Packet.IsLocked;
-        objectComponent.CurrentLockData.LockLevel = acMessage.Packet.LockLevel;
-    }
-
-    for (Player* pPlayer : m_world.GetPlayerManager())
-    {
-        if (pPlayer == acMessage.pPlayer)
-            continue;
-
-        if (pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
-            pPlayer->Send(notifyLockChange);
-    }
+    if (!GameServer::Get()->SendToPlayersInRange(notifyLockChange, target, acMessage.pPlayer))
+        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
 catch (...)
 {

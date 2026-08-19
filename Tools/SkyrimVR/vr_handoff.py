@@ -49,7 +49,7 @@ READOUT_FILES = {
     "saveload": "SkyrimTogetherVR.saveload",
 }
 
-GAMEPLAY_PROTOCOL_REVISION = 15
+GAMEPLAY_PROTOCOL_REVISION = 17
 GAMEPLAY_SNAPSHOT_SCHEMA_VERSION = 1
 GAMEPLAY_MANDATORY_CANONICAL_DOMAINS = (
     "animation", "appearance", "equipment", "inventory", "actor_state",
@@ -392,6 +392,11 @@ def gameplay_snapshot_fixture(
         f"bridge.ready={int(ready)}",
         f"bridge.localEventSinksActive={int(ready)}",
         f"bridge.localCaptureSinksActive={int(ready)}",
+        "bridge.rejectedCommands=0",
+        "bridge.discardedEvents=0",
+        "bridge.rejectedSubmissions=0",
+        "bridge.eventRingDroppedPushes=0",
+        "bridge.commandRingDroppedPushes=0",
         "session.online=1",
         f"session.id={session_id}",
         f"session.serverInstanceNonce={server_instance_nonce}",

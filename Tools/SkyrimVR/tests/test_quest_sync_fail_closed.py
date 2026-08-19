@@ -31,7 +31,7 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
         protocol = PROTOCOL.read_text(encoding="utf-8")
 
         self.assertIn("QuestMutation = 1ull << 23", protocol)
-        self.assertIn("inline constexpr std::uint32_t kCapabilityRevision = 33", protocol)
+        self.assertIn("inline constexpr std::uint32_t kCapabilityRevision = 34", protocol)
         mapping = protocol.split("constexpr Capability CapabilityForDomain", 1)[1].split(
             "constexpr bool IsActionInDomain", 1
         )[0]

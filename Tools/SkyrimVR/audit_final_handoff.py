@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import pathlib
@@ -391,6 +392,23 @@ def fixture_runtime_identity(
     return runtime_identity, payloads, readout_mtime_ns
 
 
+def fixture_scenario_evidence(
+    *,
+    primary: dict[str, str],
+    peer: dict[str, str],
+    server_instance_nonce: str,
+) -> bytes:
+    """Build the one shared, engine-correlated scenario record used by both fixtures."""
+    evidence = audit_runtime_evidence_zip.scenario_evidence_fixture(
+        collect_runtime_evidence.vr_handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS,
+        primary=primary,
+        peer=peer,
+        server_instance_nonce=server_instance_nonce,
+        now=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+    )
+    return (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def create_runtime_evidence_zip(
     path: pathlib.Path,
     *,
@@ -402,6 +420,10 @@ def create_runtime_evidence_zip(
     launch_nonce: str = "0123456789abcdef0123456789abcdef",
     process_id: int = 42,
     player_id: int = 4,
+    session_id: int = 8,
+    server_instance_nonce: int = 7,
+    connection_generation: int = 9,
+    scenario_evidence: bytes | None = None,
 ) -> pathlib.Path:
     package_manifest = build_manifest(avatar_sync, gameplay=gameplay)
     avatar_runtime_checks = avatar_sync or gameplay
@@ -413,6 +435,9 @@ def create_runtime_evidence_zip(
         launch_nonce=launch_nonce,
         process_id=process_id,
         player_id=player_id,
+        session_id=session_id,
+        server_instance_nonce=server_instance_nonce,
+        connection_generation=connection_generation,
         gameplay_ready=gameplay,
     )
     runtime_trust = "trusted" if live_admission and bool(runtime_identity["ok"]) else "untrusted"
@@ -476,6 +501,16 @@ def create_runtime_evidence_zip(
             ],
         ],
     }
+    if scenario_evidence is not None:
+        runtime_manifest["files"].append(
+            {
+                "category": "explicit-scenario-evidence",
+                "source": "self-test",
+                "archiveName": audit_runtime_evidence_zip.SCENARIO_EVIDENCE_ARCHIVE_ENTRY,
+                "required": True,
+                "exists": True,
+            }
+        )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         write_runtime_evidence_entry(
             archive,
@@ -493,6 +528,13 @@ def create_runtime_evidence_zip(
                 runtime_manifest,
                 f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES[name]}",
                 identity_payloads[name],
+            )
+        if scenario_evidence is not None:
+            write_runtime_evidence_entry(
+                archive,
+                runtime_manifest,
+                audit_runtime_evidence_zip.SCENARIO_EVIDENCE_ARCHIVE_ENTRY,
+                scenario_evidence,
             )
         archive.writestr("manifest.json", json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n")
     return path
@@ -544,12 +586,30 @@ def run_self_test() -> int:
             pose_context=True,
             gameplay_relays=False,
         )
+        scenario_evidence = fixture_scenario_evidence(
+            primary={
+                "playerId": "4",
+                "sessionId": "8",
+                "connectionGeneration": "9",
+                "launchNonce": "0123456789abcdef0123456789abcdef",
+                "processId": "42",
+            },
+            peer={
+                "playerId": "5",
+                "sessionId": "9",
+                "connectionGeneration": "10",
+                "launchNonce": "fedcba9876543210fedcba9876543210",
+                "processId": "43",
+            },
+            server_instance_nonce="7",
+        )
         runtime_gameplay = create_runtime_evidence_zip(
             runtime_out / "SkyrimTogetherVR-evidence-gameplay.zip",
             avatar_sync=False,
             gameplay=True,
             pose_context=True,
             gameplay_relays=True,
+            scenario_evidence=scenario_evidence,
         )
         runtime_gameplay_peer = create_runtime_evidence_zip(
             runtime_out / "SkyrimTogetherVR-evidence-gameplay-peer.zip",
@@ -560,6 +620,10 @@ def run_self_test() -> int:
             launch_nonce="fedcba9876543210fedcba9876543210",
             process_id=43,
             player_id=5,
+            session_id=9,
+            server_instance_nonce=7,
+            connection_generation=10,
+            scenario_evidence=scenario_evidence,
         )
         untrusted_runtime_default = create_runtime_evidence_zip(
             runtime_out / "SkyrimTogetherVR-evidence-default-generic.zip",
@@ -598,7 +662,7 @@ def run_self_test() -> int:
             build_dll_only=None,
             runtime_default=None,
             runtime_avatar_sync=None,
-            runtime_gameplay=None,
+            runtime_gameplay=runtime_gameplay,
             runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,

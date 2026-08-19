@@ -2,8 +2,10 @@
 
 #include "AvatarManager.h"
 #include "AnimationGraphDescriptors.h"
+#include "LocalGameplayCapture.h"
 #include "VerifiedVrActorAction.h"
 #include "VrHookDetachPolicy.h"
+#include "VrNoThrow.h"
 
 #include <MinHook.h>
 
@@ -68,8 +70,8 @@ std::array<PendingActionSlot, kMaximumPendingActions> g_pendingActions{};
         return VrHookDetachPolicy::OperationResult::AlreadyDisabled;
     if (status == MH_ERROR_NOT_CREATED)
         return VrHookDetachPolicy::OperationResult::NotCreated;
-    SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook disable failed ({})",
-                     static_cast<int>(status));
+    NoThrow::BestEffort([&] { SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook disable failed ({})",
+                                                static_cast<int>(status)); });
     return VrHookDetachPolicy::OperationResult::Failed;
 }
 
@@ -80,8 +82,8 @@ std::array<PendingActionSlot, kMaximumPendingActions> g_pendingActions{};
         return VrHookDetachPolicy::OperationResult::Complete;
     if (status == MH_ERROR_NOT_CREATED)
         return VrHookDetachPolicy::OperationResult::NotCreated;
-    SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook remove failed ({})",
-                     static_cast<int>(status));
+    NoThrow::BestEffort([&] { SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook remove failed ({})",
+                                                static_cast<int>(status)); });
     return VrHookDetachPolicy::OperationResult::Failed;
 }
 
@@ -100,11 +102,11 @@ void ForgetDetachedPerformActionHook() noexcept
 
 void LogRetainedPerformActionHook(const char* a_operation) noexcept
 {
-    BridgeEndpoint::Get().Fault("ActorMediator::PerformAction hook rollback could not prove detachment");
-    SKSE::log::error(
+    NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("ActorMediator::PerformAction hook rollback could not prove detachment"); });
+    NoThrow::BestEffort([&] { SKSE::log::error(
         "SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction {} could not prove detachment; retaining "
         "target, trampoline, and optional capability so a possible live detour remains callable",
-        a_operation);
+        a_operation); });
 }
 
 struct LocalActionCapture
@@ -386,6 +388,7 @@ void PublishLocalAction(const LocalActionCapture& a_capture, const RE::TESAction
 
 std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noexcept
 {
+    try {
     const auto original = g_originalPerformAction;
     if (!original)
         return 0;
@@ -401,7 +404,12 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
             if (managedRemote && g_remoteActionDepth == 0)
                 return 0;
 
-            locallyOwned = actor && !managedRemote && g_remoteActionDepth == 0;
+            // Generic local NPC actions are not owned gameplay. Only the
+            // player and explicitly observed native NPCs have a client-side
+            // server binding that can relay this exact action transaction.
+            locallyOwned = actor && !managedRemote && g_remoteActionDepth == 0 &&
+                           (actor == RE::PlayerCharacter::GetSingleton() ||
+                            LocalGameplayCapture::IsNpcObserved(actor->GetFormID()));
             if (locallyOwned) {
                 static_cast<void>(CaptureLocalAction(*actor, *a_data, capture));
             }
@@ -428,6 +436,9 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
         // Serialization failures must not change the engine result.
     }
     return result;
+    } catch (...) {
+        return 0;
+    }
 }
 
 [[nodiscard]] CommandStatus StageGraph(const CommandRecord& a_command)

@@ -180,12 +180,76 @@ private:
     }
 
 #if TP_SKYRIM_VR
+    static bool IsVrForbiddenLegacyHookId(unsigned long long id)
+    {
+        // These raw VR Address Library IDs were proven unrelated to their
+        // desktop hook names. Exact replacements, where known, are consumed
+        // only by bridge-owned direct-RVA contracts.
+        switch (id)
+        {
+        case 34989: // SummonCreatureEffect factory
+        case 37577: // Actor::IsFleeing
+        case 39643: // Dialogue process response
+        case 40454: // PlayerCharacter::DropObject
+        case 42704: // Detection-state update
+            return true;
+        default: return false;
+        }
+    }
+
+    void RepairVrReverseMappingAfterIdRemoval(unsigned long long id, unsigned long long offset)
+    {
+        const auto reverse = _rdata.find(offset);
+        if (reverse == _rdata.end() || reverse->second != id)
+            return;
+
+        _rdata.erase(reverse);
+        for (const auto& [candidateId, candidateOffset] : _data)
+        {
+            if (candidateId != id && candidateOffset == offset)
+            {
+                _rdata[offset] = candidateId;
+                break;
+            }
+        }
+    }
+
+    void RemoveOffsetForId(unsigned long long id)
+    {
+        const auto existing = _data.find(id);
+        if (existing == _data.end())
+            return;
+
+        const auto offset = existing->second;
+        _data.erase(existing);
+        RepairVrReverseMappingAfterIdRemoval(id, offset);
+    }
+
+    void EnforceVrForbiddenLegacyHookIds()
+    {
+        // Keep this after every source of mappings: raw Address Library rows,
+        // project overrides, and generated aliases. Filtering only callers or
+        // forward lookup would leave a reverse mapping that can still enable a
+        // legacy hook through another resolution path.
+        for (auto it = _data.begin(); it != _data.end();)
+        {
+            const auto id = it->first;
+            ++it;
+            if (IsVrForbiddenLegacyHookId(id))
+                RemoveOffsetForId(id);
+        }
+    }
+
     bool ApplyVrProjectAddressFiles(const std::filesystem::path& acGamePath)
     {
         const auto pluginPath = acGamePath / "Data" / "SKSE" / "Plugins";
         if (!LoadCsvOffsetFile(pluginPath / "SkyrimTogetherVR_AddressOverrides.csv", false, &_vrProjectOverrideIds))
             return false;
-        return ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv");
+        if (!ApplyIdAliasFile(pluginPath / "SkyrimTogetherVR_AE_to_SE.csv"))
+            return false;
+
+        EnforceVrForbiddenLegacyHookIds();
+        return true;
     }
 
     bool ApplyIdAliasFile(const std::filesystem::path& path)

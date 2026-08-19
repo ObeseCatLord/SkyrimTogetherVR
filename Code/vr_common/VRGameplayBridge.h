@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -18,8 +19,8 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 22;
-inline constexpr std::uint32_t kCapabilityRevision = 33;
+inline constexpr std::uint16_t kMappingAbiVersion = 23;
+inline constexpr std::uint32_t kCapabilityRevision = 34;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
 inline constexpr std::uint32_t kSkyrimVrRuntimeVersion = 0x010400F0;
@@ -106,6 +107,11 @@ enum class EndpointState : std::uint32_t
     Retired = 4,
     Faulted = 5,
 };
+
+[[nodiscard]] constexpr bool IsOperationalEndpointState(const EndpointState a_state) noexcept
+{
+    return a_state == EndpointState::Prepared || a_state == EndpointState::Ready;
+}
 
 enum class Capability : std::uint64_t
 {
@@ -1076,7 +1082,62 @@ enum RemoteAvatarCreateFlag : std::uint32_t
 {
     UseExistingReference = 1u << 0,
     PlayerAvatar = 1u << 1,
+    PlayerSummon = 1u << 2,
 };
+
+inline constexpr std::uint32_t kKnownRemoteAvatarCreateFlags =
+    UseExistingReference | PlayerAvatar | PlayerSummon;
+
+[[nodiscard]] constexpr bool IsValidRemoteAvatarCreateFlags(const std::uint32_t a_flags) noexcept
+{
+    return (a_flags & ~kKnownRemoteAvatarCreateFlags) == 0 &&
+           (a_flags & (PlayerAvatar | PlayerSummon)) != (PlayerAvatar | PlayerSummon);
+}
+
+// This is local adapter state, never a mapped payload. The bridge stores the
+// actual health returned by the game only after the corresponding network
+// command has completed successfully, then uses it to correct later engine
+// drift without touching the remaining actor-value map.
+enum class RemoteActorAuthorityTransition : std::uint8_t
+{
+    InitialHealth,
+    SetHealth,
+    ModifyHealth,
+    Death,
+    Respawn,
+};
+
+struct RemoteActorAuthorityState
+{
+    float Health{};
+    bool HasHealth{};
+    bool IsDead{};
+};
+
+[[nodiscard]] inline bool ApplyRemoteActorAuthorityTransition(
+    RemoteActorAuthorityState& ar_state,
+    const RemoteActorAuthorityTransition a_transition,
+    const float a_appliedHealth) noexcept
+{
+    if (!std::isfinite(a_appliedHealth))
+        return false;
+
+    ar_state.Health = a_appliedHealth;
+    ar_state.HasHealth = true;
+    switch (a_transition) {
+    case RemoteActorAuthorityTransition::InitialHealth:
+    case RemoteActorAuthorityTransition::SetHealth:
+    case RemoteActorAuthorityTransition::ModifyHealth:
+        return true;
+    case RemoteActorAuthorityTransition::Death:
+        ar_state.IsDead = true;
+        return true;
+    case RemoteActorAuthorityTransition::Respawn:
+        ar_state.IsDead = false;
+        return true;
+    }
+    return false;
+}
 
 struct DestroyRemoteAvatarPayload
 {
@@ -1206,6 +1267,23 @@ struct alignas(8) MappingHeader
     AtomicU64 ExecutedCommandCount;
     AtomicU64 RejectedCommandCount;
     AtomicU64 StaleCommandCount;
+    // Actor-authority hooks run in the SKSEVR bridge, while the regular
+    // diagnostics service lives in the client. Keep only aggregate counters
+    // here: this shared ABI must never expose game pointers or per-actor data.
+    AtomicU64 AuthoritySuppressedDamageCount;
+    AtomicU64 AuthoritySuppressedDeathItemsCount;
+    AtomicU64 AuthoritySuppressedPositiveActiveEffectHealthCount;
+    AtomicU64 AuthoritySuppressedRestoreHealthCount;
+    AtomicU64 AuthoritySuppressedReferenceSetPositionCount;
+    AtomicU64 AuthoritySuppressedActorSetPositionCount;
+    AtomicU64 AuthoritySuppressedMoveToCount;
+    AtomicU64 AuthoritySuppressedActorProcessCount;
+    AtomicU64 AuthorityPublishedRemoteNpcHealthDeltaCount;
+    AtomicU64 AuthorityFailedRemoteNpcHealthDeltaPublicationCount;
+    AtomicU64 AuthorityLeaseFailureCount;
+    AtomicU64 AuthorityRetirementFailureCount;
+    AtomicU64 AuthorityRetirementTimeoutCount;
+    AtomicU64 AuthorityRegistryInconsistencyCount;
 };
 
 struct SessionIdentitySnapshot
@@ -1213,6 +1291,59 @@ struct SessionIdentitySnapshot
     std::uint64_t ServerInstanceNonce{};
     std::uint64_t ConnectionGeneration{};
 };
+
+enum class WorkAttribution : std::uint8_t
+{
+    Current = 0,
+    PreReady = 1,
+    LifecycleRetired = 2,
+};
+
+[[nodiscard]] constexpr WorkAttribution ClassifyWorkAttribution(
+    const EndpointState a_state,
+    const SessionIdentitySnapshot& ac_session,
+    const std::uint64_t a_lifecycleEpoch,
+    const BridgeIdentity& ac_identity) noexcept
+{
+    if (a_state == EndpointState::Retiring || a_state == EndpointState::Retired)
+        return WorkAttribution::LifecycleRetired;
+    if (a_state == EndpointState::Uninitialized || a_state == EndpointState::Prepared ||
+        ac_session.ServerInstanceNonce == 0 || ac_session.ConnectionGeneration == 0)
+        return WorkAttribution::PreReady;
+
+    // Once the endpoint has a valid session, an incomplete identity cannot
+    // prove that work belongs to a retired lifecycle. Let normal validation
+    // attribute invalid work to Other.
+    if (ac_identity.ServerInstanceNonce == 0 || ac_identity.ConnectionGeneration == 0 ||
+        ac_identity.LifecycleEpoch == 0)
+        return WorkAttribution::Current;
+
+    if (ac_identity.ConnectionGeneration < ac_session.ConnectionGeneration)
+        return WorkAttribution::LifecycleRetired;
+    if (ac_identity.ServerInstanceNonce == ac_session.ServerInstanceNonce &&
+        ac_identity.ConnectionGeneration == ac_session.ConnectionGeneration &&
+        ac_identity.LifecycleEpoch < a_lifecycleEpoch)
+        return WorkAttribution::LifecycleRetired;
+    return WorkAttribution::Current;
+}
+
+[[nodiscard]] constexpr bool AreAttributionCountersReconciled(
+    const std::uint64_t a_total,
+    const std::uint64_t a_preReady,
+    const std::uint64_t a_lifecycleRetired,
+    const std::uint64_t a_other) noexcept
+{
+    return a_preReady <= a_total && a_lifecycleRetired <= a_total - a_preReady &&
+           a_other == a_total - a_preReady - a_lifecycleRetired;
+}
+
+[[nodiscard]] constexpr std::uint64_t ReconciledAttributionTotal(
+    const std::uint64_t a_preReady,
+    const std::uint64_t a_lifecycleRetired,
+    const std::uint64_t a_other) noexcept
+{
+    return a_preReady + a_lifecycleRetired + a_other;
+}
 
 [[nodiscard]] inline bool TrySnapshotSessionIdentity(
     const MappingHeader& acHeader, SessionIdentitySnapshot& arSnapshot) noexcept
@@ -1413,6 +1544,166 @@ template <class T, std::size_t Capacity>
     return true;
 }
 
+// The mapped ring stays fixed-size. This local, fixed-capacity backlog lets
+// bridge producers wait for the client consumer without dropping a valid
+// non-coalescible event. Callers must serialize FlushTo with all producers.
+template <class T, std::size_t Capacity>
+class BoundedRecordBacklog
+{
+public:
+    static_assert(Capacity != 0);
+    static_assert(std::is_trivially_copyable_v<T>);
+
+    [[nodiscard]] bool Empty() const noexcept { return _count == 0; }
+    [[nodiscard]] std::size_t Size() const noexcept { return _count; }
+    [[nodiscard]] std::size_t FreeCapacity() const noexcept { return Capacity - _count; }
+
+    [[nodiscard]] bool TryAppend(const T& ac_record) noexcept
+    {
+        return TryAppendBatch(&ac_record, 1);
+    }
+
+    [[nodiscard]] bool TryAppendBatch(const T* ap_records, const std::size_t a_count) noexcept
+    {
+        if (!ap_records || a_count == 0 || a_count > FreeCapacity())
+            return false;
+        for (std::size_t index = 0; index < a_count; ++index)
+            At(_count + index) = ap_records[index];
+        _count += a_count;
+        return true;
+    }
+
+    [[nodiscard]] const T& Front() const noexcept { return At(0); }
+
+    void PopFront() noexcept
+    {
+        if (_count == 0)
+            return;
+        _head = (_head + 1) % Capacity;
+        --_count;
+    }
+
+    template <class Predicate>
+    [[nodiscard]] std::size_t CountIf(Predicate&& a_predicate) const noexcept
+    {
+        std::size_t count{};
+        for (std::size_t index = 0; index < _count; ++index)
+            if (a_predicate(At(index)))
+                ++count;
+        return count;
+    }
+
+    template <class Predicate>
+    void EraseIf(Predicate&& a_predicate) noexcept
+    {
+        std::size_t retained{};
+        for (std::size_t index = 0; index < _count; ++index) {
+            if (a_predicate(At(index)))
+                continue;
+            if (retained != index)
+                At(retained) = At(index);
+            ++retained;
+        }
+        _count = retained;
+    }
+
+    template <std::size_t RingCapacity>
+    [[nodiscard]] bool FlushTo(BoundedMpmcRing<T, RingCapacity>& ar_ring) noexcept
+    {
+        while (!Empty()) {
+            const auto enqueue = ar_ring.EnqueuePosition.load(std::memory_order_acquire);
+            const auto dequeue = ar_ring.DequeuePosition.load(std::memory_order_acquire);
+            if (enqueue - dequeue >= RingCapacity)
+                return false;
+            if (!TryPush(ar_ring, Front()))
+                return false;
+            PopFront();
+        }
+        return true;
+    }
+
+private:
+    [[nodiscard]] T& At(const std::size_t a_offset) noexcept
+    {
+        return _records[(_head + a_offset) % Capacity];
+    }
+
+    [[nodiscard]] const T& At(const std::size_t a_offset) const noexcept
+    {
+        return _records[(_head + a_offset) % Capacity];
+    }
+
+    std::array<T, Capacity> _records{};
+    std::size_t _head{};
+    std::size_t _count{};
+};
+
+// A fixed FIFO whose uncommitted reservations consume capacity. Callers
+// provide external serialization; mapped-ring pressure leaves committed
+// records untouched and does not increment the mapped ring's drop counter.
+template <class T, std::size_t Capacity>
+class BoundedReservedRecordQueue
+{
+public:
+    static_assert(Capacity != 0);
+    static_assert(std::is_trivially_copyable_v<T>);
+
+    [[nodiscard]] bool Empty() const noexcept { return _count == 0; }
+    [[nodiscard]] std::size_t Size() const noexcept { return _count; }
+    [[nodiscard]] std::size_t Reserved() const noexcept { return _reserved; }
+    [[nodiscard]] std::size_t FreeCapacity() const noexcept { return Capacity - _count - _reserved; }
+
+    [[nodiscard]] bool TryReserve(const std::size_t a_count) noexcept
+    {
+        if (a_count == 0 || a_count > FreeCapacity())
+            return false;
+        _reserved += a_count;
+        return true;
+    }
+
+    [[nodiscard]] bool ReleaseReserved(const std::size_t a_count) noexcept
+    {
+        if (a_count > _reserved)
+            return false;
+        _reserved -= a_count;
+        return true;
+    }
+
+    [[nodiscard]] bool TryCommitReserved(const T& ac_record) noexcept
+    {
+        if (_reserved == 0 || _count >= Capacity)
+            return false;
+        const auto tail = (_head + _count) % Capacity;
+        _records[tail] = ac_record;
+        --_reserved;
+        ++_count;
+        return true;
+    }
+
+    template <std::size_t RingCapacity>
+    [[nodiscard]] bool FlushTo(BoundedMpmcRing<T, RingCapacity>& ar_ring) noexcept
+    {
+        while (_count != 0) {
+            const auto enqueue = ar_ring.EnqueuePosition.load(std::memory_order_acquire);
+            const auto dequeue = ar_ring.DequeuePosition.load(std::memory_order_acquire);
+            if (enqueue - dequeue >= RingCapacity)
+                return false;
+            if (!TryPush(ar_ring, _records[_head]))
+                return false;
+            _head = (_head + 1) % Capacity;
+            --_count;
+        }
+        _head = 0;
+        return true;
+    }
+
+private:
+    std::array<T, Capacity> _records{};
+    std::size_t _head{};
+    std::size_t _count{};
+    std::size_t _reserved{};
+};
+
 using EventRing = BoundedMpmcRing<EventRecord, kDefaultEventRingCapacity>;
 using CommandRing = BoundedMpmcRing<CommandRecord, kDefaultCommandRingCapacity>;
 
@@ -1537,7 +1828,7 @@ static_assert(std::is_standard_layout_v<EventRecord>);
 static_assert(std::is_trivially_copyable_v<EventRecord>);
 static_assert(std::is_standard_layout_v<CommandRecord>);
 static_assert(std::is_trivially_copyable_v<CommandRecord>);
-static_assert(sizeof(MappingHeader) == 0x90);
+static_assert(sizeof(MappingHeader) == 0x100);
 static_assert(alignof(MappingHeader) == 8);
 static_assert(offsetof(MappingHeader, State) == 0x18);
 static_assert(offsetof(MappingHeader, SessionIdentityVersion) == 0x1C);
@@ -1547,6 +1838,8 @@ static_assert(offsetof(MappingHeader, ActiveCapabilities) == 0x30);
 static_assert(offsetof(MappingHeader, LifecycleEpoch) == 0x48);
 static_assert(offsetof(MappingHeader, CommandExecutionThreadId) == 0x58);
 static_assert(offsetof(MappingHeader, RejectedCommandCount) == 0x80);
+static_assert(offsetof(MappingHeader, AuthoritySuppressedDamageCount) == 0x90);
+static_assert(offsetof(MappingHeader, AuthorityRegistryInconsistencyCount) == 0xF8);
 static_assert(sizeof(RingSlot<EventRecord>) == 0x98);
 static_assert(sizeof(RingSlot<CommandRecord>) == 0x98);
 static_assert(offsetof(EventRing, Slots) == 0x20);
@@ -1558,9 +1851,9 @@ static_assert(alignof(CommandRing) == 8);
 static_assert(std::is_standard_layout_v<MappingHeader>);
 static_assert(std::is_standard_layout_v<EventRing>);
 static_assert(std::is_standard_layout_v<CommandRing>);
-static_assert(sizeof(GameplayBridgeMapping) == 0x980D0);
+static_assert(sizeof(GameplayBridgeMapping) == 0x98140);
 static_assert(alignof(GameplayBridgeMapping) == 8);
-static_assert(offsetof(GameplayBridgeMapping, Events) == 0x90);
-static_assert(offsetof(GameplayBridgeMapping, Commands) == 0x4C0B0);
+static_assert(offsetof(GameplayBridgeMapping, Events) == 0x100);
+static_assert(offsetof(GameplayBridgeMapping, Commands) == 0x4C120);
 static_assert(std::is_standard_layout_v<GameplayBridgeMapping>);
 } // namespace SkyrimTogetherVR::GameplayBridge

@@ -8,11 +8,11 @@ using TiltedPhoques::Buffer;
 
 struct TimeModel
 {
-    // Default time: 01/01/01 at 12:00
+    // Skyrim stores months as zero-based indices; month 0 is January.
     float TimeScale = 20.f;
     float Time = 12.f;
     uint32_t Year = 1;
-    uint32_t Month = 1;
+    uint32_t Month = 0;
     uint32_t Day = 1;
 
     void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;

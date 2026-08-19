@@ -6,7 +6,11 @@
 
 namespace RE
 {
+class NiPoint3;
+class PlayerCharacter;
 class TESQuest;
+class TESObjectREFR;
+class TESWorldSpace;
 }
 
 namespace SkyrimTogetherVR::GameplayAdapter::LocalGameplayCapture
@@ -35,6 +39,39 @@ void RefreshInventoryBaseline(std::uint32_t a_ownerFormId) noexcept;
 [[nodiscard]] GameplayBridge::CommandStatus CaptureAssignmentBootstrap(
     const GameplayBridge::CommandRecord& acCommand) noexcept;
 void CapturePeriodic() noexcept;
+enum class PreActivationCaptureResult : std::uint8_t
+{
+    Published,
+    Ineligible,
+    PublicationRejected,
+};
+// The exact TESObjectREFR::ActivateRef detour calls this synchronously before
+// the original engine body. It copies only canonical wire data and retains no
+// game pointer after returning; rejection must never block local activation.
+[[nodiscard]] PreActivationCaptureResult CapturePreActivation(
+    RE::TESObjectREFR& a_target,
+    RE::TESObjectREFR& a_activator) noexcept;
+enum class ExactWaypointCaptureResult : std::uint8_t
+{
+    Published,
+    Duplicate,
+    Rejected,
+};
+// The exact waypoint detours call these only after the native body has
+// established its marker postcondition. Each function updates the matching
+// periodic baseline only after the bridge accepts the event.
+[[nodiscard]] ExactWaypointCaptureResult CaptureExactWaypointSet(
+    const RE::PlayerCharacter& a_player,
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept;
+[[nodiscard]] ExactWaypointCaptureResult CaptureExactWaypointRemove(
+    const RE::PlayerCharacter& a_player) noexcept;
+// A confirmed inbound native mutation advances only the local repair baseline;
+// it deliberately emits no bridge event and therefore cannot echo remotely.
+void AcknowledgeRemoteWaypointSet(
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept;
+void AcknowledgeRemoteWaypointRemove() noexcept;
 // Records the actual locally observed quest status and stage after an inbound
 // mutation has partially committed. It first tries the event ring and then
 // durably coalesces the latest state in a bounded session-keyed backlog.
@@ -59,14 +96,37 @@ void CancelLockSuppression(LockSuppressionToken a_token) noexcept;
 // polling path. Suppress the next change for that skill so it is not echoed
 // back to the server; the suppression expires if the engine rejects it.
 [[nodiscard]] bool ArmExperienceSuppression(std::uint32_t a_actorValue) noexcept;
+// Called by the verified AddSkillExperience detour after the original engine
+// mutation. It consumes an inbound suppression when present and advances the
+// polling baseline only when the exact event was intentionally suppressed or
+// durably accepted, leaving a rejected local event for polling recovery.
+[[nodiscard]] bool CaptureExactExperience(
+    RE::PlayerCharacter& a_player,
+    std::uint32_t a_actorValue,
+    float a_previousExperience,
+    float a_currentExperience,
+    bool a_remoteApplication) noexcept;
+// Publishes only the observed post-minus-pre health delta from the verified
+// local-player DoDamage hook against a managed remote NPC. This deliberately
+// uses no player target handle and has no acknowledgement shortcut.
+[[nodiscard]] bool PublishTargetedRemoteNpcHealthDelta(
+    std::uint32_t a_targetLocalFormId, float a_delta) noexcept;
 // Observation is keyed only by stable local reference form IDs.  The capture
 // module resolves each ID afresh on the game thread; no native pointer crosses
 // the mapped ABI or survives a lifecycle reset.
 bool StartNpcObservation(std::uint32_t a_localReferenceFormId) noexcept;
 void StopNpcObservation(std::uint32_t a_localReferenceFormId) noexcept;
+[[nodiscard]] bool IsNpcObserved(std::uint32_t a_localReferenceFormId) noexcept;
 // Called by the exact VR Actor::SpeakSound hook after the engine accepts a
 // locally simulated NPC voice line. The mapped client resolves ownership and
 // the canonical server actor ID; no game pointer crosses this boundary.
 bool CaptureDialogueVoice(std::uint32_t a_localActorFormId, const char* a_resourcePath) noexcept;
+// Called after the verified MenuTopicManager::PlayDialogueOption body accepts
+// a local index. The text and opaque baseline identity are captured before
+// that engine call; a successful publication advances the polling baseline
+// without dereferencing the identity after engine mutation.
+bool CaptureExactDialogueChoice(
+    const void* a_baselineDialogue,
+    const char* a_text) noexcept;
 void Reset() noexcept;
 } // namespace SkyrimTogetherVR::GameplayAdapter::LocalGameplayCapture

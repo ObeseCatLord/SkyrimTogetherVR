@@ -11,6 +11,7 @@ struct UpdateEvent;
 struct RequestObjectInventoryChanges;
 struct RequestInventoryChanges;
 struct RequestEquipmentChanges;
+struct RequestActorResync;
 struct DrawWeaponRequest;
 struct PlayerLeaveEvent;
 struct CharacterRemoveEvent;
@@ -37,6 +38,11 @@ public:
     void OnWeaponDrawnRequest(const PacketEvent<DrawWeaponRequest>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
     void OnCharacterRemove(const CharacterRemoveEvent& acEvent) noexcept;
+    void OnObjectDestroy(entt::registry&, entt::entity aEntity) noexcept;
+    void OnActorResyncRequest(const PacketEvent<RequestActorResync>& acMessage) noexcept;
+    // Reserve a protocol-visible inventory mutation identity before changing
+    // canonical inventory. A zero result means the bounded ledger rejected it.
+    [[nodiscard]] uint32_t ReserveInventoryEventId(uint32_t aServerId) noexcept;
 
 private:
     struct EquipmentTransactionLedger
@@ -54,16 +60,22 @@ private:
     [[nodiscard]] EquipmentTransactionLedger* GetOrSeedEquipmentTransaction(
         uint32_t aPlayerId, uint32_t aServerId, uint64_t aClientSessionNonce,
         uint64_t aConnectionGeneration, const Inventory& aAuthoritativeInventory);
+    [[nodiscard]] uint32_t NextEquipmentSnapshotRevision(
+        uint32_t aServerId, uint32_t aKnownRevision = 0) noexcept;
 
     World& m_world;
 
     // Keyed by owner and character entity. Session values make a reconnect a
     // new bounded replay domain.
     std::unordered_map<uint64_t, EquipmentTransactionLedger> m_equipmentTransactions{};
+    std::unordered_map<uint32_t, uint32_t> m_inventoryEventIds{};
+    std::unordered_map<uint32_t, uint32_t> m_equipmentSnapshotRevisions{};
 
     entt::scoped_connection m_inventoryChangeConnection;
     entt::scoped_connection m_equipmentChangeConnection;
     entt::scoped_connection m_drawWeaponConnection;
     entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_characterRemoveConnection;
+    entt::scoped_connection m_objectDestroyConnection;
+    entt::scoped_connection m_actorResyncConnection;
 };

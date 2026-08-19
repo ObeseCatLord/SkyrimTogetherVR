@@ -21,6 +21,7 @@ struct RequestOwnershipTransfer;
 struct CharacterRemoveEvent;
 struct CharacterExteriorCellChangeEvent;
 struct RequestOwnershipClaim;
+struct RequestActorResync;
 struct OwnershipTransferEvent;
 struct MountRequest;
 struct NewPackageRequest;
@@ -52,7 +53,7 @@ protected:
     void OnOwnershipTransferRequest(const PacketEvent<RequestOwnershipTransfer>& acMessage) const noexcept;
     void OnOwnershipTransferEvent(const OwnershipTransferEvent& acEvent) const noexcept;
     void OnOwnershipClaimRequest(const PacketEvent<RequestOwnershipClaim>& acMessage) const noexcept;
-    void OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept;
+    void OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) const noexcept;
     void OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept;
     void OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept;
@@ -64,6 +65,7 @@ protected:
     void OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept;
     void OnDialogueRequest(const PacketEvent<DialogueRequest>& acMessage) const noexcept;
     void OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept;
+    void OnActorResyncRequest(const PacketEvent<RequestActorResync>& acMessage) noexcept;
 
     void CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept;
     [[nodiscard]] bool TransferOwnership(Player* apPlayer, uint32_t acServerId,
@@ -76,6 +78,8 @@ protected:
 
     void ProcessFactionsChanges() const noexcept;
     void ProcessMovementChanges() const noexcept;
+    [[nodiscard]] std::uint64_t NextActorSnapshotRevision(
+        std::uint32_t aServerId, std::uint64_t aKnownRevision) noexcept;
 
 private:
     struct PendingOwnershipGrant
@@ -94,6 +98,7 @@ private:
 
     World& m_world;
     mutable std::unordered_map<std::uint32_t, PendingOwnershipGrant> m_pendingOwnershipGrants{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_actorSnapshotRevisions{};
     mutable std::uint64_t m_nextOwnershipGrantToken{1};
 
     entt::scoped_connection m_updateConnection;
@@ -115,4 +120,5 @@ private:
     entt::scoped_connection m_syncExperienceConnection;
     entt::scoped_connection m_dialogueConnection;
     entt::scoped_connection m_subtitleConnection;
+    entt::scoped_connection m_actorResyncConnection;
 };

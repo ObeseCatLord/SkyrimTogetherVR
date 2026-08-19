@@ -9,6 +9,7 @@
 
 #include <entt/entt.hpp>
 
+#include <VRGameplayBridge.h>
 #include <vr_common/VRGameplayBridge.h>
 
 struct ConnectedEvent;
@@ -123,6 +124,7 @@ private:
     std::uint64_t m_lastStaleCommandCount{};
     std::uint64_t m_lastDroppedEventCount{};
     std::uint64_t m_lastDroppedCommandCount{};
+    SkyrimTogetherVR::GameplayBridgeClient::ActorAuthorityDiagnostics m_lastActorAuthorityDiagnostics{};
     std::string m_lastState{"bootstrap"};
     std::string m_lastReason{"service_registered"};
     double m_statusTimer{1.0};

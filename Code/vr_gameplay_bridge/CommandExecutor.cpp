@@ -26,6 +26,7 @@ std::atomic<std::uint64_t> g_lastLocalActionId{};
 std::atomic<std::uint64_t> g_lastLocalNativeActionId{};
 std::atomic<std::uint64_t> g_lastWorldActionId{};
 std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
+constexpr std::uint32_t kHealthActorValue = 24;
 
 [[nodiscard]] bool IsZero(const std::uint8_t* a_bytes, const std::size_t a_size) noexcept
 {
@@ -77,6 +78,31 @@ std::atomic<std::uint64_t> g_lastProjectileLaunchActionId{};
            a_payload.Reserved0 == 0 && IsZero(a_payload.ReservedTail, sizeof(a_payload.ReservedTail));
 }
 
+// A local-native binding represents an NPC still simulated by this client.
+// Keep the inbound authority aperture to physical health damage and death;
+// all other ActorState mutations must continue to target a remote-avatar
+// handle or the local player.
+[[nodiscard]] bool IsCanonicalLocalNativePhysicalActorState(
+    const GameplayDomain a_domain, const GameplayAction a_action,
+    const GameplayActionPayload& a_payload) noexcept
+{
+    if (a_domain != GameplayDomain::ActorState || a_payload.TargetHandle.Value != 0 ||
+        a_payload.TargetLocalFormId == 0 || a_payload.SecondaryHandle.Value != 0 ||
+        a_payload.LocalFormIdB != 0 || a_payload.LocalFormIdC != 0 ||
+        a_payload.LocalFormIdD != 0 || a_payload.ValueB != 0 ||
+        a_payload.ScalarB != 0.0F || a_payload.ScalarC != 0.0F ||
+        a_payload.ScalarD != 0.0F || a_payload.ActionFlags != 0 ||
+        a_payload.Reserved0 != 0 || !IsZero(a_payload.ReservedTail, sizeof(a_payload.ReservedTail)))
+        return false;
+
+    if (a_action == GameplayAction::ModifyActorValue) {
+        return a_payload.LocalFormIdA == kHealthActorValue && a_payload.ValueA == 0 &&
+               std::isfinite(a_payload.ScalarA) && a_payload.ScalarA < 0.0F;
+    }
+    return a_action == GameplayAction::SetDeathState && a_payload.LocalFormIdA == 0 &&
+           a_payload.ValueA == 1 && a_payload.ScalarA == 0.0F;
+}
+
 void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexcept
 {
     a_header.RejectedCommandCount.fetch_add(1, std::memory_order_relaxed);
@@ -106,9 +132,8 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
     case CommandKind::CreateRemoteAvatar:
     {
         const auto& payload = a_command.Payload.CreateRemoteAvatar;
-        const auto knownFlags = GameplayBridge::UseExistingReference | GameplayBridge::PlayerAvatar;
         if (a_command.Header.Identity.SequenceId != 0 || a_command.Header.Identity.ActionId == 0 ||
-            payload.LocalActorBaseFormId == 0 || (payload.CreateFlags & ~knownFlags) != 0 ||
+            payload.LocalActorBaseFormId == 0 || !GameplayBridge::IsValidRemoteAvatarCreateFlags(payload.CreateFlags) ||
             (((payload.CreateFlags & GameplayBridge::UseExistingReference) != 0) ==
              (payload.LocalReferenceFormId == 0)) ||
             !IsZero(payload.Reserved, sizeof(payload.Reserved)))
@@ -176,9 +201,13 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
     return a_kind == CommandKind::DestroyRemoteAvatar ? RemoteAvatarState::Destroyed : RemoteAvatarState::Created;
 }
 
-void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarCommandResult& a_result) noexcept
+[[nodiscard]] bool PublishAvatarCommandResult(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
+    const CommandRecord& a_command,
+    const AvatarCommandResult& a_result) noexcept
 {
-    PublishRemoteAvatarState(
+    return PublishRemoteAvatarState(
+        ar_reservation,
         a_command.Header.Identity,
         a_result.AvatarHandle,
         StateForAvatarResult(static_cast<CommandKind>(a_command.Header.Kind), a_result.Status),
@@ -189,7 +218,10 @@ void PublishAvatarCommandResult(const CommandRecord& a_command, const AvatarComm
         a_result.Root);
 }
 
-void PublishAnimationCommandResult(const CommandRecord& a_command, const AvatarCommandResult& a_result) noexcept
+[[nodiscard]] bool PublishAnimationCommandResult(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
+    const CommandRecord& a_command,
+    const AvatarCommandResult& a_result) noexcept
 {
     const auto snapshotId = a_result.AnimationSnapshotId != 0 ?
                                 a_result.AnimationSnapshotId :
@@ -197,7 +229,8 @@ void PublishAnimationCommandResult(const CommandRecord& a_command, const AvatarC
     const auto handle = a_result.AvatarHandle.Value != 0 ?
                             a_result.AvatarHandle :
                             a_command.Payload.ApplyRemoteAnimationGraphChunk.AvatarHandle;
-    PublishRemoteAnimationGraphState(
+    return PublishRemoteAnimationGraphState(
+        ar_reservation,
         a_command.Header.Identity,
         handle,
         snapshotId,
@@ -205,10 +238,14 @@ void PublishAnimationCommandResult(const CommandRecord& a_command, const AvatarC
         a_result.Status);
 }
 
-void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCommandResult& a_result) noexcept
+[[nodiscard]] bool PublishSpatialTransferResult(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
+    const CommandRecord& a_command,
+    const AvatarCommandResult& a_result) noexcept
 {
     const auto& payload = a_command.Payload.UpdateRemoteRootTransform;
-    PublishRemoteSpatialTransferState(
+    return PublishRemoteSpatialTransferState(
+        ar_reservation,
         a_command.Header.Identity,
         a_result.AvatarHandle.Value != 0 ? a_result.AvatarHandle : payload.AvatarHandle,
         a_result.SourceCellFormId != 0 ? a_result.SourceCellFormId : a_result.LocalCellFormId,
@@ -318,7 +355,9 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     const bool localNativeOwnedActor = !textChunk && targetHandle.Value == 0 && targetLocalFormId != 0 &&
                                        canonicalEntity &&
                                        ((domain == GameplayDomain::Magic && IsCombatMagicSupportedMagicAction(action)) ||
-                                        (domain == GameplayDomain::Inventory && IsInventoryTransactionAction(action)));
+                                        (domain == GameplayDomain::Inventory && IsInventoryTransactionAction(action)) ||
+                                        IsCanonicalLocalNativePhysicalActorState(
+                                            domain, action, a_command.Payload.ApplyGameplayAction));
     const bool worldInventoryTransaction = !textChunk && targetHandle.Value == 0 && targetLocalFormId != 0 &&
                                            zeroEntity && domain == GameplayDomain::Inventory &&
                                            IsInventoryTransactionAction(action);
@@ -444,7 +483,10 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
     return CommandStatus::Success;
 }
 
-[[nodiscard]] CommandStatus ExecuteCommand(BridgeEndpoint& a_endpoint, const CommandRecord& a_command) noexcept
+[[nodiscard]] CommandStatus ExecuteCommand(
+    BridgeEndpoint& a_endpoint,
+    BridgeEndpoint::CommandResultReservation& ar_resultReservation,
+    const CommandRecord& a_command) noexcept
 {
     auto& header = a_endpoint.Mapping()->Header;
     switch (static_cast<CommandKind>(a_command.Header.Kind)) {
@@ -455,16 +497,19 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
         const auto result = ExecuteAvatarCommand(header, a_command);
         const auto kind = static_cast<CommandKind>(a_command.Header.Kind);
         if (kind == CommandKind::UpdateRemoteRootTransform &&
-            (a_command.Payload.UpdateRemoteRootTransform.UpdateFlags & GameplayBridge::SpatialTransfer) != 0)
-            PublishSpatialTransferResult(a_command, result);
-        PublishAvatarCommandResult(a_command, result);
+            (a_command.Payload.UpdateRemoteRootTransform.UpdateFlags & GameplayBridge::SpatialTransfer) != 0 &&
+            !PublishSpatialTransferResult(ar_resultReservation, a_command, result))
+            a_endpoint.Fault("reserved spatial-transfer result commit failed");
+        if (!PublishAvatarCommandResult(ar_resultReservation, a_command, result))
+            a_endpoint.Fault("reserved avatar result commit failed");
         return result.Status;
     }
     case CommandKind::ApplyRemoteAnimationGraphChunk:
     {
         const auto result = ExecuteAvatarCommand(header, a_command);
-        if (result.Status != CommandStatus::Success || result.AnimationApplied)
-            PublishAnimationCommandResult(a_command, result);
+        if ((result.Status != CommandStatus::Success || result.AnimationApplied) &&
+            !PublishAnimationCommandResult(ar_resultReservation, a_command, result))
+            a_endpoint.Fault("reserved animation result commit failed");
         return result.Status;
     }
     case CommandKind::ApplyGameplayAction:
@@ -485,20 +530,24 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
                                                            a_command.Payload.ApplyGameplayAction.Action);
         const auto targetForm = text ? a_command.Payload.ApplyGameplayTextChunk.TargetLocalFormId :
                                        a_command.Payload.ApplyGameplayAction.TargetLocalFormId;
-        PublishRemoteGameplayActionState(a_command.Header.Identity, handle, domain, action, targetForm, status);
+        if (!PublishRemoteGameplayActionState(
+                ar_resultReservation, a_command.Header.Identity, handle, domain, action, targetForm, status))
+            a_endpoint.Fault("reserved gameplay result commit failed");
         return status;
     }
     case CommandKind::ApplyProjectileLaunch:
     {
         const auto validation = ValidateProjectileLaunchCommand(header, a_command);
         const auto status = validation == CommandStatus::Success ? ApplyProjectileLaunch(a_command) : validation;
-        PublishRemoteGameplayActionState(
+        if (!PublishRemoteGameplayActionState(
+            ar_resultReservation,
             a_command.Header.Identity,
             a_command.Payload.ApplyProjectileLaunch.TargetHandle,
             GameplayDomain::Projectile,
             GameplayAction::LaunchProjectile,
             0,
-            status);
+            status))
+            a_endpoint.Fault("reserved projectile result commit failed");
         return status;
     }
     case CommandKind::StageActorActionGraphChunk:
@@ -510,13 +559,15 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
                                 ActorActionHooks::Execute(a_command) : validation;
         if (static_cast<CommandKind>(a_command.Header.Kind) == CommandKind::ApplyActorAction) {
             const auto& payload = a_command.Payload.ApplyActorAction;
-            PublishRemoteGameplayActionState(
+            if (!PublishRemoteGameplayActionState(
+                ar_resultReservation,
                 a_command.Header.Identity,
                 payload.TargetHandle,
                 GameplayDomain::Animation,
                 GameplayAction::ActorAction,
                 payload.ActorLocalFormId,
-                status);
+                status))
+                a_endpoint.Fault("reserved actor-action result commit failed");
         }
         return status;
     }
@@ -550,7 +601,6 @@ void PublishSpatialTransferResult(const CommandRecord& a_command, const AvatarCo
         VRBodyPoseManager::Reset();
         VRInteractionManager::Reset();
         ActorWorldManager::Reset();
-        a_endpoint.DiscardCommandResultEvents();
         std::uint64_t expected = a_command.Header.Identity.LifecycleEpoch;
         if (!header.LifecycleEpoch.compare_exchange_strong(expected, expected + 1, std::memory_order_acq_rel, std::memory_order_acquire))
             return CommandStatus::StaleEpoch;
@@ -606,26 +656,47 @@ CommandPumpResult ProcessCommands(
     static_cast<void>(endpoint.FlushCommandResultEvents());
     const auto limit = a_maxCommands > kDefaultCommandRingCapacity ? kDefaultCommandRingCapacity : a_maxCommands;
     for (std::uint32_t index = 0; index < limit; ++index) {
-        // A spatial transfer emits its spatial outcome and the root-transform
-        // outcome, regardless of success. Reserve both before engine work.
-        // Reserve enough fixed backlog capacity before any engine mutation.
-        if (!endpoint.CanQueueCommandResultEvents(2))
+        const auto endpointResult = [&]() noexcept {
+            const auto state = static_cast<EndpointState>(
+                mapping->Header.State.load(std::memory_order_acquire));
+            return state == EndpointState::Faulted ? CommandPumpResult::Faulted : CommandPumpResult::Inactive;
+        };
+        if (!endpoint.IsOperational())
+            return endpointResult();
+
+        // The command ring has no non-destructive peek. Reserving the maximum
+        // two required outcomes before each pop makes spatial transfer atomic
+        // and guarantees that no popped command can mutate without result
+        // capacity. Unused slots are released by the reservation destructor.
+        BridgeEndpoint::CommandResultReservation resultReservation;
+        if (!endpoint.TryReserveCommandResultEvents(2, resultReservation)) {
+            if (!endpoint.IsOperational())
+                return endpointResult();
             break;
+        }
+        if (!endpoint.IsOperational())
+            return endpointResult();
+
         CommandRecord command{};
         if (!TryPop(commands, command))
             break;
+        if (!endpoint.IsOperational())
+            return endpointResult();
 
-        const auto status = ExecuteCommand(endpoint, command);
+        const auto status = ExecuteCommand(endpoint, resultReservation, command);
         if (IsSuccessfulCommandResult(status, command))
             mapping->Header.ExecutedCommandCount.fetch_add(1, std::memory_order_relaxed);
         else
             CountRejected(mapping->Header, status);
+        if (!endpoint.IsOperational())
+            return endpointResult();
     }
 
     AvatarManager::Get().ProcessPendingAnimationSnapshots();
     VRBodyPoseManager::ProcessPending();
     VRInteractionManager::ProcessPeriodic();
     ActorWorldManager::ProcessPeriodic();
+    AvatarManager::Get().ProcessAuthoritativeRemoteActors();
     PublishCurrentLocalPlayerState();
     PublishCurrentLocalAnimationState();
     LocalGameplayCapture::Initialize();

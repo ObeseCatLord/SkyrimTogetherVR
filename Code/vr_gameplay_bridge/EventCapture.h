@@ -10,7 +10,8 @@ void PublishPluginLoaded() noexcept;
 void PublishEpochRetired(std::uint32_t a_reason) noexcept;
 void PublishCurrentLocalPlayerState() noexcept;
 void PublishCurrentLocalAnimationState() noexcept;
-void PublishRemoteAvatarState(
+[[nodiscard]] bool PublishRemoteAvatarState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     AdapterHandle a_avatarHandle,
     RemoteAvatarState a_state,
@@ -19,13 +20,15 @@ void PublishRemoteAvatarState(
     std::uint32_t a_localWorldspaceFormId,
     std::uint32_t a_localActorReferenceFormId,
     const RootTransform& a_root) noexcept;
-void PublishRemoteAnimationGraphState(
+[[nodiscard]] bool PublishRemoteAnimationGraphState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     AdapterHandle a_avatarHandle,
     std::uint64_t a_snapshotId,
     RemoteAnimationGraphState a_state,
     CommandStatus a_status) noexcept;
-void PublishRemoteSpatialTransferState(
+[[nodiscard]] bool PublishRemoteSpatialTransferState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     AdapterHandle a_avatarHandle,
     std::uint32_t a_sourceCellFormId,
@@ -33,7 +36,8 @@ void PublishRemoteSpatialTransferState(
     std::uint32_t a_targetCellFormId,
     std::uint32_t a_targetWorldspaceFormId,
     CommandStatus a_status) noexcept;
-void PublishRemoteGameplayActionState(
+[[nodiscard]] bool PublishRemoteGameplayActionState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     AdapterHandle a_targetHandle,
     GameplayDomain a_domain,

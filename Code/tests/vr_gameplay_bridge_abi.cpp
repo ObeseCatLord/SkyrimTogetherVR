@@ -83,8 +83,8 @@ std::size_t CountOccurrences(const std::string& a_text, const std::string& a_nee
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 22);
-    REQUIRE(kCapabilityRevision == 33);
+    REQUIRE(kMappingAbiVersion == 23);
+    REQUIRE(kCapabilityRevision == 34);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
     REQUIRE(kSkseVrInterfaceRuntimeVersion != kSkyrimVrRuntimeVersion);
@@ -123,12 +123,14 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(offsetof(ActorActionPayload, TextId) == 0x30);
     REQUIRE(offsetof(ActorActionGraphChunkPayload, Values) == 0x2C);
     REQUIRE(kProjectileLaunchKnownFlags == 0x3F);
-    REQUIRE(sizeof(MappingHeader) == 0x90);
+    REQUIRE(sizeof(MappingHeader) == 0x100);
+    REQUIRE(offsetof(MappingHeader, AuthoritySuppressedDamageCount) == 0x90);
+    REQUIRE(offsetof(MappingHeader, AuthorityRegistryInconsistencyCount) == 0xF8);
     REQUIRE(sizeof(EventRing) == 0x4C020);
     REQUIRE(sizeof(CommandRing) == 0x4C020);
-    REQUIRE(sizeof(GameplayBridgeMapping) == 0x980D0);
-    REQUIRE(offsetof(GameplayBridgeMapping, Events) == 0x90);
-    REQUIRE(offsetof(GameplayBridgeMapping, Commands) == 0x4C0B0);
+    REQUIRE(sizeof(GameplayBridgeMapping) == 0x98140);
+    REQUIRE(offsetof(GameplayBridgeMapping, Events) == 0x100);
+    REQUIRE(offsetof(GameplayBridgeMapping, Commands) == 0x4C120);
     REQUIRE(HasCapability(kInitialCapabilities, Capability::Lifecycle));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalPlayerDiscovery));
     REQUIRE(HasCapability(kInitialCapabilities, Capability::LocalPlayerSnapshot));
@@ -267,7 +269,13 @@ TEST_CASE("VR quest synchronization uses synchronous native mutation", "[skyrim-
     REQUIRE_FALSE(questNativeAccess.empty());
     REQUIRE(manager.find("QuestNativeAccess::SetStage(a_quest, a_stage)") != std::string::npos);
     REQUIRE(manager.find("a_quest.SetStage(a_stage)") == std::string::npos);
-    REQUIRE(questNativeAccess.find("REL::VariantID(kSetStageSeId, kSetStageAeId, kSetStageVrRva)") != std::string::npos);
+    REQUIRE(questNativeAccess.find("REL::Offset(kSetStageVrRva)") != std::string::npos);
+    REQUIRE(questNativeAccess.find("bool ValidateTarget() noexcept") != std::string::npos);
+    REQUIRE(questNativeAccess.find("!REL::Module::IsVR()") != std::string::npos);
+    REQUIRE(questNativeAccess.find("kExpectedSkyrimVrRuntime") != std::string::npos);
+    REQUIRE(questNativeAccess.find("kSetStageVrPrologue") != std::string::npos);
+    REQUIRE(questNativeAccess.find("NoThrow::FailClosed<bool>") != std::string::npos);
+    REQUIRE(questNativeAccess.find("return ValidateTarget() && setStage") != std::string::npos);
     REQUIRE(questNativeAccess.find("using SetStageFn = bool(__fastcall*)(RE::TESQuest*, std::uint16_t);") != std::string::npos);
     REQUIRE(manager.find("ArmQuestStageSuppression") != std::string::npos);
     REQUIRE(manager.find("ArmQuestStartStopSuppression") != std::string::npos);
@@ -327,7 +335,7 @@ TEST_CASE("VR root-transform results are distinct from avatar lifecycle", "[skyr
     const auto diagnostics = ReadRepositorySource("Code/client/Services/Generic/VRGameplayDiagnosticsService.cpp");
     REQUIRE_FALSE(executor.empty());
     REQUIRE_FALSE(diagnostics.empty());
-    REQUIRE(executor.find("PublishAvatarCommandResult(a_command, result);") != std::string::npos);
+    REQUIRE(executor.find("PublishAvatarCommandResult(ar_resultReservation, a_command, result)") != std::string::npos);
     REQUIRE(diagnostics.find("record.Header.Identity.SequenceId == 0") != std::string::npos);
     const auto resultHandler = diagnostics.find("void VRGameplayDiagnosticsService::OnGameplayResult");
     const auto refreshIdentity = diagnostics.find("void VRGameplayDiagnosticsService::RefreshSessionIdentity", resultHandler);
@@ -704,6 +712,203 @@ TEST_CASE("VR gameplay bridge ring batch publication is all-or-nothing", "[skyri
         REQUIRE(TryPop(ring, output));
         REQUIRE(output.Header.Identity.SequenceId == sequence);
     }
+}
+
+TEST_CASE("VR gameplay bridge deferred backlog preserves non-coalescible overflow", "[skyrim-vr][gameplay-bridge]")
+{
+    constexpr std::size_t kRingCapacity = 4;
+    constexpr std::uint64_t kRecordCount = 12;
+    static_assert(kRecordCount > kRingCapacity);
+    BoundedMpmcRing<EventRecord, kRingCapacity> ring{};
+    BoundedRecordBacklog<EventRecord, 16> backlog{};
+    InitializeRing(ring);
+
+    for (std::uint64_t sequence{}; sequence < kRecordCount; ++sequence) {
+        auto event = MakeEvent(sequence);
+        event.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalActorActionMetadata);
+        event.Header.Identity.ActionId = sequence + 1;
+        REQUIRE(backlog.TryAppend(event));
+    }
+
+    std::array<std::uint32_t, kRecordCount> seen{};
+    EventRecord output{};
+    while (!backlog.Empty()) {
+        static_cast<void>(backlog.FlushTo(ring));
+        while (TryPop(ring, output)) {
+            REQUIRE(output.Header.Identity.SequenceId < kRecordCount);
+            ++seen[output.Header.Identity.SequenceId];
+        }
+    }
+    while (TryPop(ring, output)) {
+        REQUIRE(output.Header.Identity.SequenceId < kRecordCount);
+        ++seen[output.Header.Identity.SequenceId];
+    }
+
+    REQUIRE(ring.DroppedPushCount.load() == 0);
+    for (const auto count : seen)
+        REQUIRE(count == 1);
+}
+
+TEST_CASE("VR command results retain exact FIFO under mapped-ring pressure", "[skyrim-vr][gameplay-bridge]")
+{
+    BoundedMpmcRing<EventRecord, 2> ring{};
+    BoundedReservedRecordQueue<EventRecord, 4> results{};
+    InitializeRing(ring);
+
+    REQUIRE(TryPush(ring, MakeEvent(100)));
+    REQUIRE(TryPush(ring, MakeEvent(101)));
+    REQUIRE(results.TryReserve(2));
+    REQUIRE(results.TryCommitReserved(MakeEvent(10)));
+    REQUIRE(results.TryCommitReserved(MakeEvent(11)));
+    REQUIRE(results.Reserved() == 0);
+    REQUIRE(results.Size() == 2);
+
+    REQUIRE_FALSE(results.FlushTo(ring));
+    REQUIRE(results.Size() == 2);
+    REQUIRE(ring.DroppedPushCount.load() == 0);
+
+    EventRecord event{};
+    REQUIRE(TryPop(ring, event));
+    REQUIRE(event.Header.Identity.SequenceId == 100);
+    REQUIRE(TryPop(ring, event));
+    REQUIRE(event.Header.Identity.SequenceId == 101);
+    REQUIRE(results.FlushTo(ring));
+    REQUIRE(results.Empty());
+    REQUIRE(TryPop(ring, event));
+    REQUIRE(event.Header.Identity.SequenceId == 10);
+    REQUIRE(TryPop(ring, event));
+    REQUIRE(event.Header.Identity.SequenceId == 11);
+    REQUIRE(ring.DroppedPushCount.load() == 0);
+}
+
+TEST_CASE("VR command result reservation is atomic before mutation", "[skyrim-vr][gameplay-bridge]")
+{
+    BoundedReservedRecordQueue<EventRecord, 3> results{};
+    REQUIRE(results.TryReserve(2));
+    REQUIRE(results.TryCommitReserved(MakeEvent(1)));
+    REQUIRE(results.TryCommitReserved(MakeEvent(2)));
+    REQUIRE(results.FreeCapacity() == 1);
+
+    bool mutated{};
+    if (results.TryReserve(2))
+        mutated = true;
+    REQUIRE_FALSE(mutated);
+    REQUIRE(results.Size() == 2);
+    REQUIRE(results.Reserved() == 0);
+}
+
+TEST_CASE("VR event pressure diagnostics distinguish local backlog overflow", "[skyrim-vr][gameplay-bridge]")
+{
+    BoundedMpmcRing<EventRecord, 2> ring{};
+    BoundedRecordBacklog<EventRecord, 2> backlog{};
+    InitializeRing(ring);
+    REQUIRE(backlog.TryAppend(MakeEvent(1)));
+    REQUIRE(backlog.TryAppend(MakeEvent(2)));
+    REQUIRE_FALSE(backlog.TryAppend(MakeEvent(3)));
+    REQUIRE(ring.DroppedPushCount.load() == 0);
+
+    const auto endpoint = ReadRepositorySource("Code/vr_gameplay_bridge/BridgeEndpoint.cpp");
+    const auto overflow = endpoint.find("_pendingEventBacklogOverflowCount.fetch_add");
+    const auto diagnostic = endpoint.find("std::uint64_t BridgeEndpoint::PendingEventBacklogOverflowCount()", overflow);
+    REQUIRE(overflow != std::string::npos);
+    REQUIRE(diagnostic != std::string::npos);
+    REQUIRE(endpoint.find("return _pendingEventBacklogOverflowCount.load(std::memory_order_relaxed);", diagnostic) != std::string::npos);
+    REQUIRE(endpoint.find("DroppedPushCount.fetch_add") == std::string::npos);
+}
+
+TEST_CASE("VR command pump gates mutation on reservations and endpoint health", "[skyrim-vr][gameplay-bridge]")
+{
+    REQUIRE(IsOperationalEndpointState(EndpointState::Ready));
+    REQUIRE_FALSE(IsOperationalEndpointState(EndpointState::Faulted));
+
+    std::array states{EndpointState::Ready, EndpointState::Faulted, EndpointState::Ready};
+    std::size_t mutations{};
+    for (const auto state : states) {
+        if (!IsOperationalEndpointState(state))
+            break;
+        ++mutations;
+    }
+    REQUIRE(mutations == 1);
+
+    const auto executor = ReadRepositorySource("Code/vr_gameplay_bridge/CommandExecutor.cpp");
+    const auto pump = executor.find("CommandPumpResult ProcessCommands(");
+    const auto reserve = executor.find("TryReserveCommandResultEvents(2, resultReservation)", pump);
+    const auto prePopHealth = executor.find("if (!endpoint.IsOperational())", reserve);
+    const auto pop = executor.find("TryPop(commands, command)", reserve);
+    const auto postPopHealth = executor.find("if (!endpoint.IsOperational())", pop);
+    const auto execute = executor.find("ExecuteCommand(endpoint, resultReservation, command)", postPopHealth);
+    const auto postExecuteHealth = executor.find("if (!endpoint.IsOperational())", execute);
+    REQUIRE(pump != std::string::npos);
+    REQUIRE(reserve != std::string::npos);
+    REQUIRE(prePopHealth != std::string::npos);
+    REQUIRE(pop != std::string::npos);
+    REQUIRE(postPopHealth != std::string::npos);
+    REQUIRE(execute != std::string::npos);
+    REQUIRE(postExecuteHealth != std::string::npos);
+    REQUIRE(reserve < prePopHealth);
+    REQUIRE(prePopHealth < pop);
+    REQUIRE(pop < postPopHealth);
+    REQUIRE(postPopHealth < execute);
+    REQUIRE(execute < postExecuteHealth);
+    REQUIRE(executor.find("DiscardCommandResultEvents") == std::string::npos);
+}
+
+TEST_CASE("VR gameplay bridge loss attribution separates pre-ready and retired work", "[skyrim-vr][gameplay-bridge]")
+{
+    const SessionIdentitySnapshot session{0x1122334455667788ull, 7};
+    BridgeIdentity current{};
+    current.ServerInstanceNonce = session.ServerInstanceNonce;
+    current.ConnectionGeneration = session.ConnectionGeneration;
+    current.LifecycleEpoch = 9;
+
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::Current);
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Prepared, session, 9, current) == WorkAttribution::PreReady);
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, {}, 9, current) == WorkAttribution::PreReady);
+    current = {};
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::Current);
+    current.ServerInstanceNonce = session.ServerInstanceNonce;
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::Current);
+    current.ConnectionGeneration = session.ConnectionGeneration;
+    current.LifecycleEpoch = 10;
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::Current);
+    current.ServerInstanceNonce ^= 1;
+    current.LifecycleEpoch = 9;
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::Current);
+    current.ServerInstanceNonce = session.ServerInstanceNonce;
+    current.LifecycleEpoch = 8;
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::LifecycleRetired);
+    current.ConnectionGeneration = session.ConnectionGeneration - 1;
+    current.LifecycleEpoch = 9;
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Ready, session, 9, current) == WorkAttribution::LifecycleRetired);
+    REQUIRE(ClassifyWorkAttribution(EndpointState::Retired, session, 9, current) == WorkAttribution::LifecycleRetired);
+
+    const auto client = ReadRepositorySource("Code/client/VRGameplayBridge.cpp");
+    const auto discardRecorder = client.find("void RecordDiscardedEvent(");
+    const auto currentFailure = client.find("RecordDiscardedEvent(WorkAttribution::Current);", discardRecorder);
+    const auto otherIncrement = client.find("s_discardedEventOtherCount.fetch_add", discardRecorder);
+    REQUIRE(discardRecorder != std::string::npos);
+    REQUIRE(currentFailure != std::string::npos);
+    REQUIRE(otherIncrement != std::string::npos);
+    REQUIRE(otherIncrement < currentFailure);
+
+    REQUIRE(ReconciledAttributionTotal(3, 4, 5) == 12);
+    REQUIRE(AreAttributionCountersReconciled(12, 3, 4, 5));
+    REQUIRE_FALSE(AreAttributionCountersReconciled(12, 3, 4, 4));
+}
+
+TEST_CASE("VR avatar status emits reconciled bridge loss attribution", "[skyrim-vr][gameplay-bridge]")
+{
+    const auto source = ReadRepositorySource("Code/client/Services/Generic/VRAvatarService.cpp");
+    REQUIRE_FALSE(source.empty());
+    REQUIRE(source.find("bridge.discardedEvents=") != std::string::npos);
+    REQUIRE(source.find("bridge.discardedEvents.preReady=") != std::string::npos);
+    REQUIRE(source.find("bridge.discardedEvents.lifecycleRetired=") != std::string::npos);
+    REQUIRE(source.find("bridge.discardedEvents.other=") != std::string::npos);
+    REQUIRE(source.find("bridge.rejectedSubmissions=") != std::string::npos);
+    REQUIRE(source.find("bridge.rejectedSubmissions.preReady=") != std::string::npos);
+    REQUIRE(source.find("bridge.rejectedSubmissions.lifecycleRetired=") != std::string::npos);
+    REQUIRE(source.find("bridge.rejectedSubmissions.other=") != std::string::npos);
+    REQUIRE(source.find("bridge.eventRingDroppedPushes=") != std::string::npos);
 }
 
 TEST_CASE("VR gameplay bridge ring retains each MPMC record once", "[skyrim-vr][gameplay-bridge]")

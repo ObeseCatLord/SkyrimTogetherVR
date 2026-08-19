@@ -17,7 +17,7 @@ struct NotifyProjectileLaunch final : ServerMessage
 
     bool operator==(const NotifyProjectileLaunch& acRhs) const noexcept
     {
-        return ShooterID == acRhs.ShooterID && OriginX == acRhs.OriginX && OriginY == acRhs.OriginY &&
+        return ShooterID == acRhs.ShooterID && EventId == acRhs.EventId && OriginX == acRhs.OriginX && OriginY == acRhs.OriginY &&
                OriginZ == acRhs.OriginZ && ProjectileBaseID == acRhs.ProjectileBaseID && WeaponID == acRhs.WeaponID &&
                AmmoID == acRhs.AmmoID && ZAngle == acRhs.ZAngle && XAngle == acRhs.XAngle && YAngle == acRhs.YAngle &&
                ParentCellID == acRhs.ParentCellID && SpellID == acRhs.SpellID && CastingSource == acRhs.CastingSource &&
@@ -28,6 +28,7 @@ struct NotifyProjectileLaunch final : ServerMessage
     }
 
     uint32_t ShooterID{};
+    uint32_t EventId{};
     float OriginX{};
     float OriginY{};
     float OriginZ{};

@@ -1,7 +1,12 @@
 #include "LocalGameplayCapture.h"
 
+#include "ActorAuthorityHooks.h"
 #include "BridgeEndpoint.h"
 #include "AnimationGraphDescriptors.h"
+#include "DropHooks.h"
+#include "ProgressionHooks.h"
+#include "WaypointHooks.h"
+#include "vr_dialogue_hook_policy.h"
 
 #include <algorithm>
 #include <array>
@@ -208,6 +213,7 @@ struct Snapshot
     bool WeaponDrawn{};
     bool WeaponDrawnCaptured{};
     std::uint32_t MountFormId{};
+    bool MountCaptured{};
     std::uint32_t PackageFormId{};
     std::array<std::uint32_t, kEquipmentSlotCount> EquippedForms{};
     std::vector<WornEquipmentEntry> WornEquipment{};
@@ -835,6 +841,16 @@ void ClearLockSuppressions() noexcept
            HasCapability(endpoint.Mapping()->Header.ActiveCapabilities.load(std::memory_order_acquire), CapabilityForDomain(a_domain));
 }
 
+[[nodiscard]] bool CanCaptureExactDialogueChoice() noexcept
+{
+    if (!CanPublish(GameplayDomain::Dialogue))
+        return false;
+
+    const auto identity = BridgeEndpoint::Get().SnapshotIdentity(0);
+    return identity.ServerInstanceNonce != 0 && identity.ConnectionGeneration != 0 &&
+           identity.LifecycleEpoch != 0;
+}
+
 void RecordPeriodicPublication(const bool a_accepted) noexcept
 {
     if (g_periodicCaptureActive && !g_snapshot.Valid && !a_accepted)
@@ -861,8 +877,16 @@ void RecordPeriodicPublication(const bool a_accepted) noexcept
 {
     const std::scoped_lock lock{g_captureLock};
     const bool objectSnapshot = a_domain == GameplayDomain::Object && IsObjectSnapshotAction(a_action);
+    const ActorAuthorityHookPolicy::TargetedRemoteNpcHealthDelta healthDelta{
+        a_payload.TargetHandle.Value, a_payload.TargetLocalFormId, a_payload.LocalFormIdA, a_payload.ScalarA};
+    const bool targetedRemoteNpcHealthDelta =
+        a_domain == GameplayDomain::ActorState && a_action == GameplayAction::ModifyActorValue &&
+        ActorAuthorityHookPolicy::IsValidTargetedRemoteNpcHealthDelta(healthDelta) &&
+        a_payload.LocalFormIdB == 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
+        a_payload.ValueA == 0 && a_payload.ValueB == 0 && a_payload.ScalarB == 0.0F &&
+        a_payload.ScalarC == 0.0F && a_payload.ScalarD == 0.0F && a_payload.ActionFlags == 0;
     if (!IsActionInDomain(a_domain, a_action) || !CanPublish(a_domain) ||
-        ((!objectSnapshot && a_payload.TargetHandle.Value != kLocalPlayerHandle.Value) ||
+        ((!objectSnapshot && !targetedRemoteNpcHealthDelta && a_payload.TargetHandle.Value != kLocalPlayerHandle.Value) ||
          (objectSnapshot && (a_payload.TargetHandle.Value != 0 || a_payload.TargetLocalFormId == 0))) ||
         a_payload.SecondaryHandle.Value != 0 ||
         !IsFinite(a_payload.ScalarA) || !IsFinite(a_payload.ScalarB) || !IsFinite(a_payload.ScalarC) || !IsFinite(a_payload.ScalarD))
@@ -883,6 +907,31 @@ void RecordPeriodicPublication(const bool a_accepted) noexcept
     const auto accepted = endpoint.TryPushEvent(record);
     RecordPeriodicPublication(accepted);
     return accepted;
+}
+
+[[nodiscard]] bool PublishTargetedRemoteNpcHealthDeltaImpl(
+    const std::uint32_t a_targetLocalFormId, const float a_delta) noexcept
+{
+    try
+    {
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_targetLocalFormId);
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const ActorAuthorityHookPolicy::TargetedRemoteNpcHealthDelta healthDelta{
+            0, a_targetLocalFormId, ActorAuthorityHookPolicy::kHealthActorValue, a_delta};
+        if (!actor || actor == player ||
+            !ActorAuthorityHookPolicy::IsValidTargetedRemoteNpcHealthDelta(healthDelta))
+            return false;
+
+        GameplayActionPayload payload{};
+        payload.TargetLocalFormId = a_targetLocalFormId;
+        payload.LocalFormIdA = ActorAuthorityHookPolicy::kHealthActorValue;
+        payload.ScalarA = a_delta;
+        return Publish(GameplayDomain::ActorState, GameplayAction::ModifyActorValue, payload);
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 [[nodiscard]] bool MatchesCurrentQuestReconciliationSession(
@@ -1576,13 +1625,14 @@ catch (...)
     const auto actionId = g_nextActionId.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto textId = g_nextTextId.fetch_add(1, std::memory_order_relaxed) + 1;
     auto& endpoint = BridgeEndpoint::Get();
+    const auto identity = endpoint.SnapshotIdentity(0);
     std::vector<EventRecord> records;
     records.reserve(chunkCount);
     for (std::uint16_t index = 0; index < chunkCount; ++index) {
         auto& record = records.emplace_back();
         record.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalGameplayTextChunk);
         record.Header.PayloadSize = kFixedPayloadBytes;
-        record.Header.Identity = endpoint.SnapshotIdentity(0);
+        record.Header.Identity = identity;
         record.Header.Identity.ActionId = actionId;
         auto& payload = record.Payload.LocalGameplayTextChunk;
         payload.TargetHandle = a_target.TargetHandle;
@@ -1613,13 +1663,14 @@ catch (...)
     }
 
     auto& endpoint = BridgeEndpoint::Get();
+    const auto identity = endpoint.SnapshotIdentity(0);
     std::vector<EventRecord> records;
     records.reserve(1 + a_tints.size() * 7);
     const auto appendAction = [&](const GameplayAction a_action, GameplayActionPayload a_payload) {
         auto& record = records.emplace_back();
         record.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalGameplayAction);
         record.Header.PayloadSize = kFixedPayloadBytes;
-        record.Header.Identity = endpoint.SnapshotIdentity(0);
+        record.Header.Identity = identity;
         record.Header.Identity.ActionId = g_nextActionId.fetch_add(1, std::memory_order_relaxed) + 1;
         a_payload.TargetHandle = kLocalPlayerHandle;
         a_payload.TargetLocalFormId = a_player.GetFormID();
@@ -1647,7 +1698,7 @@ catch (...)
             auto& record = records.emplace_back();
             record.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalGameplayTextChunk);
             record.Header.PayloadSize = kFixedPayloadBytes;
-            record.Header.Identity = endpoint.SnapshotIdentity(0);
+            record.Header.Identity = identity;
             record.Header.Identity.ActionId = actionId;
             auto& text = record.Payload.LocalGameplayTextChunk;
             text.TargetHandle = kLocalPlayerHandle;
@@ -1731,13 +1782,14 @@ catch (...)
 
     const auto actionId = g_nextActionId.fetch_add(1, std::memory_order_relaxed) + 1;
     auto& endpoint = BridgeEndpoint::Get();
+    const auto identity = endpoint.SnapshotIdentity(0);
     std::vector<EventRecord> records;
     records.reserve(ac_entries.size() + 2);
     const auto append = [&](const GameplayAction a_action, const GameplayActionPayload& ac_payload) {
         auto& record = records.emplace_back();
         record.Header.Kind = static_cast<std::uint16_t>(EventKind::LocalGameplayAction);
         record.Header.PayloadSize = kFixedPayloadBytes;
-        record.Header.Identity = endpoint.SnapshotIdentity(0);
+        record.Header.Identity = identity;
         record.Header.Identity.ActionId = actionId;
         record.Payload.LocalGameplayAction = ac_payload;
         record.Payload.LocalGameplayAction.Domain = static_cast<std::uint16_t>(GameplayDomain::Equipment);
@@ -2169,7 +2221,7 @@ catch (...)
     if (tag == "ChairExit")
         return 19;
     if (tag == "HorseEnter")
-        return 20;
+        return MountCapturePolicy::kHorseEnterAnimationEventId;
     if (tag == "HorseExit")
         return 21;
     if (tag == "weaponDraw")
@@ -2194,36 +2246,24 @@ void OnAnimationEvent(const RE::BSAnimationGraphEvent& a_event) noexcept
             return;
         payload.LocalFormIdA = eventId;
         Publish(GameplayDomain::Animation, GameplayAction::AnimationEvent, payload);
-    } catch (...) {
-    }
-}
-
-void OnActivateEvent(const RE::TESActivateEvent& a_event) noexcept
-{
-    try {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* activated = a_event.objectActivated.get();
-        if (!player || a_event.actionRef.get() != player || !activated || !IsValidFormId(activated->GetFormID()))
+        if (eventId != MountCapturePolicy::kHorseEnterAnimationEventId)
             return;
 
-        GameplayActionPayload payload{};
-        if (!PreparePlayerPayload(payload, *player))
+        // The mounted actor is normally available by the HorseEnter graph
+        // event. If it is not visible yet, periodic capture remains the
+        // bounded repair path rather than retaining a native pointer.
+        RE::NiPointer<RE::Actor> mount;
+        if (!player->GetMount(mount) || !mount || !IsValidFormId(mount->GetFormID()))
             return;
-        auto* base = activated->GetBaseObject();
-        auto* cell = activated->GetParentCell();
-        auto* worldspace = activated->GetWorldspace();
-        if (!base || !cell || !IsValidFormId(cell->GetFormID()))
+        const auto mountFormId = mount->GetFormID();
+        const bool matchesBaseline = g_snapshot.MountCaptured && g_snapshot.MountFormId == mountFormId;
+        if (!MountCapturePolicy::ShouldPublishEventAssistedMount(
+                eventId, true, g_snapshot.MountCaptured, matchesBaseline))
             return;
-        payload.LocalFormIdA = activated->GetFormID();
-        payload.LocalFormIdB = cell->GetFormID();
-        payload.LocalFormIdC = worldspace ? worldspace->GetFormID() : 0;
-        payload.ValueA = static_cast<std::int32_t>(base->GetFormType());
-        payload.ValueB = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(activated));
-        const auto position = activated->GetPosition();
-        payload.ScalarA = position.x;
-        payload.ScalarB = position.y;
-        payload.ScalarC = position.z;
-        Publish(GameplayDomain::Object, GameplayAction::Activate, payload);
+        if (PublishMount(*player, mountFormId)) {
+            g_snapshot.MountFormId = mountFormId;
+            g_snapshot.MountCaptured = true;
+        }
     } catch (...) {
     }
 }
@@ -2266,7 +2306,16 @@ void RefreshContainerInventoryBaselineFromOwner(const std::uint32_t a_ownerFormI
 void OnContainerChangedEvent(const RE::TESContainerChangedEvent& a_event) noexcept
 {
     try {
-        if (IsRemoteInventorySuppressed())
+        const auto dropDisposition = DropHooks::ConsumeContainerChangedEvent(
+            {
+                a_event.oldContainer,
+                a_event.newContainer,
+                a_event.baseObj,
+                a_event.uniqueID,
+                a_event.itemCount,
+            },
+            IsRemoteInventorySuppressed());
+        if (dropDisposition == DropHookPolicy::ContainerChangedDisposition::RemoteSuppressed)
             return;
         if (a_event.itemCount <= 0 || a_event.itemCount > kMaximumCapturedInventoryCount ||
             !IsValidFormId(a_event.baseObj) ||
@@ -2334,9 +2383,10 @@ void OnContainerChangedEvent(const RE::TESContainerChangedEvent& a_event) noexce
         if (a_event.oldContainer != 0 && !oldNpcOwner) {
             auto removal = stack;
             removal.Count = -removal.Count;
-            const auto isActorDrop = a_event.newContainer == 0 &&
-                RE::TESForm::LookupByID<RE::Actor>(a_event.oldContainer) != nullptr;
-            publishForOwner(a_event.oldContainer, removal, isActorDrop);
+            publishForOwner(
+                a_event.oldContainer,
+                removal,
+                DropHookPolicy::ShouldPublishInventoryDrop(dropDisposition));
         }
         if (a_event.newContainer != 0 && !newNpcOwner)
             publishForOwner(a_event.newContainer, stack, false);
@@ -2478,7 +2528,6 @@ public:
 };
 
 LocalSink<RE::BSAnimationGraphEvent, OnAnimationEvent> g_animationSink;
-LocalSink<RE::TESActivateEvent, OnActivateEvent> g_activateSink;
 LocalSink<RE::TESContainerChangedEvent, OnContainerChangedEvent> g_containerChangedSink;
 LocalSink<RE::TESEquipEvent, OnEquipEvent> g_equipSink;
 LocalSink<RE::TESLockChangedEvent, OnLockChangedEvent> g_lockChangedSink;
@@ -2529,7 +2578,6 @@ void RetainAnimationSinkOwnershipUnverified() noexcept
         g_scriptSinkRegistration = {};
     }
 
-    holder->AddEventSink(&g_activateSink);
     holder->AddEventSink(&g_containerChangedSink);
     holder->AddEventSink(&g_equipSink);
     holder->AddEventSink(&g_lockChangedSink);
@@ -2949,15 +2997,21 @@ void CaptureActorState(RE::PlayerCharacter& a_player, Snapshot& a_current) noexc
     auto mountFormId = RE::FormID{};
     if (a_player.GetMount(mount) && mount && IsValidFormId(mount->GetFormID()))
         mountFormId = mount->GetFormID();
-    // Zero is an internal cancellation signal for a pending local mount. The
-    // mapped client never serializes it because the original wire protocol has
-    // no dismount message.
-    if ((!g_snapshot.Valid && mountFormId != 0) ||
-        (g_snapshot.Valid && g_snapshot.MountFormId != mountFormId)) {
-        if (PublishMount(a_player, mountFormId))
+    // A zero mount is an internal cancellation signal. The original wire has
+    // no dismount action, so advance only the local baseline and preserve the
+    // independently captured HorseExit animation event.
+    if (mountFormId == 0) {
+        a_current.MountFormId = 0;
+        a_current.MountCaptured = g_snapshot.MountCaptured;
+    } else if ((!g_snapshot.MountCaptured && mountFormId != 0) ||
+        (g_snapshot.MountCaptured && g_snapshot.MountFormId != mountFormId)) {
+        if (PublishMount(a_player, mountFormId)) {
             a_current.MountFormId = mountFormId;
+            a_current.MountCaptured = true;
+        }
     } else {
         a_current.MountFormId = mountFormId;
+        a_current.MountCaptured = g_snapshot.MountCaptured;
     }
 
     auto packageFormId = RE::FormID{};
@@ -3403,6 +3457,89 @@ void CaptureWaypoint(const RE::PlayerCharacter& a_player) noexcept
     }
 }
 
+ExactWaypointCaptureResult CaptureExactWaypointSetImpl(
+    const RE::PlayerCharacter& a_player,
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        const auto worldspaceFormId = a_worldspace.GetFormID();
+        if (!IsValidFormId(worldspaceFormId) || !IsFinite(a_position.x) || !IsFinite(a_position.y) ||
+            !IsFinite(a_position.z))
+            return ExactWaypointCaptureResult::Rejected;
+        if (!WaypointHooks::ShouldPublishObservedWaypoint(
+                false, true, WaypointMatches(g_waypointSnapshot, a_worldspace, a_position)))
+            return ExactWaypointCaptureResult::Duplicate;
+
+        GameplayActionPayload payload{};
+        if (!PreparePlayerPayload(payload, a_player))
+            return ExactWaypointCaptureResult::Rejected;
+        payload.LocalFormIdA = worldspaceFormId;
+        payload.ScalarA = a_position.x;
+        payload.ScalarB = a_position.y;
+        payload.ScalarC = a_position.z;
+        if (!Publish(GameplayDomain::Party, GameplayAction::SetWaypoint, payload))
+            return ExactWaypointCaptureResult::Rejected;
+
+        g_waypointSnapshot = {
+            .Valid = true,
+            .WorldspaceFormId = worldspaceFormId,
+            .Position = a_position,
+        };
+        return ExactWaypointCaptureResult::Published;
+    } catch (...) {
+        return ExactWaypointCaptureResult::Rejected;
+    }
+}
+
+ExactWaypointCaptureResult CaptureExactWaypointRemoveImpl(const RE::PlayerCharacter& a_player) noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        if (!g_waypointSnapshot.Valid)
+            return ExactWaypointCaptureResult::Duplicate;
+
+        GameplayActionPayload payload{};
+        if (!PreparePlayerPayload(payload, a_player) ||
+            !Publish(GameplayDomain::Party, GameplayAction::RemoveWaypoint, payload))
+            return ExactWaypointCaptureResult::Rejected;
+
+        g_waypointSnapshot = {};
+        return ExactWaypointCaptureResult::Published;
+    } catch (...) {
+        return ExactWaypointCaptureResult::Rejected;
+    }
+}
+
+void AcknowledgeRemoteWaypointSetImpl(
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        const auto worldspaceFormId = a_worldspace.GetFormID();
+        if (!IsValidFormId(worldspaceFormId) || !IsFinite(a_position.x) || !IsFinite(a_position.y) ||
+            !IsFinite(a_position.z))
+            return;
+        g_waypointSnapshot = {
+            .Valid = true,
+            .WorldspaceFormId = worldspaceFormId,
+            .Position = a_position,
+        };
+    } catch (...) {
+    }
+}
+
+void AcknowledgeRemoteWaypointRemoveImpl() noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        g_waypointSnapshot = {};
+    } catch (...) {
+    }
+}
+
 void CapturePlayerDialogue(const RE::PlayerCharacter& a_player) noexcept
 {
     const auto* manager = RE::MenuTopicManager::GetSingleton();
@@ -3417,7 +3554,8 @@ void CapturePlayerDialogue(const RE::PlayerCharacter& a_player) noexcept
     if (!text || text[0] == '\0')
         return;
     const std::string_view selectedText{text};
-    if (selected == g_lastSelectedDialogue && selectedText == g_lastSelectedDialogueText)
+    if (!DialogueHookPolicy::ShouldPublishPolledDialogue(
+            selected == g_lastSelectedDialogue && selectedText == g_lastSelectedDialogueText))
         return;
 
     GameplayActionPayload payload{};
@@ -3466,6 +3604,37 @@ void ResetCaptureBaselinesUnlocked() noexcept
     g_nextTextId.store(0, std::memory_order_release);
 }
 } // namespace
+
+ExactWaypointCaptureResult CaptureExactWaypointSet(
+    const RE::PlayerCharacter& a_player,
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept
+{
+    return CaptureExactWaypointSetImpl(a_player, a_worldspace, a_position);
+}
+
+ExactWaypointCaptureResult CaptureExactWaypointRemove(const RE::PlayerCharacter& a_player) noexcept
+{
+    return CaptureExactWaypointRemoveImpl(a_player);
+}
+
+void AcknowledgeRemoteWaypointSet(
+    const RE::TESWorldSpace& a_worldspace,
+    const RE::NiPoint3& a_position) noexcept
+{
+    AcknowledgeRemoteWaypointSetImpl(a_worldspace, a_position);
+}
+
+void AcknowledgeRemoteWaypointRemove() noexcept
+{
+    AcknowledgeRemoteWaypointRemoveImpl();
+}
+
+bool PublishTargetedRemoteNpcHealthDelta(
+    const std::uint32_t a_targetLocalFormId, const float a_delta) noexcept
+{
+    return PublishTargetedRemoteNpcHealthDeltaImpl(a_targetLocalFormId, a_delta);
+}
 
 QuestSuppressionToken ArmQuestStartStopSuppression(
     const std::uint32_t a_questLocalFormId,
@@ -4149,6 +4318,78 @@ bool ArmExperienceSuppression(const std::uint32_t a_actorValue) noexcept
     }
 }
 
+bool CaptureExactExperience(
+    RE::PlayerCharacter& a_player,
+    const std::uint32_t a_actorValue,
+    const float a_previousExperience,
+    const float a_currentExperience,
+    const bool a_remoteApplication) noexcept
+{
+    try {
+        if (!GameplayBridge::IsCombatSkillActorValue(a_actorValue) ||
+            !IsFinite(a_previousExperience) || !IsFinite(a_currentExperience) ||
+            a_previousExperience < 0.0F || a_currentExperience < 0.0F)
+            return false;
+
+        const auto index = static_cast<std::size_t>(a_actorValue - GameplayBridge::kFirstSkillActorValue);
+        const auto currentBits = std::bit_cast<std::uint32_t>(a_currentExperience);
+        const auto now = std::chrono::steady_clock::now();
+        const auto delta = a_currentExperience - a_previousExperience;
+        const std::scoped_lock lock{g_captureLock};
+
+        auto& suppression = g_experienceSuppressions[index];
+        const bool tokenConsumed = suppression != std::chrono::steady_clock::time_point{} && suppression >= now;
+        suppression = {};
+        const auto advanceBaseline = [&]() noexcept {
+            if (g_snapshot.Valid && g_snapshot.SkillsValid)
+                g_snapshot.SkillXpBits[index] = currentBits;
+        };
+
+        const bool suppressCapture =
+            ProgressionHooks::ShouldSuppressExperienceCapture(a_remoteApplication, tokenConsumed);
+        if (suppressCapture) {
+            advanceBaseline();
+            return true;
+        }
+
+        if (!ProgressionHooks::ShouldPublishExactExperience(
+                a_actorValue,
+                delta,
+                GameplayBridge::kMaximumSyncedExperience,
+                a_remoteApplication,
+                tokenConsumed)) {
+            // A level rollover or another non-monotonic engine correction is
+            // not a transferable positive XP event. Keep polling aligned.
+            advanceBaseline();
+            return false;
+        }
+
+        if (!g_armed.load(std::memory_order_acquire) || !CanPublish(GameplayDomain::ActorState)) {
+            advanceBaseline();
+            return false;
+        }
+
+        GameplayActionPayload payload{};
+        if (!PreparePlayerPayload(payload, a_player)) {
+            advanceBaseline();
+            return false;
+        }
+        payload.LocalFormIdA = a_actorValue;
+        payload.ScalarA = delta;
+        if (Publish(GameplayDomain::ActorState, GameplayAction::SyncExperience, payload)) {
+            advanceBaseline();
+            return true;
+        }
+
+        // Do not move the baseline when the bridge did not accept a local
+        // event. CapturePeriodic will publish the aggregate delta as its
+        // bounded recovery backstop.
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool StartNpcObservation(const std::uint32_t a_localReferenceFormId) noexcept
 {
     try {
@@ -4174,6 +4415,16 @@ void StopNpcObservation(const std::uint32_t a_localReferenceFormId) noexcept
     }
 }
 
+bool IsNpcObserved(const std::uint32_t a_localReferenceFormId) noexcept
+{
+    try {
+        const std::scoped_lock lock{g_captureLock};
+        return g_observedNpcReferences.contains(a_localReferenceFormId);
+    } catch (...) {
+        return false;
+    }
+}
+
 bool CaptureDialogueVoice(
     const std::uint32_t a_localActorFormId,
     const char* a_resourcePath) noexcept
@@ -4195,6 +4446,51 @@ bool CaptureDialogueVoice(
             payload,
             a_resourcePath,
             kMaximumPlayerDialogueBytes);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool CaptureExactDialogueChoice(
+    const void* a_baselineDialogue,
+    const char* a_text) noexcept
+{
+    try {
+        if (!a_text)
+            return false;
+
+        std::size_t byteCount{};
+        while (byteCount <= kMaximumPlayerDialogueBytes && a_text[byteCount] != '\0')
+            ++byteCount;
+        if (byteCount == 0 || byteCount > kMaximumPlayerDialogueBytes)
+            return false;
+
+        // Allocate before publication. If it fails, polling retains the old
+        // baseline and can still recover this choice on a later tick.
+        std::string dialogueText{a_text, byteCount};
+        // PublishText takes this same recursive mutex before it takes
+        // g_textPublishLock. Retaining it through the baseline update makes
+        // exact publication and polling deduplication one transaction.
+        const std::scoped_lock lock{g_captureLock};
+        if (!CanCaptureExactDialogueChoice())
+            return false;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        GameplayActionPayload payload{};
+        if (!player || !PreparePlayerPayload(payload, *player))
+            return false;
+        const auto published = PublishText(
+            GameplayDomain::Dialogue, GameplayAction::Dialogue, payload,
+            dialogueText.c_str(), kMaximumPlayerDialogueBytes);
+        if (!DialogueHookPolicy::ShouldAdvanceDialogueBaseline(published))
+            return false;
+        if (a_baselineDialogue) {
+            // This is an opaque identity copied from the pre-call typed list
+            // traversal. It is never dereferenced here or after publication.
+            g_lastSelectedDialogue = static_cast<const RE::MenuTopicManager::Dialogue*>(a_baselineDialogue);
+            g_lastSelectedDialogueText.swap(dialogueText);
+        }
+        return true;
     } catch (...) {
         return false;
     }
@@ -4252,6 +4548,52 @@ void Reset() noexcept
         g_pendingQuestReconciliations = {};
         ResetCaptureBaselinesUnlocked();
     } catch (...) {
+    }
+}
+
+PreActivationCaptureResult CapturePreActivation(
+    RE::TESObjectREFR& a_target,
+    RE::TESObjectREFR& a_activator) noexcept
+{
+    try {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || std::addressof(a_activator) != player)
+            return PreActivationCaptureResult::Ineligible;
+
+        const auto targetFormId = a_target.GetFormID();
+        auto* base = a_target.GetBaseObject();
+        auto* cell = a_target.GetParentCell();
+        auto* worldspace = a_target.GetWorldspace();
+        const bool validTarget = IsValidFormId(targetFormId);
+        const bool validBase = base && IsValidFormId(base->GetFormID());
+        const bool validCell = cell && IsValidFormId(cell->GetFormID());
+        const bool isBook = base && base->GetFormType() == RE::FormType::Book;
+        if (!validTarget || !validBase || !validCell || isBook)
+            return PreActivationCaptureResult::Ineligible;
+        if (worldspace && !IsValidFormId(worldspace->GetFormID()))
+            return PreActivationCaptureResult::Ineligible;
+
+        const auto position = a_target.GetPosition();
+        if (!IsFinite(position.x) || !IsFinite(position.y) || !IsFinite(position.z))
+            return PreActivationCaptureResult::Ineligible;
+
+        GameplayActionPayload payload{};
+        if (!PreparePlayerPayload(payload, *player))
+            return PreActivationCaptureResult::PublicationRejected;
+        payload.LocalFormIdA = targetFormId;
+        payload.LocalFormIdB = cell->GetFormID();
+        payload.LocalFormIdC = worldspace ? worldspace->GetFormID() : 0;
+        payload.ValueA = static_cast<std::int32_t>(base->GetFormType());
+        // Read this before ActivateRef can toggle a door/container state.
+        payload.ValueB = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(&a_target));
+        payload.ScalarA = position.x;
+        payload.ScalarB = position.y;
+        payload.ScalarC = position.z;
+        return Publish(GameplayDomain::Object, GameplayAction::Activate, payload) ?
+                   PreActivationCaptureResult::Published :
+                   PreActivationCaptureResult::PublicationRejected;
+    } catch (...) {
+        return PreActivationCaptureResult::PublicationRejected;
     }
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::LocalGameplayCapture

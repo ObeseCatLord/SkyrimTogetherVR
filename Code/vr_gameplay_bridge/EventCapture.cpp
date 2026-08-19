@@ -64,6 +64,7 @@ void PublishLifecycle(const LifecycleState a_state, const std::uint32_t a_reason
 void PublishCurrentLocalPlayerStateImpl() noexcept
 {
     auto& endpoint = BridgeEndpoint::Get();
+    static_cast<void>(endpoint.FlushPendingEvents());
     if (!endpoint.IsOperational())
         return;
     const auto requiredCapabilities = static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
@@ -144,6 +145,7 @@ void PopulateAnimationChunk(
 void PublishCurrentLocalAnimationStateImpl() noexcept
 {
     auto& endpoint = BridgeEndpoint::Get();
+    static_cast<void>(endpoint.FlushPendingEvents());
     if (!endpoint.IsOperational() ||
         !HasCapability(endpoint.Mapping()->Header.ActiveCapabilities.load(std::memory_order_acquire),
                        Capability::LocalAnimationGraphSnapshot))
@@ -257,7 +259,6 @@ bool ProcessPendingLifecycleTransitions() noexcept
 
     AvatarManager::Get().RetireAllOnCommandPumpOwner();
     AnimationGraphs::ResetCache();
-    endpoint.DiscardCommandResultEvents();
     g_lastAnimationSnapshotTime = {};
     endpoint.Mapping()->Header.LifecycleEpoch.fetch_add(1, std::memory_order_acq_rel);
     PublishLifecycle(state, 0);
@@ -276,7 +277,8 @@ void PublishEpochRetired(const std::uint32_t a_reason) noexcept
     PublishLifecycle(LifecycleState::EpochRetired, a_reason);
 }
 
-void PublishRemoteAvatarState(
+bool PublishRemoteAvatarState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     const AdapterHandle a_avatarHandle,
     const RemoteAvatarState a_state,
@@ -286,10 +288,6 @@ void PublishRemoteAvatarState(
     const std::uint32_t a_localActorReferenceFormId,
     const RootTransform& a_root) noexcept
 {
-    auto& endpoint = BridgeEndpoint::Get();
-    if (!endpoint.IsOperational())
-        return;
-
     EventRecord record{};
     record.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteAvatarState);
     record.Header.PayloadSize = kFixedPayloadBytes;
@@ -303,21 +301,17 @@ void PublishRemoteAvatarState(
     payload.LocalWorldspaceFormId = a_localWorldspaceFormId;
     payload.LocalActorReferenceFormId = a_localActorReferenceFormId;
     payload.Root = EventSafeRoot(a_root);
-    if (!endpoint.QueueCommandResultEvent(record))
-        endpoint.Fault("command-result backlog overflow while publishing remote avatar state");
+    return ar_reservation.Commit(record);
 }
 
-void PublishRemoteAnimationGraphState(
+bool PublishRemoteAnimationGraphState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     const AdapterHandle a_avatarHandle,
     const std::uint64_t a_snapshotId,
     const RemoteAnimationGraphState a_state,
     const CommandStatus a_status) noexcept
 {
-    auto& endpoint = BridgeEndpoint::Get();
-    if (!endpoint.IsOperational())
-        return;
-
     EventRecord record{};
     record.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteAnimationGraphState);
     record.Header.PayloadSize = kFixedPayloadBytes;
@@ -327,11 +321,11 @@ void PublishRemoteAnimationGraphState(
     payload.SnapshotId = a_snapshotId;
     payload.State = static_cast<std::uint32_t>(a_state);
     payload.Status = static_cast<std::uint32_t>(a_status);
-    if (!endpoint.QueueCommandResultEvent(record))
-        endpoint.Fault("command-result backlog overflow while publishing remote animation state");
+    return ar_reservation.Commit(record);
 }
 
-void PublishRemoteSpatialTransferState(
+bool PublishRemoteSpatialTransferState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     const AdapterHandle a_avatarHandle,
     const std::uint32_t a_sourceCellFormId,
@@ -340,9 +334,6 @@ void PublishRemoteSpatialTransferState(
     const std::uint32_t a_targetWorldspaceFormId,
     const CommandStatus a_status) noexcept
 {
-    auto& endpoint = BridgeEndpoint::Get();
-    if (!endpoint.IsOperational())
-        return;
     EventRecord record{};
     record.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteSpatialTransferState);
     record.Header.PayloadSize = kFixedPayloadBytes;
@@ -354,11 +345,11 @@ void PublishRemoteSpatialTransferState(
     payload.TargetCellFormId = a_targetCellFormId;
     payload.TargetWorldspaceFormId = a_targetWorldspaceFormId;
     payload.Status = static_cast<std::uint32_t>(a_status);
-    if (!endpoint.QueueCommandResultEvent(record))
-        endpoint.Fault("command-result backlog overflow while publishing remote spatial-transfer state");
+    return ar_reservation.Commit(record);
 }
 
-void PublishRemoteGameplayActionState(
+bool PublishRemoteGameplayActionState(
+    BridgeEndpoint::CommandResultReservation& ar_reservation,
     const BridgeIdentity& a_identity,
     const AdapterHandle a_targetHandle,
     const GameplayDomain a_domain,
@@ -366,9 +357,6 @@ void PublishRemoteGameplayActionState(
     const std::uint32_t a_targetLocalFormId,
     const CommandStatus a_status) noexcept
 {
-    auto& endpoint = BridgeEndpoint::Get();
-    if (!endpoint.IsOperational())
-        return;
     EventRecord record{};
     record.Header.Kind = static_cast<std::uint16_t>(EventKind::RemoteGameplayActionState);
     record.Header.PayloadSize = kFixedPayloadBytes;
@@ -379,7 +367,6 @@ void PublishRemoteGameplayActionState(
     payload.Action = static_cast<std::uint16_t>(a_action);
     payload.Status = static_cast<std::uint32_t>(a_status);
     payload.TargetLocalFormId = a_targetLocalFormId;
-    if (!endpoint.QueueCommandResultEvent(record))
-        endpoint.Fault("command-result backlog overflow while publishing gameplay action state");
+    return ar_reservation.Commit(record);
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

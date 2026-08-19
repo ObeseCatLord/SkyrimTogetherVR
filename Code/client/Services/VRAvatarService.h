@@ -192,6 +192,7 @@ private:
         bool AnimationFaulted{false};
         bool SpatialTransferPending{false};
         bool IsPlayer{false};
+        bool IsPlayerSummon{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;

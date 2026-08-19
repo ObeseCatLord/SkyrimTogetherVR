@@ -24,6 +24,7 @@
 
 struct DisconnectedEvent;
 struct NotifyActorMaxValueChanges;
+struct NotifyActorResync;
 struct NotifyActorValueChanges;
 struct NotifyDeathStateChange;
 struct NotifyHealthChangeBroadcast;
@@ -57,6 +58,228 @@ struct VRAvatarService;
 struct VRNpcOwnershipService;
 struct World;
 struct UpdateEvent;
+
+namespace SkyrimTogetherVR::ActorReplicationRecovery
+{
+enum class Disposition : std::uint8_t
+{
+    Retry,
+    Terminal,
+};
+
+// These failures are reported before an equipment snapshot's final commit
+// action can mutate the actor. A reported result has an explicit pre-mutation
+// meaning; a missing result does not, because it may be buffered after a
+// bridge-side mutation.
+[[nodiscard]] constexpr bool IsRetryablePreMutationStatus(
+    const GameplayBridge::CommandStatus aStatus) noexcept
+{
+    switch (aStatus) {
+    case GameplayBridge::CommandStatus::Inactive:
+    case GameplayBridge::CommandStatus::StaleEntity:
+    case GameplayBridge::CommandStatus::InvalidHandle:
+    case GameplayBridge::CommandStatus::MissingForm:
+    case GameplayBridge::CommandStatus::MissingCell:
+    case GameplayBridge::CommandStatus::EngineRejected:
+    case GameplayBridge::CommandStatus::QueueOverflow:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] constexpr Disposition ClassifySpawnResult(
+    const GameplayBridge::CommandStatus, const std::uint8_t,
+    const std::uint8_t) noexcept
+{
+    // Retained spawn snapshots have no canonical state revision or ordering
+    // barrier. Replaying one can overwrite a newer server update, even when a
+    // particular failed command reports no mutation. Wait for fresh canonical
+    // spawn data instead.
+    return Disposition::Terminal;
+}
+
+[[nodiscard]] constexpr Disposition ClassifySpawnTimeout(
+    const std::uint8_t, const std::uint8_t) noexcept
+{
+    return Disposition::Terminal;
+}
+
+// Spawn action history can contain one-shot actor actions and legacy animation
+// events. It is valid only for the initial submission of an entity generation;
+// retained spawn snapshots are never replayed for recovery.
+[[nodiscard]] constexpr bool ShouldReplaySpawnActionHistory(const std::uint8_t aResyncAttempts) noexcept
+{
+    return aResyncAttempts == 0;
+}
+
+[[nodiscard]] constexpr bool IsBeforeEquipmentFinalMutation(
+    const std::uint16_t aResultIndex, const std::uint16_t aExpectedResults) noexcept
+{
+    return aExpectedResults != 0 && aResultIndex + 1 < aExpectedResults;
+}
+
+[[nodiscard]] constexpr Disposition ClassifyEquipmentResult(
+    const GameplayBridge::CommandStatus aStatus, const bool aBeforeFinalMutation,
+    const std::uint8_t aResultFailures, const std::uint8_t aMaximumResultFailures) noexcept
+{
+    return aBeforeFinalMutation && IsRetryablePreMutationStatus(aStatus) &&
+               aResultFailures < aMaximumResultFailures ?
+               Disposition::Retry : Disposition::Terminal;
+}
+
+[[nodiscard]] constexpr Disposition ClassifyEquipmentTimeout(
+    const bool, const std::uint8_t,
+    const std::uint8_t) noexcept
+{
+    // The result queue can retain a successful final commit while the client
+    // waits. Without a result, position in the expected sequence cannot prove
+    // that mutation has not happened, so replay is ambiguous.
+    return Disposition::Terminal;
+}
+
+// Admission order is assigned when semantic work is staged, before it can
+// enter the bridge. A later item must not consume the same ledger revision as
+// an earlier unadmitted item in its acceptance domain.
+[[nodiscard]] constexpr bool IsEarlierAdmissionOrder(
+    const std::uint64_t aCandidateOrder, const std::uint64_t aOtherOrder) noexcept
+{
+    return aOtherOrder != 0 && aOtherOrder < aCandidateOrder;
+}
+
+[[nodiscard]] constexpr bool CanRefreshUnadmittedAcceptance(const bool aAdmitted) noexcept
+{
+    return !aAdmitted;
+}
+
+// Retries are cadence-limited, but a head that cannot enter the bridge must
+// still age out. Keeping the timeout policy separate prevents a retry from
+// extending an unadmitted FIFO reservation indefinitely.
+[[nodiscard]] constexpr bool HasCumulativeAdmissionTimedOut(
+    const double aAdmissionAge, const double aTimeout) noexcept
+{
+    return aTimeout > 0.0 && aAdmissionAge >= aTimeout;
+}
+
+[[nodiscard]] constexpr bool ShouldRetireUnadmittedAdmissionHead(
+    const bool aAdmitted, const bool aIsAdmissionHead, const double aAdmissionAge,
+    const double aTimeout) noexcept
+{
+    return !aAdmitted && aIsAdmissionHead &&
+           HasCumulativeAdmissionTimedOut(aAdmissionAge, aTimeout);
+}
+
+[[nodiscard]] constexpr bool IsDuplicateAdmissionIdentity(
+    const std::uint32_t aLeftPlayerId, const std::uint16_t aLeftDomain,
+    const std::uint32_t aLeftSequence, const std::uint64_t aLeftSignature,
+    const std::uint8_t aLeftChannel, const std::uint32_t aRightPlayerId,
+    const std::uint16_t aRightDomain, const std::uint32_t aRightSequence,
+    const std::uint64_t aRightSignature, const std::uint8_t aRightChannel) noexcept
+{
+    return aLeftPlayerId == aRightPlayerId && aLeftDomain == aRightDomain &&
+           aLeftSequence == aRightSequence && aLeftSignature == aRightSignature &&
+           aLeftChannel == aRightChannel;
+}
+
+[[nodiscard]] constexpr bool IsRetiredLedgerIdentity(
+    const std::uint32_t aCandidateId, const std::uint32_t aServerId,
+    const std::uint32_t aMappedPlayerId) noexcept
+{
+    return aCandidateId != 0 &&
+           (aCandidateId == aServerId || (aMappedPlayerId != 0 && aCandidateId == aMappedPlayerId));
+}
+
+[[nodiscard]] constexpr bool IsServerIdIdentityReplacement(
+    const std::uint32_t aExistingPlayerId, const std::uint32_t aIncomingPlayerId) noexcept
+{
+    return aExistingPlayerId != aIncomingPlayerId;
+}
+
+[[nodiscard]] constexpr bool IsPlayerIdIdentityReplacement(
+    const std::uint32_t aPlayerId, const std::uint32_t aExistingServerId,
+    const std::uint32_t aIncomingServerId) noexcept
+{
+    return aPlayerId != 0 && aExistingServerId != 0 &&
+           aExistingServerId != aIncomingServerId;
+}
+
+[[nodiscard]] constexpr bool IsLocalServerIdIdentityReplacement(
+    const std::uint32_t aPreviousServerId, const std::uint32_t aIncomingServerId) noexcept
+{
+    return aPreviousServerId != 0 && aPreviousServerId != aIncomingServerId;
+}
+
+[[nodiscard]] constexpr bool IsSameSpawnEntityIdentity(
+    const GameplayBridge::BridgeIdentity& acLeft,
+    const GameplayBridge::BridgeIdentity& acRight) noexcept
+{
+    return acLeft.ServerInstanceNonce == acRight.ServerInstanceNonce &&
+           acLeft.ConnectionGeneration == acRight.ConnectionGeneration &&
+           acLeft.LifecycleEpoch == acRight.LifecycleEpoch &&
+           acLeft.EntityId == acRight.EntityId &&
+           acLeft.EntityGeneration == acRight.EntityGeneration;
+}
+
+[[nodiscard]] constexpr bool IsSpawnEntityIdentityReplacement(
+    const std::uint32_t aExistingServerId,
+    const GameplayBridge::BridgeIdentity& acExisting,
+    const std::uint32_t aIncomingServerId,
+    const GameplayBridge::BridgeIdentity& acIncoming) noexcept
+{
+    if (aExistingServerId == aIncomingServerId)
+        return !IsSameSpawnEntityIdentity(acExisting, acIncoming);
+
+    return acExisting.ServerInstanceNonce == acIncoming.ServerInstanceNonce &&
+           acExisting.ConnectionGeneration == acIncoming.ConnectionGeneration &&
+           acExisting.LifecycleEpoch == acIncoming.LifecycleEpoch &&
+           acExisting.EntityId == acIncoming.EntityId &&
+           acExisting.EntityGeneration != acIncoming.EntityGeneration;
+}
+
+// Canonical resync retries run in bounded rounds. Exhausting one round gets a
+// new request identity after this capped exponential delay, so quarantine is
+// never permanent solely because a response was lost.
+[[nodiscard]] constexpr std::uint8_t CanonicalResyncBackoffMultiplier(
+    const std::uint8_t aExhaustedRounds) noexcept
+{
+    constexpr std::uint8_t kMaximumExponent = 4;
+    const auto exponent = aExhaustedRounds < kMaximumExponent ? aExhaustedRounds : kMaximumExponent;
+    return static_cast<std::uint8_t>(1u << exponent);
+}
+
+[[nodiscard]] constexpr bool ShouldLogCanonicalResyncExhaustion(
+    const std::uint8_t aExhaustedRounds) noexcept
+{
+    return aExhaustedRounds != 0 && (aExhaustedRounds & (aExhaustedRounds - 1)) == 0;
+}
+
+[[nodiscard]] constexpr bool ShouldRotateCanonicalResyncRequest(
+    const std::uint8_t aAttempts, const std::uint8_t aMaximumAttempts) noexcept
+{
+    return aMaximumAttempts != 0 && aAttempts >= aMaximumAttempts;
+}
+
+[[nodiscard]] constexpr bool CanLiftCanonicalResyncQuarantine(
+    const bool aStagingSucceeded) noexcept
+{
+    return aStagingSucceeded;
+}
+
+struct SpawnRecoveryState
+{
+    GameplayBridge::BridgeIdentity EntityIdentity{};
+    std::uint8_t ResyncAttempts{};
+    bool HasEntityIdentity{};
+
+    [[nodiscard]] constexpr bool MatchesCurrentEntity(
+        const GameplayBridge::BridgeIdentity& acIdentity) const noexcept
+    {
+        return HasEntityIdentity && IsSameSpawnEntityIdentity(EntityIdentity, acIdentity);
+    }
+
+    constexpr void Reset() noexcept { *this = {}; }
+};
+} // namespace SkyrimTogetherVR::ActorReplicationRecovery
 
 /**
  * Maps remote server gameplay messages to fixed GameplayActionPayload records.
@@ -160,6 +383,7 @@ private:
     struct PendingGameplayWork
     {
         std::uint64_t WorkId{};
+        std::uint64_t AdmissionOrder{};
         std::uint32_t ServerId{};
         std::uint32_t PlayerId{};
         SkyrimTogetherVR::GameplayBridge::GameplayDomain Domain{};
@@ -169,7 +393,8 @@ private:
         std::string Text{};
         std::uint64_t TextId{};
         AcceptanceToken Acceptance{};
-        double AdmissionWaitElapsed{};
+        double AdmissionAgeElapsed{};
+        double RetryWaitElapsed{};
         double ResultWaitElapsed{};
         std::uint8_t Attempts{};
         std::uint16_t NextResultIndex{};
@@ -295,6 +520,17 @@ private:
         std::uint8_t ResultFailures{};
         double ResultWaitElapsed{};
         bool AwaitingResult{};
+        bool AcceptanceCommitted{};
+        bool Terminal{};
+    };
+
+    struct PendingCanonicalResync
+    {
+        std::uint32_t RequestId{};
+        std::uint64_t KnownRevision{};
+        double RetryElapsed{};
+        std::uint8_t Attempts{};
+        std::uint8_t ExhaustedRounds{};
     };
 
     struct EquipmentActionTracking
@@ -310,6 +546,7 @@ private:
     struct PendingInventoryTransaction
     {
         std::uint32_t ServerId{};
+        std::uint64_t AdmissionOrder{};
         std::vector<Inventory::Entry> Entries{};
         std::vector<std::uint8_t> Drops{};
         std::vector<SkyrimTogetherVR::GameplayBridge::GameplayAction> ExpectedActions{};
@@ -320,6 +557,7 @@ private:
         std::uint64_t FirstActionId{};
         std::uint64_t EndActionId{};
         AcceptanceToken Acceptance{};
+        double AdmissionAgeElapsed{};
         double RetryWaitElapsed{};
         double ResultWaitElapsed{};
         bool Reset{};
@@ -375,6 +613,10 @@ private:
     };
 
     void OnCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept;
+    [[nodiscard]] bool TryStageCharacterSpawn(const CharacterSpawnRequest& acMessage) noexcept;
+    [[nodiscard]] bool BuildSpawnEntityIdentity(
+        std::uint32_t aServerId,
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity& arIdentity) const noexcept;
     void OnReferencesMove(const ServerReferencesMoveRequest& acMessage) noexcept;
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
     void OnDrawWeapon(const NotifyDrawWeapon& acMessage) noexcept;
@@ -383,6 +625,7 @@ private:
     void OnInventory(const NotifyInventoryChanges& acMessage) noexcept;
     void OnActorValues(const NotifyActorValueChanges& acMessage) noexcept;
     void OnActorMaximums(const NotifyActorMaxValueChanges& acMessage) noexcept;
+    void OnActorResync(const NotifyActorResync& acMessage) noexcept;
     void OnHealthChangeBroadcast(const NotifyHealthChangeBroadcast& acMessage) noexcept;
     void OnDeath(const NotifyDeathStateChange& acMessage) noexcept;
     void OnRespawn(const NotifyRespawn& acMessage) noexcept;
@@ -459,6 +702,8 @@ private:
         std::uint64_t aTextId, std::string_view acText) noexcept;
     [[nodiscard]] bool QueueReliableGameplayWork(PendingGameplayWork&& arWork) noexcept;
     [[nodiscard]] bool TrySubmitReliableGameplayWork(std::size_t aIndex) noexcept;
+    [[nodiscard]] bool IsAdmissionHead(const AcceptanceToken& acAcceptance,
+                                       std::uint64_t aAdmissionOrder) const noexcept;
     [[nodiscard]] static bool IsVrBodyPoseWork(const PendingGameplayWork& acWork) noexcept;
     [[nodiscard]] bool HasAdmittedVrBodyPoseWork(std::uint32_t aPlayerId,
                                                  std::uint64_t aExceptWorkId = 0) const noexcept;
@@ -521,7 +766,14 @@ private:
     [[nodiscard]] bool TrySubmitEquipmentApplication(std::uint32_t aServerId,
                                                      PendingEquipmentApplication& arPending) noexcept;
     void ForgetEquipmentApplication(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool RetryEquipmentApplication(std::uint32_t aServerId,
+                                                  SkyrimTogetherVR::ActorReplicationRecovery::Disposition aDisposition) noexcept;
     void TerminalizeEquipmentApplication(std::uint32_t aServerId) noexcept;
+    void RequestActorSnapshotResync(std::uint32_t aServerId) noexcept;
+    void RequestEquipmentSnapshotResync(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool SendCanonicalResyncRequest(
+        std::uint32_t aServerId, std::uint8_t aScope,
+        PendingCanonicalResync& arPending) noexcept;
     [[nodiscard]] bool HasInventoryTransactionCapability() const noexcept;
     [[nodiscard]] bool QueueInventoryTransaction(std::uint32_t aServerId,
                                                   const std::vector<Inventory::Entry>& acEntries,
@@ -542,6 +794,10 @@ private:
     void RememberCompletedRemoteActorAction(std::uint32_t aServerId,
                                             const ActionEvent& acAction) noexcept;
     void ForgetRemoteActorActions(std::uint32_t aServerId) noexcept;
+    [[nodiscard]] bool ScheduleSpawnRecovery(
+        std::uint32_t aServerId,
+        SkyrimTogetherVR::ActorReplicationRecovery::Disposition aDisposition) noexcept;
+    void TerminalizeSpawn(std::uint32_t aServerId) noexcept;
     void ForgetSpawnActionIds(std::uint32_t aServerId) noexcept;
     [[nodiscard]] bool HasSpawnActionIds(std::uint32_t aServerId) const noexcept;
     void ForgetPlayer(std::uint32_t aPlayerId) noexcept;
@@ -554,13 +810,16 @@ private:
     std::unordered_map<std::uint32_t, std::uint32_t> m_serverPlayers{};
     std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_pendingSpawns{};
     std::unordered_map<std::uint32_t, CharacterSpawnRequest> m_spawnSnapshots{};
+    std::unordered_map<std::uint32_t, SkyrimTogetherVR::GameplayBridge::BridgeIdentity>
+        m_spawnEntityIdentities{};
     std::unordered_map<std::uint64_t, VRAppearance> m_latestAppearances{};
     std::unordered_map<std::uint64_t, std::uint32_t> m_appliedAppearanceSequences{};
     std::unordered_map<std::uint64_t, std::uint32_t> m_failedAppearanceSequences{};
     std::unordered_map<std::uint64_t, PendingAppearanceApplication> m_pendingAppearanceApplications{};
     std::unordered_map<std::uint64_t, AppearanceActionTracking> m_appearanceActionOwners{};
     std::unordered_map<std::uint32_t, PendingMount> m_pendingMounts{};
-    std::unordered_map<std::uint32_t, std::uint8_t> m_resyncAttempts{};
+    std::unordered_map<std::uint32_t, SkyrimTogetherVR::ActorReplicationRecovery::SpawnRecoveryState>
+        m_resyncAttempts{};
     std::unordered_map<std::uint32_t, DomainLedgers> m_ledgers{};
     std::unordered_map<std::uint32_t, HiggsEventLedger> m_higgsEventLedgers{};
     std::unordered_map<std::uint32_t, std::deque<PendingHiggsMutation>> m_pendingHiggsMutations{};
@@ -568,6 +827,9 @@ private:
     std::vector<PendingGameplayWork> m_pendingGameplayWork{};
     std::unordered_map<std::uint64_t, GameplayResultOwner> m_gameplayResultOwners{};
     std::unordered_map<std::uint32_t, std::uint64_t> m_lastEquipmentTransactionByServer{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_lastActorSnapshotRevisionByServer{};
+    std::unordered_map<std::uint32_t, PendingCanonicalResync> m_pendingActorSnapshotResyncs{};
+    std::unordered_map<std::uint32_t, PendingCanonicalResync> m_pendingEquipmentSnapshotResyncs{};
     std::unordered_map<std::uint32_t, PendingEquipmentApplication> m_pendingEquipmentApplications{};
     std::unordered_map<std::uint64_t, EquipmentActionTracking> m_equipmentActionOwners{};
     std::vector<PendingInventoryTransaction> m_pendingInventoryTransactions{};
@@ -588,6 +850,8 @@ private:
     std::uint64_t m_nextRemoteActorActionId{1};
     std::uint32_t m_nextAppearanceTransactionSequence{1};
     std::uint64_t m_nextGameplayWorkId{1};
+    std::uint64_t m_nextAdmissionOrder{1};
+    std::uint32_t m_nextCanonicalResyncRequestId{1};
     std::uint64_t m_semanticTombstoneRebaseEpoch{0};
     double m_semanticTombstoneRebaseElapsed{0.0};
     bool m_replayAfterLifecycleBoundary{false};
@@ -601,6 +865,7 @@ private:
     entt::scoped_connection m_inventoryConnection;
     entt::scoped_connection m_actorValuesConnection;
     entt::scoped_connection m_actorMaximumsConnection;
+    entt::scoped_connection m_actorResyncConnection;
     entt::scoped_connection m_healthChangeConnection;
     entt::scoped_connection m_deathConnection;
     entt::scoped_connection m_respawnConnection;

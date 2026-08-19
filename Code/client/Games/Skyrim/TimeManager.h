@@ -1,8 +1,10 @@
 #pragma once
 
-#include <Forms/TESGlobal.h>
-#include <RuntimeLayout.h>
+#include "CalendarSnapshot.h"
+#include "Forms/TESGlobal.h"
+#include "RuntimeLayout.h"
 #include <cstddef>
+#include <cstdint>
 
 #ifndef TP_SKYRIM_VR
 #define TP_SKYRIM_VR 0
@@ -14,6 +16,13 @@ struct TimeData
     using LocalTimeDataOffsets = Skyrim::RuntimeLayout::TimeDataLocalShimOffsets;
 
     static TimeData* Get() noexcept;
+
+    using CalendarSnapshot = Skyrim::Calendar::CalendarSnapshot;
+
+    [[nodiscard]] static bool IsCalendarSnapshotValid(const CalendarSnapshot& a_snapshot) noexcept
+    {
+        return Skyrim::Calendar::IsCalendarSnapshotValid(a_snapshot);
+    }
 
     [[nodiscard]] TESGlobal* GetGameYearData() const noexcept
     {
@@ -69,6 +78,27 @@ struct TimeData
 #endif
     }
 
+    [[nodiscard]] bool TryGetCalendarSnapshot(CalendarSnapshot& ar_snapshot) const noexcept
+    {
+        const auto* gameYear = GetGameYearData();
+        const auto* gameMonth = GetGameMonthData();
+        const auto* gameDay = GetGameDayData();
+        const auto* gameHour = GetGameHourData();
+        const auto* gameDaysPassed = GetGameDaysPassedData();
+        const auto* timeScale = GetTimeScaleData();
+        if (!gameYear || !gameMonth || !gameDay || !gameHour || !gameDaysPassed || !timeScale)
+            return false;
+
+        CalendarSnapshot candidate{
+            timeScale->GetValueData(), gameHour->GetValueData(), gameYear->GetValueData(),
+            gameMonth->GetValueData(), gameDay->GetValueData(), gameDaysPassed->GetValueData()};
+        if (!IsCalendarSnapshotValid(candidate))
+            return false;
+
+        ar_snapshot = candidate;
+        return true;
+    }
+
     char pad0[0x8];            // 0x0000
     TESGlobal* GameYear;       // 0x0008
     TESGlobal* GameMonth;      // 0x0010
@@ -76,7 +106,7 @@ struct TimeData
     TESGlobal* GameHour;       // 0x0020
     TESGlobal* GameDaysPassed; // 0x0028
     TESGlobal* TimeScale;      // 0x0030
-    float unk1;                // 0x0038
+    std::uint32_t midnightsPassed; // 0x0038
     float rawDaysPassed;       // 0x003C
     char pad_40[0x88];         // 0x0040
 };
@@ -95,6 +125,6 @@ static_assert(offsetof(TimeData, GameDay) == TimeData::LocalTimeDataOffsets::Gam
 static_assert(offsetof(TimeData, GameHour) == TimeData::LocalTimeDataOffsets::GameHour);
 static_assert(offsetof(TimeData, GameDaysPassed) == TimeData::LocalTimeDataOffsets::GameDaysPassed);
 static_assert(offsetof(TimeData, TimeScale) == TimeData::LocalTimeDataOffsets::TimeScale);
-static_assert(offsetof(TimeData, unk1) == TimeData::LocalTimeDataOffsets::MidnightsPassed);
+static_assert(offsetof(TimeData, midnightsPassed) == TimeData::LocalTimeDataOffsets::MidnightsPassed);
 static_assert(offsetof(TimeData, rawDaysPassed) == TimeData::LocalTimeDataOffsets::RawDaysPassed);
 static_assert(sizeof(TimeData) == TimeData::LocalTimeDataOffsets::Size);

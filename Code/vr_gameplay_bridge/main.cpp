@@ -1,10 +1,23 @@
 #include "CommandExecutor.h"
+#include "ActivationHooks.h"
 #include "ActorActionHooks.h"
+#include "ActorAuthorityHooks.h"
+#include "CalendarHooks.h"
 #include "DialogueHooks.h"
+#include "DropHooks.h"
+#include "EquipmentAuthorityHooks.h"
 #include "EventCapture.h"
+#include "InvisibilityHooks.h"
 #include "MagicHooks.h"
 #include "PapyrusBindings.h"
+#include "ProgressionHooks.h"
 #include "ProjectileHooks.h"
+#include "QuestNativeAccess.h"
+#include "RemoteSaveExclusion.h"
+#include "SummonAuthorityHooks.h"
+#include "WaypointHooks.h"
+#include "WeatherNativeAccess.h"
+#include "VrNoThrow.h"
 
 #include <cstdio>
 #include <memory>
@@ -34,6 +47,15 @@ void InitializeLogging() noexcept
 {
     bool detached = true;
     detached = SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::InvisibilityHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::EquipmentAuthorityHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::SummonAuthorityHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::ActorAuthorityHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::ProgressionHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::WaypointHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::DropHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::ActivationHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::CalendarHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall() && detached;
@@ -42,20 +64,33 @@ void InitializeLogging() noexcept
 
 [[nodiscard]] bool FinishFaultedLoad(
     SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint& aEndpoint,
-    const char* aReason) noexcept
+    const char* aReason,
+    const bool a_mustRemainResident = false) noexcept
 {
-    aEndpoint.Fault(aReason);
-    if (DetachAllGameplayHooks())
+    SkyrimTogetherVR::GameplayAdapter::NoThrow::BestEffort([&] { aEndpoint.Fault(aReason); });
+    const bool detached = DetachAllGameplayHooks();
+    if (!a_mustRemainResident && detached)
         return false;
 
-    SKSE::log::critical(
-        "SkyrimTogetherVRGameplayBridge: load failed but at least one detour could not be proven detached; retaining the faulted plugin so its trampoline remains callable");
+    if (!detached)
+    {
+        SkyrimTogetherVR::GameplayAdapter::NoThrow::BestEffort([&] { SKSE::log::critical(
+            "SkyrimTogetherVRGameplayBridge: load failed but at least one detour could not be proven detached; retaining the faulted plugin so its trampoline remains callable");
+        });
+    }
+    else
+    {
+        SkyrimTogetherVR::GameplayAdapter::NoThrow::BestEffort([&] { SKSE::log::critical(
+            "SkyrimTogetherVRGameplayBridge: load faulted after an irreversible SKSE callback registration; retaining the inert plugin to keep callback code resident");
+        });
+    }
     return true;
 }
 } // namespace
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
+    bool mustRemainResident = false;
     try {
         if (!a_skse)
             return false;
@@ -89,19 +124,18 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             skseVersion,
             releaseIndex);
 
-        if (!SkyrimTogetherVR::GameplayAdapter::RegisterPapyrusBindings()) {
-            SKSE::log::error("SkyrimTogetherVRGameplayBridge: Papyrus registration failed");
-            return false;
-        }
-
         auto& endpoint = SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get();
         if (!endpoint.Attach())
             return false;
 
         const auto* messaging = SKSE::GetMessagingInterface();
-        if (!messaging || !messaging->RegisterListener(SkyrimTogetherVR::GameplayAdapter::HandleSkseMessage)) {
-            endpoint.Fault("SKSE messaging listener registration failed");
-            return false;
+        if (!messaging)
+            return FinishFaultedLoad(endpoint, "SKSE messaging interface is unavailable");
+        if (!SkyrimTogetherVR::GameplayAdapter::RemoteSaveExclusion::ValidateTarget()) {
+            return FinishFaultedLoad(endpoint, "exact remote actor save-exclusion target validation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::WeatherNativeAccess::ValidateTargets()) {
+            return FinishFaultedLoad(endpoint, "exact Sky weather target validation failed");
         }
         if (!SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Install()) {
             return FinishFaultedLoad(endpoint, "exact Actor::SpeakSound hook installation failed");
@@ -112,10 +146,50 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         if (!SkyrimTogetherVR::GameplayAdapter::MagicHooks::Install()) {
             return FinishFaultedLoad(endpoint, "exact magic hook installation failed");
         }
+        if (!SkyrimTogetherVR::GameplayAdapter::CalendarHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact Calendar::Update hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::ActivationHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact TESObjectREFR::Activate hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::DropHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact PlayerCharacter::DropObject hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::WaypointHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact local waypoint hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::QuestNativeAccess::ValidateTarget()) {
+            return FinishFaultedLoad(endpoint, "exact TESQuest::SetStage target validation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::ProgressionHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact progression hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::ActorAuthorityHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact actor authority hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::SummonAuthorityHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact SummonCreatureEffect authority hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::EquipmentAuthorityHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact equipment authority hook installation failed");
+        }
+        if (!SkyrimTogetherVR::GameplayAdapter::InvisibilityHooks::Install()) {
+            return FinishFaultedLoad(endpoint, "exact InvisibilityEffect::Finish hook installation failed");
+        }
         if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
-            SKSE::log::warn(
-                "SkyrimTogetherVRGameplayBridge: verified ActorMediator action capture/replay is unavailable; "
-                "continuing without exact actor actions");
+            return FinishFaultedLoad(endpoint, "exact ActorMediator action hook installation failed");
+        }
+
+        // SKSE exposes no callback unregister operation. Do all reversible
+        // target validation and hook installation first. From the first
+        // registration attempt onward, any failure keeps a faulted inert DLL
+        // resident so SKSE can never call into unloaded code.
+        mustRemainResident = true;
+        if (!SkyrimTogetherVR::GameplayAdapter::RegisterPapyrusBindings()) {
+            return FinishFaultedLoad(endpoint, "Papyrus registration failed", true);
+        }
+        if (!messaging->RegisterListener(SkyrimTogetherVR::GameplayAdapter::HandleSkseMessage)) {
+            return FinishFaultedLoad(endpoint, "SKSE messaging listener registration failed", true);
         }
 
         SkyrimTogetherVR::GameplayAdapter::PublishPluginLoaded();
@@ -124,7 +198,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
     } catch (...) {
         return FinishFaultedLoad(
             SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get(),
-            "exception during SKSEPluginLoad");
+            "exception during SKSEPluginLoad",
+            mustRemainResident);
     }
 }
 
@@ -141,7 +216,9 @@ extern "C" __declspec(dllexport) std::uint32_t __cdecl STVRGameplayBridge_Proces
             a_lifecycleEpoch,
             a_maxCommands));
     } catch (...) {
-        SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get().Fault("exception during command pump");
+        SkyrimTogetherVR::GameplayAdapter::NoThrow::BestEffort([] {
+            SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get().Fault("exception during command pump");
+        });
         return static_cast<std::uint32_t>(SkyrimTogetherVR::GameplayBridge::CommandPumpResult::Faulted);
     }
 }

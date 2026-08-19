@@ -3,6 +3,7 @@
 void NotifyProjectileLaunch::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
     Serialization::WriteVarInt(aWriter, ShooterID);
+    Serialization::WriteVarInt(aWriter, EventId);
 
     Serialization::WriteFloat(aWriter, OriginX);
     Serialization::WriteFloat(aWriter, OriginY);
@@ -40,6 +41,7 @@ void NotifyProjectileLaunch::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     ServerMessage::DeserializeRaw(aReader);
 
     ShooterID = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    EventId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
 
     OriginX = Serialization::ReadFloat(aReader);
     OriginY = Serialization::ReadFloat(aReader);

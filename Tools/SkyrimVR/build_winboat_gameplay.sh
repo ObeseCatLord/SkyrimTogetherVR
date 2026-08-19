@@ -80,7 +80,7 @@ export STVR_BUILD_LOCK_HELD=1
 
 cleanup_after_build() {
     "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-        --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
+        --apply --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
 }
 
 import_root=""
@@ -133,7 +133,7 @@ if [[ ! -x $winboat_scp ]]; then
 fi
 
 "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-    --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
+    --apply --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
 
 winboat_repo=${STVR_WINBOAT_REPO:-'C:\Users\obesecatlord\Documents\Codex\SkyrimTogetherVR'}
 timestamp=$(date -u +%Y%m%d%H%M%SZ)

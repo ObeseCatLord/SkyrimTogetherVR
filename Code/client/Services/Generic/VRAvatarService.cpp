@@ -431,14 +431,31 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
         return;
     }
 
+    if (acMessage.IsPlayer && acMessage.IsPlayerSummon)
+    {
+        spdlog::error("VR avatar spawn marked as both player and player summon; rebasing the gameplay epoch");
+        TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+        return;
+    }
+
     const auto localReferenceFormId = acMessage.IsPlayer ? 0 : m_world.GetModSystem().GetGameId(acMessage.FormId);
+    const auto localActorBaseFormId = acMessage.IsPlayer ? m_localSnapshot.LocalActorBaseFormId :
+        m_world.GetModSystem().GetGameId(acMessage.BaseId);
+    if (localActorBaseFormId == 0)
+    {
+        spdlog::warn("VR avatar spawn rejected for server id {} because its actor base is unavailable", acMessage.ServerId);
+        return;
+    }
 
     if (const auto existingIt = m_remoteAvatars.find(acMessage.ServerId); existingIt != m_remoteAvatars.end())
     {
         auto& existing = existingIt->second;
-        if (existing.LocalReferenceFormId != localReferenceFormId)
+        if (existing.PlayerId != acMessage.PlayerId || existing.IsPlayer != acMessage.IsPlayer ||
+            existing.IsPlayerSummon != acMessage.IsPlayerSummon ||
+            existing.LocalActorBaseFormId != localActorBaseFormId ||
+            existing.LocalReferenceFormId != localReferenceFormId)
         {
-            spdlog::error("VR avatar server entity remapped to a different local reference; rebasing the gameplay epoch");
+            spdlog::error("VR avatar spawn metadata conflicts with an existing remote entity; rebasing the gameplay epoch");
             TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
             return;
         }
@@ -488,14 +505,9 @@ void VRAvatarService::OnCharacterSpawn(const CharacterSpawnRequest& acMessage) n
     RemoteAvatar avatar{};
     avatar.PlayerId = acMessage.PlayerId;
     avatar.IsPlayer = acMessage.IsPlayer;
-    avatar.LocalActorBaseFormId = acMessage.IsPlayer ? m_localSnapshot.LocalActorBaseFormId :
-        m_world.GetModSystem().GetGameId(acMessage.BaseId);
+    avatar.IsPlayerSummon = acMessage.IsPlayerSummon;
+    avatar.LocalActorBaseFormId = localActorBaseFormId;
     avatar.LocalReferenceFormId = localReferenceFormId;
-    if (avatar.LocalActorBaseFormId == 0)
-    {
-        spdlog::warn("VR avatar spawn rejected for server id {} because its actor base is unavailable", acMessage.ServerId);
-        return;
-    }
     avatar.CurrentRoot = root;
     avatar.TargetRoot = root;
     avatar.TargetCellFormId = localCellId;
@@ -2263,7 +2275,8 @@ void VRAvatarService::SubmitCreateRemoteAvatar(const std::uint32_t aServerId, Re
     command.Payload.CreateRemoteAvatar.LocalReferenceFormId = arAvatar.LocalReferenceFormId;
     command.Payload.CreateRemoteAvatar.CreateFlags =
         (arAvatar.LocalReferenceFormId != 0 ? GameplayBridge::UseExistingReference : 0u) |
-        (arAvatar.IsPlayer ? GameplayBridge::PlayerAvatar : 0u);
+        (arAvatar.IsPlayer ? GameplayBridge::PlayerAvatar : 0u) |
+        (arAvatar.IsPlayerSummon ? GameplayBridge::PlayerSummon : 0u);
     command.Payload.CreateRemoteAvatar.LocalCellFormId = arAvatar.TargetCellFormId;
     command.Payload.CreateRemoteAvatar.LocalWorldspaceFormId = arAvatar.TargetWorldspaceFormId;
     command.Payload.CreateRemoteAvatar.InitialRoot = arAvatar.CurrentRoot;
@@ -2602,6 +2615,16 @@ void VRAvatarService::WriteStatus() noexcept
                 file << "bridgeRequestedCapabilities=0x" << std::hex << diagnostics.RequestedCapabilities << std::dec << "\n";
                 file << "bridgeAvailableCapabilities=0x" << std::hex << diagnostics.AvailableCapabilities << std::dec << "\n";
                 file << "bridgeActiveCapabilities=0x" << std::hex << diagnostics.ActiveCapabilities << std::dec << "\n";
+                file << "bridge.discardedEvents=" << diagnostics.DiscardedEventCount << "\n";
+                file << "bridge.discardedEvents.preReady=" << diagnostics.DiscardedEventPreReadyCount << "\n";
+                file << "bridge.discardedEvents.lifecycleRetired=" << diagnostics.DiscardedEventLifecycleRetiredCount << "\n";
+                file << "bridge.discardedEvents.other=" << diagnostics.DiscardedEventOtherCount << "\n";
+                file << "bridge.rejectedSubmissions=" << diagnostics.RejectedSubmissionCount << "\n";
+                file << "bridge.rejectedSubmissions.preReady=" << diagnostics.RejectedSubmissionPreReadyCount << "\n";
+                file << "bridge.rejectedSubmissions.lifecycleRetired=" << diagnostics.RejectedSubmissionLifecycleRetiredCount << "\n";
+                file << "bridge.rejectedSubmissions.other=" << diagnostics.RejectedSubmissionOtherCount << "\n";
+                file << "bridge.eventRingDroppedPushes=" << diagnostics.EventRingDroppedPushCount << "\n";
+                file << "bridge.commandRingDroppedPushes=" << diagnostics.CommandRingDroppedPushCount << "\n";
                 file << "localSnapshotReady=" << (HasValidLocalSnapshot() ? 1 : 0) << "\n";
                 file << "localServerAssigned=" << (m_localServerId ? 1 : 0) << "\n";
                 file << "localServerId=" << m_localServerId.value_or(0) << "\n";

@@ -66,10 +66,16 @@ commonlib_common_ancestor="NOT_RESOLVED"
 commonlib_trusted_ref=""
 commonlib_trusted_upstream_commit="NOT_RESOLVED"
 commonlib_trusted_upstream_url="https://github.com/alandtse/CommonLibVR.git"
+commonlib_verification_source="NETWORK"
+commonlib_trusted_upstream_match_required=true
+commonlib_base_upstream_available=false
+commonlib_target_upstream_available=false
+commonlib_cache_file=""
+commonlib_source_git_dir=""
 
 cleanup_after_build() {
     "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-        --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
+        --apply --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
 }
 
 cleanup_guest_candidate() {
@@ -233,6 +239,7 @@ cleanup_runtime() {
     printf 'STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=%s\n' "$commonlib_common_ancestor"
     printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
     printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
+    printf 'STVR_CANDIDATE_COMMONLIB_VERIFICATION=%s\n' "$commonlib_verification_source"
     exit "$status"
 }
 trap cleanup_runtime EXIT
@@ -341,56 +348,160 @@ if [[ ( $commonlib_status_prefix != '+' && $commonlib_status_prefix != ' ' ) || 
     exit 2
 fi
 
+prepare_commonlib_cache_path() {
+    local cache_root cache_key git_dir
+    git_dir=$(git -C "$commonlib_path" rev-parse --git-dir)
+    if [[ $git_dir != /* ]]; then
+        git_dir="$commonlib_path/$git_dir"
+    fi
+    commonlib_source_git_dir=$(cd "$git_dir" && pwd -P)
+    cache_root="${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-together-vr/commonlib-verification"
+    cache_key=$(printf '%s\0' \
+        "$commonlib_trusted_upstream_url" "$commonlib_source_git_dir" \
+        "$commonlib_base_commit" "$commonlib_target_commit" | sha256sum | awk '{print $1}')
+    commonlib_cache_file="$cache_root/${cache_key}.verified"
+}
+
+load_commonlib_verification_cache() {
+    local key value mode cache_root
+    local cache_schema='' cache_url='' cache_git_dir='' cache_base='' cache_target=''
+    local cache_ancestor='' cache_upstream='' cache_base_available='' cache_target_available=''
+
+    prepare_commonlib_cache_path
+    cache_root=${commonlib_cache_file%/*}
+    [[ -d $cache_root && ! -L $cache_root && -O $cache_root ]] || return 1
+    mode=$(stat -c '%a' -- "$cache_root" 2>/dev/null) || return 1
+    (( (8#$mode & 077) == 0 )) || return 1
+    [[ -f $commonlib_cache_file && ! -L $commonlib_cache_file && -O $commonlib_cache_file ]] || return 1
+    mode=$(stat -c '%a' -- "$commonlib_cache_file" 2>/dev/null) || return 1
+    (( (8#$mode & 022) == 0 )) || return 1
+
+    while IFS='=' read -r key value || [[ -n $key ]]; do
+        case $key in
+            schema) cache_schema=$value ;;
+            upstream_url) cache_url=$value ;;
+            source_git_dir) cache_git_dir=$value ;;
+            base_commit) cache_base=$value ;;
+            target_commit) cache_target=$value ;;
+            common_ancestor) cache_ancestor=$value ;;
+            trusted_upstream_commit) cache_upstream=$value ;;
+            base_upstream_available) cache_base_available=$value ;;
+            target_upstream_available) cache_target_available=$value ;;
+            *) return 1 ;;
+        esac
+    done < "$commonlib_cache_file"
+
+    [[ $cache_schema == stvr-commonlib-verification-v1 && \
+           $cache_url == "$commonlib_trusted_upstream_url" && \
+           $cache_git_dir == "$commonlib_source_git_dir" && \
+           $cache_base == "$commonlib_base_commit" && \
+           $cache_target == "$commonlib_target_commit" && \
+           $cache_ancestor =~ ^[0-9a-fA-F]{40}$ && \
+           $cache_upstream =~ ^[0-9a-fA-F]{40}$ && \
+           ( $cache_base_available == true || $cache_base_available == false ) && \
+           ( $cache_target_available == true || $cache_target_available == false ) ]] || return 1
+    git -C "$commonlib_path" cat-file -e "$cache_ancestor^{commit}" || return 1
+    git -C "$commonlib_path" merge-base --is-ancestor "$cache_ancestor" "$commonlib_base_commit" || return 1
+    git -C "$commonlib_path" merge-base --is-ancestor "$cache_ancestor" "$commonlib_target_commit" || return 1
+
+    commonlib_common_ancestor=$cache_ancestor
+    commonlib_trusted_upstream_commit=$cache_upstream
+    commonlib_base_upstream_available=$cache_base_available
+    commonlib_target_upstream_available=$cache_target_available
+    commonlib_verification_source="LOCAL_CACHE"
+    commonlib_trusted_upstream_match_required=false
+}
+
+write_commonlib_verification_cache() {
+    local cache_root temporary
+    prepare_commonlib_cache_path
+    cache_root=${commonlib_cache_file%/*}
+    if ! (umask 077; mkdir -p -- "$cache_root" && chmod 700 -- "$cache_root"); then
+        echo "Unable to create CommonLib verification cache; continuing without reuse: $cache_root" >&2
+        return 0
+    fi
+    temporary=$(mktemp "$cache_root/.commonlib-verification-XXXXXX") || {
+        echo "Unable to create CommonLib verification cache entry; continuing without reuse." >&2
+        return 0
+    }
+    {
+        printf 'schema=stvr-commonlib-verification-v1\n'
+        printf 'upstream_url=%s\n' "$commonlib_trusted_upstream_url"
+        printf 'source_git_dir=%s\n' "$commonlib_source_git_dir"
+        printf 'base_commit=%s\n' "$commonlib_base_commit"
+        printf 'target_commit=%s\n' "$commonlib_target_commit"
+        printf 'common_ancestor=%s\n' "$commonlib_common_ancestor"
+        printf 'trusted_upstream_commit=%s\n' "$commonlib_trusted_upstream_commit"
+        printf 'base_upstream_available=%s\n' "$commonlib_base_upstream_available"
+        printf 'target_upstream_available=%s\n' "$commonlib_target_upstream_available"
+    } > "$temporary"
+    chmod 600 -- "$temporary"
+    mv -f -- "$temporary" "$commonlib_cache_file"
+}
+
 short_commit=${base_commit:0:8}
+
+# Cleanup must run before this invocation creates its transfer artifacts.
+# With --max-age-days 0, the temporary-artifact sweep intentionally removes
+# every matching /tmp/stvr-* file, including a patch created moments earlier.
+"$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
+    --apply --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
+
 status_before=$(git status --porcelain=v1 --untracked-files=all)
 commonlib_head_before=$(git -C "$commonlib_path" rev-parse --verify HEAD^{commit})
-commonlib_probe_repo=$(mktemp -d "${TMPDIR:-/tmp}/stvr-winboat-commonlib-probe-${short_commit}-XXXXXX")
-git -C "$commonlib_probe_repo" init --bare --quiet
-probe_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream"
-git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
-    "$commonlib_trusted_upstream_url" "+HEAD:$probe_trusted_ref"
-commonlib_trusted_upstream_commit=$(git -C "$commonlib_probe_repo" rev-parse --verify "$probe_trusted_ref^{commit}")
-if [[ ! $commonlib_trusted_upstream_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "Trusted CommonLib upstream HEAD did not resolve to a full commit." >&2
-    exit 2
-fi
+if load_commonlib_verification_cache; then
+    printf 'Reusing locally verified CommonLib source state for %s -> %s.\n' \
+        "$commonlib_base_commit" "$commonlib_target_commit"
+else
+    commonlib_verification_source="NETWORK"
+    commonlib_trusted_upstream_match_required=true
+    commonlib_probe_repo=$(mktemp -d "${TMPDIR:-/tmp}/stvr-winboat-commonlib-probe-${short_commit}-XXXXXX")
+    git -C "$commonlib_probe_repo" init --bare --quiet
+    probe_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream"
+    git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+        "$commonlib_trusted_upstream_url" "+HEAD:$probe_trusted_ref"
+    commonlib_trusted_upstream_commit=$(git -C "$commonlib_probe_repo" rev-parse --verify "$probe_trusted_ref^{commit}")
+    if [[ ! $commonlib_trusted_upstream_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "Trusted CommonLib upstream HEAD did not resolve to a full commit." >&2
+        exit 2
+    fi
 
-commonlib_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream-${short_commit}-$$"
-if git -C "$commonlib_path" show-ref --verify --quiet "$commonlib_trusted_ref"; then
-    echo "Temporary local CommonLib trusted-upstream ref already exists: $commonlib_trusted_ref" >&2
-    exit 2
-fi
-git -C "$commonlib_path" fetch --quiet --no-tags --no-write-fetch-head \
-    "$commonlib_trusted_upstream_url" "+HEAD:$commonlib_trusted_ref"
-if [[ $(git -C "$commonlib_path" rev-parse --verify "$commonlib_trusted_ref^{commit}") != "$commonlib_trusted_upstream_commit" ]]; then
-    echo "Local CommonLib trusted-upstream ref does not match the isolated upstream probe." >&2
-    exit 2
-fi
-if ! commonlib_common_ancestor=$(git -C "$commonlib_path" merge-base "$commonlib_base_commit" "$commonlib_trusted_ref"); then
-    echo "Cannot derive a trusted-upstream ancestor for the exact CommonLib base gitlink." >&2
-    exit 2
-fi
-if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_base_commit" || \
-   ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_trusted_ref"; then
-    echo "Derived CommonLib bundle prerequisite failed its ancestry checks." >&2
-    exit 2
-fi
+    commonlib_trusted_ref="refs/stvr/winboat-candidate/trusted-upstream-${short_commit}-$$"
+    if git -C "$commonlib_path" show-ref --verify --quiet "$commonlib_trusted_ref"; then
+        echo "Temporary local CommonLib trusted-upstream ref already exists: $commonlib_trusted_ref" >&2
+        exit 2
+    fi
+    git -C "$commonlib_path" fetch --quiet --no-tags --no-write-fetch-head \
+        "$commonlib_trusted_upstream_url" "+HEAD:$commonlib_trusted_ref"
+    if [[ $(git -C "$commonlib_path" rev-parse --verify "$commonlib_trusted_ref^{commit}") != "$commonlib_trusted_upstream_commit" ]]; then
+        echo "Local CommonLib trusted-upstream ref does not match the isolated upstream probe." >&2
+        exit 2
+    fi
+    if ! commonlib_common_ancestor=$(git -C "$commonlib_path" merge-base "$commonlib_base_commit" "$commonlib_trusted_ref"); then
+        echo "Cannot derive a trusted-upstream ancestor for the exact CommonLib base gitlink." >&2
+        exit 2
+    fi
+    if ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_base_commit" || \
+       ! git -C "$commonlib_path" merge-base --is-ancestor "$commonlib_common_ancestor" "$commonlib_trusted_ref"; then
+        echo "Derived CommonLib bundle prerequisite failed its ancestry checks." >&2
+        exit 2
+    fi
 
-commonlib_base_upstream_available=false
-commonlib_target_upstream_available=false
-if git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
-    "$commonlib_trusted_upstream_url" "$commonlib_base_commit:refs/stvr/winboat-candidate/probe-base" \
-    >/dev/null 2>&1 && \
-   [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-base^{commit}') == "$commonlib_base_commit" ]]; then
-    commonlib_base_upstream_available=true
-fi
-if [[ $commonlib_target_commit == "$commonlib_base_commit" ]]; then
-    commonlib_target_upstream_available=$commonlib_base_upstream_available
-elif git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
-    "$commonlib_trusted_upstream_url" "$commonlib_target_commit:refs/stvr/winboat-candidate/probe-target" \
-    >/dev/null 2>&1 && \
-     [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-target^{commit}') == "$commonlib_target_commit" ]]; then
-    commonlib_target_upstream_available=true
+    if git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+        "$commonlib_trusted_upstream_url" "$commonlib_base_commit:refs/stvr/winboat-candidate/probe-base" \
+        >/dev/null 2>&1 && \
+       [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-base^{commit}') == "$commonlib_base_commit" ]]; then
+        commonlib_base_upstream_available=true
+    fi
+    if [[ $commonlib_target_commit == "$commonlib_base_commit" ]]; then
+        commonlib_target_upstream_available=$commonlib_base_upstream_available
+    elif git -C "$commonlib_probe_repo" fetch --quiet --no-tags --no-write-fetch-head \
+        "$commonlib_trusted_upstream_url" "$commonlib_target_commit:refs/stvr/winboat-candidate/probe-target" \
+        >/dev/null 2>&1 && \
+         [[ $(git -C "$commonlib_probe_repo" rev-parse --verify 'refs/stvr/winboat-candidate/probe-target^{commit}') == "$commonlib_target_commit" ]]; then
+        commonlib_target_upstream_available=true
+    fi
+    write_commonlib_verification_cache
 fi
 
 if [[ $commonlib_base_upstream_available != true || $commonlib_target_upstream_available != true ]]; then
@@ -414,7 +525,9 @@ if [[ $commonlib_base_upstream_available != true || $commonlib_target_upstream_a
 fi
 rm -rf -- "$commonlib_probe_repo"
 commonlib_probe_repo=""
-git -C "$commonlib_path" update-ref -d "$commonlib_trusted_ref"
+if [[ -n $commonlib_trusted_ref ]]; then
+    git -C "$commonlib_path" update-ref -d "$commonlib_trusted_ref"
+fi
 commonlib_trusted_ref=""
 patch_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.patch")
 git diff --binary --full-index --no-ext-diff --ignore-submodules=none "$base_commit" -- >"$patch_file"
@@ -491,9 +604,6 @@ for helper in "$winboat_powershell" "$winboat_ssh" "$winboat_scp"; do
     fi
 done
 
-"$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-    --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
-
 winboat_repo=${STVR_WINBOAT_REPO:-'C:\Users\obesecatlord\Documents\Codex\SkyrimTogetherVR'}
 timestamp=$(date -u +%Y%m%d%H%M%SZ)
 winboat_build="${winboat_repo}-candidate-${short_commit}-${timestamp}"
@@ -527,6 +637,7 @@ printf 'STVR_CANDIDATE_COMMONLIB_TARGET=%s\n' "$commonlib_target_commit"
 printf 'STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=%s\n' "$commonlib_common_ancestor"
 printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
 printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
+printf 'STVR_CANDIDATE_COMMONLIB_VERIFICATION=%s\n' "$commonlib_verification_source"
 
 read -r -d '' powershell_payload <<'POWERSHELL' || true
 $ErrorActionPreference = "Stop"
@@ -549,6 +660,7 @@ $commonLibBase = '__COMMONLIB_BASE__'
 $commonLibTarget = '__COMMONLIB_TARGET__'
 $commonLibCommonAncestor = '__COMMONLIB_COMMON_ANCESTOR__'
 $commonLibTrustedUpstream = '__COMMONLIB_TRUSTED_UPSTREAM__'
+$commonLibTrustedUpstreamRequired = [System.Convert]::ToBoolean('__COMMONLIB_TRUSTED_UPSTREAM_REQUIRED__')
 $commonLibTrustedUpstreamUrl = '__COMMONLIB_TRUSTED_UPSTREAM_URL__'
 $commonLibBundle = '__GUEST_COMMONLIB_BUNDLE__'
 $commonLibBundleSha256 = '__COMMONLIB_BUNDLE_SHA256__'
@@ -634,6 +746,7 @@ function Remove-StaleCandidateWorktrees {
     $repoParent = Split-Path -Parent $repo
     $repoLeaf = Split-Path -Leaf $repo
     $candidatePattern = "$repoLeaf-candidate-*"
+    $candidateCutoff = (Get-Date).ToUniversalTime().AddDays(-2)
     $active = @(
         Get-CimInstance Win32_Process | Where-Object {
             $_.ProcessId -ne $PID -and
@@ -646,6 +759,7 @@ function Remove-StaleCandidateWorktrees {
     }
 
     foreach ($directory in @(Get-ChildItem -LiteralPath $repoParent -Directory -Filter $candidatePattern -ErrorAction SilentlyContinue)) {
+        if ($directory.LastWriteTimeUtc -gt $candidateCutoff) { continue }
         Remove-CandidateWorktree -Path $directory.FullName -FailIfActive $true
     }
     git -C $repo worktree prune
@@ -729,7 +843,10 @@ try {
     git -C $commonLibWorktree fetch --no-tags --no-write-fetch-head $commonLibTrustedUpstreamUrl "+HEAD:$commonLibTrustedRef"
     if ($LASTEXITCODE -ne 0) { throw "Could not fetch trusted CommonLib upstream HEAD into its temporary ref." }
     $guestCommonLibTrustedUpstream = (git -C $commonLibWorktree rev-parse "$commonLibTrustedRef^{commit}").Trim()
-    if ($LASTEXITCODE -ne 0 -or $guestCommonLibTrustedUpstream -ne $commonLibTrustedUpstream) {
+    if ($LASTEXITCODE -ne 0 -or $guestCommonLibTrustedUpstream -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Guest CommonLib trusted-upstream ref did not resolve to a full commit."
+    }
+    if ($commonLibTrustedUpstreamRequired -and $guestCommonLibTrustedUpstream -ne $commonLibTrustedUpstream) {
         throw "Guest CommonLib trusted-upstream ref does not match the Linux probe."
     }
     git -C $commonLibWorktree cat-file -e "$commonLibCommonAncestor^{commit}"
@@ -928,6 +1045,7 @@ powershell_payload=${powershell_payload//__COMMONLIB_BASE__/$commonlib_base_comm
 powershell_payload=${powershell_payload//__COMMONLIB_TARGET__/$commonlib_target_commit}
 powershell_payload=${powershell_payload//__COMMONLIB_COMMON_ANCESTOR__/$commonlib_common_ancestor}
 powershell_payload=${powershell_payload//__COMMONLIB_TRUSTED_UPSTREAM__/$commonlib_trusted_upstream_commit}
+powershell_payload=${powershell_payload//__COMMONLIB_TRUSTED_UPSTREAM_REQUIRED__/$commonlib_trusted_upstream_match_required}
 powershell_payload=${powershell_payload//__COMMONLIB_TRUSTED_UPSTREAM_URL__/$commonlib_trusted_upstream_url}
 powershell_payload=${powershell_payload//__GUEST_COMMONLIB_BUNDLE__/$guest_commonlib_bundle}
 powershell_payload=${powershell_payload//__COMMONLIB_BUNDLE_SHA256__/$commonlib_bundle_sha256}
@@ -987,9 +1105,17 @@ fi
 if [[ $guest_commonlib_base != "$commonlib_base_commit" || \
       $guest_commonlib_target != "$commonlib_target_commit" || \
       $guest_commonlib_common_ancestor != "$commonlib_common_ancestor" || \
-      $guest_commonlib_trusted_upstream != "$commonlib_trusted_upstream_commit" || \
       $guest_commonlib_bundle_sha256 != "$commonlib_bundle_sha256" ]]; then
     echo "WinBoat candidate build did not report the verified CommonLib transfer identity." >&2
+    exit 2
+fi
+if [[ $commonlib_trusted_upstream_match_required == true ]]; then
+    if [[ $guest_commonlib_trusted_upstream != "$commonlib_trusted_upstream_commit" ]]; then
+        echo "WinBoat candidate build did not report the trusted CommonLib upstream from the Linux network probe." >&2
+        exit 2
+    fi
+elif [[ ! $guest_commonlib_trusted_upstream =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "WinBoat candidate build did not independently verify a trusted CommonLib upstream commit." >&2
     exit 2
 fi
 if [[ ! $candidate_ephemeral_revision =~ ^[0-9a-fA-F]{40}$ || $candidate_build_success != true ]]; then

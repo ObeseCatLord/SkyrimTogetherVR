@@ -1,5 +1,7 @@
 #include <catch2/catch.hpp>
 
+#include "../vr_common/VRGameplayBridge.h"
+
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -80,4 +82,59 @@ TEST_CASE("VR gameplay diagnostics use an explicit domain descriptor map", "[sky
     REQUIRE(diagnostics.find("ResetGameplayCounters") != std::string::npos);
     REQUIRE(diagnostics.find("if (published)") != std::string::npos);
     REQUIRE(diagnostics.find("m_statusDirty = true;") != std::string::npos);
+}
+
+TEST_CASE("VR gameplay diagnostics surface bounded actor-authority aggregates", "[skyrim-vr][telemetry]")
+{
+    const auto diagnostics = ReadRepositorySource("Code/client/Services/Generic/VRGameplayDiagnosticsService.cpp");
+    const auto bridge = ReadRepositorySource("Code/client/VRGameplayBridge.cpp");
+    const auto shared = ReadRepositorySource("Code/vr_common/VRGameplayBridge.h");
+
+    REQUIRE_FALSE(diagnostics.empty());
+    REQUIRE_FALSE(bridge.empty());
+    REQUIRE_FALSE(shared.empty());
+    REQUIRE(shared.find("kMappingAbiVersion = 23") != std::string::npos);
+    REQUIRE(shared.find("AuthoritySuppressedDamageCount") != std::string::npos);
+    REQUIRE(shared.find("AuthorityPublishedRemoteNpcHealthDeltaCount") != std::string::npos);
+    REQUIRE(shared.find("AuthorityLeaseFailureCount") != std::string::npos);
+    REQUIRE(shared.find("AuthorityRetirementTimeoutCount") != std::string::npos);
+    REQUIRE(shared.find("AuthorityRegistryInconsistencyCount") != std::string::npos);
+    REQUIRE(bridge.find("diagnostics.ActorAuthority") != std::string::npos);
+    REQUIRE(diagnostics.find("bridge.authority.suppressedDamage=") != std::string::npos);
+    REQUIRE(diagnostics.find("bridge.authority.retirementFailures=") != std::string::npos);
+    REQUIRE(diagnostics.find("bridge.authority.registryInconsistencies=") != std::string::npos);
+    REQUIRE(diagnostics.find("m_lastActorAuthorityDiagnostics") != std::string::npos);
+    REQUIRE(diagnostics.find("kSummaryLogInterval") != std::string::npos);
+}
+
+TEST_CASE("VR gameplay snapshot emits reconciled bridge loss attribution", "[skyrim-vr][telemetry]")
+{
+    using namespace SkyrimTogetherVR::GameplayBridge;
+
+    const auto diagnostics = ReadRepositorySource("Code/client/Services/Generic/VRGameplayDiagnosticsService.cpp");
+    const auto bridge = ReadRepositorySource("Code/client/VRGameplayBridge.cpp");
+    REQUIRE_FALSE(diagnostics.empty());
+    REQUIRE_FALSE(bridge.empty());
+
+    const auto writerBegin = diagnostics.find("bool WriteGameplayStatusSnapshot(");
+    const auto writerEnd = diagnostics.find(
+        "VRGameplayDiagnosticsService::VRGameplayDiagnosticsService(", writerBegin);
+    REQUIRE(writerBegin != std::string::npos);
+    REQUIRE(writerEnd != std::string::npos);
+    const auto writer = diagnostics.substr(writerBegin, writerEnd - writerBegin);
+
+    REQUIRE(writer.find("bridge.discardedEvents=") != std::string::npos);
+    REQUIRE(writer.find("bridge.discardedEvents.preReady=") != std::string::npos);
+    REQUIRE(writer.find("bridge.discardedEvents.lifecycleRetired=") != std::string::npos);
+    REQUIRE(writer.find("bridge.discardedEvents.other=") != std::string::npos);
+    REQUIRE(writer.find("bridge.rejectedSubmissions=") != std::string::npos);
+    REQUIRE(writer.find("bridge.rejectedSubmissions.preReady=") != std::string::npos);
+    REQUIRE(writer.find("bridge.rejectedSubmissions.lifecycleRetired=") != std::string::npos);
+    REQUIRE(writer.find("bridge.rejectedSubmissions.other=") != std::string::npos);
+    REQUIRE(writer.find("bridge.eventRingDroppedPushes=") != std::string::npos);
+
+    REQUIRE(bridge.find("diagnostics.DiscardedEventCount = ReconciledAttributionTotal(") != std::string::npos);
+    REQUIRE(bridge.find("diagnostics.RejectedSubmissionCount = ReconciledAttributionTotal(") != std::string::npos);
+    const auto total = ReconciledAttributionTotal(3, 4, 5);
+    REQUIRE(AreAttributionCountersReconciled(total, 3, 4, 5));
 }

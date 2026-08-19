@@ -2,6 +2,7 @@
 
 #include "DynamicActorBaseFlags.h"
 #include "LocalGameplayCapture.h"
+#include "ProgressionHooks.h"
 #include "VerifiedVrDeath.h"
 
 #include <algorithm>
@@ -115,7 +116,46 @@ bool g_bleedoutTransitionObserved{};
 
 [[nodiscard]] CommandStatus ResolveActor(const CommandRecord& a_command, RE::NiPointer<RE::Actor>& ar_actor) noexcept
 {
+    const auto& payload = a_command.Payload.ApplyGameplayAction;
+    if (payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0) {
+        // CommandExecutor has already admitted the matching local-native
+        // binding. Revalidate here because this is the final game-thread
+        // boundary before a native actor is dereferenced.
+        if (const auto binding = AvatarManager::Get().ValidateLocalNativeGameplayActor(a_command);
+            binding != CommandStatus::Success)
+            return binding;
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(payload.TargetLocalFormId);
+        if (!actor || actor == RE::PlayerCharacter::GetSingleton())
+            return CommandStatus::InvalidHandle;
+        ar_actor = RE::NiPointer<RE::Actor>(actor);
+        return CommandStatus::Success;
+    }
     return AvatarManager::Get().ResolveGameplayActor(a_command, ar_actor);
+}
+
+[[nodiscard]] bool IsLocalNativePhysicalHealthPayload(const GameplayActionPayload& a_payload) noexcept
+{
+    return a_payload.TargetHandle.Value == 0 && a_payload.TargetLocalFormId != 0 &&
+           a_payload.SecondaryHandle.Value == 0 &&
+           a_payload.LocalFormIdA == static_cast<std::uint32_t>(RE::ActorValue::kHealth) &&
+           a_payload.LocalFormIdB == 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
+           a_payload.ValueA == 0 && a_payload.ValueB == 0 && std::isfinite(a_payload.ScalarA) &&
+           a_payload.ScalarA < 0.0F && a_payload.ScalarB == 0.0F && a_payload.ScalarC == 0.0F &&
+           a_payload.ScalarD == 0.0F && a_payload.ActionFlags == 0 && a_payload.Reserved0 == 0 &&
+           std::all_of(std::begin(a_payload.ReservedTail), std::end(a_payload.ReservedTail),
+                       [](const std::uint8_t a_value) noexcept { return a_value == 0; });
+}
+
+[[nodiscard]] bool IsLocalNativePhysicalDeathPayload(const GameplayActionPayload& a_payload) noexcept
+{
+    return a_payload.TargetHandle.Value == 0 && a_payload.TargetLocalFormId != 0 &&
+           a_payload.SecondaryHandle.Value == 0 && a_payload.LocalFormIdA == 0 &&
+           a_payload.LocalFormIdB == 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
+           a_payload.ValueA == 1 && a_payload.ValueB == 0 && a_payload.ScalarA == 0.0F &&
+           a_payload.ScalarB == 0.0F && a_payload.ScalarC == 0.0F && a_payload.ScalarD == 0.0F &&
+           a_payload.ActionFlags == 0 && a_payload.Reserved0 == 0 &&
+           std::all_of(std::begin(a_payload.ReservedTail), std::end(a_payload.ReservedTail),
+                       [](const std::uint8_t a_value) noexcept { return a_value == 0; });
 }
 
 [[nodiscard]] CommandStatus ResolveObject(
@@ -513,8 +553,10 @@ void ResetPostRespawnState() noexcept
             return CommandStatus::Malformed;
         break;
     case GameplayAction::ModifyActorValue:
-        if (payload.TargetHandle.Value == 0 || !HasOnlyActorValueArguments(payload) ||
-            !IsValidActorValue(payload.LocalFormIdA) || !IsValidActorValueAmount(payload.ScalarA))
+        if ((payload.TargetHandle.Value == 0 && !IsLocalNativePhysicalHealthPayload(payload)) ||
+            (payload.TargetHandle.Value != 0 &&
+             (!HasOnlyActorValueArguments(payload) || !IsValidActorValue(payload.LocalFormIdA) ||
+              !IsValidActorValueAmount(payload.ScalarA))))
             return CommandStatus::Malformed;
         break;
     case GameplayAction::SyncExperience:
@@ -525,11 +567,12 @@ void ResetPostRespawnState() noexcept
             return CommandStatus::Malformed;
         break;
     case GameplayAction::SetDeathState:
-        if (payload.TargetHandle.Value == 0 || payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 ||
-            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
-            !IsBoolean(payload.ValueA) || payload.ValueB != 0 || payload.ScalarA != 0.0f ||
-            payload.ScalarB != 0.0f || payload.ScalarC != 0.0f || payload.ScalarD != 0.0f ||
-            payload.ActionFlags != 0)
+        if ((payload.TargetHandle.Value == 0 && !IsLocalNativePhysicalDeathPayload(payload)) ||
+            (payload.TargetHandle.Value != 0 &&
+             (payload.TargetLocalFormId != 0 || payload.LocalFormIdA != 0 || payload.LocalFormIdB != 0 ||
+              payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 || !IsBoolean(payload.ValueA) ||
+              payload.ValueB != 0 || payload.ScalarA != 0.0f || payload.ScalarB != 0.0f ||
+              payload.ScalarC != 0.0f || payload.ScalarD != 0.0f || payload.ActionFlags != 0)))
             return CommandStatus::Malformed;
         break;
     case GameplayAction::Respawn:
@@ -602,18 +645,27 @@ void ResetPostRespawnState() noexcept
     switch (action) {
     case GameplayAction::SetActorValue:
         actor->SetActorValue(static_cast<RE::ActorValue>(payload.LocalFormIdA), payload.ScalarA);
+        AvatarManager::Get().RecordAuthoritativeActorState(a_command, *actor);
         return CommandStatus::Success;
     case GameplayAction::SetActorMaximum:
         actor->SetBaseActorValue(static_cast<RE::ActorValue>(payload.LocalFormIdA), payload.ScalarA);
         return CommandStatus::Success;
     case GameplayAction::ModifyActorValue:
+    {
+        const bool localNative = payload.TargetHandle.Value == 0 && payload.TargetLocalFormId != 0;
         actor->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                              static_cast<RE::ActorValue>(payload.LocalFormIdA), payload.ScalarA);
         if (payload.LocalFormIdA == static_cast<std::uint32_t>(RE::ActorValue::kHealth) &&
             actor->GetActorValue(RE::ActorValue::kHealth) <= 0.0F && !actor->IsDead() &&
             !AvatarManager::Get().IsPlayerAvatar(a_command.Header.Identity, payload.TargetHandle))
             actor->KillDying();
+        // Native NPC observation samples values after each game-thread command,
+        // so this completed write becomes the next owner snapshot rather than
+        // being overwritten by an older polling baseline.
+        if (!localNative)
+            AvatarManager::Get().RecordAuthoritativeActorState(a_command, *actor);
         return CommandStatus::Success;
+    }
     case GameplayAction::SyncExperience:
     {
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -621,6 +673,7 @@ void ResetPostRespawnState() noexcept
             return CommandStatus::EngineRejected;
         if (!LocalGameplayCapture::ArmExperienceSuppression(payload.LocalFormIdA))
             return CommandStatus::EngineRejected;
+        const ProgressionHooks::ScopedRemoteExperienceApplication remoteExperience;
         player->AddSkillExperience(static_cast<RE::ActorValue>(payload.LocalFormIdA), payload.ScalarA);
         return CommandStatus::Success;
     }
@@ -629,12 +682,17 @@ void ResetPostRespawnState() noexcept
             actor->KillDying();
         else
             actor->Resurrect(false, true);
+        if (payload.TargetHandle.Value != 0)
+            AvatarManager::Get().RecordAuthoritativeActorState(a_command, *actor);
         return CommandStatus::Success;
     case GameplayAction::Respawn:
         if (payload.TargetHandle.Value == kLocalPlayerHandle.Value)
             return RespawnLocalPlayer(*actor);
         actor->Resurrect(false, true);
-        return actor->IsDead() ? CommandStatus::EngineRejected : CommandStatus::Success;
+        if (actor->IsDead())
+            return CommandStatus::EngineRejected;
+        AvatarManager::Get().RecordAuthoritativeActorState(a_command, *actor);
+        return CommandStatus::Success;
     case GameplayAction::Mount:
     {
         if (payload.SecondaryHandle.Value == 0) {

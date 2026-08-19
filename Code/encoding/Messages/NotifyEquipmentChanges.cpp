@@ -5,6 +5,8 @@ void NotifyEquipmentChanges::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
 {
     Serialization::WriteVarInt(aWriter, ServerId);
     Serialization::WriteVarInt(aWriter, TransactionId);
+    Serialization::WriteVarInt(aWriter, CanonicalRevision);
+    Serialization::WriteVarInt(aWriter, ResyncRequestId);
     ItemId.Serialize(aWriter);
     EquipSlotId.Serialize(aWriter);
     Serialization::WriteVarInt(aWriter, Count);
@@ -20,6 +22,8 @@ void NotifyEquipmentChanges::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
 
     ServerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     TransactionId = Serialization::ReadVarInt(aReader);
+    CanonicalRevision = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    ResyncRequestId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     ItemId.Deserialize(aReader);
     EquipSlotId.Deserialize(aReader);
     Count = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;

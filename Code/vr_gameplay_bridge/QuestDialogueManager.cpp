@@ -3,6 +3,7 @@
 #include "AvatarManager.h"
 #include "LocalGameplayCapture.h"
 #include "QuestNativeAccess.h"
+#include "WaypointHooks.h"
 
 #include <vr_common/VRCanonicalEntity.h>
 
@@ -20,17 +21,7 @@ namespace
 constexpr std::int32_t kQuestStatusStarted = 1;
 constexpr std::int32_t kQuestStatusStopped = 2;
 constexpr std::uint32_t kMaximumQuestType = 11;
-constexpr std::uint64_t kSetWaypointVrRva = 0x06C74D0;
-constexpr std::uint64_t kRemoveWaypointVrRva = 0x06C7630;
 constexpr std::uint64_t kMoveToVrRva = 0x09E90E0;
-constexpr std::array<std::uint8_t, 16> kSetWaypointVrPrologue{
-    0x40, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57,
-    0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24,
-};
-constexpr std::array<std::uint8_t, 16> kRemoveWaypointVrPrologue{
-    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
-    0xEC, 0x20, 0x48, 0x8D, 0x05, 0x1F, 0x20, 0x8C,
-};
 constexpr std::array<std::uint8_t, 16> kMoveToVrPrologue{
     0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57,
     0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
@@ -163,6 +154,11 @@ void CancelQuestSuppressions(const QuestStageResult& a_result) noexcept
     if (before.Stage == a_stage && !before.Stopped)
         return {.Status = CommandStatus::Success};
 
+    // Match desktop ScriptSetStage semantics. Replaying a historically
+    // completed stage must not restart fragments, aliases, or objectives.
+    if (QuestNativeAccess::IsStageDone(a_quest, a_stage))
+        return {.Status = CommandStatus::Success};
+
     // Native SetStage can start a stopped quest as well as emit its stage
     // event. This applies to both Started and StageUpdate packets. The
     // bridge-owned relocation pins its audited VR RVA and desktop IDs; this
@@ -255,7 +251,10 @@ void CancelQuestSuppressions(const QuestStageResult& a_result) noexcept
         CancelQuestSuppressions(stageResult);
         return ReconcilePartialOrReject(*quest, beforeStart);
     }
-    if (quest->GetCurrentStageID() == static_cast<std::uint16_t>(payload.ValueA) &&
+    const auto requestedStage = static_cast<std::uint16_t>(payload.ValueA);
+    const bool stageSatisfied = quest->GetCurrentStageID() == requestedStage ||
+                                QuestNativeAccess::IsStageDone(*quest, requestedStage);
+    if (stageSatisfied &&
         quest->IsActive() && !quest->IsStopped())
         return CommandStatus::Success;
 
@@ -368,22 +367,19 @@ void CancelQuestSuppressions(const QuestStageResult& a_result) noexcept
             return CommandStatus::Malformed;
         if (auto* worldspace = LookupLocalForm<RE::TESWorldSpace>(payload.LocalFormIdA)) {
             RE::NiPoint3 position{payload.ScalarA, payload.ScalarB, payload.ScalarC};
-            using SetWaypoint = void(RE::PlayerCharacter*, RE::NiPoint3*, RE::TESWorldSpace*);
-            // The generated VR row for desktop ID 40535 points at an
-            // unrelated routine. RVA 0x6C74D0 is the verified VR equivalent:
-            // its body creates/reuses the custom marker, writes the supplied
-            // NiPoint3, consumes the TESWorldSpace argument, and stores the
-            // handle at VR PlayerCharacter offset 0x1020.
-            static REL::Relocation<SetWaypoint> setWaypoint{REL::Offset(kSetWaypointVrRva)};
-            if (setWaypoint.offset() != kSetWaypointVrRva ||
-                std::memcmp(reinterpret_cast<const void*>(setWaypoint.address()),
-                            kSetWaypointVrPrologue.data(), kSetWaypointVrPrologue.size()) != 0)
+            // The shared hook owner resolves this exact direct VR target and
+            // validates both RVA and prologue before the bridge registers any
+            // irreversible SKSE callbacks. The scope keeps the detour from
+            // echoing this inbound server-authoritative mutation.
+            WaypointHooks::ScopedRemoteWaypointReplay replay;
+            if (!WaypointHooks::InvokeSetWaypoint(player, std::addressof(position), worldspace))
                 return CommandStatus::Unsupported;
-            setWaypoint(player, std::addressof(position), worldspace);
             const auto* runtime = player->GetVRInfoRuntimeData();
             const auto marker = runtime ? runtime->playerMapMarker.get() : nullptr;
-            return marker && marker->GetWorldspace() == worldspace && marker->GetPosition() == position ?
-                       CommandStatus::Success : CommandStatus::EngineRejected;
+            if (!marker || marker->GetWorldspace() != worldspace || marker->GetPosition() != position)
+                return CommandStatus::EngineRejected;
+            LocalGameplayCapture::AcknowledgeRemoteWaypointSet(*worldspace, position);
+            return CommandStatus::Success;
         }
         else
             return CommandStatus::MissingForm;
@@ -391,19 +387,14 @@ void CancelQuestSuppressions(const QuestStageResult& a_result) noexcept
         if (payload.LocalFormIdA != 0 || !HasNoUnusedActionFields(payload))
             return CommandStatus::Malformed;
         {
-            using RemoveWaypoint = void(RE::PlayerCharacter*);
-            // RVA 0x6C7630 releases the handle at VR offset 0x1020, restores
-            // the invalid handle sentinel, and updates the marker path. The
-            // generated desktop ID 40536 row is not this function in VR.
-            static REL::Relocation<RemoveWaypoint> removeWaypoint{REL::Offset(kRemoveWaypointVrRva)};
-            if (removeWaypoint.offset() != kRemoveWaypointVrRva ||
-                std::memcmp(reinterpret_cast<const void*>(removeWaypoint.address()),
-                            kRemoveWaypointVrPrologue.data(), kRemoveWaypointVrPrologue.size()) != 0)
+            WaypointHooks::ScopedRemoteWaypointReplay replay;
+            if (!WaypointHooks::InvokeRemoveWaypoint(player))
                 return CommandStatus::Unsupported;
-            removeWaypoint(player);
             const auto* runtime = player->GetVRInfoRuntimeData();
-            return runtime && !runtime->playerMapMarker.get() ?
-                       CommandStatus::Success : CommandStatus::EngineRejected;
+            if (!runtime || runtime->playerMapMarker.get())
+                return CommandStatus::EngineRejected;
+            LocalGameplayCapture::AcknowledgeRemoteWaypointRemove();
+            return CommandStatus::Success;
         }
     default:
         return CommandStatus::Malformed;

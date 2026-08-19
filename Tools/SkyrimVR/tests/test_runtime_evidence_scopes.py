@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import importlib.util
 import io
 import json
@@ -60,6 +61,63 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def paired_session_evidence() -> tuple[
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+    ]:
+        game = pathlib.Path("/fixture")
+        primary = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(game)
+        )
+        peer = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(
+                game,
+                launch_nonce="fedcba9876543210fedcba9876543210",
+                process_id=43,
+                session_id=456,
+                connection_generation=2,
+            )
+        )
+        primary_status = {
+            "online": "1",
+            "playerId": "4",
+            "launchNonce": primary["launchNonce"],
+            "processId": primary["processId"],
+            "sessionId": primary["session.id"],
+            "serverInstanceNonce": primary["session.serverInstanceNonce"],
+            "connectionGeneration": primary["session.connectionGeneration"],
+        }
+        peer_status = {
+            "online": "1",
+            "playerId": "5",
+            "launchNonce": peer["launchNonce"],
+            "processId": peer["processId"],
+            "sessionId": peer["session.id"],
+            "serverInstanceNonce": peer["session.serverInstanceNonce"],
+            "connectionGeneration": peer["session.connectionGeneration"],
+        }
+        return primary, peer, primary_status, peer_status
+
+    def explicit_scenario(self, domains: tuple[str, ...]) -> tuple[
+        dict[str, object],
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+    ]:
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        scenario = ARCHIVE_AUDIT.scenario_evidence_fixture(
+            domains,
+            primary=ARCHIVE_AUDIT._expected_scenario_client(primary, primary_status),
+            peer=ARCHIVE_AUDIT._expected_scenario_client(peer, peer_status),
+            server_instance_nonce=primary["session.serverInstanceNonce"],
+            now=dt.datetime.now(dt.timezone.utc),
+        )
+        return scenario, primary, peer, primary_status, peer_status
+
     def test_collector_gameplay_bootstrap_propagates_only_local_requirements(self) -> None:
         with mock.patch.object(COLLECT, "collect", return_value=pathlib.Path("fixture.zip")) as collect:
             with mock.patch.object(sys, "argv", ["collect_runtime_evidence.py", "--gameplay-bootstrap"]):
@@ -102,121 +160,203 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         )
         self.assertEqual(canonical, COLLECT.vr_handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS)
         self.assertEqual(optional, ())
-        primary = COLLECT.vr_handoff.parse_key_value_text(
-            COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
-        )
-        peer = dict(primary)
-        peer["domain.quest.applied"] = "0"
-        failures: list[str] = []
-        ARCHIVE_AUDIT.require_paired_domain_evidence(
-            primary,
-            peer,
-            canonical,
-            failures,
-            scope="mandatory canonical",
-        )
-        self.assertIn(
-            "paired mandatory canonical domain quest lacks primary captured/sent and peer applied counters",
-            failures,
-        )
-
-    def test_paired_save_load_accepts_local_lifecycle_rehydration_evidence(self) -> None:
-        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
-        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
-        peer = dict(primary)
-
-        self.assertEqual(primary["domain.save_load.sent"], "0")
-        for field, expected in COLLECT.vr_handoff.GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items():
-            self.assertEqual(primary[f"domain.save_load.{field}"], expected)
-
-        failures: list[str] = []
-        ARCHIVE_AUDIT.require_paired_domain_evidence(
-            primary,
-            peer,
-            ("save_load",),
-            failures,
-            scope="mandatory canonical",
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario(canonical)
+        # Activity counts remain diagnostics. Mutating unrelated aggregate
+        # counts cannot make or break action-correlated scenario validation.
+        primary["domain.quest.captured"] = "900"
+        peer["domain.quest.applied"] = "900"
+        failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=canonical,
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         )
         self.assertEqual(failures, [])
 
-    def test_paired_save_load_requires_exact_contract_on_both_peers(self) -> None:
-        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
-        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
-        peer = dict(primary)
-
-        for label in ("primary", "peer"):
-            for field, expected in COLLECT.vr_handoff.GAMEPLAY_SAVE_LOAD_EVIDENCE_CONTRACT.items():
-                with self.subTest(label=label, field=field):
-                    altered_primary = dict(primary)
-                    altered_peer = dict(peer)
-                    altered = altered_primary if label == "primary" else altered_peer
-                    altered[f"domain.save_load.{field}"] = "wrong"
-                    failures: list[str] = []
-                    ARCHIVE_AUDIT.require_paired_domain_evidence(
-                        altered_primary,
-                        altered_peer,
-                        ("save_load",),
-                        failures,
-                        scope="mandatory canonical",
-                    )
-                    self.assertIn(
-                        "paired mandatory canonical domain save_load "
-                        f"{label} requires domain.save_load.{field}={expected}",
-                        failures,
-                    )
-
-    def test_paired_save_load_requires_each_peer_captured_and_applied(self) -> None:
-        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
-        primary = COLLECT.vr_handoff.parse_key_value_text(fixture)
-        peer = dict(primary)
-
-        for label in ("primary", "peer"):
-            for counter in ("captured", "applied"):
-                with self.subTest(label=label, counter=counter):
-                    altered_primary = dict(primary)
-                    altered_peer = dict(peer)
-                    altered = altered_primary if label == "primary" else altered_peer
-                    altered[f"domain.save_load.{counter}"] = "0"
-                    failures: list[str] = []
-                    ARCHIVE_AUDIT.require_paired_domain_evidence(
-                        altered_primary,
-                        altered_peer,
-                        ("save_load",),
-                        failures,
-                        scope="mandatory canonical",
-                    )
-                    self.assertIn(
-                        "paired mandatory canonical domain save_load "
-                        f"{label} lacks captured/applied lifecycle evidence",
-                        failures,
-                    )
-
-    def test_paired_counters_require_complementary_peer_session_evidence(self) -> None:
-        game = pathlib.Path("/fixture")
-        primary = COLLECT.vr_handoff.parse_key_value_text(COLLECT.vr_handoff.gameplay_snapshot_fixture(game))
-        peer = COLLECT.vr_handoff.parse_key_value_text(
-            COLLECT.vr_handoff.gameplay_snapshot_fixture(
-                game,
-                launch_nonce="fedcba9876543210fedcba9876543210",
-                process_id=43,
-            )
+        no_scenario_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            {},
+            expected_domains=canonical,
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         )
-        primary_status = {
-            "online": "1",
-            "playerId": "4",
-            "launchNonce": primary["launchNonce"],
-            "processId": primary["processId"],
-            "sessionId": primary["session.id"],
-            "serverInstanceNonce": primary["session.serverInstanceNonce"],
-            "connectionGeneration": primary["session.connectionGeneration"],
-        }
-        peer_status = dict(primary_status)
-        peer_status.update(
-            {
-                "launchNonce": peer["launchNonce"],
-                "processId": peer["processId"],
-            }
+        self.assertIn(
+            "scenario evidence is missing required domain quest",
+            no_scenario_failures,
         )
+
+    def test_paired_save_load_requires_explicit_receiver_post_state(self) -> None:
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario(("save_load",))
+        self.assertEqual(primary["domain.save_load.sent"], "0")
+        for action in scenario["domains"][0]["actions"]:
+            action["receiverObservation"]["postState"] = {}
+        failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=("save_load",),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertTrue(any("receiverObservation.postState" in failure for failure in failures))
+
+    def test_explicit_scenario_evidence_validates_all_required_bindings(self) -> None:
+        domains = COLLECT.vr_handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario(domains)
+        failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=domains,
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertEqual(failures, [])
+
+        body_actions = next(row for row in scenario["domains"] if row["domain"] == "vr_body_pose")["actions"]
+        self.assertTrue(all("manualHumanObservation" in action for action in body_actions))
+
+    def test_explicit_scenario_evidence_rejects_malformed_replayed_and_cross_session_records(self) -> None:
+        domain = "magic"
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario((domain,))
+
+        malformed = json.loads(json.dumps(scenario))
+        malformed["domains"][0]["actions"][0]["target"] = None
+        malformed_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            malformed,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertTrue(any("requires a target identity" in failure for failure in malformed_failures))
+
+        replayed = json.loads(json.dumps(scenario))
+        replayed["domains"][0]["actions"][1]["correlationToken"] = replayed["domains"][0]["actions"][0]["correlationToken"]
+        replayed_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            replayed,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertTrue(any("replays a correlationToken" in failure for failure in replayed_failures))
+
+        cross_session_peer = dict(peer)
+        cross_session_peer_status = dict(peer_status)
+        cross_session_peer["session.serverInstanceNonce"] = "100"
+        cross_session_peer_status["serverInstanceNonce"] = "100"
+        cross_session_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=cross_session_peer,
+            primary_status=primary_status,
+            peer_status=cross_session_peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertIn(
+            "scenario evidence serverInstanceNonce does not match peer archived session",
+            cross_session_failures,
+        )
+
+    def test_scenario_shape_validation_rejects_stale_and_mislabeled_engine_proof(self) -> None:
+        domain = "movement"
+        stale_time = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario((domain,))
+        scenario = ARCHIVE_AUDIT.scenario_evidence_fixture(
+            (domain,),
+            primary=ARCHIVE_AUDIT._expected_scenario_client(primary, primary_status),
+            peer=ARCHIVE_AUDIT._expected_scenario_client(peer, peer_status),
+            server_instance_nonce=primary["session.serverInstanceNonce"],
+            now=stale_time,
+        )
+        stale_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertIn("scenario evidence is stale relative to collection createdUtc", stale_failures)
+
+        scenario, primary, peer, primary_status, peer_status = self.explicit_scenario((domain,))
+        legacy = json.loads(json.dumps(scenario))
+        for action in legacy["domains"][0]["actions"]:
+            action["proof"]["kind"] = "engine_correlated"
+        legacy_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            legacy,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertTrue(any("cannot claim native engine correlation" in failure for failure in legacy_failures))
+
+        for action in scenario["domains"][0]["actions"]:
+            action["proof"] = {"kind": "manual_unproven", "reason": "no engine action ID in this tranche"}
+        manual_failures = ARCHIVE_AUDIT.validate_scenario_evidence(
+            scenario,
+            expected_domains=(domain,),
+            primary_snapshot=primary,
+            peer_snapshot=peer,
+            primary_status=primary_status,
+            peer_status=peer_status,
+            collection_created_utc=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        self.assertEqual(manual_failures, [])
+
+    def test_strict_paired_scenario_certification_requires_native_trace_corroboration(self) -> None:
+        canonical = COLLECT.vr_handoff.GAMEPLAY_MANDATORY_CANONICAL_DOMAINS
+        for expected_domains in (canonical, ("movement",)):
+            with self.subTest(expected_domains=expected_domains):
+                scenario, primary, peer, primary_status, peer_status = self.explicit_scenario(expected_domains)
+                payload = json.dumps(scenario, sort_keys=True).encode("utf-8")
+                with tempfile.TemporaryDirectory(prefix="stvr-native-trace-") as temp:
+                    root = pathlib.Path(temp)
+                    primary_archive = root / "primary.zip"
+                    peer_archive = root / "peer.zip"
+                    for archive in (primary_archive, peer_archive):
+                        with zipfile.ZipFile(archive, "w") as zf:
+                            zf.writestr(ARCHIVE_AUDIT.SCENARIO_EVIDENCE_ARCHIVE_ENTRY, payload)
+                    failures: list[str] = []
+                    with zipfile.ZipFile(primary_archive) as primary_zf, zipfile.ZipFile(peer_archive) as peer_zf:
+                        ARCHIVE_AUDIT.require_paired_scenario_evidence(
+                            primary_zf,
+                            set(primary_zf.namelist()),
+                            peer_zf,
+                            set(peer_zf.namelist()),
+                            primary_snapshot=primary,
+                            peer_snapshot=peer,
+                            primary_status=primary_status,
+                            peer_status=peer_status,
+                            primary_manifest={
+                                "createdUtc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+                            },
+                            expected_domains=expected_domains,
+                            failures=failures,
+                        )
+                self.assertIn(ARCHIVE_AUDIT.NATIVE_TRACE_CORROBORATION_MISSING, failures)
+
+    def test_paired_counters_accept_distinct_clients_with_shared_server(self) -> None:
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        self.assertEqual(primary["session.connectionGeneration"], "1")
+        self.assertEqual(peer["session.connectionGeneration"], "2")
         failures: list[str] = []
         ARCHIVE_AUDIT.require_paired_session_evidence(
             primary,
@@ -225,7 +365,216 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
             peer_status,
             failures,
         )
+        self.assertEqual(failures, [])
+
+    def test_paired_counters_reject_reused_client_identity(self) -> None:
+        status_field_by_snapshot_field = {
+            "session.id": "sessionId",
+            "launchNonce": "launchNonce",
+            "processId": "processId",
+            "session.connectionGeneration": "connectionGeneration",
+        }
+        for snapshot_field, status_field in status_field_by_snapshot_field.items():
+            with self.subTest(snapshot_field=snapshot_field):
+                primary, peer, primary_status, peer_status = self.paired_session_evidence()
+                peer[snapshot_field] = primary[snapshot_field]
+                peer_status[status_field] = primary_status[status_field]
+                failures: list[str] = []
+                ARCHIVE_AUDIT.require_paired_session_evidence(
+                    primary,
+                    peer,
+                    primary_status,
+                    peer_status,
+                    failures,
+                )
+                self.assertIn(
+                    f"paired evidence must originate from distinct clients ({snapshot_field})",
+                    failures,
+                )
+
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        peer_status["playerId"] = primary_status["playerId"]
+        failures = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
         self.assertIn("paired evidence must originate from distinct players", failures)
+
+    def test_paired_counters_require_generation_to_match_own_nonzero_status(self) -> None:
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        peer["session.connectionGeneration"] = "0"
+        peer_status["connectionGeneration"] = "0"
+        failures: list[str] = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
+        self.assertIn(
+            "peer gameplay session.connectionGeneration is missing or zero",
+            failures,
+        )
+
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        peer["session.connectionGeneration"] = "3"
+        failures = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
+        self.assertIn(
+            "peer gameplay session.connectionGeneration does not match status connectionGeneration",
+            failures,
+        )
+
+    def test_paired_counters_require_one_nonzero_shared_server_instance(self) -> None:
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        peer["session.serverInstanceNonce"] = "100"
+        peer_status["serverInstanceNonce"] = "100"
+        failures: list[str] = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
+        self.assertIn("paired evidence session.serverInstanceNonce differs", failures)
+
+        primary, peer, primary_status, peer_status = self.paired_session_evidence()
+        primary["session.serverInstanceNonce"] = "0"
+        primary_status["serverInstanceNonce"] = "0"
+        failures = []
+        ARCHIVE_AUDIT.require_paired_session_evidence(
+            primary,
+            peer,
+            primary_status,
+            peer_status,
+            failures,
+        )
+        self.assertIn(
+            "primary paired evidence lacks nonzero session.serverInstanceNonce",
+            failures,
+        )
+
+    def test_strict_gameplay_loss_counters_reject_harmful_loss(self) -> None:
+        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        for field, label in (
+            ("bridge.eventRingDroppedPushes", "event-ring dropped pushes"),
+            ("bridge.commandRingDroppedPushes", "command-ring dropped pushes"),
+            ("bridge.rejectedCommands", "rejected commands"),
+            ("bridge.discardedEvents", "discarded events"),
+            ("bridge.rejectedSubmissions", "rejected submissions"),
+        ):
+            with self.subTest(field=field):
+                values = COLLECT.vr_handoff.parse_key_value_text(fixture)
+                values[field] = "1"
+                failures: list[str] = []
+                warnings: list[str] = []
+                ARCHIVE_AUDIT.audit_gameplay_loss_counters(
+                    values,
+                    failures,
+                    warnings,
+                    label="primary",
+                    strict=True,
+                )
+                self.assertEqual(warnings, [])
+                self.assertIn(
+                    f"primary gameplay snapshot reports harmful {label}: 1 unclassified of 1",
+                    failures,
+                )
+
+    def test_strict_gameplay_loss_counters_require_nonnegative_values(self) -> None:
+        fixture = COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        for value, detail in ((None, "missing or invalid"), ("-1", "missing or invalid")):
+            with self.subTest(value=value):
+                values = COLLECT.vr_handoff.parse_key_value_text(fixture)
+                if value is None:
+                    values.pop("bridge.commandRingDroppedPushes")
+                else:
+                    values["bridge.commandRingDroppedPushes"] = value
+                failures: list[str] = []
+                warnings: list[str] = []
+                ARCHIVE_AUDIT.audit_gameplay_loss_counters(
+                    values,
+                    failures,
+                    warnings,
+                    label="primary",
+                    strict=True,
+                )
+                self.assertEqual(warnings, [])
+                self.assertIn(
+                    f"primary gameplay snapshot bridge.commandRingDroppedPushes is {detail}",
+                    failures,
+                )
+
+    def test_loss_counters_exempt_only_explicit_lifecycle_work(self) -> None:
+        values = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        )
+        values.update(
+            {
+                "bridge.discardedEvents": "3",
+                "bridge.discardedEvents.preReady": "1",
+                "bridge.discardedEvents.lifecycleRetired": "2",
+                "bridge.rejectedSubmissions": "4",
+                "bridge.rejectedSubmissions.preReady": "3",
+                "bridge.rejectedSubmissions.lifecycleRetired": "1",
+            }
+        )
+        failures: list[str] = []
+        warnings: list[str] = []
+        ARCHIVE_AUDIT.audit_gameplay_loss_counters(
+            values,
+            failures,
+            warnings,
+            label="primary",
+            strict=True,
+        )
+        self.assertEqual(failures, [])
+        self.assertEqual(warnings, [])
+
+        values["bridge.discardedEvents.lifecycleRetired"] = "3"
+        ARCHIVE_AUDIT.audit_gameplay_loss_counters(
+            values,
+            failures,
+            warnings,
+            label="primary",
+            strict=True,
+        )
+        self.assertIn(
+            "primary gameplay snapshot bridge.discardedEvents lifecycle exclusions exceed the total (4>3)",
+            failures,
+        )
+
+    def test_non_strict_gameplay_loss_counters_warn_without_failing(self) -> None:
+        values = COLLECT.vr_handoff.parse_key_value_text(
+            COLLECT.vr_handoff.gameplay_snapshot_fixture(pathlib.Path("/fixture"))
+        )
+        values["bridge.eventRingDroppedPushes"] = "2"
+        failures: list[str] = []
+        warnings: list[str] = []
+        ARCHIVE_AUDIT.audit_gameplay_loss_counters(
+            values,
+            failures,
+            warnings,
+            label="primary",
+            strict=False,
+        )
+        self.assertEqual(failures, [])
+        self.assertIn(
+            "primary gameplay snapshot reports harmful event-ring dropped pushes: 2 unclassified of 2",
+            warnings,
+        )
 
     def test_bootstrap_accepts_live_startup_breadcrumbs_without_shutdown(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stvr-live-log-") as temp:
@@ -308,6 +657,33 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 self.assertFalse(manifest["liveAdmissionRequested"])
                 self.assertEqual(manifest["runtimeEvidenceTrust"], "untrusted")
 
+    def test_collector_copies_precreated_scenario_evidence_without_rewriting_it(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stvr-scenario-collector-") as temp:
+            root = pathlib.Path(temp)
+            game = root / "SkyrimVR"
+            handoff = game / "Data" / "SkyrimTogetherReborn"
+            handoff.mkdir(parents=True)
+            (game / COLLECT.BUILD_MANIFEST_NAME).write_text(
+                json.dumps(self.package_manifest()), encoding="utf-8"
+            )
+            source = root / "prepared-scenario.json"
+            payload = b'{"precreated":"collector must not rewrite this"}\n'
+            source.write_bytes(payload)
+            args = COLLECT.build_collection_args(
+                game_path=game,
+                handoff_dir=handoff,
+                out=root / "evidence.zip",
+                scenario_evidence=source,
+                no_audit=True,
+            )
+            identity = {"schema": "skyrim_together_vr_runtime_identity_v1", "ok": False, "reasons": ["fixture"]}
+            with mock.patch.object(COLLECT.vr_handoff, "evaluate_runtime_identity", return_value=identity):
+                archive = COLLECT.collect(args)
+            with zipfile.ZipFile(archive) as zf:
+                self.assertEqual(zf.read(ARCHIVE_AUDIT.SCENARIO_EVIDENCE_ARCHIVE_ENTRY), payload)
+                manifest = json.loads(zf.read("manifest.json"))
+                self.assertTrue(manifest["scenarioEvidence"]["provided"])
+
     def test_failed_live_admission_returns_nonzero_and_preserves_archive(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stvr-live-admission-cli-") as temp:
             archive = pathlib.Path(temp) / "failed.zip"
@@ -326,7 +702,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         identity_readouts = {
             "status": (
                 "online=1\nlaunchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=15\n"
+                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=17\n"
                 "serverInstanceNonce=1\nsessionId=1\nconnectionGeneration=1\ngamePath=/fixture\n"
             ),
             "lifecycle": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
@@ -395,7 +771,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 "status": (
                     "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
                     "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=15\n"
+                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=17\n"
                     "serverInstanceNonce=99\ngamePath={}\n".format(game)
                 ),
                 "lifecycle": (

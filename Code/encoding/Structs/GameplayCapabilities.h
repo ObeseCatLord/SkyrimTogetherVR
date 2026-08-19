@@ -10,10 +10,19 @@ namespace SkyrimTogether::Protocol
 // mutation batch, keeping mutation delivery independent from HIGGS telemetry.
 // Revision 15 separates VR client identity from optional direct relays and
 // makes the mandatory native gameplay-parity contract explicit at admission.
+// Revision 16 identity-authorizes attacker-originated health deltas against an
+// owned attacker entity and rejects duplicate action nonces. This is replay
+// resistance and sender authority, not proof that a compromised client
+// reported truthful damage.
+// Revision 17 adds server-issued mutation event IDs for inventory, health,
+// projectile, spell-cast, and magic-effect relays, plus explicit canonical
+// actor and final-equipment resynchronization requests. Receivers deduplicate
+// one retransmitted edge by event identity rather than equal payload bytes,
+// and terminal recovery is no longer dependent on an unsolicited update.
 // Exact matching prevents older endpoints from decoding the changed layout.
 // Additive negotiated capability bits do not change this revision because
 // endpoints already intersect the advertised masks.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 15;
+inline constexpr std::uint32_t kGameplayProtocolRevision = 17;
 
 enum class GameplayCapability : std::uint64_t
 {
@@ -46,6 +55,10 @@ enum class GameplayCapability : std::uint64_t
     VrClient = 1ull << 24,
     NativeGameplayParity = 1ull << 25,
     VrGameplayClient = 1ull << 26,
+    // The canonical transaction-id equipment protocol carries the complete
+    // final worn state plus left/right spells and shout selection.
+    FinalEquipmentTransactions = 1ull << 27,
+    CanonicalStateResync = 1ull << 28,
 };
 
 using GameplayCapabilityMask = std::uint64_t;
@@ -79,9 +92,10 @@ inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
     ToMask(GameplayCapability::VRAppearanceRelay);
 
 // Direct packets are optional VR extensions. Only handlers that perform a
-// complete receive/apply operation are advertised. Equipment, magic, combat,
-// and projectile diagnostics remain protocol-defined but cannot be negotiated
-// as gameplay capabilities.
+// complete receive/apply operation are advertised. VREquipmentRelay remains
+// protocol-defined but unsupported until RequestVREquipmentUpdate has both a
+// producer and an applying receiver; final equipment transactions use their
+// separate canonical capability below.
 inline constexpr GameplayCapabilityMask kFunctionalVRRelayCapabilities =
     ToMask(GameplayCapability::VRPoseRelay) |
     ToMask(GameplayCapability::VRHiggsRelay) |
@@ -117,8 +131,9 @@ enum class VRProductionProfile : std::uint8_t
 };
 
 // These profile baselines are the complete non-relay contracts emitted by the
-// three production VR targets. Direct relays are intentionally added only
-// after their corresponding runtime service has proved operational.
+// three production VR targets. Optional direct relays are added only after
+// their corresponding runtime service has proved operational. Native gameplay
+// requires the complete canonical final-equipment transaction contract.
 inline constexpr GameplayCapabilityMask kVRConnectionOnlyProfileCapabilities =
     kCoreCapabilities | ToMask(GameplayCapability::VrClient);
 inline constexpr GameplayCapabilityMask kVRAvatarSyncProfileCapabilities =
@@ -126,7 +141,9 @@ inline constexpr GameplayCapabilityMask kVRAvatarSyncProfileCapabilities =
 inline constexpr GameplayCapabilityMask kVRGameplayProfileCapabilities =
     kVRAvatarSyncProfileCapabilities | kVRNpcOwnershipCapabilities |
     ToMask(GameplayCapability::NativeGameplayParity) |
-    ToMask(GameplayCapability::VrGameplayClient);
+    ToMask(GameplayCapability::VrGameplayClient) |
+    ToMask(GameplayCapability::FinalEquipmentTransactions) |
+    ToMask(GameplayCapability::CanonicalStateResync);
 
 [[nodiscard]] constexpr GameplayCapabilityMask BuildVRProductionCapabilities(
     const VRProductionProfile aProfile,
@@ -150,12 +167,16 @@ inline constexpr GameplayCapabilityMask kServerCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
     kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
     ToMask(GameplayCapability::NativeGameplayParity) |
-    ToMask(GameplayCapability::VrGameplayClient);
+    ToMask(GameplayCapability::VrGameplayClient) |
+    ToMask(GameplayCapability::FinalEquipmentTransactions) |
+    ToMask(GameplayCapability::CanonicalStateResync);
 inline constexpr GameplayCapabilityMask kClientCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
     kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
     ToMask(GameplayCapability::NativeGameplayParity) |
-    ToMask(GameplayCapability::VrGameplayClient);
+    ToMask(GameplayCapability::VrGameplayClient) |
+    ToMask(GameplayCapability::FinalEquipmentTransactions) |
+    ToMask(GameplayCapability::CanonicalStateResync);
 
 [[nodiscard]] constexpr bool IsVrClient(const GameplayCapabilityMask aMask) noexcept
 {
@@ -175,7 +196,9 @@ inline constexpr GameplayCapabilityMask kClientCapabilities =
 inline constexpr GameplayCapabilityMask kVRIdentityRequiredCapabilities =
     kVRRelayCapabilities | kVRNpcOwnershipCapabilities |
     ToMask(GameplayCapability::NativeGameplayParity) |
-    ToMask(GameplayCapability::VrGameplayClient);
+    ToMask(GameplayCapability::VrGameplayClient) |
+    ToMask(GameplayCapability::FinalEquipmentTransactions) |
+    ToMask(GameplayCapability::CanonicalStateResync);
 
 [[nodiscard]] constexpr bool HasVrGameplayIntent(const GameplayCapabilityMask aMask) noexcept
 {
@@ -216,7 +239,9 @@ inline constexpr GameplayCapabilityMask kVRIdentityRequiredCapabilities =
         return HasCompleteVRGameplayContract(aMask);
 
     return !HasNativeGameplayParity(aMask) && !HasVRNpcOwnershipContract(aMask) &&
-           (aMask & kVRNpcOwnershipCapabilities) == 0;
+           (aMask & kVRNpcOwnershipCapabilities) == 0 &&
+           !HasCapability(aMask, GameplayCapability::FinalEquipmentTransactions) &&
+           !HasCapability(aMask, GameplayCapability::CanonicalStateResync);
 }
 
 // Assignment rejection uses ServerId 0 as an explicit wire sentinel. Only VR

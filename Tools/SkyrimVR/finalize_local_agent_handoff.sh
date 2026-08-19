@@ -17,6 +17,7 @@ output=''
 portable_runtime_dir=''
 upload_target=''
 self_test_pins=0
+full_zip_test=0
 
 usage() {
     cat >&2 <<EOF
@@ -30,6 +31,7 @@ Options:
   --opencomposite-root DIR      Reviewed OpenComposite source checkout
   --upload-target HOST:DIR/     Upload ZIP and sidecar, then verify remotely
   --self-test-pins              Load and print reviewed pins, then exit
+  --full-zip-test               Repeat a full unzip CRC pass after the mandatory handoff audit
 EOF
 }
 
@@ -49,6 +51,7 @@ while (($#)); do
         --opencomposite-root) opencomposite_root=${2:?missing OpenComposite root}; shift 2 ;;
         --upload-target) upload_target=${2:?missing upload target}; shift 2 ;;
         --self-test-pins) self_test_pins=1; shift ;;
+        --full-zip-test) full_zip_test=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) usage; die "unknown argument: $1" ;;
     esac
@@ -60,7 +63,9 @@ fi
 command -v git >/dev/null || die 'git is required'
 command -v python3 >/dev/null || die 'python3 is required'
 command -v sha256sum >/dev/null || die 'sha256sum is required'
-command -v unzip >/dev/null || die 'unzip is required'
+if ((full_zip_test)); then
+    command -v unzip >/dev/null || die 'unzip is required for --full-zip-test'
+fi
 
 cd -- "$repo_root"
 mapfile -t pins < <(python3 - "$repo_root" <<'PY'
@@ -181,7 +186,11 @@ python3 "$repo_root/Tools/SkyrimVR/create_local_agent_handoff.py" \
     --runtime-evidence "$runtime_evidence" \
     --output "$output"
 python3 "$repo_root/Tools/SkyrimVR/audit_local_agent_handoff.py" "$output"
-unzip -tq "$output"
+# The mandatory audit already calls ZipFile.testzip() before structural and identity checks.
+# Keep the second full unzip CRC pass as an explicit diagnostic, not the default handoff path.
+if ((full_zip_test)); then
+    unzip -tq "$output"
+fi
 (cd -- "$(dirname -- "$output")" && sha256sum -c "$(basename -- "$output").sha256.txt")
 
 if [[ -n $upload_target ]]; then

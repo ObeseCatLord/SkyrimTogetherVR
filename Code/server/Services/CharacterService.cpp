@@ -21,6 +21,8 @@
 #include <Messages/ClientReferencesMoveRequest.h>
 #include <Messages/ClientActorActionRequest.h>
 #include <Messages/CharacterSpawnRequest.h>
+#include <Messages/NotifyActorResync.h>
+#include <Messages/RequestActorResync.h>
 #include <Messages/RequestFactionsChanges.h>
 #include <Messages/NotifyFactionsChanges.h>
 #include <Messages/NotifyRemoveCharacter.h>
@@ -51,6 +53,7 @@
 
 #include <Setting.h>
 
+#include <atomic>
 #include <cmath>
 #include <utility>
 namespace
@@ -60,8 +63,12 @@ constexpr auto kOwnershipGrantLifetime = std::chrono::seconds(5);
 constexpr std::size_t kActorValueCount = 164;
 constexpr std::size_t kMaximumVRAssignmentInventoryEntries = 512;
 constexpr std::size_t kMaximumVRAssignmentInventoryEffects = 512;
+constexpr std::size_t kMaximumActorSnapshotRevisions = 4096;
+constexpr std::uint64_t kLedgerExhaustionLogInterval = 128;
 constexpr float kMaximumActorValueMagnitude = 1'000'000.0F;
 constexpr float kMaximumInventoryScalarMagnitude = 1'000'000.0F;
+
+std::atomic<std::uint64_t> g_actorSnapshotRevisionLedgerExhaustions{};
 
 [[nodiscard]] bool HasAssignmentAction(const ActionEvent& acAction) noexcept;
 [[nodiscard]] bool IsValidAssignmentAction(const ActionEvent& acAction) noexcept;
@@ -71,6 +78,21 @@ void LogCharacterServiceFailure(const char* apOperation) noexcept
     try
     {
         spdlog::error("Character service {} failed; authoritative state was retained", apOperation);
+    }
+    catch (...)
+    {
+    }
+}
+
+void LogActorSnapshotRevisionLedgerExhaustion() noexcept
+{
+    const auto aggregate = g_actorSnapshotRevisionLedgerExhaustions.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (aggregate == 0 || (aggregate != 1 && aggregate % kLedgerExhaustionLogInterval != 0))
+        return;
+    try
+    {
+        spdlog::warn("Actor snapshot revision ledger capacity exhausted; rejecting new source (capacity={}, aggregate={})",
+                     kMaximumActorSnapshotRevisions, aggregate);
     }
     catch (...)
     {
@@ -424,7 +446,69 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
     , m_syncExperienceConnection(aDispatcher.sink<PacketEvent<SyncExperienceRequest>>().connect<&CharacterService::OnSyncExperienceRequest>(this))
     , m_dialogueConnection(aDispatcher.sink<PacketEvent<DialogueRequest>>().connect<&CharacterService::OnDialogueRequest>(this))
     , m_subtitleConnection(aDispatcher.sink<PacketEvent<SubtitleRequest>>().connect<&CharacterService::OnSubtitleRequest>(this))
+    , m_actorResyncConnection(aDispatcher.sink<PacketEvent<RequestActorResync>>().connect<&CharacterService::OnActorResyncRequest>(this))
 {
+}
+
+std::uint64_t CharacterService::NextActorSnapshotRevision(
+    const std::uint32_t aServerId, const std::uint64_t aKnownRevision) noexcept
+{
+    if (aServerId == 0)
+        return 0;
+    auto it = m_actorSnapshotRevisions.find(aServerId);
+    if (it == m_actorSnapshotRevisions.end()) {
+        if (m_actorSnapshotRevisions.size() >= kMaximumActorSnapshotRevisions) {
+            LogActorSnapshotRevisionLedgerExhaustion();
+            return 0;
+        }
+        it = m_actorSnapshotRevisions.emplace(aServerId, 0).first;
+    }
+    // A client cannot advance canonical state by claiming an unobserved
+    // revision. It must accept the latest server-issued snapshot instead.
+    if (aKnownRevision > it->second)
+        return 0;
+    ++it->second;
+    return it->second;
+}
+
+void CharacterService::OnActorResyncRequest(
+    const PacketEvent<RequestActorResync>& acMessage) noexcept try
+{
+    const auto& request = acMessage.Packet;
+    if (!acMessage.pPlayer || !request.IsDecodedValid || !request.IsValid() ||
+        (request.Scope & RequestActorResync::kActorSnapshot) == 0 ||
+        !SkyrimTogether::Protocol::IsVrGameplayClient(acMessage.pPlayer->GetGameplayCapabilities()) ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::CanonicalStateResync))
+        return;
+
+    const auto entity = static_cast<entt::entity>(request.ServerId);
+    if (!m_world.valid(entity) ||
+        !m_world.all_of<CharacterComponent, CellIdComponent>(entity))
+        return;
+    const auto& character = m_world.get<CharacterComponent>(entity);
+    const auto& cell = m_world.get<CellIdComponent>(entity);
+    if (!acMessage.pPlayer->GetCellComponent().IsInRange(cell, character.IsDragon()))
+        return;
+
+    CharacterSpawnRequest snapshot{};
+    if (!Serialize(m_world, entity, &snapshot))
+        return;
+    const auto revision = NextActorSnapshotRevision(request.ServerId, request.KnownActorRevision);
+    if (revision == 0)
+        return;
+
+    NotifyActorResync response{};
+    response.ServerId = request.ServerId;
+    response.RequestId = request.RequestId;
+    response.CanonicalRevision = revision;
+    response.Snapshot = std::move(snapshot);
+    acMessage.pPlayer->Send(response);
+}
+catch (...)
+{
+    LogCharacterServiceFailure("actor resynchronization");
 }
 
 bool CharacterService::Serialize(World& aRegistry, entt::entity aEntity,
@@ -861,11 +945,12 @@ catch (...)
     LogCharacterServiceFailure("ownership-transfer selection");
 }
 
-void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept
+void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) noexcept
 {
     try
     {
         m_pendingOwnershipGrants.erase(acEvent.ServerId);
+        m_actorSnapshotRevisions.erase(acEvent.ServerId);
         const auto entity = static_cast<entt::entity>(acEvent.ServerId);
         if (!m_world.valid(entity) || !m_world.all_of<OwnerComponent>(entity))
             return;

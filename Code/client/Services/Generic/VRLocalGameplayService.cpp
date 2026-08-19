@@ -39,6 +39,7 @@
 #include <VRGameplayBridge.h>
 #include <Structs/GameId.h>
 #include <World.h>
+#include <vr_gameplay_bridge/ActorAuthorityHooks.h>
 
 #include <algorithm>
 #include <cmath>
@@ -118,6 +119,20 @@ constexpr std::uint64_t kPlayerLevelSendCoalesceKey = kAppearanceSendCoalesceKey
          aAction == GameplayBridge::GameplayAction::ApplyMagicEffect))
         return false;
     return true;
+}
+
+[[nodiscard]] bool IsTargetedRemoteNpcHealthDelta(
+    const GameplayBridge::GameplayActionPayload& acPayload) noexcept
+{
+    SkyrimTogetherVR::GameplayAdapter::ActorAuthorityHookPolicy::TargetedRemoteNpcHealthDelta healthDelta{};
+    healthDelta.TargetHandle = acPayload.TargetHandle.Value;
+    healthDelta.TargetLocalFormId = acPayload.TargetLocalFormId;
+    healthDelta.ActorValue = acPayload.LocalFormIdA;
+    healthDelta.Delta = acPayload.ScalarA;
+    return SkyrimTogetherVR::GameplayAdapter::ActorAuthorityHookPolicy::IsValidTargetedRemoteNpcHealthDelta(healthDelta) &&
+           acPayload.LocalFormIdB == 0 && acPayload.LocalFormIdC == 0 && acPayload.LocalFormIdD == 0 &&
+           acPayload.ValueA == 0 && acPayload.ValueB == 0 && acPayload.ScalarB == 0.0F &&
+           acPayload.ScalarC == 0.0F && acPayload.ScalarD == 0.0F && acPayload.ActionFlags == 0;
 }
 
 } // namespace
@@ -307,7 +322,8 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
         ApplyEquipmentSnapshot(record);
         return;
     }
-    if (RequiresMappedLocalPlayerForm(domain, action) && !HasMappedLocalPlayerForm(payload))
+    const bool targetedRemoteNpcHealthDelta = IsTargetedRemoteNpcHealthDelta(payload);
+    if (!targetedRemoteNpcHealthDelta && RequiresMappedLocalPlayerForm(domain, action) && !HasMappedLocalPlayerForm(payload))
         return;
 
     if (domain == GameplayBridge::GameplayDomain::Appearance ||
@@ -599,6 +615,28 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
             std::abs(payload.ScalarA) > kMaximumActorValueMagnitude || payload.ScalarB != 0.0F ||
             payload.ScalarC != 0.0F || payload.ScalarD != 0.0F || payload.ActionFlags != 0)
             return;
+
+        if (payload.TargetHandle.Value == 0)
+        {
+            if (!IsTargetedRemoteNpcHealthDelta(payload))
+                return;
+            const auto targetServerId = GetServerIdForLocalActor(payload.TargetLocalFormId);
+            const auto* ownership = m_world.ctx().find<VRNpcOwnershipService>();
+            if (targetServerId == 0 || !ownership ||
+                ownership->GetServerIdForLocalReference(payload.TargetLocalFormId) != targetServerId)
+                return;
+
+            RequestHealthChangeBroadcast request{};
+            request.Id = targetServerId;
+            request.DeltaHealth = payload.ScalarA;
+            request.AttackerId = m_localServerId;
+            // The bridge allocates ActionId process-monotonically for each
+            // published gameplay action. AcceptAction above has already
+            // rejected zero and stale actor-state records.
+            request.ActionNonce = record.Header.Identity.ActionId;
+            TP_UNUSED(SendStateful(std::move(request), domainIndex, record.Header.Identity.ActionId, false, 0));
+            return;
+        }
 
         const auto combined = m_pendingHealthDelta + payload.ScalarA;
         if (!std::isfinite(combined) || std::abs(combined) > kMaximumActorValueMagnitude)
@@ -2050,11 +2088,13 @@ bool VRLocalGameplayService::AcceptAction(const GameplayBridge::EventRecord& acR
         GameplayBridge::IsObjectSnapshotAction(action);
     const bool inventoryTransaction = domain == GameplayBridge::GameplayDomain::Inventory &&
         GameplayBridge::IsInventoryTransactionAction(action);
-    if ((!objectSnapshot && !inventoryTransaction &&
+    const bool targetedRemoteNpcHealthDelta = IsTargetedRemoteNpcHealthDelta(payload);
+    if ((!objectSnapshot && !inventoryTransaction && !targetedRemoteNpcHealthDelta &&
          payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value) ||
         (inventoryTransaction &&
          (payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value || payload.TargetLocalFormId == 0)) ||
-        (objectSnapshot && (payload.TargetHandle.Value != 0 || payload.TargetLocalFormId == 0)))
+        (objectSnapshot && (payload.TargetHandle.Value != 0 || payload.TargetLocalFormId == 0)) ||
+        (targetedRemoteNpcHealthDelta && payload.TargetHandle.Value != 0))
         return false;
 
     if (objectSnapshot && action != GameplayBridge::GameplayAction::ObjectSnapshotBegin) {

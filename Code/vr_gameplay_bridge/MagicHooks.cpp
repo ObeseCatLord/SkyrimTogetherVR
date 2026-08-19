@@ -4,6 +4,7 @@
 #include "BridgeEndpoint.h"
 #include "VRInteractionManager.h"
 #include "VrHookDetachPolicy.h"
+#include "VrNoThrow.h"
 
 #include <MinHook.h>
 #include <RE/B/BGSPerk.h>
@@ -1027,7 +1028,7 @@ bool Install() noexcept
                           reinterpret_cast<void**>(&g_originalRemoveSpell))) {
             if (!hooks.Rollback()) {
                 LogHookFailure("magic hook install rollback could not prove detachment; retaining targets and trampolines so a possible live detour remains callable");
-                BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment");
+                NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment"); });
                 return finish(true);
             }
             return finish(false);
@@ -1039,7 +1040,7 @@ bool Install() noexcept
             !hooks.Enable(MagicHookIndex::RemoveSpell)) {
             if (!hooks.Rollback()) {
                 LogHookFailure("magic hook install rollback could not prove detachment; retaining targets and trampolines so a possible live detour remains callable");
-                BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment");
+                NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment"); });
                 return finish(true);
             }
             return finish(false);
@@ -1056,7 +1057,7 @@ bool Install() noexcept
         LogHookFailure("exception while installing magic hooks");
         if (HasTrackedHooks()) {
             LogHookFailure("magic hook exception rollback retained targets and trampolines so a possible live detour remains callable");
-            BridgeEndpoint::Get().Fault("magic hook exception rollback could not prove detachment");
+            NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("magic hook exception rollback could not prove detachment"); });
             return finish(true);
         }
         return finish(false);
@@ -1065,6 +1066,7 @@ bool Install() noexcept
 
 bool Uninstall() noexcept
 {
+    try {
     bool expected = false;
     if (!g_installing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
         return false;
@@ -1072,5 +1074,9 @@ bool Uninstall() noexcept
     const bool detached = CleanupInstalledHooks();
     g_installing.store(false, std::memory_order_release);
     return detached;
+    } catch (...) {
+        g_installing.store(false, std::memory_order_release);
+        return false;
+    }
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::MagicHooks

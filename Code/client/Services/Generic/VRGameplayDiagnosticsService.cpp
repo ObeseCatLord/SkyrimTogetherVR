@@ -271,9 +271,33 @@ bool WriteGameplayStatusSnapshot(
             file << "bridge.rejectedCommands=" << acDiagnostics.RejectedCommandCount << "\n";
             file << "bridge.staleCommands=" << acDiagnostics.StaleCommandCount << "\n";
             file << "bridge.discardedEvents=" << acDiagnostics.DiscardedEventCount << "\n";
+            file << "bridge.discardedEvents.preReady=" << acDiagnostics.DiscardedEventPreReadyCount << "\n";
+            file << "bridge.discardedEvents.lifecycleRetired=" << acDiagnostics.DiscardedEventLifecycleRetiredCount << "\n";
+            file << "bridge.discardedEvents.other=" << acDiagnostics.DiscardedEventOtherCount << "\n";
             file << "bridge.rejectedSubmissions=" << acDiagnostics.RejectedSubmissionCount << "\n";
+            file << "bridge.rejectedSubmissions.preReady=" << acDiagnostics.RejectedSubmissionPreReadyCount << "\n";
+            file << "bridge.rejectedSubmissions.lifecycleRetired=" << acDiagnostics.RejectedSubmissionLifecycleRetiredCount << "\n";
+            file << "bridge.rejectedSubmissions.other=" << acDiagnostics.RejectedSubmissionOtherCount << "\n";
             file << "bridge.eventRingDroppedPushes=" << acDiagnostics.EventRingDroppedPushCount << "\n";
             file << "bridge.commandRingDroppedPushes=" << acDiagnostics.CommandRingDroppedPushCount << "\n";
+            file << "bridge.authority.suppressedDamage=" << acDiagnostics.ActorAuthority.SuppressedDamageCount << "\n";
+            file << "bridge.authority.suppressedDeathItems=" << acDiagnostics.ActorAuthority.SuppressedDeathItemsCount << "\n";
+            file << "bridge.authority.suppressedPositiveActiveEffectHealth=" <<
+                acDiagnostics.ActorAuthority.SuppressedPositiveActiveEffectHealthCount << "\n";
+            file << "bridge.authority.suppressedRestoreHealth=" << acDiagnostics.ActorAuthority.SuppressedRestoreHealthCount << "\n";
+            file << "bridge.authority.suppressedReferenceSetPosition=" <<
+                acDiagnostics.ActorAuthority.SuppressedReferenceSetPositionCount << "\n";
+            file << "bridge.authority.suppressedActorSetPosition=" << acDiagnostics.ActorAuthority.SuppressedActorSetPositionCount << "\n";
+            file << "bridge.authority.suppressedMoveTo=" << acDiagnostics.ActorAuthority.SuppressedMoveToCount << "\n";
+            file << "bridge.authority.suppressedActorProcess=" << acDiagnostics.ActorAuthority.SuppressedActorProcessCount << "\n";
+            file << "bridge.authority.publishedRemoteNpcHealthDelta=" <<
+                acDiagnostics.ActorAuthority.PublishedRemoteNpcHealthDeltaCount << "\n";
+            file << "bridge.authority.failedRemoteNpcHealthDeltaPublication=" <<
+                acDiagnostics.ActorAuthority.FailedRemoteNpcHealthDeltaPublicationCount << "\n";
+            file << "bridge.authority.leaseFailures=" << acDiagnostics.ActorAuthority.LeaseFailureCount << "\n";
+            file << "bridge.authority.retirementFailures=" << acDiagnostics.ActorAuthority.RetirementFailureCount << "\n";
+            file << "bridge.authority.retirementTimeouts=" << acDiagnostics.ActorAuthority.RetirementTimeoutCount << "\n";
+            file << "bridge.authority.registryInconsistencies=" << acDiagnostics.ActorAuthority.RegistryInconsistencyCount << "\n";
             file << "session.online=" << (online ? "1" : "0") << "\n";
             file << "session.transportOnline=" << (transportOnline ? "1" : "0") << "\n";
             file << "session.id=" << (apTransport ? apTransport->GetSessionId() : 0) << "\n";
@@ -520,6 +544,7 @@ void VRGameplayDiagnosticsService::ResetGameplayCounters() noexcept
     m_lastStaleCommandCount = 0;
     m_lastDroppedEventCount = 0;
     m_lastDroppedCommandCount = 0;
+    m_lastActorAuthorityDiagnostics = {};
 }
 
 void VRGameplayDiagnosticsService::WriteSnapshot(const bool aForce) noexcept
@@ -639,16 +664,48 @@ void VRGameplayDiagnosticsService::LogRateLimitedSummary() noexcept
     const bool changed = diagnostics.RejectedCommandCount != m_lastRejectedCommandCount ||
                          diagnostics.StaleCommandCount != m_lastStaleCommandCount ||
                          diagnostics.EventRingDroppedPushCount != m_lastDroppedEventCount ||
-                         diagnostics.CommandRingDroppedPushCount != m_lastDroppedCommandCount;
+                         diagnostics.CommandRingDroppedPushCount != m_lastDroppedCommandCount ||
+                         diagnostics.ActorAuthority != m_lastActorAuthorityDiagnostics;
     m_lastRejectedCommandCount = diagnostics.RejectedCommandCount;
     m_lastStaleCommandCount = diagnostics.StaleCommandCount;
     m_lastDroppedEventCount = diagnostics.EventRingDroppedPushCount;
     m_lastDroppedCommandCount = diagnostics.CommandRingDroppedPushCount;
-    if (changed && (diagnostics.RejectedCommandCount != 0 || diagnostics.StaleCommandCount != 0 ||
-                    diagnostics.EventRingDroppedPushCount != 0 || diagnostics.CommandRingDroppedPushCount != 0))
-        spdlog::warn("SkyrimTogetherVR gameplay diagnostics summary: rejectedCommands={}, staleCommands={}, eventDrops={}, commandDrops={}",
-                     diagnostics.RejectedCommandCount, diagnostics.StaleCommandCount,
-                     diagnostics.EventRingDroppedPushCount, diagnostics.CommandRingDroppedPushCount);
+    m_lastActorAuthorityDiagnostics = diagnostics.ActorAuthority;
+    const auto& authority = diagnostics.ActorAuthority;
+    const bool authorityFailure = authority.FailedRemoteNpcHealthDeltaPublicationCount != 0 || authority.LeaseFailureCount != 0 ||
+                                  authority.RetirementFailureCount != 0 || authority.RetirementTimeoutCount != 0 ||
+                                  authority.RegistryInconsistencyCount != 0;
+    if (!changed || (diagnostics.RejectedCommandCount == 0 && diagnostics.StaleCommandCount == 0 &&
+                     diagnostics.EventRingDroppedPushCount == 0 && diagnostics.CommandRingDroppedPushCount == 0 &&
+                     authority.SuppressedDamageCount == 0 && authority.SuppressedDeathItemsCount == 0 &&
+                     authority.SuppressedPositiveActiveEffectHealthCount == 0 && authority.SuppressedRestoreHealthCount == 0 &&
+                     authority.SuppressedReferenceSetPositionCount == 0 && authority.SuppressedActorSetPositionCount == 0 &&
+                     authority.SuppressedMoveToCount == 0 && authority.SuppressedActorProcessCount == 0 &&
+                     authority.PublishedRemoteNpcHealthDeltaCount == 0 && !authorityFailure))
+        return;
+
+    if (authorityFailure || diagnostics.RejectedCommandCount != 0 || diagnostics.StaleCommandCount != 0 ||
+        diagnostics.EventRingDroppedPushCount != 0 || diagnostics.CommandRingDroppedPushCount != 0)
+        spdlog::warn(
+            "SkyrimTogetherVR gameplay diagnostics summary: rejectedCommands={}, staleCommands={}, eventDrops={}, commandDrops={}, "
+            "authority(suppressedDamage={}, deathItems={}, activeEffectHealth={}, restoreHealth={}, referenceSetPosition={}, actorSetPosition={}, moveTo={}, actorProcess={}, "
+            "publishedNpcHealth={}, failedNpcHealth={}, leaseFailures={}, retirementFailures={}, retirementTimeouts={}, registryInconsistencies={})",
+            diagnostics.RejectedCommandCount, diagnostics.StaleCommandCount, diagnostics.EventRingDroppedPushCount,
+            diagnostics.CommandRingDroppedPushCount, authority.SuppressedDamageCount, authority.SuppressedDeathItemsCount,
+            authority.SuppressedPositiveActiveEffectHealthCount, authority.SuppressedRestoreHealthCount,
+            authority.SuppressedReferenceSetPositionCount, authority.SuppressedActorSetPositionCount, authority.SuppressedMoveToCount,
+            authority.SuppressedActorProcessCount, authority.PublishedRemoteNpcHealthDeltaCount,
+            authority.FailedRemoteNpcHealthDeltaPublicationCount, authority.LeaseFailureCount, authority.RetirementFailureCount,
+            authority.RetirementTimeoutCount, authority.RegistryInconsistencyCount);
+    else
+        spdlog::info(
+            "SkyrimTogetherVR gameplay authority summary: suppressedDamage={}, deathItems={}, activeEffectHealth={}, restoreHealth={}, "
+            "referenceSetPosition={}, actorSetPosition={}, moveTo={}, actorProcess={}, publishedNpcHealth={}",
+            authority.SuppressedDamageCount, authority.SuppressedDeathItemsCount,
+            authority.SuppressedPositiveActiveEffectHealthCount, authority.SuppressedRestoreHealthCount,
+            authority.SuppressedReferenceSetPositionCount, authority.SuppressedActorSetPositionCount,
+            authority.SuppressedMoveToCount, authority.SuppressedActorProcessCount,
+            authority.PublishedRemoteNpcHealthDeltaCount);
 }
 
 GameplayBridge::GameplayDomain VRGameplayDiagnosticsService::DomainForEvent(

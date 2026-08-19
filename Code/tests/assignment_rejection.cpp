@@ -16,11 +16,11 @@ TEST_CASE("assignment rejection is limited to VR gameplay clients", "[skyrim-vr]
         ToMask(GameplayCapability::VrGameplayClient)));
 }
 
-TEST_CASE("production VR profile builder emits legal capability masks", "[skyrim-vr][authentication]")
+TEST_CASE("production VR profile builder negotiates canonical final-equipment transactions", "[skyrim-vr][authentication]")
 {
     using namespace SkyrimTogether::Protocol;
 
-    CHECK(kGameplayProtocolRevision == 15);
+    CHECK(kGameplayProtocolRevision == 17);
     const auto requestedRelays = kFunctionalVRRelayCapabilities |
                                  ToMask(GameplayCapability::VREquipmentRelay);
     const auto connectionOnly = BuildVRProductionCapabilities(
@@ -29,6 +29,8 @@ TEST_CASE("production VR profile builder emits legal capability masks", "[skyrim
         VRProductionProfile::AvatarSync, requestedRelays, true);
     const auto gameplay = BuildVRProductionCapabilities(
         VRProductionProfile::Gameplay, requestedRelays, true);
+    const auto gameplayBaseline = BuildVRProductionCapabilities(VRProductionProfile::Gameplay);
+    const auto negotiatedGameplay = kServerCapabilities & gameplayBaseline;
 
     CHECK(connectionOnly == kVRConnectionOnlyProfileCapabilities);
     CHECK(avatarSync == (kVRAvatarSyncProfileCapabilities |
@@ -37,7 +39,20 @@ TEST_CASE("production VR profile builder emits legal capability masks", "[skyrim
     CHECK(gameplay == (kVRGameplayProfileCapabilities |
                        kFunctionalVRRelayCapabilities |
                        kVRExactAnimationActionCapabilities));
+    CHECK(gameplayBaseline == kVRGameplayProfileCapabilities);
+    CHECK(negotiatedGameplay == gameplayBaseline);
+    CHECK(HasCapability(kServerCapabilities, GameplayCapability::FinalEquipmentTransactions));
+    CHECK(HasCapability(kClientCapabilities, GameplayCapability::FinalEquipmentTransactions));
+    CHECK_FALSE(HasCapability(kServerCapabilities, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(HasCapability(kClientCapabilities, GameplayCapability::VREquipmentRelay));
     CHECK_FALSE(HasCapability(avatarSync, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(HasCapability(gameplayBaseline, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(HasCapability(negotiatedGameplay, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(HasCapability(gameplay, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(HasCapability(avatarSync, GameplayCapability::FinalEquipmentTransactions));
+    CHECK(HasCapability(gameplayBaseline, GameplayCapability::FinalEquipmentTransactions));
+    CHECK(HasCapability(negotiatedGameplay, GameplayCapability::FinalEquipmentTransactions));
+    CHECK(HasCapability(gameplay, GameplayCapability::FinalEquipmentTransactions));
 
     CHECK(IsVrClient(connectionOnly));
     CHECK_FALSE(IsVrGameplayClient(connectionOnly));
@@ -51,9 +66,24 @@ TEST_CASE("production VR profile builder emits legal capability masks", "[skyrim
 
     CHECK(IsVrClient(gameplay));
     CHECK(IsVrGameplayClient(gameplay));
+    CHECK(CanAdmitGameplayClient(gameplayBaseline));
     CHECK(CanReceiveAssignmentRejection(gameplay));
     CHECK(CanOwnNpc(gameplay));
     CHECK(CanAdmitGameplayClient(gameplay));
+}
+
+TEST_CASE("canonical final-equipment recipients exclude desktop and direct-relay peers", "[skyrim-vr][capabilities]")
+{
+    using namespace SkyrimTogether::Protocol;
+
+    const auto canonicalRecipient = BuildVRProductionCapabilities(VRProductionProfile::Gameplay);
+    const auto desktopRecipient = kCoreCapabilities;
+    const auto directRelayPeer = canonicalRecipient | ToMask(GameplayCapability::VREquipmentRelay);
+
+    CHECK(HasCapability(canonicalRecipient, GameplayCapability::FinalEquipmentTransactions));
+    CHECK_FALSE(HasCapability(desktopRecipient, GameplayCapability::FinalEquipmentTransactions));
+    CHECK_FALSE(HasCapability(canonicalRecipient, GameplayCapability::VREquipmentRelay));
+    CHECK_FALSE(CanAdmitGameplayClient(directRelayPeer));
 }
 
 TEST_CASE("admission rejects malformed VR capability tuples without breaking desktop", "[skyrim-vr][capabilities]")
@@ -70,11 +100,17 @@ TEST_CASE("admission rejects malformed VR capability tuples without breaking des
     const auto unidentifiedRelay = desktop | ToMask(GameplayCapability::VRPoseRelay);
     const auto unidentifiedParity = desktop | ToMask(GameplayCapability::NativeGameplayParity);
     const auto unidentifiedGameplay = desktop | ToMask(GameplayCapability::VrGameplayClient);
+    const auto unidentifiedFinalEquipment =
+        desktop | ToMask(GameplayCapability::FinalEquipmentTransactions);
     const auto unidentifiedOwnership = desktop | kVRNpcOwnershipCapabilities;
     const auto incompleteGameplay = kVRGameplayProfileCapabilities & ~kVRNpcOwnershipCapabilities;
     const auto gameplayWithoutParity =
         kVRGameplayProfileCapabilities & ~ToMask(GameplayCapability::NativeGameplayParity);
     const auto gameplayWithoutCore = kVRGameplayProfileCapabilities & ~kCoreCapabilities;
+    const auto gameplayWithoutFinalEquipment =
+        kVRGameplayProfileCapabilities & ~ToMask(GameplayCapability::FinalEquipmentTransactions);
+    const auto finalEquipmentWithoutGameplayIntent =
+        kVRAvatarSyncProfileCapabilities | ToMask(GameplayCapability::FinalEquipmentTransactions);
     const auto unsupportedRelay = kVRAvatarSyncProfileCapabilities |
                                   ToMask(GameplayCapability::VREquipmentRelay);
 
@@ -85,10 +121,13 @@ TEST_CASE("admission rejects malformed VR capability tuples without breaking des
     CHECK_FALSE(CanAdmitGameplayClient(unidentifiedRelay));
     CHECK_FALSE(CanAdmitGameplayClient(unidentifiedParity));
     CHECK_FALSE(CanAdmitGameplayClient(unidentifiedGameplay));
+    CHECK_FALSE(CanAdmitGameplayClient(unidentifiedFinalEquipment));
     CHECK_FALSE(CanAdmitGameplayClient(unidentifiedOwnership));
     CHECK_FALSE(CanAdmitGameplayClient(incompleteGameplay));
     CHECK_FALSE(CanAdmitGameplayClient(gameplayWithoutParity));
     CHECK_FALSE(CanAdmitGameplayClient(gameplayWithoutCore));
+    CHECK_FALSE(CanAdmitGameplayClient(gameplayWithoutFinalEquipment));
+    CHECK_FALSE(CanAdmitGameplayClient(finalEquipmentWithoutGameplayIntent));
     CHECK_FALSE(CanAdmitGameplayClient(unsupportedRelay));
 }
 

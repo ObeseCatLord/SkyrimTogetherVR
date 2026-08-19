@@ -13,9 +13,11 @@
 #include <Messages/RequestEquipmentChanges.h>
 #include <Messages/NotifyEquipmentChanges.h>
 #include <Messages/DrawWeaponRequest.h>
+#include <Messages/RequestActorResync.h>
 #include <Structs/LegacyEquipmentDiff.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <unordered_set>
 #include <utility>
@@ -27,12 +29,50 @@ namespace
 Console::Setting bEnableItemDrops{"Gameplay:bEnableItemDrops", "(Experimental) Syncs dropped items by players", false};
 constexpr std::size_t kMaximumEquipmentSnapshotEntries = 64;
 constexpr std::int32_t kMaximumEquipmentCount = 10'000;
+constexpr std::size_t kMaximumInventoryEventSources = 4096;
+constexpr std::size_t kMaximumEquipmentSnapshotSources = 4096;
+constexpr std::uint64_t kLedgerExhaustionLogInterval = 128;
 const GameId kRightHandEquipSlot{0, 0x00013F42};
 const GameId kLeftHandEquipSlot{0, 0x00013F43};
-constexpr auto kVREquipmentCapability =
-    SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VREquipmentRelay);
+constexpr auto kFinalEquipmentTransactionCapability =
+    SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::FinalEquipmentTransactions);
 constexpr std::uint8_t kKnownEquipmentFlags =
     Inventory::Entry::kEquipmentWeapon | Inventory::Entry::kEquipmentAmmo;
+
+std::atomic<std::uint64_t> g_inventoryEventLedgerExhaustions{};
+std::atomic<std::uint64_t> g_equipmentSnapshotRevisionLedgerExhaustions{};
+std::atomic<std::uint64_t> g_inventoryEventLedgerReservationFailures{};
+std::atomic<std::uint64_t> g_equipmentSnapshotRevisionLedgerReservationFailures{};
+
+void LogLedgerExhaustion(std::atomic<std::uint64_t>& aCounter, const char* apLedger,
+                         const std::size_t aCapacity) noexcept
+{
+    const auto aggregate = aCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (aggregate == 0 || (aggregate != 1 && aggregate % kLedgerExhaustionLogInterval != 0))
+        return;
+    try
+    {
+        spdlog::warn("{} capacity exhausted; rejecting new source (capacity={}, aggregate={})",
+                     apLedger, aCapacity, aggregate);
+    }
+    catch (...)
+    {
+    }
+}
+
+void LogLedgerReservationFailure(std::atomic<std::uint64_t>& aCounter, const char* apLedger) noexcept
+{
+    const auto aggregate = aCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (aggregate == 0 || (aggregate != 1 && aggregate % kLedgerExhaustionLogInterval != 0))
+        return;
+    try
+    {
+        spdlog::warn("{} reservation failed; rejecting mutation (aggregate={})", apLedger, aggregate);
+    }
+    catch (...)
+    {
+    }
+}
 
 void ReplaceEquipmentSnapshot(Inventory& arDestination, Inventory&& aSource) noexcept
 {
@@ -141,6 +181,8 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher)
     m_drawWeaponConnection = aDispatcher.sink<PacketEvent<DrawWeaponRequest>>().connect<&InventoryService::OnWeaponDrawnRequest>(this);
     m_playerLeaveConnection = aDispatcher.sink<PlayerLeaveEvent>().connect<&InventoryService::OnPlayerLeave>(this);
     m_characterRemoveConnection = aDispatcher.sink<CharacterRemoveEvent>().connect<&InventoryService::OnCharacterRemove>(this);
+    m_objectDestroyConnection = m_world.on_destroy<ObjectComponent>().connect<&InventoryService::OnObjectDestroy>(this);
+    m_actorResyncConnection = aDispatcher.sink<PacketEvent<RequestActorResync>>().connect<&InventoryService::OnActorResyncRequest>(this);
 }
 
 InventoryService::EquipmentTransactionLedger* InventoryService::GetOrSeedEquipmentTransaction(
@@ -181,6 +223,64 @@ InventoryService::EquipmentTransactionLedger* InventoryService::GetOrSeedEquipme
     return &ledger;
 }
 
+uint32_t InventoryService::ReserveInventoryEventId(const uint32_t aServerId) noexcept
+{
+    try
+    {
+        if (aServerId == 0)
+            return 0;
+        auto it = m_inventoryEventIds.find(aServerId);
+        if (it == m_inventoryEventIds.end()) {
+            if (m_inventoryEventIds.size() >= kMaximumInventoryEventSources) {
+                LogLedgerExhaustion(g_inventoryEventLedgerExhaustions, "Inventory event ID ledger",
+                                    kMaximumInventoryEventSources);
+                return 0;
+            }
+            it = m_inventoryEventIds.emplace(aServerId, 0).first;
+        }
+        ++it->second;
+        if (it->second == 0)
+            ++it->second;
+        return it->second;
+    }
+    catch (...)
+    {
+        LogLedgerReservationFailure(g_inventoryEventLedgerReservationFailures, "Inventory event ID ledger");
+        return 0;
+    }
+}
+
+uint32_t InventoryService::NextEquipmentSnapshotRevision(
+    const uint32_t aServerId, const uint32_t aKnownRevision) noexcept
+{
+    try
+    {
+        if (aServerId == 0)
+            return 0;
+        auto it = m_equipmentSnapshotRevisions.find(aServerId);
+        if (it == m_equipmentSnapshotRevisions.end()) {
+            if (m_equipmentSnapshotRevisions.size() >= kMaximumEquipmentSnapshotSources) {
+                LogLedgerExhaustion(g_equipmentSnapshotRevisionLedgerExhaustions,
+                                    "Equipment snapshot revision ledger", kMaximumEquipmentSnapshotSources);
+                return 0;
+            }
+            it = m_equipmentSnapshotRevisions.emplace(aServerId, 0).first;
+        }
+        if (aKnownRevision > it->second)
+            return 0;
+        ++it->second;
+        if (it->second == 0)
+            return 0;
+        return it->second;
+    }
+    catch (...)
+    {
+        LogLedgerReservationFailure(g_equipmentSnapshotRevisionLedgerReservationFailures,
+                                    "Equipment snapshot revision ledger");
+        return 0;
+    }
+}
+
 void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChanges>& acMessage) noexcept try
 {
     auto& message = acMessage.Packet;
@@ -199,6 +299,9 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
 
     NotifyInventoryChanges notify;
     notify.ServerId = message.ServerId;
+    notify.EventId = ReserveInventoryEventId(message.ServerId);
+    if (notify.EventId == 0)
+        return;
     notify.Item = message.Item;
     notify.Drop = bEnableItemDrops ? message.Drop : false;
 
@@ -206,7 +309,7 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
     if (ownsCharacter &&
         SkyrimTogether::Protocol::HasCapability(
             acMessage.pPlayer->GetGameplayCapabilities(),
-            SkyrimTogether::Protocol::GameplayCapability::VREquipmentRelay) &&
+            SkyrimTogether::Protocol::GameplayCapability::FinalEquipmentTransactions) &&
         !GetOrSeedEquipmentTransaction(acMessage.pPlayer->GetId(), message.ServerId,
                                        acMessage.pPlayer->GetClientSessionNonce(),
                                        acMessage.pPlayer->GetConnectionGeneration(),
@@ -249,7 +352,7 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
     if (message.TransactionId != 0) {
         if (!SkyrimTogether::Protocol::HasCapability(
                 acMessage.pPlayer->GetGameplayCapabilities(),
-                SkyrimTogether::Protocol::GameplayCapability::VREquipmentRelay) ||
+                SkyrimTogether::Protocol::GameplayCapability::FinalEquipmentTransactions) ||
             !IsValidFinalEquipmentRequest(message, inventoryComponent.Content))
             return;
 
@@ -291,7 +394,13 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
 
         NotifyEquipmentChanges notify{};
         notify.ServerId = message.ServerId;
-        notify.TransactionId = message.TransactionId;
+        const auto canonicalRevision = NextEquipmentSnapshotRevision(message.ServerId);
+        if (canonicalRevision == 0)
+            return;
+        // The bridge transaction is server-issued so reconnecting owners
+        // cannot collide with an older client's local transaction counter.
+        notify.TransactionId = canonicalRevision;
+        notify.CanonicalRevision = canonicalRevision;
         notify.FinalEquipment = nextEquipment;
 
         // Every final-state field, including all worn counts, was checked
@@ -306,16 +415,16 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
         // understand only incremental notifications, so their complete diff is
         // prepared before any fanout and all unequips precede all equips.
         if (!GameServer::Get()->SendToPlayersWithCapabilitiesInRange(
-                notify, origin, kVREquipmentCapability, acMessage.GetSender()))
+                notify, origin, kFinalEquipmentTransactionCapability, acMessage.GetSender()))
             spdlog::error("{}: SendToPlayersWithCapabilitiesInRange failed", __FUNCTION__);
         for (const auto& legacy : legacyUnequips) {
             if (!GameServer::Get()->SendToPlayersWithoutCapabilitiesInRange(
-                    legacy, origin, kVREquipmentCapability, acMessage.GetSender()))
+                    legacy, origin, kFinalEquipmentTransactionCapability, acMessage.GetSender()))
                 spdlog::error("{}: legacy unequip fanout failed", __FUNCTION__);
         }
         for (const auto& legacy : legacyEquips) {
             if (!GameServer::Get()->SendToPlayersWithoutCapabilitiesInRange(
-                    legacy, origin, kVREquipmentCapability, acMessage.GetSender()))
+                    legacy, origin, kFinalEquipmentTransactionCapability, acMessage.GetSender()))
                 spdlog::error("{}: legacy equip fanout failed", __FUNCTION__);
         }
         return;
@@ -382,4 +491,56 @@ void InventoryService::OnCharacterRemove(const CharacterRemoveEvent& acEvent) no
     std::erase_if(m_equipmentTransactions, [&acEvent](const auto& acEntry) noexcept {
         return static_cast<std::uint32_t>(acEntry.first) == acEvent.ServerId;
     });
+    m_inventoryEventIds.erase(acEvent.ServerId);
+    m_equipmentSnapshotRevisions.erase(acEvent.ServerId);
+}
+
+void InventoryService::OnObjectDestroy(entt::registry&, const entt::entity aEntity) noexcept
+{
+    m_inventoryEventIds.erase(World::ToInteger(aEntity));
+}
+
+void InventoryService::OnActorResyncRequest(
+    const PacketEvent<RequestActorResync>& acMessage) noexcept try
+{
+    const auto& request = acMessage.Packet;
+    if (!acMessage.pPlayer || !request.IsDecodedValid || !request.IsValid() ||
+        (request.Scope & RequestActorResync::kEquipmentSnapshot) == 0 ||
+        !SkyrimTogether::Protocol::IsVrGameplayClient(acMessage.pPlayer->GetGameplayCapabilities()) ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::FinalEquipmentTransactions) ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::CanonicalStateResync))
+        return;
+
+    const auto entity = static_cast<entt::entity>(request.ServerId);
+    if (!m_world.valid(entity) ||
+        !m_world.all_of<CharacterComponent, CellIdComponent, InventoryComponent>(entity))
+        return;
+    const auto& character = m_world.get<CharacterComponent>(entity);
+    const auto& cell = m_world.get<CellIdComponent>(entity);
+    if (!acMessage.pPlayer->GetCellComponent().IsInRange(cell, character.IsDragon()))
+        return;
+
+    if (request.KnownEquipmentRevision > std::numeric_limits<std::uint32_t>::max())
+        return;
+    const auto revision = NextEquipmentSnapshotRevision(
+        request.ServerId, static_cast<std::uint32_t>(request.KnownEquipmentRevision));
+    if (revision == 0)
+        return;
+
+    NotifyEquipmentChanges response{};
+    response.ServerId = request.ServerId;
+    response.TransactionId = revision;
+    response.CanonicalRevision = revision;
+    response.ResyncRequestId = request.RequestId;
+    response.FinalEquipment = SkyrimTogether::Encoding::CaptureEquipmentBaseline(
+        m_world.get<InventoryComponent>(entity).Content);
+    acMessage.pPlayer->Send(response);
+}
+catch (...)
+{
+    spdlog::error("Actor equipment resynchronization rejected after an allocation or serialization failure");
 }

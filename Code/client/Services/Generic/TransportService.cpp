@@ -699,6 +699,38 @@ void TransportService::OnConnected()
     request.CellId = {};
     request.Level = 1;
     request.PlayerTime = TimeModel{};
+
+    // VR authenticates before the player/cell stream is intentionally made
+    // authoritative, but the Calendar globals are already available in a
+    // normally initialized game. Read and validate every calendar global so
+    // the server never mistakes protocol defaults for observed local time.
+    TimeData::CalendarSnapshot observedCalendar{};
+    auto* const gameTime = TimeData::Get();
+    if (gameTime && gameTime->TryGetCalendarSnapshot(observedCalendar))
+    {
+        request.PlayerTime.TimeScale = observedCalendar.TimeScale;
+        request.PlayerTime.Time = observedCalendar.Time;
+        request.PlayerTime.Year = static_cast<std::uint32_t>(observedCalendar.Year);
+        request.PlayerTime.Month = static_cast<std::uint32_t>(observedCalendar.Month);
+        request.PlayerTime.Day = static_cast<std::uint32_t>(observedCalendar.Day);
+        spdlog::info(
+            "SkyrimTogetherVR VR authentication observed calendar: year={}, month={}, day={}, hour={:.3f}, scale={:.3f}, gameDays={:.3f}",
+            request.PlayerTime.Year, request.PlayerTime.Month, request.PlayerTime.Day, request.PlayerTime.Time,
+            request.PlayerTime.TimeScale, observedCalendar.GameDaysPassed);
+    }
+    else
+    {
+        // A fabricated default can permanently seed an all-VR server with the
+        // wrong calendar. Fail this attempt explicitly; the lifecycle service
+        // will reconnect once the game has initialized valid globals.
+        spdlog::error(
+            "SkyrimTogetherVR VR authentication deferred because calendar globals are unavailable or invalid");
+        Client::Close();
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"calendar_globals_unavailable\"}";
+        m_dispatcher.trigger(errorEvent);
+        return;
+    }
 #else
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
     if (!pPlayer || !pPlayer->GetBaseFormData() || !pPlayer->GetParentCellData())

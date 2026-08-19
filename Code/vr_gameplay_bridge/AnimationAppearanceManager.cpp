@@ -2,6 +2,8 @@
 
 #include "DynamicActorBaseFlags.h"
 #include "AvatarManager.h"
+#include "EquipmentAuthorityHooks.h"
+#include "EquipmentPostconditionPolicy.h"
 #include "LocalGameplayCapture.h"
 #include "VRFaceGen.h"
 
@@ -902,6 +904,73 @@ struct StagedEquipmentTransaction
     std::vector<StagedEquipmentEntry> Entries{};
 };
 
+[[nodiscard]] bool CaptureObservedEquipmentState(
+    RE::Actor& a_actor,
+    EquipmentPostconditionPolicy::State& ar_state) noexcept
+{
+    try {
+        EquipmentPostconditionPolicy::State observed{};
+        const auto inventory = a_actor.GetInventory();
+        observed.Worn.reserve(std::min<std::size_t>(inventory.size(), 64));
+        for (const auto& [object, data] : inventory) {
+            if (!data.second || !data.second->IsWorn())
+                continue;
+            if (!object || object->GetFormID() == 0 || data.first <= 0 ||
+                data.first > kMaximumItemCount || observed.Worn.size() >= 64)
+                return false;
+            const auto formType = object->GetFormType();
+            observed.Worn.push_back({object->GetFormID(), static_cast<std::uint32_t>(data.first),
+                                     data.second->IsWorn(false), data.second->IsWorn(true),
+                                     formType == RE::FormType::Weapon, formType == RE::FormType::Ammo});
+        }
+        std::sort(observed.Worn.begin(), observed.Worn.end(), [](const auto& a_left, const auto& a_right) {
+            return a_left.FormId < a_right.FormId;
+        });
+
+        const auto formId = [](const RE::TESForm* a_form) noexcept {
+            return a_form ? a_form->GetFormID() : 0u;
+        };
+        const auto& runtime = a_actor.GetActorRuntimeData();
+        observed.LeftObject = formId(a_actor.GetEquippedObject(true));
+        observed.RightObject = formId(a_actor.GetEquippedObject(false));
+        observed.LeftSpell = formId(runtime.selectedSpells[RE::Actor::SlotTypes::kLeftHand]);
+        observed.RightSpell = formId(runtime.selectedSpells[RE::Actor::SlotTypes::kRightHand]);
+        observed.Shout = formId(runtime.selectedPower);
+        observed.AvailableFields = EquipmentPostconditionPolicy::kCompleteStateFields;
+        ar_state = std::move(observed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+[[nodiscard]] EquipmentPostconditionPolicy::State RequestedEquipmentState(
+    const StagedEquipmentTransaction& a_transaction) noexcept
+{
+    EquipmentPostconditionPolicy::State requested{};
+    requested.AvailableFields = EquipmentPostconditionPolicy::kCompleteStateFields;
+    requested.Worn.reserve(a_transaction.Entries.size());
+    for (const auto& entry : a_transaction.Entries) {
+        const bool worn = (entry.Flags & kEquipmentSnapshotWorn) != 0;
+        const bool wornLeft = (entry.Flags & kEquipmentSnapshotWornLeft) != 0;
+        const bool weapon = (entry.Flags & kEquipmentSnapshotWeapon) != 0;
+        const bool ammo = (entry.Flags & kEquipmentSnapshotAmmo) != 0;
+        requested.Worn.push_back({entry.FormId, entry.Count, worn, wornLeft, weapon, ammo});
+        if (worn && weapon)
+            requested.RightObject = entry.FormId;
+        if (wornLeft && !ammo)
+            requested.LeftObject = entry.FormId;
+    }
+    requested.LeftSpell = a_transaction.LeftSpell;
+    requested.RightSpell = a_transaction.RightSpell;
+    requested.Shout = a_transaction.Shout;
+    if (requested.LeftSpell != 0)
+        requested.LeftObject = requested.LeftSpell;
+    if (requested.RightSpell != 0)
+        requested.RightObject = requested.RightSpell;
+    return requested;
+}
+
 std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{};
 
 [[nodiscard]] std::uint64_t TransactionId(const std::uint32_t aHigh, const std::uint32_t aLow) noexcept
@@ -1002,16 +1071,6 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
     const bool needsLeftUnequip = currentLeftSpell && currentLeftSpell != leftSpell;
     const bool needsRightUnequip = currentRightSpell && currentRightSpell != rightSpell;
     const bool needsShoutUnequip = currentShout && currentShout != shout;
-    auto* skyrimVm = RE::SkyrimVM::GetSingleton();
-    auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
-    auto* handles = vm ? vm->GetObjectHandlePolicy() : nullptr;
-    if (needsLeftUnequip || needsRightUnequip || needsShoutUnequip) {
-        if (!handles)
-            return eraseAnd(CommandStatus::Inactive);
-        const auto validationHandle = handles->GetHandleForObject(a_actor.GetFormType(), &a_actor);
-        if (validationHandle == handles->EmptyHandle())
-            return eraseAnd(CommandStatus::EngineRejected);
-    }
 
     const auto inventory = a_actor.GetInventory();
     std::sort(staged.Entries.begin(), staged.Entries.end(), [](const StagedEquipmentEntry& aLeft, const StagedEquipmentEntry& aRight) {
@@ -1050,39 +1109,14 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
         return aLeft.Object->GetFormID() < aRight.Object->GetFormID();
     });
 
-    const auto restorePreviousState = [&]() noexcept {
-        try {
-            const auto currentInventory = a_actor.GetInventory();
-            for (const auto& [object, data] : currentInventory) {
-                if (object && data.second && data.second->IsWorn())
-                    manager->UnequipObject(&a_actor, object, nullptr, 1, nullptr, true, true, false, false);
-            }
-            for (const auto& previous : wornItems) {
-                if (previous.Worn)
-                    manager->EquipObject(
-                        &a_actor, previous.Object, nullptr, previous.Count,
-                        previous.Weapon ? RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId) : nullptr,
-                        true, true, false, false);
-                if (previous.WornLeft && (previous.Weapon || !previous.Worn))
-                    manager->EquipObject(
-                        &a_actor, previous.Object, nullptr, previous.Count,
-                        previous.Weapon ? RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlotFormId) : nullptr,
-                        true, true, false, false);
-            }
-            if (currentLeftSpell)
-                manager->EquipSpell(&a_actor, currentLeftSpell,
-                                    RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlotFormId));
-            if (currentRightSpell)
-                manager->EquipSpell(&a_actor, currentRightSpell,
-                                    RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId));
-            if (currentShout)
-                manager->EquipShout(&a_actor, currentShout);
-        } catch (...) {
-        }
-    };
+    const auto requestedState = RequestedEquipmentState(staged);
 
     // All form, actor, manager, and count validation is complete before the
-    // first engine mutation. The bounded staging entry is consumed only here.
+    // first engine mutation. Keep the scope alive through the native commit
+    // and typed final-state read so the exact low hooks admit only this replay.
+    EquipmentAuthorityHooks::ScopedAuthoritativeEquipmentReplay replay{};
+
+    // The bounded staging entry is consumed only after its native commit.
     try {
         for (const auto& previous : wornItems)
             manager->UnequipObject(&a_actor, previous.Object, nullptr, 1, nullptr, true, true, false, false);
@@ -1101,24 +1135,13 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
                                      true, true, false, false);
         }
         if (needsLeftUnequip || needsRightUnequip || needsShoutUnequip) {
-            const auto handle = handles->GetHandleForObject(a_actor.GetFormType(), &a_actor);
-            const auto unequipSpell = [vm, handle](RE::SpellItem* aSpell, const RE::MagicSystem::CastingSource aSource) noexcept {
-                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-                return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString("UnequipSpell"),
-                                              RE::MakeFunctionArguments(
-                                                  static_cast<RE::SpellItem*>(aSpell),
-                                                  static_cast<std::int32_t>(aSource)),
-                                              callback);
-            };
-            const auto unequipShout = [vm, handle](RE::TESShout* aShout) noexcept {
-                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-                return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString("UnequipShout"),
-                                              RE::MakeFunctionArguments(static_cast<RE::TESShout*>(aShout)), callback);
-            };
-            if ((needsLeftUnequip && !unequipSpell(currentLeftSpell, RE::MagicSystem::CastingSource::kLeftHand)) ||
-                (needsRightUnequip && !unequipSpell(currentRightSpell, RE::MagicSystem::CastingSource::kRightHand)) ||
-                (needsShoutUnequip && !unequipShout(currentShout))) {
-                restorePreviousState();
+            if ((needsLeftUnequip && !EquipmentAuthorityHooks::UnequipSpellSynchronously(
+                                         manager, &a_actor, currentLeftSpell,
+                                         RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlotFormId))) ||
+                (needsRightUnequip && !EquipmentAuthorityHooks::UnequipSpellSynchronously(
+                                          manager, &a_actor, currentRightSpell,
+                                          RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlotFormId))) ||
+                (needsShoutUnequip && !EquipmentAuthorityHooks::UnequipShoutSynchronously(manager, &a_actor, currentShout))) {
                 return eraseAnd(CommandStatus::EngineRejected);
             }
         }
@@ -1129,9 +1152,12 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
         if (shout)
             manager->EquipShout(&a_actor, shout);
     } catch (...) {
-        restorePreviousState();
         return eraseAnd(CommandStatus::EngineRejected);
     }
+    EquipmentPostconditionPolicy::State observedState{};
+    if (!CaptureObservedEquipmentState(a_actor, observedState) ||
+        !EquipmentPostconditionPolicy::MatchesFinalState(requestedState, observedState))
+        return eraseAnd(CommandStatus::EngineRejected);
     s_stagedEquipment.erase(stagedIt);
     return CommandStatus::Success;
 }
@@ -1162,77 +1188,80 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
             return CommandStatus::Inactive;
 
         const auto count = static_cast<std::uint32_t>(a_payload.ValueA);
+        EquipmentAuthorityHooks::ScopedAuthoritativeEquipmentReplay replay{};
+        EquipmentPostconditionPolicy::State observedState{};
         if (action == GameplayAction::EquipForm) {
             manager->EquipObject(&a_actor, object, nullptr, count, slot, true, true, false, false);
-            return CommandStatus::Success;
+            if (!CaptureObservedEquipmentState(a_actor, observedState))
+                return CommandStatus::EngineRejected;
+            if (a_payload.LocalFormIdB == kLeftHandEquipSlotFormId)
+                return EquipmentPostconditionPolicy::IsObjectWorn(observedState, object->GetFormID(), true) &&
+                       observedState.LeftObject == object->GetFormID() ? CommandStatus::Success : CommandStatus::EngineRejected;
+            if (a_payload.LocalFormIdB == kRightHandEquipSlotFormId)
+                return EquipmentPostconditionPolicy::IsObjectWorn(observedState, object->GetFormID(), false) &&
+                       observedState.RightObject == object->GetFormID() ? CommandStatus::Success : CommandStatus::EngineRejected;
+            return (EquipmentPostconditionPolicy::IsObjectWorn(observedState, object->GetFormID(), false) ||
+                    EquipmentPostconditionPolicy::IsObjectWorn(observedState, object->GetFormID(), true)) ?
+                       CommandStatus::Success : CommandStatus::EngineRejected;
         }
-        return manager->UnequipObject(&a_actor, object, nullptr, count, slot, true, true, false, false) ?
-                   CommandStatus::Success :
-                   CommandStatus::EngineRejected;
+        if (!manager->UnequipObject(&a_actor, object, nullptr, count, slot, true, true, false, false) ||
+            !CaptureObservedEquipmentState(a_actor, observedState))
+            return CommandStatus::EngineRejected;
+        if (a_payload.LocalFormIdB == kLeftHandEquipSlotFormId &&
+            !EquipmentPostconditionPolicy::IsObjectUnequipped(observedState, object->GetFormID(), true))
+            return CommandStatus::EngineRejected;
+        if (a_payload.LocalFormIdB == kRightHandEquipSlotFormId &&
+            !EquipmentPostconditionPolicy::IsObjectUnequipped(observedState, object->GetFormID(), false))
+            return CommandStatus::EngineRejected;
+        if (a_payload.LocalFormIdB != kLeftHandEquipSlotFormId &&
+            a_payload.LocalFormIdB != kRightHandEquipSlotFormId &&
+            !EquipmentPostconditionPolicy::IsObjectUnequipped(observedState, object->GetFormID()))
+            return CommandStatus::EngineRejected;
+        return CommandStatus::Success;
     }
 
     if (auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_payload.LocalFormIdA)) {
+        auto* manager = RE::ActorEquipManager::GetSingleton();
+        if (!manager)
+            return CommandStatus::Inactive;
+        if (a_payload.LocalFormIdB != kLeftHandEquipSlotFormId &&
+            a_payload.LocalFormIdB != kRightHandEquipSlotFormId)
+            return CommandStatus::Malformed;
+        EquipmentAuthorityHooks::ScopedAuthoritativeEquipmentReplay replay{};
+        const bool leftHand = a_payload.LocalFormIdB == kLeftHandEquipSlotFormId;
         if (action == GameplayAction::EquipForm) {
-            auto* manager = RE::ActorEquipManager::GetSingleton();
-            if (!manager)
-                return CommandStatus::Inactive;
             manager->EquipSpell(&a_actor, spell, slot);
-            return CommandStatus::Success;
+            EquipmentPostconditionPolicy::State observedState{};
+            return CaptureObservedEquipmentState(a_actor, observedState) &&
+                   EquipmentPostconditionPolicy::MatchesSelectedSpell(observedState, spell->GetFormID(), leftHand, true) ?
+                       CommandStatus::Success : CommandStatus::EngineRejected;
         }
 
-        std::int32_t source{};
-        if (a_payload.LocalFormIdB == kLeftHandEquipSlotFormId)
-            source = static_cast<std::int32_t>(RE::MagicSystem::CastingSource::kLeftHand);
-        else if (a_payload.LocalFormIdB == kRightHandEquipSlotFormId)
-            source = static_cast<std::int32_t>(RE::MagicSystem::CastingSource::kRightHand);
-        else
-            return CommandStatus::Malformed;
-
-        auto* skyrimVm = RE::SkyrimVM::GetSingleton();
-        auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
-        auto* handles = vm ? vm->GetObjectHandlePolicy() : nullptr;
-        if (!handles)
-            return CommandStatus::Inactive;
-        const auto handle = handles->GetHandleForObject(a_actor.GetFormType(), &a_actor);
-        if (handle == handles->EmptyHandle())
-            return CommandStatus::EngineRejected;
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-        return vm->DispatchMethodCall(
-                   handle,
-                   RE::BSFixedString("Actor"),
-                   RE::BSFixedString("UnequipSpell"),
-                   RE::MakeFunctionArguments(
-                       static_cast<RE::SpellItem*>(spell),
-                       static_cast<std::int32_t>(source)),
-                   callback) ?
+        EquipmentPostconditionPolicy::State observedState{};
+        return EquipmentAuthorityHooks::UnequipSpellSynchronously(manager, &a_actor, spell, slot) &&
+               CaptureObservedEquipmentState(a_actor, observedState) &&
+               EquipmentPostconditionPolicy::MatchesSelectedSpell(observedState, spell->GetFormID(), leftHand, false) ?
                    CommandStatus::Success : CommandStatus::EngineRejected;
     }
     if (auto* shout = RE::TESForm::LookupByID<RE::TESShout>(a_payload.LocalFormIdA)) {
+        auto* manager = RE::ActorEquipManager::GetSingleton();
+        if (!manager)
+            return CommandStatus::Inactive;
+        EquipmentAuthorityHooks::ScopedAuthoritativeEquipmentReplay replay{};
         if (action == GameplayAction::EquipForm) {
-            auto* manager = RE::ActorEquipManager::GetSingleton();
-            if (!manager)
-                return CommandStatus::Inactive;
             manager->EquipShout(&a_actor, shout);
-            return CommandStatus::Success;
+            EquipmentPostconditionPolicy::State observedState{};
+            return CaptureObservedEquipmentState(a_actor, observedState) &&
+                   EquipmentPostconditionPolicy::MatchesSelectedShout(observedState, shout->GetFormID(), true) ?
+                       CommandStatus::Success : CommandStatus::EngineRejected;
         }
 
         if (a_payload.LocalFormIdB != 0)
             return CommandStatus::Malformed;
-        auto* skyrimVm = RE::SkyrimVM::GetSingleton();
-        auto* vm = skyrimVm ? skyrimVm->impl.get() : nullptr;
-        auto* handles = vm ? vm->GetObjectHandlePolicy() : nullptr;
-        if (!handles)
-            return CommandStatus::Inactive;
-        const auto handle = handles->GetHandleForObject(a_actor.GetFormType(), &a_actor);
-        if (handle == handles->EmptyHandle())
-            return CommandStatus::EngineRejected;
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-        return vm->DispatchMethodCall(
-                   handle,
-                   RE::BSFixedString("Actor"),
-                   RE::BSFixedString("UnequipShout"),
-                   RE::MakeFunctionArguments(static_cast<RE::TESShout*>(shout)),
-                   callback) ?
+        EquipmentPostconditionPolicy::State observedState{};
+        return EquipmentAuthorityHooks::UnequipShoutSynchronously(manager, &a_actor, shout) &&
+               CaptureObservedEquipmentState(a_actor, observedState) &&
+               EquipmentPostconditionPolicy::MatchesSelectedShout(observedState, shout->GetFormID(), false) ?
                    CommandStatus::Success : CommandStatus::EngineRejected;
     }
     return RE::TESForm::LookupByID(a_payload.LocalFormIdA) ? CommandStatus::Unsupported : CommandStatus::MissingForm;
@@ -1247,6 +1276,7 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
             a_payload.LocalFormIdD != 0 || a_payload.ValueA != 0 || a_payload.ValueB != 0 ||
             !HasNoScalars(a_payload) || a_payload.ActionFlags != 0)
             return CommandStatus::Malformed;
+        EquipmentAuthorityHooks::ScopedAdmittedInventoryRemoval inventoryRemovalScope{};
         const auto inventory = a_owner.GetInventory();
         for (const auto& [object, data] : inventory) {
             const auto count = data.first;
@@ -1282,6 +1312,7 @@ std::unordered_map<std::uint64_t, StagedEquipmentTransaction> s_stagedEquipment{
         const auto drop = (a_payload.ActionFlags & kInventoryDrop) != 0;
         if (drop && !a_owner.As<RE::Actor>())
             return CommandStatus::Unsupported;
+        EquipmentAuthorityHooks::ScopedAdmittedInventoryRemoval inventoryRemovalScope{};
         a_owner.RemoveItem(object, -a_payload.ValueA,
                            drop ? RE::ITEM_REMOVE_REASON::kDropping : RE::ITEM_REMOVE_REASON::kRemove,
                            nullptr, nullptr);
@@ -2082,6 +2113,7 @@ std::unordered_map<InventoryTransactionKey, StagedInventoryTransaction, Inventor
 
     LocalGameplayCapture::ScopedRemoteInventorySuppression suppress{};
     ScopedInventoryBaselineRefresh refresh{owner->GetFormID()};
+    EquipmentAuthorityHooks::ScopedAdmittedInventoryRemoval inventoryRemovalScope{};
     for (const auto& removal : resetRemovals) {
         refresh.MarkNativeMutation();
         owner->RemoveItem(removal.Object, removal.Count, RE::ITEM_REMOVE_REASON::kRemove, removal.ExtraList, nullptr);

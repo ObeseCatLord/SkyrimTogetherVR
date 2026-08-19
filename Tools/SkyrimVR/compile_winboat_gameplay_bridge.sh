@@ -26,7 +26,7 @@ cleanup_runtime() {
     fi
     [[ -z $payload_file ]] || rm -f -- "$payload_file"
     "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-        --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
+        --apply --scheduled --max-age-days 2 --skip-local-artifacts --temp-artifacts || true
     exit "$status"
 }
 trap cleanup_runtime EXIT
@@ -56,7 +56,7 @@ for helper in "$winboat_powershell" "$winboat_ssh" "$winboat_scp"; do
 done
 
 "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
-    --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
+    --apply --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
 
 winboat_repo=${STVR_WINBOAT_REPO:-'C:\Users\obesecatlord\Documents\Codex\SkyrimTogetherVR'}
 timestamp=$(date -u +%Y%m%d%H%M%SZ)

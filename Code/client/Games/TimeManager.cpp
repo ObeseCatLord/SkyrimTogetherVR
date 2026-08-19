@@ -11,6 +11,7 @@ TimeData* TimeData::Get() noexcept
     return *(s_instance.Get());
 }
 
+#if !TP_SKYRIM_VR
 using TSimulateTime = void(TimeData*, float);
 static TSimulateTime* RealSimulateTime;
 
@@ -30,3 +31,4 @@ static TiltedPhoques::Initializer s_loadingScreenHooks(
         RealSimulateTime = s_SimulateTime.Get();
         TP_HOOK(&RealSimulateTime, HookSimulateTime);
     });
+#endif

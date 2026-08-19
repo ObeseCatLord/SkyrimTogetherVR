@@ -70,6 +70,12 @@ uninstall commands, runtime alternatives, and evidence collection follow.
   The handoff finalizer and archive auditor require its gameplay package source
   revision and canonical build-manifest identity to match `build/`. This proves
   connection/bootstrap only; it is not two-client gameplay-parity evidence.
+- The finalizer runs the mandatory local-handoff archive audit, including its
+  full ZIP CRC pass and structural/identity checks, before verifying the
+  archive sidecar checksum and any remote checksum. It does not repeat a second
+  full `unzip` read by default. Use `finalize_local_agent_handoff.sh
+  --full-zip-test ...` only when an additional diagnostic CRC pass is wanted;
+  this does not replace any identity, binding, or checksum gate.
 - `dependencies/current-game-overlay/` is a filtered compatibility overlay.
   It deliberately excludes `Data/SkyrimTogetherReborn/SkyrimTogetherVR.*`
   session readout/control files. Those files are per-process state, not
