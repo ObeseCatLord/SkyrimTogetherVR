@@ -94,26 +94,26 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:3fe08ccd-arm64`.
+- Image tag: `skyrim-together-vr-server:b8305b3b-arm64`.
 - Image ID:
-  `sha256:de20e13617d8bb2e2eca796d0ad321af9d5f01404b7733da0b954903296d2300`.
+  `sha256:ed4391b577f9e0428fe46ae98a71f169ff9352187d8b530762e8eb46e11133cd`.
 - Runtime executable SHA-256:
-  `8965dbe5d7a9e5f579587240a6de22917791602642193cfdd88d293c450ccf89`.
+  `daecb901001cc61063d9920e43b0f87dd8ccc2154399925f512d139704c35162`.
 - Runtime core SHA-256:
-  `882fbbb50a45e9478fc9793d4cf96f0e37101824b4b3044c2d53e14137f01629`.
-- Server deployment revision: `3fe08ccd`; the matching client build is
-  `3fe08ccd99b0d4cfa14c5dab872fa9c37f67d6c8` and reports
-  `stvr-v0.1.0-alpha.1-84-g3fe08ccd`.
+  `3b64ea8c4905e6c0bc64159f65a342a74a8696a304bd5ffe148274c2f7f10c55`.
+- Server deployment revision: `b8305b3b`; the matching client build is
+  `b8305b3bb87c35d404d18fcd1b88d084880fad82` and reports
+  `stvr-v0.1.0-alpha.1-91-gb8305b3b`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `3fe08ccd` source revision. The current
+The client and server use the exact `b8305b3b` source revision. The current
 deployment has one container and zero restarts, listens on UDP port 26099, and
 retains the existing persistent config, Data, and log mounts. A matching
 handoff-only Linux/Monado client authenticated successfully on 2026-08-18; see
-`runtime-connection-result-20260818-3fe08ccd.md`. This is one-client bootstrap
+`runtime-connection-result-20260818-b8305b3b.md`. This is one-client bootstrap
 proof, not two-client gameplay proof. Rebuild and redeploy whenever shared
 message definitions, encoding, or server code changes.
 

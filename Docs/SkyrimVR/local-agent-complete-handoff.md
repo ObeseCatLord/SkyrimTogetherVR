@@ -25,7 +25,7 @@ STVR_OPENVR_RUNTIME=xrizer STVR_AUTOCONNECT="$SERVER" "$GAME_DIR/launch-skyrim-t
 
 The launch script validates the selected runtime and prints its resolved paths
 before starting Proton. OpenComposite remains an explicit alternative. The
-2026-08-18 exact `3fe08ccd` Linux/Monado acceptance run used and validated the
+2026-08-18 exact `b8305b3b` Linux/Monado acceptance run used and validated the
 bundled portable XRizer payload. Set
 `STVR_PASSWORD` in the same command only when the server requires one; do not
 store it in the handoff or logs.

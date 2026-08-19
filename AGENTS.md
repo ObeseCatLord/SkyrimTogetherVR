@@ -310,7 +310,7 @@ STVR_FORCE_PROTON=1 STVR_COMPATDATA="$PREFIX" STVR_PROTONPATH="$PROTON" \
 
 The directory name is retained because the transactional install was created
 during the earlier `c18ca1d8` bring-up. Its authoritative installed
-`SkyrimTogetherVR_BuildManifest.json` now reports exact build `3fe08ccd`; do not
+`SkyrimTogetherVR_BuildManifest.json` now reports exact build `b8305b3b`; do not
 infer the installed revision from this historical directory name.
 
 Require the status, lifecycle, player-cell, avatar, and gameplay readouts to
@@ -321,7 +321,7 @@ mapping must validate capability revision 33.
 `ready=1` is required only for gameplay and gameplay-bootstrap profiles; every
 profile still requires a fresh structurally valid gameplay snapshot. Then
 correlate that identity with Foundry's `STVR auth accepted` line. The current exact acceptance is recorded in
-`Docs/SkyrimVR/runtime-connection-result-20260818-3fe08ccd.md`. The earlier
+`Docs/SkyrimVR/runtime-connection-result-20260818-b8305b3b.md`. The earlier
 `c18ca1d8` run remains as historical diagnosis of character creation and the
 stale fader.
 
