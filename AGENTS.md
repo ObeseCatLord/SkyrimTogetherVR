@@ -317,7 +317,7 @@ fixture, not the normal multiplayer starting point.
 
 The directory name is retained because the transactional install was created
 during the earlier `c18ca1d8` bring-up. Its authoritative installed
-`SkyrimTogetherVR_BuildManifest.json` now reports exact build `c1ffb57e`; do not
+`SkyrimTogetherVR_BuildManifest.json` now reports exact build `9eba3bb5`; do not
 infer the installed revision from this historical directory name.
 
 Skyrim VR's startup calibration is not a gameplay-ready state. While
@@ -331,13 +331,13 @@ the logged `candidate` -> `hide issued` -> `verified closed` recovery sequence.
 
 Require the status, lifecycle, player-cell, avatar, and gameplay readouts to
 pass the fresh launch identity gate. `SkyrimTogetherVR.status` must also report
-equal nonempty client/server versions, protocol revision 15, and nonzero
+equal nonempty client/server versions, protocol revision 17, and nonzero
 server, session, and connection-generation identities. The matching bridge
-mapping must validate capability revision 33.
+mapping must validate ABI 23 and capability revision 34.
 `ready=1` is required only for gameplay and gameplay-bootstrap profiles; every
 profile still requires a fresh structurally valid gameplay snapshot. Then
 correlate that identity with Foundry's `STVR auth accepted` line. The current exact acceptance is recorded in
-`Docs/SkyrimVR/runtime-connection-result-20260819-c1ffb57e.md`. The earlier
+`Docs/SkyrimVR/runtime-connection-result-20260819-9eba3bb5.md`. The earlier
 `c18ca1d8` run remains as historical diagnosis of character creation and the
 stale fader.
 
@@ -430,9 +430,10 @@ export YDOTOOL_SOCKET=/run/user/1000/stvr-ydotool.sock
 Main Menu -> New Game:
 
 1. Use `devbench_new_game.py`'s cached Win32 helper inside the exact Proton
-   prefix. It sends `End`, then `Enter` when no `.ess` saves exist. When saves
-   exist, it sends `End`, `Down`, then `Enter` so `Continue` cannot be loaded in
-   place of `New Game`. Do not use host focus injection.
+   prefix. It sends repeated `Up` presses to clamp to the first row, then
+   `Enter` when no `.ess` saves exist. When saves exist, it sends `Down`, then
+   `Enter` so `Continue` cannot be loaded in place of `New Game`. Do not use
+   host focus injection.
 2. Publish XRizer `trigger` to accept Realm of Lorkhan's New Game confirmation.
 
 Automated RaceSex completion with XRizer:

@@ -68,17 +68,19 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
 
     def test_quest_dispatch_is_synchronous_and_suppressed(self) -> None:
         manager = (BRIDGE / "QuestDialogueManager.cpp").read_text(encoding="utf-8")
+        native_access = (BRIDGE / "QuestNativeAccess.cpp").read_text(encoding="utf-8")
         capture = (BRIDGE / "LocalGameplayCapture.cpp").read_text(encoding="utf-8")
 
-        self.assertIn("a_quest.SetStage(a_stage)", manager)
+        self.assertIn("QuestNativeAccess::SetStage(a_quest, a_stage)", manager)
+        self.assertIn("QuestNativeAccess::SetActive(*quest, false);\n            quest->Stop();", manager)
+        self.assertIn("QuestNativeAccess::SetActive(*quest, true);", manager)
+        self.assertIn("bool SetStage(RE::TESQuest& a_quest, const std::uint16_t a_stage) noexcept", native_access)
+        self.assertIn("void SetActive(RE::TESQuest& a_quest, const bool a_active) noexcept", native_access)
         self.assertIn("ArmQuestStageSuppression", manager)
         self.assertIn("ArmQuestStartStopSuppression", manager)
-        self.assertIn("quest->SetActive(false);\n        quest->Stop();", manager)
-        self.assertIn("quest->SetActive(true);", manager)
         self.assertIn("CommandStatus::Degraded", manager)
         self.assertIn("CancelQuestSuppressions(stageResult)", manager)
         self.assertIn("ReconcilePartialQuestMutation", manager)
-        self.assertIn("runtime-unverified", manager)
         self.assertNotIn("DispatchMethodCall(", manager)
         can_publish = capture.split("bool CanPublish(", 1)[1].split("void RecordPeriodicPublication", 1)[0]
         self.assertIn("CapabilityForDomain(a_domain)", can_publish)
@@ -86,7 +88,15 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
         self.assertIn("!CanPublish(a_domain)", publish)
 
         self.assertIn("Capability::LocalCaptureSinks", capture)
-        self.assertIn("g_scriptSinksRegistered && g_animationSinkRegistered", capture)
+        self.assertIn(
+            "g_scriptSinkRegistration.State == SinkRegistrationState::Registered",
+            capture,
+        )
+        self.assertIn(
+            "g_animationSinkRegistration.State == SinkRegistrationState::Registered",
+            capture,
+        )
+        self.assertIn("PublishLocalCaptureSinkReadiness", capture)
         self.assertIn("g_initialized = false;", capture)
         capture_init = capture.split("bool InitializeLocalCaptureSinksUnlocked()", 1)[1].split(
             "void CaptureAppearance", 1

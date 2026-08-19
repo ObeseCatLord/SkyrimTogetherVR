@@ -437,7 +437,24 @@ def xmake_targets_visible(root: pathlib.Path) -> tuple[bool, str]:
     )
     if result.returncode != 0:
         return False, result.stdout
-    missing = sorted(target for target in expected if target not in result.stdout)
+    target_output = result.stdout
+    if not target_output.strip():
+        # xmake 3.0.9 can return an empty successful target-list response even
+        # though its project-aware build help still emits the complete target
+        # choices. Keep exact-name verification and use that output only when
+        # the primary query is empty.
+        fallback = subprocess.run(
+            ["xmake", "--help"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if fallback.returncode != 0:
+            return False, fallback.stdout
+        target_output = fallback.stdout
+    missing = sorted(target for target in expected if target not in target_output)
     if missing:
         return False, "missing target(s): " + ", ".join(missing)
     return True, "all expected VR targets are visible"

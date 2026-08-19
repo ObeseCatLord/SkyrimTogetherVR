@@ -9,6 +9,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -28,6 +29,33 @@ AUDIT = load_auditor()
 
 
 class SourceReadinessTests(unittest.TestCase):
+    def test_xmake_target_check_falls_back_to_project_help_when_show_is_empty(self) -> None:
+        expected = " ".join(
+            (
+                "SkyrimTogetherVRClient",
+                "SkyrimTogetherVRVrikBridge",
+                "SkyrimTogetherVRHiggsBridge",
+                "SkyrimTogetherVRPlanckBridge",
+                "SkyrimTogetherVRTickBridge",
+                "SkyrimVRImmersiveLauncher",
+                "SkyrimTogetherVRClientAvatarSync",
+                "SkyrimVRImmersiveLauncherAvatarSync",
+                "SkyrimTogetherVRGameplayClient",
+                "SkyrimVRImmersiveLauncherGameplay",
+                "ImmersiveElf",
+                "TPProcess",
+            )
+        )
+        responses = (
+            mock.Mock(returncode=0, stdout=""),
+            mock.Mock(returncode=0, stdout=expected),
+        )
+        with mock.patch.object(AUDIT.subprocess, "run", side_effect=responses) as run:
+            visible, detail = AUDIT.xmake_targets_visible(ROOT)
+
+        self.assertTrue(visible, detail)
+        self.assertEqual(run.call_count, 2)
+
     def test_workflow_checks_the_pull_request_merge_revision(self) -> None:
         workflow = (ROOT / ".github/workflows/readiness.yml").read_text(encoding="utf-8")
         self.assertNotIn("pull_request.head.sha", workflow)

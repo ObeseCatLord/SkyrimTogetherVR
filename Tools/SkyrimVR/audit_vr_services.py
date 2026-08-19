@@ -1733,7 +1733,7 @@ REQUIRED_LAYOUT_TOKENS = {
         "static_assert(sizeof(TESGlobal) == TESGlobal::LocalGlobalOffsets::Size);",
     ),
     "Code/client/Games/Skyrim/TimeManager.h": (
-        "#include <RuntimeLayout.h>",
+        '#include "RuntimeLayout.h"',
         "CommonLibCalendarOffsets = Skyrim::RuntimeLayout::CalendarCommonLibNgOffsets",
         "LocalTimeDataOffsets = Skyrim::RuntimeLayout::TimeDataLocalShimOffsets",
         "GetGameYearData",
@@ -4240,9 +4240,37 @@ def audit_vr_connection_only_game_call_safety(root: pathlib.Path) -> list[str]:
         errors.append("TransportService::OnConnected must contain the dedicated VR authentication branch")
     else:
         vr_auth = connected[vr_auth_start:vr_auth_end]
-        for token in ("PlayerCharacter::Get", "GetLevel(", "TimeData::Get"):
+        for token in ("PlayerCharacter::Get", "GetLevel("):
             if token in vr_auth:
                 errors.append(f"VR authentication branch must not call `{token}`")
+
+        snapshot_declaration = "TimeData::CalendarSnapshot observedCalendar{};"
+        snapshot_lookup = "auto* const gameTime = TimeData::Get();"
+        snapshot_validation = "gameTime && gameTime->TryGetCalendarSnapshot(observedCalendar)"
+        fail_closed_tokens = (
+            "Client::Close();",
+            "ConnectionErrorEvent errorEvent;",
+            'errorEvent.ErrorDetail = "{\\\"error\\\":\\\"calendar_globals_unavailable\\\"}";',
+            "m_dispatcher.trigger(errorEvent);",
+            "return;",
+        )
+        declaration_at = vr_auth.find(snapshot_declaration)
+        lookup_at = vr_auth.find(snapshot_lookup)
+        validation_at = vr_auth.find(snapshot_validation)
+        failure_at = vr_auth.find("else", validation_at)
+        if (
+            vr_auth.count("TimeData::Get") != 1
+            or declaration_at < 0
+            or lookup_at < 0
+            or validation_at < 0
+            or failure_at < 0
+            or not (declaration_at < lookup_at < validation_at < failure_at)
+            or any(token not in vr_auth[failure_at:] for token in fail_closed_tokens)
+        ):
+            errors.append(
+                "VR authentication calendar access must use exactly one validated "
+                "TimeData::Get/TryGetCalendarSnapshot path and fail closed when globals are unavailable"
+            )
 
     for signature in (
         "void PlayerService::RunVrLevelUpdates(const double acDeltaTime) noexcept",

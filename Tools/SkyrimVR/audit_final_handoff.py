@@ -694,9 +694,32 @@ def run_self_test() -> int:
                 print(f"expected={expected} discovered={discovered}")
             print(f"expected gameplay evidence={expected_gameplay_paths} discovered={discovered_gameplay_paths}")
             return 1
-        positive_result = run_audit(args)
-        if positive_result != 0:
-            return positive_result
+        accepted_args = argparse.Namespace(
+            build_default=build_default,
+            build_avatar_sync=build_avatar,
+            build_gameplay=build_gameplay,
+            build_dll_only=build_dll,
+            runtime_default=runtime_default,
+            runtime_avatar_sync=runtime_avatar,
+            runtime_gameplay=None,
+            runtime_gameplay_peer=None,
+            build_evidence_dir=build_out,
+            runtime_evidence_dir=runtime_out,
+            no_auto_discover=True,
+            require_gameplay_runtime=False,
+        )
+        accepted_result = run_audit(accepted_args)
+        if accepted_result != 0:
+            print("Final handoff self-test failed: trusted non-gameplay evidence unexpectedly failed.")
+            return accepted_result
+
+        strict_without_native_trace_result = run_audit(args)
+        if strict_without_native_trace_result == 0:
+            print(
+                "Final handoff self-test failed: strict gameplay evidence unexpectedly passed "
+                "without native trace corroboration."
+            )
+            return 1
 
         missing_peer_args = argparse.Namespace(
             build_default=build_default,
@@ -723,12 +746,12 @@ def run_self_test() -> int:
             build_dll_only=build_dll,
             runtime_default=untrusted_runtime_default,
             runtime_avatar_sync=runtime_avatar,
-            runtime_gameplay=runtime_gameplay,
-            runtime_gameplay_peer=runtime_gameplay_peer,
+            runtime_gameplay=None,
+            runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
-            require_gameplay_runtime=True,
+            require_gameplay_runtime=False,
         )
         untrusted_runtime_result = run_audit(untrusted_runtime_args)
         if untrusted_runtime_result == 0:
@@ -747,12 +770,12 @@ def run_self_test() -> int:
             build_dll_only=build_dll,
             runtime_default=runtime_default,
             runtime_avatar_sync=runtime_avatar,
-            runtime_gameplay=runtime_gameplay,
-            runtime_gameplay_peer=runtime_gameplay_peer,
+            runtime_gameplay=None,
+            runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
-            require_gameplay_runtime=True,
+            require_gameplay_runtime=False,
         )
         weakened_result = run_audit(weakened_args)
         if weakened_result == 0:
@@ -766,12 +789,12 @@ def run_self_test() -> int:
             build_dll_only=build_dll,
             runtime_default=runtime_avatar,
             runtime_avatar_sync=runtime_avatar,
-            runtime_gameplay=runtime_gameplay,
-            runtime_gameplay_peer=runtime_gameplay_peer,
+            runtime_gameplay=None,
+            runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
-            require_gameplay_runtime=True,
+            require_gameplay_runtime=False,
         )
         wrong_default_runtime_result = run_audit(wrong_default_runtime_args)
         if wrong_default_runtime_result == 0:
@@ -784,17 +807,17 @@ def run_self_test() -> int:
             build_gameplay=build_gameplay,
             build_dll_only=build_dll,
             runtime_default=runtime_default,
-            runtime_avatar_sync=runtime_gameplay,
-            runtime_gameplay=runtime_gameplay,
-            runtime_gameplay_peer=runtime_gameplay_peer,
+            runtime_avatar_sync=runtime_default,
+            runtime_gameplay=None,
+            runtime_gameplay_peer=None,
             build_evidence_dir=build_out,
             runtime_evidence_dir=runtime_out,
             no_auto_discover=True,
-            require_gameplay_runtime=True,
+            require_gameplay_runtime=False,
         )
         wrong_avatar_runtime_result = run_audit(wrong_avatar_runtime_args)
         if wrong_avatar_runtime_result == 0:
-            print("Final handoff self-test failed: gameplay runtime evidence unexpectedly passed as avatar-sync runtime evidence.")
+            print("Final handoff self-test failed: default runtime evidence unexpectedly passed as avatar-sync runtime evidence.")
             return 1
 
         return 0

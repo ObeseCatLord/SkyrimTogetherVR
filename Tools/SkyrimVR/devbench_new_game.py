@@ -52,10 +52,10 @@ LAUNCH_NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 RELEASE_ACTIVE_PLUGIN_ORDER = (
     "Skyrim.esm",
     "Update.esm",
-    "Dawnguard.esm",
     "HearthFires.esm",
     "Dragonborn.esm",
     "SkyrimVR.esm",
+    "Dawnguard.esm",
     "higgs_vr.esp",
     "vrik.esp",
     "Realm of Lorkhan - Custom Alternate Start - Choose your own adventure.esp",
@@ -342,7 +342,7 @@ def main_menu_new_game_input_mode(wine_prefix: pathlib.Path) -> str:
         has_saves = False
     except OSError as exc:
         raise AutomationError(f"could not inspect Skyrim VR saves at {saves_directory}: {exc}") from exc
-    return "--end-down-enter" if has_saves else "--end-enter"
+    return "--up-down-enter" if has_saves else "--up-enter"
 
 
 def select_new_game_with_win32_scancodes(args: argparse.Namespace) -> None:
@@ -1286,7 +1286,7 @@ def main() -> int:
         )
     else:
         if "RaceSex Menu" not in open_menus:
-            # End normalizes Skyrim VR's Main Menu to its top visible entry.
+            # Repeated Up presses clamp Skyrim VR's Main Menu to its first row.
             # The helper uses the active prefix's save roster: its saved-game
             # route moves one row from Continue to New Game; the clean route
             # activates top-row New Game. Both stay inside Wine's input stack.
@@ -1345,11 +1345,14 @@ def main() -> int:
             ) from exc
 
     scene = wait_until(
-        "Realm of Lorkhan player placement",
+        "loaded player placement" if args.load_save else "Realm of Lorkhan player placement",
         args.timeout,
         lambda: post_tool(args.url, "inspect", {"kind": "scene"}),
         lambda value: value.get("playerLoaded") is True
-        and value.get("cell", {}).get("editorId") == "RealmLorkhan",
+        and (
+            args.load_save
+            or value.get("cell", {}).get("editorId") == "RealmLorkhan"
+        ),
         on_wait=lambda: handle_blocking_message_box(args.url, "finalization"),
     )
     mods = post_tool(args.url, "inspect", {"kind": "mods"})
@@ -1411,7 +1414,7 @@ def main() -> int:
         timeout=10.0,
     )
 
-    print(f"Realm of Lorkhan ready at {scene.get('position')}")
+    print(f"Player world ready in {scene.get('cell', {}).get('editorId', 'unknown cell')} at {scene.get('position')}")
     print(f"Player finalized: {player.get('name')} ({player.get('race')})")
     print("Release active plugin order is verified")
 

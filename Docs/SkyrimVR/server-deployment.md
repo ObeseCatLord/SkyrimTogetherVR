@@ -94,26 +94,24 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:b8305b3b-arm64`.
+- Image tag: `skyrim-together-vr-server:9eba3bb5-arm64`.
 - Image ID:
-  `sha256:ed4391b577f9e0428fe46ae98a71f169ff9352187d8b530762e8eb46e11133cd`.
+  `sha256:8fb348622e4ab8db0c0bada8b7cc83cab457fe94134ee10667b1214fa84f0614`.
 - Runtime executable SHA-256:
-  `daecb901001cc61063d9920e43b0f87dd8ccc2154399925f512d139704c35162`.
-- Runtime core SHA-256:
-  `3b64ea8c4905e6c0bc64159f65a342a74a8696a304bd5ffe148274c2f7f10c55`.
-- Server deployment revision: `b8305b3b`; the matching client build is
-  `b8305b3bb87c35d404d18fcd1b88d084880fad82` and reports
-  `stvr-v0.1.0-alpha.1-91-gb8305b3b`.
+  `6a20bd5846e1fafc09b446dd7e390fe6ad6f7dd20d84ccf1ee97eb57545aec7c`.
+- Server deployment revision: `9eba3bb5`; the matching client build is
+  `9eba3bb5d540326bc946e5811fdca3bc72118810` and reports
+  `stvr-v0.1.0-alpha.1-99-g9eba3bb5`.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `b8305b3b` source revision. The current
+The client and server use the exact `9eba3bb5` source revision. The current
 deployment has one container and zero restarts, listens on UDP port 26099, and
 retains the existing persistent config, Data, and log mounts. A matching
-handoff-only Linux/Monado client authenticated successfully on 2026-08-18; see
-`runtime-connection-result-20260818-b8305b3b.md`. This is one-client bootstrap
+handoff-only Linux/Monado client authenticated successfully on 2026-08-19; see
+`runtime-connection-result-20260819-9eba3bb5.md`. This is one-client bootstrap
 proof, not two-client gameplay proof. Rebuild and redeploy whenever shared
 message definitions, encoding, or server code changes.
 

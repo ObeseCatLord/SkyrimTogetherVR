@@ -85,7 +85,7 @@ class Win32InputTests(unittest.TestCase):
         self.assertEqual(kwargs["timeout"], DEV_BENCH.WIN32_INPUT_TIMEOUT)
         self.assertEqual(
             run.call_args.args[0][-1],
-            "--end-enter",
+            "--up-enter",
         )
 
     def test_save_roster_selects_the_row_below_continue(self) -> None:
@@ -97,7 +97,7 @@ class Win32InputTests(unittest.TestCase):
 
             self.assertEqual(
                 DEV_BENCH.main_menu_new_game_input_mode(prefix),
-                "--end-down-enter",
+                "--up-down-enter",
             )
 
     def test_saved_prefix_passes_down_row_mode_to_helper(self) -> None:
@@ -127,7 +127,7 @@ class Win32InputTests(unittest.TestCase):
             ):
                 DEV_BENCH.select_new_game_with_win32_scancodes(args)
 
-        self.assertEqual(run.call_args.args[0][-1], "--end-down-enter")
+        self.assertEqual(run.call_args.args[0][-1], "--up-down-enter")
 
     def test_helper_failure_retains_bounded_file_diagnostics(self) -> None:
         args = types.SimpleNamespace()
