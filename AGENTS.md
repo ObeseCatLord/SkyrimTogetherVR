@@ -310,8 +310,17 @@ STVR_FORCE_PROTON=1 STVR_COMPATDATA="$PREFIX" STVR_PROTONPATH="$PROTON" \
 
 The directory name is retained because the transactional install was created
 during the earlier `c18ca1d8` bring-up. Its authoritative installed
-`SkyrimTogetherVR_BuildManifest.json` now reports exact build `b8305b3b`; do not
+`SkyrimTogetherVR_BuildManifest.json` now reports exact build `c1ffb57e`; do not
 infer the installed revision from this historical directory name.
+
+Skyrim VR's startup calibration is not a gameplay-ready state. While
+`CalibrationOptionMenu` is open or the player remains in SkyrimVR.esm cell
+`0x040008D4` (`VRPlayroom01`), require lifecycle `state=suspended`, `ready=0`,
+and reason `calibration_option_menu` or `vr_playroom`; Foundry must not admit the
+client. Do not close `Fader Menu` manually during calibration. After a normal
+New Game completion or settled save load leaves the playroom, require lifecycle
+readiness, exact-version authentication, and either a naturally absent Fader or
+the logged `candidate` -> `hide issued` -> `verified closed` recovery sequence.
 
 Require the status, lifecycle, player-cell, avatar, and gameplay readouts to
 pass the fresh launch identity gate. `SkyrimTogetherVR.status` must also report
@@ -321,7 +330,7 @@ mapping must validate capability revision 33.
 `ready=1` is required only for gameplay and gameplay-bootstrap profiles; every
 profile still requires a fresh structurally valid gameplay snapshot. Then
 correlate that identity with Foundry's `STVR auth accepted` line. The current exact acceptance is recorded in
-`Docs/SkyrimVR/runtime-connection-result-20260818-b8305b3b.md`. The earlier
+`Docs/SkyrimVR/runtime-connection-result-20260819-c1ffb57e.md`. The earlier
 `c18ca1d8` run remains as historical diagnosis of character creation and the
 stale fader.
 
