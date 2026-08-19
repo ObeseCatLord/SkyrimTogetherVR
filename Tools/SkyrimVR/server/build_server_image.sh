@@ -58,7 +58,7 @@ awk '
     /^RUN --mount=type=cache,target=\/root\/\.xmake\/packages/ {
         print "RUN source ~/.xmake/profile && \\"
         replacing = 1
-        replaced = 1
+        replaced += 1
         next
     }
     replacing && /^[[:space:]]*--mount=type=cache/ { next }
@@ -68,11 +68,16 @@ awk '
     }
     { print }
     END {
-        if (!replaced || replacing) {
+        if (replaced != 2 || replacing) {
             exit 2
         }
     }
 ' "$repo_root/Dockerfile" > "$cacheless"
+
+if ! grep -Fq -- "--mount=type=cache" "$repo_root/Dockerfile" || grep -Fq -- "--mount=type=cache" "$cacheless"; then
+    echo "Unable to remove Docker BuildKit cache mounts from the fallback Dockerfile." >&2
+    exit 2
+fi
 
 echo "Docker BuildKit/buildx is unavailable; building without xmake cache mounts."
 docker "${build_args[@]}" -f "$cacheless" "$repo_root"

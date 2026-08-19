@@ -4,12 +4,26 @@
 #include <TiltedCore/Serialization.hpp>
 
 #include <Messages/RequestHealthChangeBroadcast.h>
+#include <Structs/ActorValues.h>
 #include <server/Services/HealthChangePolicy.h>
 #include <server/Services/ServerAuthorityPolicy.h>
 
 #include <catch2/catch.hpp>
 
 using namespace TiltedPhoques;
+
+TEST_CASE("Actor health ledger updates mapped health through a writable hopscotch iterator", "[server][vr-health-change]")
+{
+    constexpr std::uint32_t healthActorValue = 24;
+    ActorValues values{};
+    values.ActorValuesList.emplace(healthActorValue, 100.0F);
+
+    const auto healthIt = values.ActorValuesList.find(healthActorValue);
+    REQUIRE(healthIt != values.ActorValuesList.end());
+
+    healthIt.value() = 75.0F;
+    REQUIRE(healthIt.value() == 75.0F);
+}
 
 TEST_CASE("VR health-change request preserves attacker authentication fields", "[encoding][vr-health-change]")
 {

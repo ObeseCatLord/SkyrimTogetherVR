@@ -335,7 +335,7 @@ void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthC
             if (healthIt == actorValues.end())
                 actorValues.emplace(kHealthActorValue, newHealth);
             else
-                healthIt->second = newHealth;
+                healthIt.value() = newHealth;
 
             NotifyHealthChangeBroadcast notify;
             notify.Id = message.Id;
@@ -428,7 +428,7 @@ void ActorValueService::OnHealthChangeBroadcast(const PacketEvent<RequestHealthC
         if (nonceIt == m_vrHealthActionNonces.end())
             nonceIt = m_vrHealthActionNonces.emplace(
                 playerId, HealthActionNonceState{sessionNonce, connectionGeneration, 0}).first;
-        healthIt->second = newHealth;
+        healthIt.value() = newHealth;
         if (resetNonceDomain)
             nonceIt->second = {sessionNonce, connectionGeneration, 0};
         nonceIt->second.LastActionNonce = message.ActionNonce;
