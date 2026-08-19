@@ -8,6 +8,7 @@
 
 #include <Games/References.h>
 #include <Games/TES.h>
+#include <Games/Skyrim/Interface/MenuPausePolicy.h>
 #include <Forms/TESWorldSpace.h>
 #include <Forms/TESObjectCELL.h>
 
@@ -91,6 +92,21 @@ constexpr std::size_t kMaximumOutboundPacketBytes = 1u << 16;
 constexpr std::size_t kMaximumOutboundQueuePackets = 256;
 constexpr std::size_t kMaximumOutboundQueueBytes = 8u << 20;
 constexpr std::uint32_t kGameplayRetirementRetryIntervalFrames = 30;
+
+constexpr const char* DisconnectReasonToString(const TiltedPhoques::Client::EDisconnectReason aReason) noexcept
+{
+    using DisconnectReason = TiltedPhoques::Client::EDisconnectReason;
+    switch (aReason)
+    {
+    case DisconnectReason::kTimeout: return "Timeout";
+    case DisconnectReason::kLocalProblem: return "LocalProblem";
+    case DisconnectReason::kKicked: return "Kicked";
+    case DisconnectReason::kCannotResolve: return "CannotResolve";
+    case DisconnectReason::kAborted: return "Aborted";
+    case DisconnectReason::kNormal: return "Normal";
+    default: return "Unknown";
+    }
+}
 
 #if TP_SKYRIM_VR
 [[nodiscard]] SkyrimTogetherVR::GameplayBridge::GameplayDomain GameplayDomainForOpcode(
@@ -596,6 +612,10 @@ void TransportService::OnConnected()
     }
 #endif
 
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::MenuPausePolicy::PublishTransportConnectionState(true);
+#endif
+
     AuthenticationRequest request{};
     request.Version = BUILD_COMMIT;
     request.GameplayProtocolRevision = SkyrimTogether::Protocol::kGameplayProtocolRevision;
@@ -802,6 +822,9 @@ void TransportService::OnConnected()
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
+#if TP_SKYRIM_VR
+    SkyrimTogetherVR::MenuPausePolicy::PublishTransportConnectionState(false);
+#endif
     ClearOutboundQueue();
     m_connected = false;
     m_localPlayerId = 0;
@@ -826,7 +849,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_acceptedServerVersion.clear();
     m_negotiatedGameplayCapabilities = 0;
 
-    spdlog::warn("Disconnected from server {}", static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
+    spdlog::warn("Disconnected from server: {} ({})", DisconnectReasonToString(aReason), static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
 
     m_dispatcher.trigger(DisconnectedEvent());
 }

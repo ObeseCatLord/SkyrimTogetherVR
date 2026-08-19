@@ -22,6 +22,25 @@ enum class Action : std::uint8_t
     Restore,
 };
 
+enum class MutationContext : std::uint8_t
+{
+    Creator,
+    PeriodicScan,
+};
+
+// Transport callbacks publish exact connection edges for creator threads;
+// the owner-thread UI scan also refreshes the same atomic snapshot.
+void PublishTransportConnectionState(bool aConnected) noexcept;
+
+// Creator wrappers run before Skyrim places the new menu on its active queue,
+// so they may mutate an off-stack menu even when they are not on TickBridge's
+// owner thread. Periodic scans must remain on that owner thread.
+[[nodiscard]] constexpr bool CanMutateFlags(
+    const MutationContext aContext, const bool aIsVrUiOwnerThread, const bool aMenuOnStack) noexcept
+{
+    return !aMenuOnStack && (aContext == MutationContext::Creator || aIsVrUiOwnerThread);
+}
+
 [[nodiscard]] constexpr bool IsAllowlisted(const std::string_view aMenuName) noexcept
 {
     for (const auto name : kAllowList)
@@ -32,18 +51,21 @@ enum class Action : std::uint8_t
     return false;
 }
 
-[[nodiscard]] constexpr bool ShouldUnpause(const std::string_view aMenuName, const bool aClientOnline, const bool aSkyrimSoulsActive, const bool aRuntimeApiAvailable) noexcept
+// Match the desktop queue hook: authentication is not enough.  The underlying
+// transport must be connected so opening a menu cannot stall the handshake.
+[[nodiscard]] constexpr bool ShouldUnpause(
+    const std::string_view aMenuName, const bool aTransportConnected, const bool aSkyrimSoulsActive, const bool aRuntimeApiAvailable) noexcept
 {
-    return aClientOnline && !aSkyrimSoulsActive && aRuntimeApiAvailable && IsAllowlisted(aMenuName);
+    return aTransportConnected && !aSkyrimSoulsActive && aRuntimeApiAvailable && IsAllowlisted(aMenuName);
 }
 
 [[nodiscard]] constexpr Action DecideAction(
-    const std::string_view aMenuName, const bool aClientOnline, const bool aSkyrimSoulsActive, const bool aRuntimeApiAvailable, const bool aMenuOnStack,
+    const std::string_view aMenuName, const bool aTransportConnected, const bool aSkyrimSoulsActive, const bool aRuntimeApiAvailable, const bool aMenuOnStack,
     const bool aPreviouslyModified) noexcept
 {
     if (aMenuOnStack || aSkyrimSoulsActive || !aRuntimeApiAvailable || !IsAllowlisted(aMenuName))
         return Action::None;
-    if (aClientOnline)
+    if (aTransportConnected)
         return Action::Unpause;
     return aPreviouslyModified ? Action::Restore : Action::None;
 }

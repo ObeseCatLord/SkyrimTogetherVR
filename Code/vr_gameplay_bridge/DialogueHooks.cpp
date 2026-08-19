@@ -54,6 +54,25 @@ void* g_playDialogueOptionHookTarget{};
 std::atomic_bool g_installAttempted{};
 std::atomic_bool g_missingSpeakSoundTrampolineLogged{};
 std::atomic_bool g_missingPlayDialogueOptionTrampolineLogged{};
+enum class PresentationDiagnostic : std::size_t
+{
+    UnmanagedNative,
+    ManagedSuppression,
+    ReplayAttempt,
+    ReplaySuccess,
+    ReplayRejected,
+    NativeFallback,
+    Count,
+};
+
+struct PresentationDiagnostics
+{
+    std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(PresentationDiagnostic::Count)> Counts{};
+};
+
+PresentationDiagnostics g_speechDiagnostics{};
+PresentationDiagnostics g_subtitleDiagnostics{};
+std::atomic<std::uint64_t> g_nativeSpeechResultCount{};
 std::atomic<std::uint64_t> g_suppressedManagedRemoteSpeechCount{};
 std::atomic<std::uint64_t> g_suppressedManagedRemoteSubtitleCount{};
 DialogueHookPolicy::HookAttachment g_speakSoundAttachment{};
@@ -144,6 +163,11 @@ void ClearDetachedHookState() noexcept
     g_installRetainedDegraded = false;
     g_missingSpeakSoundTrampolineLogged.store(false, std::memory_order_relaxed);
     g_missingPlayDialogueOptionTrampolineLogged.store(false, std::memory_order_relaxed);
+    for (auto& count : g_speechDiagnostics.Counts)
+        count.store(0, std::memory_order_relaxed);
+    for (auto& count : g_subtitleDiagnostics.Counts)
+        count.store(0, std::memory_order_relaxed);
+    g_nativeSpeechResultCount.store(0, std::memory_order_relaxed);
     g_suppressedManagedRemoteSpeechCount.store(0, std::memory_order_relaxed);
     g_suppressedManagedRemoteSubtitleCount.store(0, std::memory_order_relaxed);
 }
@@ -261,6 +285,78 @@ void RecordManagedRemoteDialogueSuppression(
     }
 }
 
+[[nodiscard]] constexpr const char* PresentationDiagnosticName(const PresentationDiagnostic a_diagnostic) noexcept
+{
+    switch (a_diagnostic) {
+    case PresentationDiagnostic::UnmanagedNative:
+        return "unmanaged native playback";
+    case PresentationDiagnostic::ManagedSuppression:
+        return "managed suppression";
+    case PresentationDiagnostic::ReplayAttempt:
+        return "replay attempt";
+    case PresentationDiagnostic::ReplaySuccess:
+        return "replay success";
+    case PresentationDiagnostic::ReplayRejected:
+        return "replay rejection";
+    case PresentationDiagnostic::NativeFallback:
+        return "native fallback";
+    case PresentationDiagnostic::Count:
+        break;
+    }
+    return "unknown";
+}
+
+void RecordPresentationDiagnostic(
+    PresentationDiagnostics& ar_diagnostics,
+    const PresentationDiagnostic a_diagnostic,
+    const char* a_presentationName) noexcept
+{
+    auto& count = ar_diagnostics.Counts[static_cast<std::size_t>(a_diagnostic)];
+    const auto total = count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (BridgeBatchPolicy::ShouldLogAggregate(total)) {
+        NoThrow::BestEffort([&] { SKSE::log::info(
+            "SkyrimTogetherVRGameplayBridge: dialogue {} {} (aggregate total={})",
+            a_presentationName, PresentationDiagnosticName(a_diagnostic), total);
+        });
+    }
+}
+
+void RecordNativeSpeechResult(const float a_result, const bool aHandlePresent) noexcept
+{
+    const auto total = g_nativeSpeechResultCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!BridgeBatchPolicy::ShouldLogAggregate(total))
+        return;
+
+    NoThrow::BestEffort([&] {
+        SKSE::log::info(
+            "SkyrimTogetherVRGameplayBridge: native speech scheduling result={} accepted={} "
+            "handlePresent={} (aggregate total={})",
+            a_result, std::isfinite(a_result) && a_result > 0.0F, aHandlePresent, total);
+    });
+}
+
+[[nodiscard]] bool IsManagedRemotePresentationRelayAvailable(const bool a_hasReplayTrampoline) noexcept
+{
+    try {
+        auto& endpoint = BridgeEndpoint::Get();
+        const auto* mapping = endpoint.Mapping();
+        if (!a_hasReplayTrampoline || !mapping || !endpoint.IsOperational() ||
+            static_cast<EndpointState>(mapping->Header.State.load(std::memory_order_acquire)) != EndpointState::Ready)
+            return false;
+
+        SessionIdentitySnapshot session{};
+        if (!TrySnapshotSessionIdentity(mapping->Header, session) || session.ServerInstanceNonce == 0 ||
+            session.ConnectionGeneration == 0 || mapping->Header.LifecycleEpoch.load(std::memory_order_acquire) == 0)
+            return false;
+
+        return static_cast<EndpointState>(mapping->Header.State.load(std::memory_order_acquire)) == EndpointState::Ready &&
+               HasCapability(mapping->Header.ActiveCapabilities.load(std::memory_order_acquire),
+                             CapabilityForDomain(GameplayDomain::Dialogue));
+    } catch (...) {
+        return false;
+    }
+}
+
 [[nodiscard]] std::uint32_t GetCurrentSubtitleTopicFormId(RE::TESObjectREFR& a_speaker) noexcept
 {
     auto* topicManager = RE::MenuTopicManager::GetSingleton();
@@ -347,11 +443,19 @@ float HookSpeakSound(
     try {
     const bool hasSpeaker = a_actor != nullptr;
     const bool managedRemoteSpeaker = hasSpeaker && AvatarManager::Get().IsManagedRemoteActor(a_actor);
-    const auto disposition = DialogueHookPolicy::DecideSpeakerEvent(
-        hasSpeaker, managedRemoteSpeaker, g_remoteReplayDepth != 0);
-    if (!disposition.CallNative) {
+    const auto disposition = DialogueHookPolicy::DecideSpeakerPresentation(
+        hasSpeaker, managedRemoteSpeaker, g_remoteReplayDepth != 0,
+        managedRemoteSpeaker && IsManagedRemotePresentationRelayAvailable(g_originalSpeakSound != nullptr));
+    if (disposition.SuppressManagedRemote) {
         RecordManagedRemoteDialogueSuppression(g_suppressedManagedRemoteSpeechCount, "SpeakSound");
+        RecordPresentationDiagnostic(
+            g_speechDiagnostics, PresentationDiagnostic::ManagedSuppression, "speech");
         return 0.0F;
+    }
+    if (disposition.FallbackToNative) {
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::NativeFallback, "speech");
+    } else if (hasSpeaker && !managedRemoteSpeaker && g_remoteReplayDepth == 0) {
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::UnmanagedNative, "speech");
     }
 
     // Install verifies and publishes this trampoline before it enables the
@@ -369,6 +473,7 @@ float HookSpeakSound(
     const auto result = original(
         a_actor, a_resourcePath, a_handle, a_arg4, a_priority, a_arg6, a_arg7, a_arg8,
         a_arg9, a_arg10, a_arg11, a_arg12, a_arg13, a_arg14);
+    RecordNativeSpeechResult(result, a_handle != nullptr);
     if (std::isfinite(result) && result > 0.0F && disposition.CaptureLocal && a_resourcePath) {
         NoThrow::BestEffort([&] {
             LocalGameplayCapture::CaptureDialogueVoice(a_actor->GetFormID(), a_resourcePath);
@@ -388,12 +493,20 @@ void HookShowSubtitle(
 {
     try {
     auto* actor = a_speaker ? a_speaker->As<RE::Actor>() : nullptr;
-    const auto disposition = DialogueHookPolicy::DecideSpeakerEvent(
-        actor != nullptr, actor && AvatarManager::Get().IsManagedRemoteActor(actor),
-        g_remoteSubtitleDepth != 0);
-    if (!disposition.CallNative) {
+    const bool managedRemoteSpeaker = actor && AvatarManager::Get().IsManagedRemoteActor(actor);
+    const auto disposition = DialogueHookPolicy::DecideSpeakerPresentation(
+        actor != nullptr, managedRemoteSpeaker, g_remoteSubtitleDepth != 0,
+        managedRemoteSpeaker && IsManagedRemotePresentationRelayAvailable(g_originalShowSubtitle != nullptr));
+    if (disposition.SuppressManagedRemote) {
         RecordManagedRemoteDialogueSuppression(g_suppressedManagedRemoteSubtitleCount, "ShowSubtitle");
+        RecordPresentationDiagnostic(
+            g_subtitleDiagnostics, PresentationDiagnostic::ManagedSuppression, "subtitle");
         return;
+    }
+    if (disposition.FallbackToNative) {
+        RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::NativeFallback, "subtitle");
+    } else if (actor && !managedRemoteSpeaker && g_remoteSubtitleDepth == 0) {
+        RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::UnmanagedNative, "subtitle");
     }
 
     if (!g_originalShowSubtitle)
@@ -678,34 +791,50 @@ bool Uninstall() noexcept
 
 bool PlayRemoteVoice(RE::Actor& a_actor, const char* a_resourcePath) noexcept
 {
-    if (!a_resourcePath || a_resourcePath[0] == '\0')
+    RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplayAttempt, "speech");
+    if (!a_resourcePath || a_resourcePath[0] == '\0') {
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplayRejected, "speech");
         return false;
+    }
     auto* speak = g_originalSpeakSound;
-    if (!speak)
+    if (!speak) {
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplayRejected, "speech");
         return false;
+    }
 
     try {
         ScopedRemoteReplay replay;
         std::uint32_t handle[3]{std::numeric_limits<std::uint32_t>::max(), 0, 0};
         const auto result = speak(&a_actor, a_resourcePath, handle, 0, 0x32, 0, 0, 0, 0, false, 0,
                                   false, true, true);
-        return std::isfinite(result) && result > 0.0F;
+        if (std::isfinite(result) && result > 0.0F) {
+            RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplaySuccess, "speech");
+            return true;
+        }
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplayRejected, "speech");
+        return false;
     } catch (...) {
+        RecordPresentationDiagnostic(g_speechDiagnostics, PresentationDiagnostic::ReplayRejected, "speech");
         return false;
     }
 }
 
 bool ShowRemoteSubtitle(RE::Actor& a_speaker, const char* a_text) noexcept
 {
+    RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::ReplayAttempt, "subtitle");
     auto* manager = RE::SubtitleManager::GetSingleton();
-    if (!manager || !a_text || !g_originalShowSubtitle)
+    if (!manager || !a_text || !g_originalShowSubtitle) {
+        RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::ReplayRejected, "subtitle");
         return false;
+    }
 
     try {
         ScopedRemoteSubtitle replay;
         g_originalShowSubtitle(manager, &a_speaker, a_text, false);
+        RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::ReplaySuccess, "subtitle");
         return true;
     } catch (...) {
+        RecordPresentationDiagnostic(g_subtitleDiagnostics, PresentationDiagnostic::ReplayRejected, "subtitle");
         return false;
     }
 }

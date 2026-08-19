@@ -6,6 +6,7 @@ namespace
 {
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::CanEnableSpeakSoundHook;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::DecideSpeakerEvent;
+using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::DecideSpeakerPresentation;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::HookAttachment;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::IsPinnedPlayDialogueOptionTarget;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::ShouldAdvanceDialogueBaseline;
@@ -36,6 +37,39 @@ TEST_CASE("Dialogue speaker event policy preserves remote dialogue ownership")
             test.HasSpeaker, test.ManagedRemoteSpeaker, test.RemoteReplay);
         REQUIRE(disposition.CallNative == test.CallsNative);
         REQUIRE(disposition.CaptureLocal == test.CapturesLocal);
+    }
+}
+
+TEST_CASE("Dialogue presentation policy suppresses only when managed relay is available")
+{
+    struct Case
+    {
+        bool ManagedRemoteSpeaker;
+        bool RemoteReplay;
+        bool RelayAvailable;
+        bool CallsNative;
+        bool CapturesLocal;
+        bool SuppressesManagedRemote;
+        bool FallsBackToNative;
+    };
+    constexpr std::array cases{
+        // Unmanaged native presentation remains the local capture source.
+        Case{false, false, false, true, true, false, false},
+        // A healthy managed relay preserves no-echo suppression.
+        Case{true, false, true, false, false, true, false},
+        // A managed actor must remain audible when no replay path exists.
+        Case{true, false, false, true, false, false, true},
+        // Explicit replay is native presentation, not local capture or fallback.
+        Case{true, true, false, true, false, false, false},
+    };
+
+    for (const auto& test : cases) {
+        const auto disposition = DecideSpeakerPresentation(
+            true, test.ManagedRemoteSpeaker, test.RemoteReplay, test.RelayAvailable);
+        REQUIRE(disposition.CallNative == test.CallsNative);
+        REQUIRE(disposition.CaptureLocal == test.CapturesLocal);
+        REQUIRE(disposition.SuppressManagedRemote == test.SuppressesManagedRemote);
+        REQUIRE(disposition.FallbackToNative == test.FallsBackToNative);
     }
 }
 

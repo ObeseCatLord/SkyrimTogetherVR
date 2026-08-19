@@ -10,7 +10,9 @@
 
 #include <World.h>
 
+#include <atomic>
 #include <limits>
+#include <mutex>
 
 static bool g_RequestUnpauseAll{false};
 
@@ -24,21 +26,64 @@ static_assert(IMenu::kFreezeFramePause == SkyrimTogetherVR::MenuPausePolicy::kFr
 using MenuCreator = UI::TCreate*;
 static_assert(std::is_same_v<MenuCreator, IMenu* (*)()>);
 
-static std::array<MenuCreator, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> s_originalMenuCreators{};
+static std::array<std::atomic<MenuCreator>, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> s_originalMenuCreators{};
 
 struct ManagedMenuState
 {
     IMenu* Instance{};
     std::uint32_t OriginalManagedFlags{};
     bool Modified{};
+    bool DisconnectedBypassLogged{};
 };
 
 static std::array<ManagedMenuState, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> s_managedMenus{};
+// Creator wrappers and periodic scans can arrive on different threads. Keep
+// each menu's instance, original flags, and modification state coherent.
+static std::mutex s_managedMenusMutex{};
+static std::atomic_bool s_soulsReBypassLogged{false};
+static std::atomic_bool s_unsafeStateBypassLogged{false};
+static std::atomic_bool s_disconnectedBypassLogged{false};
+
+enum class VrMenuPausePolicyRuntimeState : std::uint8_t
+{
+    Unsafe,
+    SoulsRe,
+    Disconnected,
+    Connected,
+};
+
+static std::atomic<VrMenuPausePolicyRuntimeState> s_runtimeState{VrMenuPausePolicyRuntimeState::Unsafe};
+
+void LogVrMenuPausePolicyBypassOnce(std::atomic_bool& arLogged, const char* apReason)
+{
+    if (!arLogged.exchange(true, std::memory_order_relaxed))
+        spdlog::info("VR menu pause policy bypassed: {}", apReason);
+}
 
 [[nodiscard]] bool IsVrUiOwnerThread() noexcept
 {
     const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
     return ownerThreadId != 0 && ownerThreadId == GetCurrentThreadId();
+}
+
+void RefreshVrMenuPausePolicyRuntimeState()
+{
+    if (!World::Exists())
+    {
+        s_runtimeState.store(VrMenuPausePolicyRuntimeState::Unsafe, std::memory_order_release);
+        return;
+    }
+
+    if (stubs::g_IsSoulsREActive)
+    {
+        s_runtimeState.store(VrMenuPausePolicyRuntimeState::SoulsRe, std::memory_order_release);
+        return;
+    }
+
+    const auto runtimeState = World::Get().GetTransport().IsConnected() ? VrMenuPausePolicyRuntimeState::Connected : VrMenuPausePolicyRuntimeState::Disconnected;
+    if (runtimeState == VrMenuPausePolicyRuntimeState::Connected)
+        s_disconnectedBypassLogged.store(false, std::memory_order_relaxed);
+    s_runtimeState.store(runtimeState, std::memory_order_release);
 }
 
 [[nodiscard]] bool HasVrMemoryProtection(const void* apAddress, const std::size_t aSize, const bool aWritable, const bool aExecutable) noexcept
@@ -86,21 +131,43 @@ static std::array<ManagedMenuState, SkyrimTogetherVR::MenuPausePolicy::kAllowLis
            apName[aExpected.size()] == '\0';
 }
 
-void ApplyVrMenuPausePolicy(const std::size_t aIndex, IMenu* apMenu)
+void ApplyVrMenuPausePolicy(
+    const std::size_t aIndex, IMenu* apMenu, const SkyrimTogetherVR::MenuPausePolicy::MutationContext aContext)
 {
-    if (!IsVrUiOwnerThread() || !apMenu || stubs::g_IsSoulsREActive || !World::Exists() ||
+    const bool isVrUiOwnerThread = IsVrUiOwnerThread();
+    if ((aContext == SkyrimTogetherVR::MenuPausePolicy::MutationContext::PeriodicScan && !isVrUiOwnerThread) || !apMenu ||
         !SkyrimTogetherVR::IsReadableVrMemory(apMenu, IMenu::CommonLibIMenuOffsets::MenuFlags + sizeof(std::uint32_t)))
+    {
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
         return;
+    }
 
     const auto flags = apMenu->GetMenuFlagsData();
+    if (!SkyrimTogetherVR::MenuPausePolicy::CanMutateFlags(aContext, isVrUiOwnerThread, (flags & IMenu::kOnStack) != 0))
+        return;
+
+    const auto runtimeState = s_runtimeState.load(std::memory_order_acquire);
+    if (runtimeState == VrMenuPausePolicyRuntimeState::Unsafe)
+    {
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
+        return;
+    }
+
+    if (runtimeState == VrMenuPausePolicyRuntimeState::SoulsRe)
+    {
+        LogVrMenuPausePolicyBypassOnce(s_soulsReBypassLogged, "SkyrimSoulsRE active");
+        return;
+    }
+
+    const bool transportConnected = runtimeState == VrMenuPausePolicyRuntimeState::Connected;
+    std::scoped_lock lock(s_managedMenusMutex);
     auto& state = s_managedMenus[aIndex];
     if (state.Instance != apMenu)
         state = {apMenu, flags & SkyrimTogetherVR::MenuPausePolicy::kClearedFlags, false};
 
-    const bool clientOnline = World::Get().GetTransport().IsOnline();
     auto newFlags = flags;
     const auto action = SkyrimTogetherVR::MenuPausePolicy::DecideAction(
-        SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex], clientOnline, false, true, (flags & IMenu::kOnStack) != 0, state.Modified);
+        SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex], transportConnected, false, true, (flags & IMenu::kOnStack) != 0, state.Modified);
     if (action == SkyrimTogetherVR::MenuPausePolicy::Action::Unpause)
     {
         if (!state.Modified)
@@ -115,30 +182,35 @@ void ApplyVrMenuPausePolicy(const std::size_t aIndex, IMenu* apMenu)
     {
         // A live menu must remain untouched until close; otherwise Skyrim's
         // numPausesGame queue bookkeeping would be desynchronized.
+        if (!transportConnected && !state.Modified && !state.DisconnectedBypassLogged &&
+            !s_disconnectedBypassLogged.exchange(true, std::memory_order_relaxed))
+        {
+            spdlog::info("VR menu pause policy bypassed: transport disconnected {}", SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex]);
+            state.DisconnectedBypassLogged = true;
+        }
         return;
     }
 
     if (newFlags == flags)
     {
-        if (!clientOnline)
+        if (!transportConnected)
             state.Modified = false;
         return;
     }
 
     apMenu->SetMenuFlagsData(newFlags);
-    state.Modified = clientOnline;
-    spdlog::debug("VR menu pause policy {} {}", clientOnline ? "unpaused" : "restored", SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex]);
+    state.Modified = transportConnected;
+    spdlog::info("VR menu pause policy {} {}", transportConnected ? "unpaused" : "restored", SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex]);
 }
 
 template <std::size_t Index> IMenu* CreateVrParityMenu()
 {
-    const auto original = s_originalMenuCreators[Index];
+    const auto original = s_originalMenuCreators[Index].load(std::memory_order_acquire);
     if (!original)
         return nullptr;
 
     auto* menu = original();
-    s_managedMenus[Index] = {};
-    ApplyVrMenuPausePolicy(Index, menu);
+    ApplyVrMenuPausePolicy(Index, menu, SkyrimTogetherVR::MenuPausePolicy::MutationContext::Creator);
     return menu;
 }
 
@@ -149,14 +221,23 @@ static constexpr std::array<MenuCreator, SkyrimTogetherVR::MenuPausePolicy::kAll
 
 void TryInstallVrMenuPausePolicy(UI* apUI)
 {
-    static bool soulsBypassLogged = false;
-    if (!IsVrUiOwnerThread() || !apUI || stubs::g_IsSoulsREActive)
+    if (!IsVrUiOwnerThread())
     {
-        if (stubs::g_IsSoulsREActive && !soulsBypassLogged)
-        {
-            spdlog::info("VR menu pause policy deferred to SkyrimSoulsRE");
-            soulsBypassLogged = true;
-        }
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
+        return;
+    }
+
+    RefreshVrMenuPausePolicyRuntimeState();
+    const auto runtimeState = s_runtimeState.load(std::memory_order_acquire);
+    if (runtimeState == VrMenuPausePolicyRuntimeState::SoulsRe)
+    {
+        LogVrMenuPausePolicyBypassOnce(s_soulsReBypassLogged, "SkyrimSoulsRE active");
+        return;
+    }
+
+    if (runtimeState == VrMenuPausePolicyRuntimeState::Unsafe || !apUI)
+    {
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
         return;
     }
 
@@ -165,12 +246,18 @@ void TryInstallVrMenuPausePolicy(UI* apUI)
     static_assert(offsetof(MenuTable, m_entries) == 0x28);
 
     if (!SkyrimTogetherVR::IsReadableVrMemory(apUI, UI::CommonLibUIOffsets::MenuMap + sizeof(MenuTable)))
+    {
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
         return;
+    }
 
     auto& menuTable = apUI->GetMenuMapData();
     if (menuTable.m_size == 0 || menuTable.m_size > 4096 || menuTable.m_freeCount > menuTable.m_size || !menuTable.m_entries ||
         !SkyrimTogetherVR::IsReadableVrMemory(menuTable.m_entries, sizeof(MenuTableEntry) * menuTable.m_size))
+    {
+        LogVrMenuPausePolicyBypassOnce(s_unsafeStateBypassLogged, "unsafe runtime state");
         return;
+    }
 
     for (auto& entry : menuTable)
     {
@@ -180,20 +267,22 @@ void TryInstallVrMenuPausePolicy(UI* apUI)
         for (std::size_t index = 0; index < SkyrimTogetherVR::MenuPausePolicy::kAllowList.size(); ++index)
         {
             const auto menuName = SkyrimTogetherVR::MenuPausePolicy::kAllowList[index];
-            if (s_originalMenuCreators[index] || !IsExactReadableMenuName(entry.key.data, menuName) ||
+            if (s_originalMenuCreators[index].load(std::memory_order_relaxed) || !IsExactReadableMenuName(entry.key.data, menuName) ||
                 !HasVrMemoryProtection(reinterpret_cast<const void*>(entry.value.create), 1, false, true))
                 continue;
 
-            s_originalMenuCreators[index] = entry.value.create;
+            // Publish the original before exposing its wrapper to creator
+            // threads through Skyrim's menu table.
+            s_originalMenuCreators[index].store(entry.value.create, std::memory_order_release);
             entry.value.create = kVrParityCreators[index];
-            spdlog::debug("VR menu pause policy registered {}", SkyrimTogetherVR::MenuPausePolicy::kAllowList[index]);
+            spdlog::info("VR menu pause policy registered {}", SkyrimTogetherVR::MenuPausePolicy::kAllowList[index]);
         }
 
         for (std::size_t index = 0; index < SkyrimTogetherVR::MenuPausePolicy::kAllowList.size(); ++index)
         {
             if (IsExactReadableMenuName(entry.key.data, SkyrimTogetherVR::MenuPausePolicy::kAllowList[index]))
             {
-                ApplyVrMenuPausePolicy(index, entry.value.spMenu);
+                ApplyVrMenuPausePolicy(index, entry.value.spMenu, SkyrimTogetherVR::MenuPausePolicy::MutationContext::PeriodicScan);
                 break;
             }
         }
@@ -201,6 +290,22 @@ void TryInstallVrMenuPausePolicy(UI* apUI)
 }
 #endif
 } // namespace
+
+#if TP_SKYRIM_VR
+void SkyrimTogetherVR::MenuPausePolicy::PublishTransportConnectionState(const bool aConnected) noexcept
+{
+    if (stubs::g_IsSoulsREActive)
+    {
+        s_runtimeState.store(VrMenuPausePolicyRuntimeState::SoulsRe, std::memory_order_release);
+        return;
+    }
+
+    const auto runtimeState = aConnected ? VrMenuPausePolicyRuntimeState::Connected : VrMenuPausePolicyRuntimeState::Disconnected;
+    if (aConnected)
+        s_disconnectedBypassLogged.store(false, std::memory_order_relaxed);
+    s_runtimeState.store(runtimeState, std::memory_order_release);
+}
+#endif
 
 #if TP_SKYRIM_VR
 [[maybe_unused]] static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x67B;

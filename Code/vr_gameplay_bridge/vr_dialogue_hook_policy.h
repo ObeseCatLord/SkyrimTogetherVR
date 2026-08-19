@@ -25,6 +25,14 @@ struct SpeakerEventDisposition
     bool CaptureLocal{};
 };
 
+struct SpeakerPresentationDisposition
+{
+    bool CallNative{};
+    bool CaptureLocal{};
+    bool SuppressManagedRemote{};
+    bool FallbackToNative{};
+};
+
 // A managed remote actor owns its native dialogue presentation.  Outside an
 // explicit replay, reject the engine event before it can produce duplicate
 // audio or subtitles.  A replay may present remotely supplied dialogue, but
@@ -40,6 +48,24 @@ struct SpeakerEventDisposition
         .CallNative = true,
         .CaptureLocal = a_hasSpeaker && !a_managedRemoteSpeaker && !a_remoteReplay,
     };
+}
+
+// Managed remote presentation is suppressed only while the replacement replay
+// path is available. A replay remains native but never becomes local capture.
+[[nodiscard]] constexpr SpeakerPresentationDisposition DecideSpeakerPresentation(
+    const bool a_hasSpeaker,
+    const bool a_managedRemoteSpeaker,
+    const bool a_remoteReplay,
+    const bool a_relayAvailable) noexcept
+{
+    if (a_hasSpeaker && a_managedRemoteSpeaker && !a_remoteReplay) {
+        if (a_relayAvailable)
+            return {.SuppressManagedRemote = true};
+        return {.CallNative = true, .FallbackToNative = true};
+    }
+
+    const auto event = DecideSpeakerEvent(a_hasSpeaker, a_managedRemoteSpeaker, a_remoteReplay);
+    return {.CallNative = event.CallNative, .CaptureLocal = event.CaptureLocal};
 }
 
 template <class Disable, class Remove> [[nodiscard]] bool TryDetachHook(HookAttachment& arAttachment, Disable&& aDisable, Remove&& aRemove) noexcept

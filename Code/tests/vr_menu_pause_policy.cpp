@@ -17,13 +17,25 @@ TEST_CASE("VR menu pause policy preserves the desktop parity allowlist")
     REQUIRE_FALSE(IsAllowlisted("RaceSex Menu"));
 }
 
-TEST_CASE("VR menu pause policy requires an online client and supported runtime API")
+TEST_CASE("VR menu pause policy requires an underlying connected transport and supported runtime API")
 {
-    REQUIRE(ShouldUnpause("InventoryMenu", true, false, true));
-    REQUIRE_FALSE(ShouldUnpause("InventoryMenu", false, false, true));
+    const bool connectedBeforeAuthentication = true;
+    const bool disconnectedTransport = false;
+
+    REQUIRE(ShouldUnpause("InventoryMenu", connectedBeforeAuthentication, false, true));
+    REQUIRE_FALSE(ShouldUnpause("InventoryMenu", disconnectedTransport, false, true));
     REQUIRE_FALSE(ShouldUnpause("InventoryMenu", true, true, true));
     REQUIRE_FALSE(ShouldUnpause("InventoryMenu", true, false, false));
     REQUIRE_FALSE(ShouldUnpause("MapMenu", true, false, true));
+}
+
+TEST_CASE("VR menu pause policy permits only private creator-time cross-thread mutation off-stack")
+{
+    REQUIRE(CanMutateFlags(MutationContext::Creator, false, false));
+    REQUIRE_FALSE(CanMutateFlags(MutationContext::Creator, false, true));
+    REQUIRE(CanMutateFlags(MutationContext::PeriodicScan, true, false));
+    REQUIRE_FALSE(CanMutateFlags(MutationContext::PeriodicScan, false, false));
+    REQUIRE_FALSE(CanMutateFlags(MutationContext::PeriodicScan, true, true));
 }
 
 TEST_CASE("VR menu pause policy clears only pause and freeze flags")
@@ -38,8 +50,11 @@ TEST_CASE("VR menu pause policy clears only pause and freeze flags")
 
 TEST_CASE("VR menu pause policy defers disconnect restoration until the menu is off-stack")
 {
-    REQUIRE(DecideAction("InventoryMenu", true, false, true, false, false) == Action::Unpause);
-    REQUIRE(DecideAction("InventoryMenu", false, false, true, true, true) == Action::None);
-    REQUIRE(DecideAction("InventoryMenu", false, false, true, false, true) == Action::Restore);
-    REQUIRE(DecideAction("InventoryMenu", false, false, true, false, false) == Action::None);
+    const bool connectedTransport = true;
+    const bool disconnectedTransport = false;
+
+    REQUIRE(DecideAction("InventoryMenu", connectedTransport, false, true, false, false) == Action::Unpause);
+    REQUIRE(DecideAction("InventoryMenu", disconnectedTransport, false, true, true, true) == Action::None);
+    REQUIRE(DecideAction("InventoryMenu", disconnectedTransport, false, true, false, true) == Action::Restore);
+    REQUIRE(DecideAction("InventoryMenu", disconnectedTransport, false, true, false, false) == Action::None);
 }

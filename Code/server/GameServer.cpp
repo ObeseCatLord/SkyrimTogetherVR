@@ -27,6 +27,21 @@ constexpr size_t kMaxServerNameLength = 128u;
 
 namespace
 {
+constexpr const char* DisconnectReasonToString(const TiltedPhoques::Server::EDisconnectReason aReason) noexcept
+{
+    using DisconnectReason = TiltedPhoques::Server::EDisconnectReason;
+    switch (aReason)
+    {
+    case DisconnectReason::Unknown: return "Unknown";
+    case DisconnectReason::Quit: return "Quit";
+    case DisconnectReason::Kicked: return "Kicked";
+    case DisconnectReason::Banned: return "Banned";
+    case DisconnectReason::BadConnection: return "BadConnection";
+    case DisconnectReason::TimedOut: return "TimedOut";
+    default: return "Unknown";
+    }
+}
+
 uint64_t GenerateServerInstanceNonce() noexcept
 {
     static std::atomic<uint64_t> sequence{1};
@@ -631,7 +646,9 @@ void GameServer::OnDisconnection(const ConnectionId_t aConnectionId, EDisconnect
 
     auto* pPlayer = m_pWorld->GetPlayerManager().GetByConnectionId(aConnectionId);
 
-    spdlog::info("Connection ended {:x} - '{}' disconnected", aConnectionId, (pPlayer != NULL ? pPlayer->GetUsername().c_str() : "NULL"));
+    spdlog::info(
+        "Connection ended {:x} - '{}' disconnected: {} ({})", aConnectionId, (pPlayer != NULL ? pPlayer->GetUsername().c_str() : "NULL"), DisconnectReasonToString(aReason),
+        static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
 
     m_pWorld->GetScriptService().HandlePlayerQuit(aConnectionId, aReason);
 
