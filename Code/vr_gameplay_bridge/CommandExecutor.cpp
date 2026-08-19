@@ -6,6 +6,7 @@
 #include "AnimationAppearanceManager.h"
 #include "CombatMagicManager.h"
 #include "EventCapture.h"
+#include "FaderRecovery.h"
 #include "GameplayTextManager.h"
 #include "LocalGameplayCapture.h"
 #include "QuestDialogueManager.h"
@@ -595,6 +596,12 @@ CommandPumpResult ProcessCommands(
     }
 
     auto* mapping = endpoint.Mapping();
+    SessionIdentitySnapshot session{};
+    if (!TrySnapshotSessionIdentity(mapping->Header, session))
+        session = {};
+    FaderRecovery::ProcessOnCommandPumpOwner(
+        session.ServerInstanceNonce, session.ConnectionGeneration);
+
     auto& commands = mapping->Commands;
     static_cast<void>(endpoint.FlushCommandResultEvents());
     const auto limit = a_maxCommands > kDefaultCommandRingCapacity ? kDefaultCommandRingCapacity : a_maxCommands;

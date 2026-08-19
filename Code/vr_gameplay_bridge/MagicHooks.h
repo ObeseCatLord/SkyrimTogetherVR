@@ -27,5 +27,5 @@ public:
     bool a_applyStaminaPerkBonus) noexcept;
 
 [[nodiscard]] bool Install() noexcept;
-void Uninstall() noexcept;
+[[nodiscard]] bool Uninstall() noexcept;
 } // namespace SkyrimTogetherVR::GameplayAdapter::MagicHooks

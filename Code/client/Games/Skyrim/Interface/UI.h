@@ -59,7 +59,12 @@ public:
     BSFixedString* LookupMenuNameByInstance(IMenu* apMenu);
 
 public:
+#if TP_SKYRIM_VR
+    // Matches CommonLibSSE-NG's supported RE::UI::Create_t signature.
+    using TCreate = IMenu*();
+#else
     using TCreate = IMenu*(UIMessage*);
+#endif
 
     struct UIMenuEntry
     {

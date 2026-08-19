@@ -3,6 +3,7 @@
 #include "AvatarManager.h"
 #include "BridgeEndpoint.h"
 #include "LocalGameplayCapture.h"
+#include "vr_dialogue_hook_policy.h"
 
 #include <MinHook.h>
 
@@ -43,10 +44,77 @@ ShowSubtitle g_originalShowSubtitle{};
 void* g_speakSoundHookTarget{};
 void* g_showSubtitleHookTarget{};
 std::atomic_bool g_installAttempted{};
+std::atomic_bool g_missingSpeakSoundTrampolineLogged{};
+DialogueHookPolicy::HookAttachment g_speakSoundAttachment{};
+DialogueHookPolicy::HookAttachment g_showSubtitleAttachment{};
+bool g_installRetainedDegraded{};
 thread_local std::uint32_t g_remoteReplayDepth{};
 thread_local std::uint32_t g_remoteSubtitleDepth{};
 std::atomic<std::uint64_t> g_nextSubtitleActionId{};
 std::atomic<std::uint64_t> g_nextSubtitleTextId{};
+
+[[nodiscard]] bool IsSafeDisableStatus(const MH_STATUS aStatus) noexcept
+{
+    return aStatus == MH_OK || aStatus == MH_ERROR_DISABLED || aStatus == MH_ERROR_NOT_CREATED;
+}
+
+[[nodiscard]] bool IsSafeRemoveStatus(const MH_STATUS aStatus) noexcept
+{
+    return aStatus == MH_OK || aStatus == MH_ERROR_NOT_CREATED;
+}
+
+[[nodiscard]] bool DetachHook(
+    const char* aName,
+    void* aTarget,
+    DialogueHookPolicy::HookAttachment& arAttachment) noexcept
+{
+    return DialogueHookPolicy::TryDetachHook(
+        arAttachment,
+        [aName, aTarget]() noexcept {
+            const auto status = MH_DisableHook(aTarget);
+            if (!IsSafeDisableStatus(status))
+                SKSE::log::critical("SkyrimTogetherVRGameplayBridge: {} disable failed ({}); preserving trampoline", aName, static_cast<int>(status));
+            return IsSafeDisableStatus(status);
+        },
+        [aName, aTarget]() noexcept {
+            const auto status = MH_RemoveHook(aTarget);
+            if (!IsSafeRemoveStatus(status))
+                SKSE::log::critical("SkyrimTogetherVRGameplayBridge: {} removal failed ({}); preserving hook state", aName, static_cast<int>(status));
+            return IsSafeRemoveStatus(status);
+        });
+}
+
+void ClearDetachedHookState() noexcept
+{
+    g_speakSoundHookTarget = nullptr;
+    g_showSubtitleHookTarget = nullptr;
+    g_originalSpeakSound = nullptr;
+    g_originalShowSubtitle = nullptr;
+    g_targetSpeakSound = nullptr;
+    g_installRetainedDegraded = false;
+    g_missingSpeakSoundTrampolineLogged.store(false, std::memory_order_relaxed);
+}
+
+[[nodiscard]] bool RollbackFailedInstall(const char* aStage) noexcept
+{
+    const bool subtitleDetached = DetachHook(
+        "ShowSubtitle", g_showSubtitleHookTarget, g_showSubtitleAttachment);
+    const bool speechDetached = DetachHook(
+        "SpeakSound", g_speakSoundHookTarget, g_speakSoundAttachment);
+    if (subtitleDetached && speechDetached)
+    {
+        ClearDetachedHookState();
+        g_installAttempted.store(false, std::memory_order_release);
+        return false;
+    }
+
+    g_installRetainedDegraded = true;
+    BridgeEndpoint::Get().Fault("dialogue hook rollback could not prove detachment");
+    SKSE::log::critical(
+        "SkyrimTogetherVRGameplayBridge: {} rollback could not prove all dialogue detours detached; retaining the plugin and callable trampolines in degraded mode",
+        aStage);
+    return true;
+}
 
 class ScopedRemoteReplay final
 {
@@ -205,11 +273,20 @@ float HookSpeakSound(
     const bool a_arg13,
     const bool a_arg14)
 {
-    const auto result = g_originalSpeakSound ?
-        g_originalSpeakSound(
-            a_actor, a_resourcePath, a_handle, a_arg4, a_priority, a_arg6, a_arg7, a_arg8,
-            a_arg9, a_arg10, a_arg11, a_arg12, a_arg13, a_arg14) :
-        0.0F;
+    // Install verifies and publishes this trampoline before it enables the
+    // detour. Local speech is always delegated to the engine before capture.
+    const auto original = g_originalSpeakSound;
+    if (!original) {
+        if (!g_missingSpeakSoundTrampolineLogged.exchange(true, std::memory_order_relaxed)) {
+            SKSE::log::critical(
+                "SkyrimTogetherVRGameplayBridge: enabled SpeakSound detour has no trampoline; "
+                "local dialogue capture is disabled until the hook is removed");
+        }
+        return 0.0F;
+    }
+    const auto result = original(
+        a_actor, a_resourcePath, a_handle, a_arg4, a_priority, a_arg6, a_arg7, a_arg8,
+        a_arg9, a_arg10, a_arg11, a_arg12, a_arg13, a_arg14);
     if (std::isfinite(result) && result > 0.0F && g_remoteReplayDepth == 0 && a_actor && a_resourcePath &&
         !AvatarManager::Get().IsManagedRemoteActor(a_actor))
         LocalGameplayCapture::CaptureDialogueVoice(a_actor->GetFormID(), a_resourcePath);
@@ -234,7 +311,9 @@ bool Install() noexcept
 {
     bool expected = false;
     if (!g_installAttempted.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-        return g_originalSpeakSound != nullptr && g_originalShowSubtitle != nullptr;
+        return g_installRetainedDegraded ||
+               (g_speakSoundAttachment.Enabled && g_showSubtitleAttachment.Enabled &&
+                g_originalSpeakSound != nullptr && g_originalShowSubtitle != nullptr);
 
     REL::Relocation<SpeakSound> speakTarget{REL::Offset(kSpeakSoundVrRva)};
     if (speakTarget.offset() != kSpeakSoundVrRva ||
@@ -256,6 +335,8 @@ bool Install() noexcept
         return false;
     }
     g_targetSpeakSound = speakTarget.get();
+    SKSE::log::info(
+        "SkyrimTogetherVRGameplayBridge: validated exact SpeakSound entry; creating MinHook trampoline");
 
     const auto initialize = MH_Initialize();
     if (initialize != MH_OK && initialize != MH_ERROR_ALREADY_INITIALIZED) {
@@ -267,9 +348,10 @@ bool Install() noexcept
     }
 
     g_speakSoundHookTarget = reinterpret_cast<void*>(speakTarget.address());
+    void* speakSoundTrampoline{};
     const auto createSpeak = MH_CreateHook(
         g_speakSoundHookTarget, reinterpret_cast<void*>(&HookSpeakSound),
-        reinterpret_cast<void**>(&g_originalSpeakSound));
+        &speakSoundTrampoline);
     if (createSpeak != MH_OK) {
         SKSE::log::error("SkyrimTogetherVRGameplayBridge: SpeakSound hook creation failed ({})",
                          static_cast<int>(createSpeak));
@@ -278,75 +360,77 @@ bool Install() noexcept
         g_installAttempted.store(false, std::memory_order_release);
         return false;
     }
+    g_speakSoundAttachment.Created = true;
+    if (!DialogueHookPolicy::CanEnableSpeakSoundHook(
+            reinterpret_cast<std::uintptr_t>(g_speakSoundHookTarget),
+            reinterpret_cast<std::uintptr_t>(speakSoundTrampoline))) {
+        SKSE::log::error(
+            "SkyrimTogetherVRGameplayBridge: SpeakSound hook refused because MinHook returned an invalid trampoline");
+        return RollbackFailedInstall("SpeakSound trampoline validation");
+    }
+    g_originalSpeakSound = reinterpret_cast<SpeakSound>(speakSoundTrampoline);
 
     g_showSubtitleHookTarget = reinterpret_cast<void*>(subtitleTarget.address());
+    void* showSubtitleTrampoline{};
     const auto createSubtitle = MH_CreateHook(
         g_showSubtitleHookTarget, reinterpret_cast<void*>(&HookShowSubtitle),
-        reinterpret_cast<void**>(&g_originalShowSubtitle));
+        &showSubtitleTrampoline);
     if (createSubtitle != MH_OK) {
         SKSE::log::error("SkyrimTogetherVRGameplayBridge: ShowSubtitle hook creation failed ({})",
                          static_cast<int>(createSubtitle));
-        MH_RemoveHook(g_speakSoundHookTarget);
-        g_speakSoundHookTarget = nullptr;
-        g_showSubtitleHookTarget = nullptr;
-        g_originalSpeakSound = nullptr;
-        g_targetSpeakSound = nullptr;
-        g_installAttempted.store(false, std::memory_order_release);
-        return false;
+        return RollbackFailedInstall("ShowSubtitle hook creation");
     }
-
-    const auto enableSpeak = MH_EnableHook(g_speakSoundHookTarget);
-    if (enableSpeak != MH_OK) {
-        SKSE::log::error("SkyrimTogetherVRGameplayBridge: SpeakSound hook enable failed ({})",
-                         static_cast<int>(enableSpeak));
-        MH_RemoveHook(g_showSubtitleHookTarget);
-        MH_RemoveHook(g_speakSoundHookTarget);
-        g_speakSoundHookTarget = nullptr;
-        g_showSubtitleHookTarget = nullptr;
-        g_originalSpeakSound = nullptr;
-        g_originalShowSubtitle = nullptr;
-        g_targetSpeakSound = nullptr;
-        g_installAttempted.store(false, std::memory_order_release);
-        return false;
+    g_showSubtitleAttachment.Created = true;
+    if (!DialogueHookPolicy::CanEnableSpeakSoundHook(
+            reinterpret_cast<std::uintptr_t>(g_showSubtitleHookTarget),
+            reinterpret_cast<std::uintptr_t>(showSubtitleTrampoline))) {
+        SKSE::log::error(
+            "SkyrimTogetherVRGameplayBridge: ShowSubtitle hook refused because MinHook returned an invalid trampoline");
+        return RollbackFailedInstall("ShowSubtitle trampoline validation");
     }
+    g_originalShowSubtitle = reinterpret_cast<ShowSubtitle>(showSubtitleTrampoline);
 
     const auto enableSubtitle = MH_EnableHook(g_showSubtitleHookTarget);
     if (enableSubtitle != MH_OK) {
         SKSE::log::error("SkyrimTogetherVRGameplayBridge: ShowSubtitle hook enable failed ({})",
                          static_cast<int>(enableSubtitle));
-        MH_DisableHook(g_speakSoundHookTarget);
-        MH_RemoveHook(g_showSubtitleHookTarget);
-        MH_RemoveHook(g_speakSoundHookTarget);
-        g_speakSoundHookTarget = nullptr;
-        g_showSubtitleHookTarget = nullptr;
-        g_originalSpeakSound = nullptr;
-        g_originalShowSubtitle = nullptr;
-        g_targetSpeakSound = nullptr;
-        g_installAttempted.store(false, std::memory_order_release);
-        return false;
+        return RollbackFailedInstall("ShowSubtitle hook enable");
     }
+    g_showSubtitleAttachment.Enabled = true;
+
+    const auto enableSpeak = MH_EnableHook(g_speakSoundHookTarget);
+    if (enableSpeak != MH_OK) {
+        SKSE::log::error("SkyrimTogetherVRGameplayBridge: SpeakSound hook enable failed ({})",
+                         static_cast<int>(enableSpeak));
+        return RollbackFailedInstall("SpeakSound hook enable");
+    }
+    g_speakSoundAttachment.Enabled = true;
+    SKSE::log::info(
+        "SkyrimTogetherVRGameplayBridge: SpeakSound detour enabled with verified trampoline; "
+        "local capture remains observational");
 
     SKSE::log::info("SkyrimTogetherVRGameplayBridge: installed exact dialogue hooks at VR RVAs 0x{:X} and 0x{:X}",
                     kSpeakSoundVrRva, kShowSubtitleVrRva);
     return true;
 }
 
-void Uninstall() noexcept
+bool Uninstall() noexcept
 {
-    if (g_showSubtitleHookTarget) {
-        MH_DisableHook(g_showSubtitleHookTarget);
-        MH_RemoveHook(g_showSubtitleHookTarget);
+    if (g_speakSoundHookTarget || g_showSubtitleHookTarget)
+        SKSE::log::info("SkyrimTogetherVRGameplayBridge: removing dialogue hooks");
+    const bool subtitleDetached = DetachHook(
+        "ShowSubtitle", g_showSubtitleHookTarget, g_showSubtitleAttachment);
+    const bool speechDetached = DetachHook(
+        "SpeakSound", g_speakSoundHookTarget, g_speakSoundAttachment);
+    if (!subtitleDetached || !speechDetached) {
+        g_installRetainedDegraded = true;
+        SKSE::log::critical(
+            "SkyrimTogetherVRGameplayBridge: dialogue hook uninstall incomplete; preserving callable trampolines");
+        return false;
     }
-    if (g_speakSoundHookTarget) {
-        MH_DisableHook(g_speakSoundHookTarget);
-        MH_RemoveHook(g_speakSoundHookTarget);
-    }
-    g_speakSoundHookTarget = nullptr;
-    g_showSubtitleHookTarget = nullptr;
-    g_originalSpeakSound = nullptr;
-    g_originalShowSubtitle = nullptr;
-    g_targetSpeakSound = nullptr;
+    ClearDetachedHookState();
     g_installAttempted.store(false, std::memory_order_release);
+    return true;
 }
 
 bool PlayRemoteVoice(RE::Actor& a_actor, const char* a_resourcePath) noexcept

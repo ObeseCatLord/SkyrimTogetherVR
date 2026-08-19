@@ -2,6 +2,7 @@
 
 #include "AvatarManager.h"
 #include "AnimationGraphDescriptors.h"
+#include "FaderRecovery.h"
 #include "LocalGameplayCapture.h"
 
 #include <algorithm>
@@ -23,8 +24,6 @@ constexpr std::uint32_t kPendingPreLoadGame = 1u << 1;
 constexpr std::uint32_t kPendingPostLoadGame = 1u << 2;
 
 std::atomic<std::uint32_t> g_pendingLifecycleTransitions{};
-std::uint32_t g_lastLocalCellFormId{};
-std::uint32_t g_lastLocalWorldspaceFormId{};
 std::uint64_t g_animationSnapshotId{};
 std::chrono::steady_clock::time_point g_lastAnimationSnapshotTime{};
 constexpr auto kAnimationSnapshotInterval = std::chrono::milliseconds(100);
@@ -213,16 +212,20 @@ void HandleSkseMessage(SKSE::MessagingInterface::Message* a_message) noexcept
             return;
         switch (a_message->type) {
         case SKSE::MessagingInterface::kDataLoaded:
+            FaderRecovery::NotifyLifecycleTransition();
             LocalGameplayCapture::Initialize();
             PublishLifecycle(LifecycleState::DataLoaded, 0);
             break;
         case SKSE::MessagingInterface::kNewGame:
+            FaderRecovery::NotifyLifecycleTransition();
             g_pendingLifecycleTransitions.fetch_or(kPendingNewGame, std::memory_order_release);
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
+            FaderRecovery::NotifyLifecycleTransition();
             g_pendingLifecycleTransitions.fetch_or(kPendingPreLoadGame, std::memory_order_release);
             break;
         case SKSE::MessagingInterface::kPostLoadGame:
+            FaderRecovery::NotifyLifecycleTransition();
             g_pendingLifecycleTransitions.fetch_or(kPendingPostLoadGame, std::memory_order_release);
             break;
         default:
@@ -241,28 +244,12 @@ bool ProcessPendingLifecycleTransitions() noexcept
         return false;
 
     LifecycleState state{};
-    std::uint32_t reason{};
-    bool transitionPending = (pending & (kPendingNewGame | kPendingPreLoadGame)) != 0;
+    const bool transitionPending = (pending & (kPendingNewGame | kPendingPreLoadGame)) != 0;
     if (transitionPending) {
         state = (pending & kPendingPreLoadGame) != 0 ? LifecycleState::PreLoadGame : LifecycleState::NewGame;
     } else if ((pending & kPendingPostLoadGame) != 0) {
         PublishLifecycle(LifecycleState::PostLoadGame, 0);
         return false;
-    } else {
-        const auto* player = RE::PlayerCharacter::GetSingleton();
-        const auto* cell = player ? player->GetParentCell() : nullptr;
-        const auto* worldspace = player ? player->GetWorldspace() : nullptr;
-        const auto cellFormId = cell ? cell->GetFormID() : 0;
-        const auto worldspaceFormId = worldspace ? worldspace->GetFormID() : 0;
-        transitionPending = g_lastLocalCellFormId != 0 &&
-                            (cellFormId == 0 || cellFormId != g_lastLocalCellFormId ||
-                             worldspaceFormId != g_lastLocalWorldspaceFormId);
-        g_lastLocalCellFormId = cellFormId;
-        g_lastLocalWorldspaceFormId = worldspaceFormId;
-        if (transitionPending) {
-            state = LifecycleState::CellChanged;
-            reason = cellFormId;
-        }
     }
 
     if (!transitionPending)
@@ -271,11 +258,9 @@ bool ProcessPendingLifecycleTransitions() noexcept
     AvatarManager::Get().RetireAllOnCommandPumpOwner();
     AnimationGraphs::ResetCache();
     endpoint.DiscardCommandResultEvents();
-    g_lastLocalCellFormId = 0;
-    g_lastLocalWorldspaceFormId = 0;
     g_lastAnimationSnapshotTime = {};
     endpoint.Mapping()->Header.LifecycleEpoch.fetch_add(1, std::memory_order_acq_rel);
-    PublishLifecycle(state, reason);
+    PublishLifecycle(state, 0);
     if ((pending & kPendingPostLoadGame) != 0)
         PublishLifecycle(LifecycleState::PostLoadGame, 0);
     return true;

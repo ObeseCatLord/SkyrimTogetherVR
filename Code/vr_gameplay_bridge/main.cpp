@@ -29,6 +29,29 @@ void InitializeLogging() noexcept
     } catch (...) {
     }
 }
+
+[[nodiscard]] bool DetachAllGameplayHooks() noexcept
+{
+    bool detached = true;
+    detached = SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall() && detached;
+    return detached;
+}
+
+[[nodiscard]] bool FinishFaultedLoad(
+    SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint& aEndpoint,
+    const char* aReason) noexcept
+{
+    aEndpoint.Fault(aReason);
+    if (DetachAllGameplayHooks())
+        return false;
+
+    SKSE::log::critical(
+        "SkyrimTogetherVRGameplayBridge: load failed but at least one detour could not be proven detached; retaining the faulted plugin so its trampoline remains callable");
+    return true;
+}
 } // namespace
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
@@ -81,19 +104,13 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
             return false;
         }
         if (!SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Install()) {
-            endpoint.Fault("exact Actor::SpeakSound hook installation failed");
-            return false;
+            return FinishFaultedLoad(endpoint, "exact Actor::SpeakSound hook installation failed");
         }
         if (!SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Install()) {
-            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
-            endpoint.Fault("exact Projectile::Launch hook installation failed");
-            return false;
+            return FinishFaultedLoad(endpoint, "exact Projectile::Launch hook installation failed");
         }
         if (!SkyrimTogetherVR::GameplayAdapter::MagicHooks::Install()) {
-            SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
-            SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
-            endpoint.Fault("exact magic hook installation failed");
-            return false;
+            return FinishFaultedLoad(endpoint, "exact magic hook installation failed");
         }
         if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
             SKSE::log::warn(
@@ -105,12 +122,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         SKSE::log::info("SkyrimTogetherVRGameplayBridge loaded");
         return true;
     } catch (...) {
-        SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Uninstall();
-        SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall();
-        SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall();
-        SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall();
-        SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get().Fault("exception during SKSEPluginLoad");
-        return false;
+        return FinishFaultedLoad(
+            SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get(),
+            "exception during SKSEPluginLoad");
     }
 }
 

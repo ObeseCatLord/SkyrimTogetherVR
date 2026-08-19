@@ -2,6 +2,7 @@
 
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Services/VRLifecycleIdentity.h>
 
 #include <atomic>
 #include <chrono>
@@ -40,17 +41,7 @@ struct VRLifecycleService final : BSTEventSink<TESLoadGameEvent>
     [[nodiscard]] uint32_t GetPlayerCellFormId() const noexcept { return m_readySample.CellFormId; }
 
 private:
-    struct Sample
-    {
-        std::uintptr_t Player{};
-        std::uintptr_t Base{};
-        std::uintptr_t Cell{};
-        uint32_t PlayerFormId{};
-        uint32_t BaseFormId{};
-        uint32_t CellFormId{};
-
-        bool operator==(const Sample&) const noexcept = default;
-    };
+    using Sample = VRLifecycleReadinessSample;
 
     BSTEventResult OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*) override;
     void ObserveBridgeLifecycleEpoch() noexcept;

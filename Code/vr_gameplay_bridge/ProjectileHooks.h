@@ -13,5 +13,5 @@ public:
 };
 
 [[nodiscard]] bool Install() noexcept;
-void Uninstall() noexcept;
+[[nodiscard]] bool Uninstall() noexcept;
 }

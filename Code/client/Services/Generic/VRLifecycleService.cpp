@@ -156,24 +156,32 @@ void VRLifecycleService::Update(double aDelta) noexcept
             {
                 StartStabilizing(sample);
             }
-            else if (!(sample == (m_state == State::Ready ? m_readySample : m_candidateSample)))
+            else if (RequiresVRLifecycleRetirement(m_state == State::Ready ? m_readySample : m_candidateSample, sample))
             {
                 Suspend("player_identity_changed", true);
                 StartStabilizing(sample);
             }
-            else if (m_state == State::Stabilizing)
+            else
             {
-                ++m_stableTickCount;
-                const auto stableFor = std::chrono::steady_clock::now() - m_candidateSince;
-                if (m_stableTickCount >= kRequiredStableTicks && stableFor >= kRequiredStableDuration)
+                if (m_state == State::Ready)
                 {
-                    m_readySample = m_candidateSample;
-                    m_state = State::Ready;
-                    m_suspendReason.clear();
-                    m_statusDirty = true;
-                    spdlog::info(
-                        "SkyrimTogetherVR lifecycle ready: epoch={} player={:X} base={:X} cell={:X} thread={}", m_epoch, m_readySample.PlayerFormId, m_readySample.BaseFormId,
-                        m_readySample.CellFormId, m_ownerThreadId);
+                    m_readySample = sample;
+                }
+                else
+                {
+                    m_candidateSample = sample;
+                    ++m_stableTickCount;
+                    const auto stableFor = std::chrono::steady_clock::now() - m_candidateSince;
+                    if (m_stableTickCount >= kRequiredStableTicks && stableFor >= kRequiredStableDuration)
+                    {
+                        m_readySample = m_candidateSample;
+                        m_state = State::Ready;
+                        m_suspendReason.clear();
+                        m_statusDirty = true;
+                        spdlog::info(
+                            "SkyrimTogetherVR lifecycle ready: epoch={} player={:X} base={:X} cell={:X} thread={}", m_epoch, m_readySample.PlayerFormId, m_readySample.BaseFormId,
+                            m_readySample.CellFormId, m_ownerThreadId);
+                    }
                 }
             }
         }

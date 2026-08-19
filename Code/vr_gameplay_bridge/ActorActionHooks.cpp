@@ -3,6 +3,7 @@
 #include "AvatarManager.h"
 #include "AnimationGraphDescriptors.h"
 #include "VerifiedVrActorAction.h"
+#include "VrHookDetachPolicy.h"
 
 #include <MinHook.h>
 
@@ -35,6 +36,7 @@ VerifiedVrActorAction::PerformAction g_originalPerformAction{};
 void* g_performActionTarget{};
 std::atomic<bool> g_installing{};
 std::atomic<bool> g_installed{};
+VrHookDetachPolicy::HookState g_hookState{};
 std::atomic<std::uint64_t> g_nextActionId{};
 thread_local std::uint32_t g_remoteActionDepth{};
 
@@ -56,6 +58,54 @@ struct PendingActionSlot
 };
 
 std::array<PendingActionSlot, kMaximumPendingActions> g_pendingActions{};
+
+[[nodiscard]] VrHookDetachPolicy::OperationResult DisablePerformActionHook(void*) noexcept
+{
+    const auto status = MH_DisableHook(g_performActionTarget);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_DISABLED)
+        return VrHookDetachPolicy::OperationResult::AlreadyDisabled;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook disable failed ({})",
+                     static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] VrHookDetachPolicy::OperationResult RemovePerformActionHook(void*) noexcept
+{
+    const auto status = MH_RemoveHook(g_performActionTarget);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook remove failed ({})",
+                     static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] bool DetachPerformActionHook() noexcept
+{
+    return VrHookDetachPolicy::Detach(
+        g_hookState, {DisablePerformActionHook, RemovePerformActionHook, nullptr});
+}
+
+void ForgetDetachedPerformActionHook() noexcept
+{
+    g_performActionTarget = nullptr;
+    g_originalPerformAction = nullptr;
+    g_hookState = {};
+}
+
+void LogRetainedPerformActionHook(const char* a_operation) noexcept
+{
+    BridgeEndpoint::Get().Fault("ActorMediator::PerformAction hook rollback could not prove detachment");
+    SKSE::log::error(
+        "SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction {} could not prove detachment; retaining "
+        "target, trampoline, and optional capability so a possible live detour remains callable",
+        a_operation);
+}
 
 struct LocalActionCapture
 {
@@ -570,9 +620,8 @@ bool Install() noexcept
         g_installing.store(false, std::memory_order_release);
         return a_result;
     };
-    const auto fail = [&finish]() noexcept {
-        g_performActionTarget = nullptr;
-        g_originalPerformAction = nullptr;
+    const auto failDetached = [&finish]() noexcept {
+        ForgetDetachedPerformActionHook();
         g_installed.store(false, std::memory_order_release);
         ClearPending();
         g_nextActionId.store(0, std::memory_order_release);
@@ -580,19 +629,25 @@ bool Install() noexcept
         BridgeEndpoint::Get().SetOptionalCapability(Capability::ExactAnimationActions, false);
         return finish(false);
     };
+    const auto retainDegraded = [&finish](const char* a_operation) noexcept {
+        LogRetainedPerformActionHook(a_operation);
+        g_installed.store(true, std::memory_order_release);
+        BridgeEndpoint::Get().SetOptionalCapability(Capability::ExactAnimationActions, true);
+        return finish(true);
+    };
     try {
         if (!VerifiedVrActorAction::Initialize()) {
             SKSE::log::error("SkyrimTogetherVRGameplayBridge: verified VR ActorMediator action targets failed validation");
-            return fail();
+            return failDetached();
         }
         const auto target = VerifiedVrActorAction::GetPerformAction();
         if (!target)
-            return fail();
+            return failDetached();
         const auto initialize = MH_Initialize();
         if (initialize != MH_OK && initialize != MH_ERROR_ALREADY_INITIALIZED) {
             SKSE::log::error("SkyrimTogetherVRGameplayBridge: MinHook initialization failed for ActorMediator::PerformAction ({})",
                              static_cast<int>(initialize));
-            return fail();
+            return failDetached();
         }
         g_performActionTarget = reinterpret_cast<void*>(target);
         auto status = MH_CreateHook(g_performActionTarget, reinterpret_cast<void*>(&HookPerformAction),
@@ -600,14 +655,19 @@ bool Install() noexcept
         if (status != MH_OK) {
             SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook creation failed ({})",
                              static_cast<int>(status));
-            return fail();
+            return failDetached();
         }
+        g_hookState.Created = true;
+        // MinHook may fail after beginning to alter the target.  Rollback
+        // must therefore prove disablement before the trampoline is cleared.
+        g_hookState.Enabled = true;
         status = MH_EnableHook(g_performActionTarget);
         if (status != MH_OK) {
             SKSE::log::error("SkyrimTogetherVRGameplayBridge: ActorMediator::PerformAction hook enable failed ({})",
                              static_cast<int>(status));
-            MH_RemoveHook(g_performActionTarget);
-            return fail();
+            if (DetachPerformActionHook())
+                return failDetached();
+            return retainDegraded("install rollback");
         }
         g_installed.store(true, std::memory_order_release);
         BridgeEndpoint::Get().SetOptionalCapability(Capability::ExactAnimationActions, true);
@@ -615,31 +675,32 @@ bool Install() noexcept
             "SkyrimTogetherVRGameplayBridge: installed verified ActorMediator action capture and ForceAction-equivalent replay");
         return finish(true);
     } catch (...) {
-        if (g_performActionTarget) {
-            MH_DisableHook(g_performActionTarget);
-            MH_RemoveHook(g_performActionTarget);
-        }
-        return fail();
+        if (g_hookState.Created && !DetachPerformActionHook())
+            return retainDegraded("exception rollback");
+        return failDetached();
     }
 }
 
-void Uninstall() noexcept
+bool Uninstall() noexcept
 {
     bool expected = false;
     if (!g_installing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-        return;
-    if (g_performActionTarget) {
-        MH_DisableHook(g_performActionTarget);
-        MH_RemoveHook(g_performActionTarget);
+        return false;
+    if (g_hookState.Created && !DetachPerformActionHook()) {
+        LogRetainedPerformActionHook("uninstall");
+        g_installed.store(true, std::memory_order_release);
+        BridgeEndpoint::Get().SetOptionalCapability(Capability::ExactAnimationActions, true);
+        g_installing.store(false, std::memory_order_release);
+        return false;
     }
-    g_performActionTarget = nullptr;
-    g_originalPerformAction = nullptr;
+    ForgetDetachedPerformActionHook();
     g_installed.store(false, std::memory_order_release);
     ClearPending();
     g_nextActionId.store(0, std::memory_order_release);
     VerifiedVrActorAction::Reset();
     BridgeEndpoint::Get().SetOptionalCapability(Capability::ExactAnimationActions, false);
     g_installing.store(false, std::memory_order_release);
+    return true;
 }
 
 void Reset() noexcept

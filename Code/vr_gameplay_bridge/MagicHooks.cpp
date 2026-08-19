@@ -3,6 +3,7 @@
 #include "AvatarManager.h"
 #include "BridgeEndpoint.h"
 #include "VRInteractionManager.h"
+#include "VrHookDetachPolicy.h"
 
 #include <MinHook.h>
 #include <RE/B/BGSPerk.h>
@@ -96,13 +97,6 @@ thread_local const AuthoritativeRemoteAddTargetContext* g_authoritativeRemoteAdd
 // call instead of the entire AddTarget invocation, which can re-enter other
 // engine work on the same thread.
 thread_local const AuthoritativeRemoteAddTargetContext* g_adjustingAuthoritativeEffectContext{};
-void* g_interruptTarget{};
-void* g_spellTarget{};
-void* g_addTargetTarget{};
-void* g_checkAddEffectTarget{};
-void* g_adjustForPerksTarget{};
-void* g_hasPerkTarget{};
-void* g_removeSpellTarget{};
 
 [[nodiscard]] bool IsExecutableTarget(const std::uintptr_t a_address) noexcept
 {
@@ -725,6 +719,8 @@ struct HookRecord
 
 using HookRecords = std::array<HookRecord, static_cast<std::size_t>(MagicHookIndex::Count)>;
 
+HookRecords g_hookRecords{};
+
 [[nodiscard]] constexpr std::size_t HookOffset(const MagicHookIndex a_index) noexcept
 {
     return static_cast<std::size_t>(a_index);
@@ -761,25 +757,62 @@ void ResetHookTrampolines() noexcept
     g_originalRemoveSpell = nullptr;
 }
 
-void CleanupHookRecords(HookRecords& a_hooks) noexcept
+[[nodiscard]] VrHookDetachPolicy::OperationResult DisableHookRecord(void* a_context) noexcept
 {
-    for (auto iterator = a_hooks.rbegin(); iterator != a_hooks.rend(); ++iterator) {
-        if (!iterator->Enabled)
-            continue;
-        const auto status = MH_DisableHook(iterator->Target);
-        if (status != MH_OK)
-            LogHookFailure(iterator->Name, static_cast<int>(status));
-        iterator->Enabled = false;
+    const auto& hook = *static_cast<const HookRecord*>(a_context);
+    const auto status = MH_DisableHook(hook.Target);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_DISABLED)
+        return VrHookDetachPolicy::OperationResult::AlreadyDisabled;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    LogHookFailure(hook.Name, static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] VrHookDetachPolicy::OperationResult RemoveHookRecord(void* a_context) noexcept
+{
+    const auto& hook = *static_cast<const HookRecord*>(a_context);
+    const auto status = MH_RemoveHook(hook.Target);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    LogHookFailure(hook.Name, static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] bool DetachHookRecord(HookRecord& a_hook) noexcept
+{
+    auto state = VrHookDetachPolicy::HookState{a_hook.Created, a_hook.Enabled};
+    const auto detached = VrHookDetachPolicy::Detach(
+        state, {DisableHookRecord, RemoveHookRecord, &a_hook});
+    a_hook.Created = state.Created;
+    a_hook.Enabled = state.Enabled;
+    return detached;
+}
+
+[[nodiscard]] bool CleanupHookRecords(HookRecords& a_hooks) noexcept
+{
+    bool detached = true;
+    for (auto iterator = a_hooks.rbegin(); iterator != a_hooks.rend(); ++iterator)
+        detached = DetachHookRecord(*iterator) && detached;
+    return detached;
+}
+
+[[nodiscard]] bool HasTrackedHooks() noexcept
+{
+    for (const auto& hook : g_hookRecords) {
+        if (hook.Created)
+            return true;
     }
-    for (auto iterator = a_hooks.rbegin(); iterator != a_hooks.rend(); ++iterator) {
-        if (!iterator->Created)
-            continue;
-        const auto status = MH_RemoveHook(iterator->Target);
-        if (status != MH_OK)
-            LogHookFailure(iterator->Name, static_cast<int>(status));
-        iterator->Created = false;
-    }
-    ResetHookTrampolines();
+    return false;
+}
+
+void StoreHookRecords(HookRecords&& a_hooks) noexcept
+{
+    g_hookRecords = std::move(a_hooks);
 }
 
 class HookInstallTransaction final
@@ -792,7 +825,7 @@ public:
     ~HookInstallTransaction() noexcept
     {
         if (!_committed)
-            CleanupHookRecords(_hooks);
+            static_cast<void>(Rollback());
     }
 
     [[nodiscard]] bool Create(
@@ -813,26 +846,34 @@ public:
     [[nodiscard]] bool Enable(const MagicHookIndex a_index) noexcept
     {
         auto& hook = _hooks[HookOffset(a_index)];
+        // A failing enable is not evidence that the target was left pristine.
+        // Keep rollback on the disable-first path until MinHook proves it safe.
+        hook.Enabled = true;
         const auto status = MH_EnableHook(hook.Target);
         if (status != MH_OK) {
             LogHookFailure(hook.Name, static_cast<int>(status));
             return false;
         }
-        hook.Enabled = true;
         return true;
     }
 
     void Commit() noexcept
     {
+        StoreHookRecords(std::move(_hooks));
         _committed = true;
     }
 
-    void Rollback() noexcept
+    [[nodiscard]] bool Rollback() noexcept
     {
         if (_committed)
-            return;
-        CleanupHookRecords(_hooks);
+            return !HasTrackedHooks();
+        const auto detached = CleanupHookRecords(_hooks);
+        if (detached)
+            ResetHookTrampolines();
+        else
+            StoreHookRecords(std::move(_hooks));
         _committed = true;
+        return detached;
     }
 
 private:
@@ -840,23 +881,21 @@ private:
     bool _committed{};
 };
 
-void CleanupInstalledHooks() noexcept
+[[nodiscard]] bool CleanupInstalledHooks() noexcept
 {
-    auto hooks = MakeHookRecords(g_interruptTarget, g_spellTarget, g_addTargetTarget, g_checkAddEffectTarget,
-                                 g_adjustForPerksTarget, g_hasPerkTarget, g_removeSpellTarget);
-    for (auto& hook : hooks) {
-        hook.Created = hook.Target != nullptr;
-        hook.Enabled = hook.Target != nullptr;
+    if (!HasTrackedHooks()) {
+        ResetHookTrampolines();
+        g_installed.store(false, std::memory_order_release);
+        return true;
     }
-    CleanupHookRecords(hooks);
-    g_interruptTarget = nullptr;
-    g_spellTarget = nullptr;
-    g_addTargetTarget = nullptr;
-    g_checkAddEffectTarget = nullptr;
-    g_adjustForPerksTarget = nullptr;
-    g_hasPerkTarget = nullptr;
-    g_removeSpellTarget = nullptr;
+    if (!CleanupHookRecords(g_hookRecords)) {
+        LogHookFailure("magic hook uninstall could not prove detachment; retaining targets and trampolines so a possible live detour remains callable");
+        return false;
+    }
+    g_hookRecords = {};
+    ResetHookTrampolines();
     g_installed.store(false, std::memory_order_release);
+    return true;
 }
 } // namespace
 
@@ -898,7 +937,7 @@ RemoteAddTargetResult ApplyRemoteAddTarget(
 
 bool Install() noexcept
 {
-    if (g_installed.load(std::memory_order_acquire))
+    if (g_installed.load(std::memory_order_acquire) || HasTrackedHooks())
         return true;
 
     bool expected = false;
@@ -986,7 +1025,11 @@ bool Install() noexcept
                           reinterpret_cast<void**>(&g_originalHasPerk)) ||
             !hooks.Create(MagicHookIndex::RemoveSpell, reinterpret_cast<void*>(&HookRemoveSpell),
                           reinterpret_cast<void**>(&g_originalRemoveSpell))) {
-            hooks.Rollback();
+            if (!hooks.Rollback()) {
+                LogHookFailure("magic hook install rollback could not prove detachment; retaining targets and trampolines so a possible live detour remains callable");
+                BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment");
+                return finish(true);
+            }
             return finish(false);
         }
 
@@ -994,17 +1037,14 @@ bool Install() noexcept
             !hooks.Enable(MagicHookIndex::AddTarget) || !hooks.Enable(MagicHookIndex::CheckAddEffect) ||
             !hooks.Enable(MagicHookIndex::AdjustForPerks) || !hooks.Enable(MagicHookIndex::HasPerk) ||
             !hooks.Enable(MagicHookIndex::RemoveSpell)) {
-            hooks.Rollback();
+            if (!hooks.Rollback()) {
+                LogHookFailure("magic hook install rollback could not prove detachment; retaining targets and trampolines so a possible live detour remains callable");
+                BridgeEndpoint::Get().Fault("magic hook install rollback could not prove detachment");
+                return finish(true);
+            }
             return finish(false);
         }
 
-        g_interruptTarget = interruptTarget;
-        g_spellTarget = spellTarget;
-        g_addTargetTarget = addTargetTarget;
-        g_checkAddEffectTarget = checkAddEffectTarget;
-        g_adjustForPerksTarget = adjustForPerksTarget;
-        g_hasPerkTarget = hasPerkTarget;
-        g_removeSpellTarget = removeSpellTarget;
         hooks.Commit();
         g_installed.store(true, std::memory_order_release);
         try {
@@ -1014,18 +1054,23 @@ bool Install() noexcept
         return finish(true);
     } catch (...) {
         LogHookFailure("exception while installing magic hooks");
-        ResetHookTrampolines();
+        if (HasTrackedHooks()) {
+            LogHookFailure("magic hook exception rollback retained targets and trampolines so a possible live detour remains callable");
+            BridgeEndpoint::Get().Fault("magic hook exception rollback could not prove detachment");
+            return finish(true);
+        }
         return finish(false);
     }
 }
 
-void Uninstall() noexcept
+bool Uninstall() noexcept
 {
     bool expected = false;
     if (!g_installing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-        return;
+        return false;
 
-    CleanupInstalledHooks();
+    const bool detached = CleanupInstalledHooks();
     g_installing.store(false, std::memory_order_release);
+    return detached;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::MagicHooks

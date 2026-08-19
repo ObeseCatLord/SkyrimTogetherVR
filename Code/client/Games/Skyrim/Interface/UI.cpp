@@ -1,17 +1,209 @@
 #include <Games/Skyrim/Interface/IMenu.h>
+#include <Games/Skyrim/Interface/MenuPausePolicy.h>
 #include <Games/Skyrim/Interface/UI.h>
 #include <Games/Skyrim/VR/VRHookPolicy.h>
 #include <Games/Skyrim/VR/VRMemorySafety.h>
 #include <Misc/BSFixedString.h>
 #include <TiltedOnlinePCH.h>
+#include <VRTickBridge.h>
 #include "immersive_launcher/stubs/DllBlocklist.h"
 
 #include <World.h>
 
+#include <limits>
+
 static bool g_RequestUnpauseAll{false};
 
+namespace
+{
+static_assert(IMenu::kPausesGame == SkyrimTogetherVR::MenuPausePolicy::kPausesGame);
+static_assert(IMenu::kFreezeFrameBackground == SkyrimTogetherVR::MenuPausePolicy::kFreezeFrameBackground);
+static_assert(IMenu::kFreezeFramePause == SkyrimTogetherVR::MenuPausePolicy::kFreezeFramePause);
+
 #if TP_SKYRIM_VR
-static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x67B;
+using MenuCreator = UI::TCreate*;
+static_assert(std::is_same_v<MenuCreator, IMenu* (*)()>);
+
+static std::array<MenuCreator, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> s_originalMenuCreators{};
+
+struct ManagedMenuState
+{
+    IMenu* Instance{};
+    std::uint32_t OriginalManagedFlags{};
+    bool Modified{};
+};
+
+static std::array<ManagedMenuState, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> s_managedMenus{};
+
+[[nodiscard]] bool IsVrUiOwnerThread() noexcept
+{
+    const auto ownerThreadId = SkyrimTogetherVR::TickBridge::GetActivationThreadId();
+    return ownerThreadId != 0 && ownerThreadId == GetCurrentThreadId();
+}
+
+[[nodiscard]] bool HasVrMemoryProtection(const void* apAddress, const std::size_t aSize, const bool aWritable, const bool aExecutable) noexcept
+{
+    if (!apAddress || aSize == 0)
+        return false;
+
+    const auto start = reinterpret_cast<std::uintptr_t>(apAddress);
+    if (aSize - 1 > std::numeric_limits<std::uintptr_t>::max() - start)
+        return false;
+
+    const auto last = start + aSize - 1;
+    auto current = start;
+    while (current <= last)
+    {
+        MEMORY_BASIC_INFORMATION page{};
+        if (VirtualQuery(reinterpret_cast<const void*>(current), &page, sizeof(page)) != sizeof(page) || page.State != MEM_COMMIT ||
+            (page.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            return false;
+
+        const auto protection = page.Protect & 0xFFu;
+        const bool readable = protection == PAGE_READONLY || protection == PAGE_READWRITE || protection == PAGE_WRITECOPY || protection == PAGE_EXECUTE_READ ||
+                              protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
+        const bool writable = protection == PAGE_READWRITE || protection == PAGE_WRITECOPY || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
+        const bool executable = protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
+        if (!readable || (aWritable && !writable) || (aExecutable && !executable))
+            return false;
+
+        const auto pageBase = reinterpret_cast<std::uintptr_t>(page.BaseAddress);
+        if (page.RegionSize > std::numeric_limits<std::uintptr_t>::max() - pageBase)
+            return false;
+        const auto pageEnd = pageBase + page.RegionSize;
+        if (current < pageBase || current >= pageEnd)
+            return false;
+        if (last < pageEnd)
+            return true;
+        current = pageEnd;
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsExactReadableMenuName(const char* apName, const std::string_view aExpected) noexcept
+{
+    return apName && SkyrimTogetherVR::IsReadableVrMemory(apName, aExpected.size() + 1) && std::char_traits<char>::compare(apName, aExpected.data(), aExpected.size()) == 0 &&
+           apName[aExpected.size()] == '\0';
+}
+
+void ApplyVrMenuPausePolicy(const std::size_t aIndex, IMenu* apMenu)
+{
+    if (!IsVrUiOwnerThread() || !apMenu || stubs::g_IsSoulsREActive || !World::Exists() ||
+        !SkyrimTogetherVR::IsReadableVrMemory(apMenu, IMenu::CommonLibIMenuOffsets::MenuFlags + sizeof(std::uint32_t)))
+        return;
+
+    const auto flags = apMenu->GetMenuFlagsData();
+    auto& state = s_managedMenus[aIndex];
+    if (state.Instance != apMenu)
+        state = {apMenu, flags & SkyrimTogetherVR::MenuPausePolicy::kClearedFlags, false};
+
+    const bool clientOnline = World::Get().GetTransport().IsOnline();
+    auto newFlags = flags;
+    const auto action = SkyrimTogetherVR::MenuPausePolicy::DecideAction(
+        SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex], clientOnline, false, true, (flags & IMenu::kOnStack) != 0, state.Modified);
+    if (action == SkyrimTogetherVR::MenuPausePolicy::Action::Unpause)
+    {
+        if (!state.Modified)
+            state.OriginalManagedFlags = flags & SkyrimTogetherVR::MenuPausePolicy::kClearedFlags;
+        newFlags = SkyrimTogetherVR::MenuPausePolicy::UnpausedFlags(flags);
+    }
+    else if (action == SkyrimTogetherVR::MenuPausePolicy::Action::Restore)
+    {
+        newFlags = SkyrimTogetherVR::MenuPausePolicy::RestoredFlags(flags, state.OriginalManagedFlags);
+    }
+    else
+    {
+        // A live menu must remain untouched until close; otherwise Skyrim's
+        // numPausesGame queue bookkeeping would be desynchronized.
+        return;
+    }
+
+    if (newFlags == flags)
+    {
+        if (!clientOnline)
+            state.Modified = false;
+        return;
+    }
+
+    apMenu->SetMenuFlagsData(newFlags);
+    state.Modified = clientOnline;
+    spdlog::debug("VR menu pause policy {} {}", clientOnline ? "unpaused" : "restored", SkyrimTogetherVR::MenuPausePolicy::kAllowList[aIndex]);
+}
+
+template <std::size_t Index> IMenu* CreateVrParityMenu()
+{
+    const auto original = s_originalMenuCreators[Index];
+    if (!original)
+        return nullptr;
+
+    auto* menu = original();
+    s_managedMenus[Index] = {};
+    ApplyVrMenuPausePolicy(Index, menu);
+    return menu;
+}
+
+static constexpr std::array<MenuCreator, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> kVrParityCreators = {
+    &CreateVrParityMenu<0>, &CreateVrParityMenu<1>, &CreateVrParityMenu<2>, &CreateVrParityMenu<3>, &CreateVrParityMenu<4>,
+    &CreateVrParityMenu<5>, &CreateVrParityMenu<6>, &CreateVrParityMenu<7>, &CreateVrParityMenu<8>,
+};
+
+void TryInstallVrMenuPausePolicy(UI* apUI)
+{
+    static bool soulsBypassLogged = false;
+    if (!IsVrUiOwnerThread() || !apUI || stubs::g_IsSoulsREActive)
+    {
+        if (stubs::g_IsSoulsREActive && !soulsBypassLogged)
+        {
+            spdlog::info("VR menu pause policy deferred to SkyrimSoulsRE");
+            soulsBypassLogged = true;
+        }
+        return;
+    }
+
+    using MenuTable = creation::BSTHashMap<BSFixedString, UI::UIMenuEntry>;
+    using MenuTableEntry = typename MenuTable::entry_type;
+    static_assert(offsetof(MenuTable, m_entries) == 0x28);
+
+    if (!SkyrimTogetherVR::IsReadableVrMemory(apUI, UI::CommonLibUIOffsets::MenuMap + sizeof(MenuTable)))
+        return;
+
+    auto& menuTable = apUI->GetMenuMapData();
+    if (menuTable.m_size == 0 || menuTable.m_size > 4096 || menuTable.m_freeCount > menuTable.m_size || !menuTable.m_entries ||
+        !SkyrimTogetherVR::IsReadableVrMemory(menuTable.m_entries, sizeof(MenuTableEntry) * menuTable.m_size))
+        return;
+
+    for (auto& entry : menuTable)
+    {
+        if (!entry.key.data || !entry.value.create || !HasVrMemoryProtection(&entry.value.create, sizeof(entry.value.create), true, false))
+            continue;
+
+        for (std::size_t index = 0; index < SkyrimTogetherVR::MenuPausePolicy::kAllowList.size(); ++index)
+        {
+            const auto menuName = SkyrimTogetherVR::MenuPausePolicy::kAllowList[index];
+            if (s_originalMenuCreators[index] || !IsExactReadableMenuName(entry.key.data, menuName) ||
+                !HasVrMemoryProtection(reinterpret_cast<const void*>(entry.value.create), 1, false, true))
+                continue;
+
+            s_originalMenuCreators[index] = entry.value.create;
+            entry.value.create = kVrParityCreators[index];
+            spdlog::debug("VR menu pause policy registered {}", SkyrimTogetherVR::MenuPausePolicy::kAllowList[index]);
+        }
+
+        for (std::size_t index = 0; index < SkyrimTogetherVR::MenuPausePolicy::kAllowList.size(); ++index)
+        {
+            if (IsExactReadableMenuName(entry.key.data, SkyrimTogetherVR::MenuPausePolicy::kAllowList[index]))
+            {
+                ApplyVrMenuPausePolicy(index, entry.value.spMenu);
+                break;
+            }
+        }
+    }
+}
+#endif
+} // namespace
+
+#if TP_SKYRIM_VR
+[[maybe_unused]] static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x67B;
 #else
 static constexpr auto kUIActiveMenuQueueSwapCallAddend = 0x682;
 #endif
@@ -24,7 +216,11 @@ UI* UI::Get()
     POINTER_SKYRIMSE(UI*, s_instance, 400327);
 #endif
 
-    return *s_instance.Get();
+    auto* ui = *s_instance.Get();
+#if TP_SKYRIM_VR
+    TryInstallVrMenuPausePolicy(ui);
+#endif
+    return ui;
 }
 
 SkyrimTogetherVR::MenuOpenState UI::GetMenuOpen(const BSFixedString& acName) const noexcept
@@ -102,24 +298,12 @@ void UI::DebugLogAllMenus()
     }
 }
 
-static void UnfreezeMenu(IMenu* apEntry)
+#if !TP_SKYRIM_VR && TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
+static void UnfreezeMenu(IMenu* apMenu)
 {
-    if (apEntry->PausesGame())
-        apEntry->ClearFlag(IMenu::kPausesGame);
-
-    if (apEntry->FreezesBackground())
-        apEntry->ClearFlag(IMenu::kFreezeFrameBackground);
-
-    if (apEntry->FreezesFramePause())
-        apEntry->ClearFlag(IMenu::kFreezeFramePause);
+    const auto flags = apMenu->GetMenuFlagsData();
+    apMenu->SetMenuFlagsData(SkyrimTogetherVR::MenuPausePolicy::UnpausedFlags(flags));
 }
-
-static constexpr const char* kAllowList[] = {
-    "TweenMenu",     "MagicMenu",     "StatsMenu",     "InventoryMenu", "MessageBoxMenu",
-    "ContainerMenu", "FavoritesMenu", "Tutorial Menu", "Console"
-    //"MapMenu", // MapMenu is disabled till we find a proper fix for first person.
-    //"Journal Menu", // Journal menu, aka pause menu, is disabled until we find a fix for manual save crashing while unpaused.
-};
 
 static void* (*UI_AddToActiveQueue)(UI*, IMenu*, void*);
 
@@ -137,9 +321,9 @@ static void* UI_AddToActiveQueue_Hook(UI* apSelf, IMenu* apMenu, void* apFoundIt
 #endif
 
     // NOTE(Force): could also compare by RTTI later on...
-    for (const char* item : kAllowList)
+    for (const auto item : SkyrimTogetherVR::MenuPausePolicy::kAllowList)
     {
-        if (auto* pMenu = apSelf->FindMenuByName(item))
+        if (const BSFixedString menuName(item.data()); auto* pMenu = apSelf->FindMenuByName(menuName))
         {
             if (pMenu == apMenu)
                 UnfreezeMenu(apMenu);
@@ -148,6 +332,7 @@ static void* UI_AddToActiveQueue_Hook(UI* apSelf, IMenu* apMenu, void* apFoundIt
 
     return UI_AddToActiveQueue(apSelf, apMenu, apFoundItem);
 }
+#endif
 
 using TCallback = void(void*, const BSFixedString*, uint32_t, void*);
 static TCallback* UIMessageQueue__AddMessage_Real;
@@ -155,7 +340,8 @@ static TCallback* UIMessageQueue__AddMessage_Real;
 // Useful for debugging UI related issues.
 void UIMessageQueue__AddMessage(void* a1, const BSFixedString* a2, UIMessage::UI_MESSAGE_TYPE a3, void* a4)
 {
-    spdlog::info("Adding Message {} with prio {} from 0x{:X}", a2->AsAscii(), static_cast<std::underlying_type_t<UIMessage::UI_MESSAGE_TYPE>>(a3),
+    spdlog::info(
+        "Adding Message {} with prio {} from 0x{:X}", a2->AsAscii(), static_cast<std::underlying_type_t<UIMessage::UI_MESSAGE_TYPE>>(a3),
         reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
     UIMessageQueue__AddMessage_Real(a1, a2, a3, a4);
 }
@@ -163,7 +349,7 @@ void UIMessageQueue__AddMessage(void* a1, const BSFixedString* a2, UIMessage::UI
 static TiltedPhoques::Initializer s_s(
     []()
     {
-#if TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
+#if !TP_SKYRIM_VR && TP_SKYRIM_ALLOW_VR_RESOLVED_INLINE_PATCH(TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE, TP_SKYRIM_VR_INLINE_PATCH_UI_ACTIVE_MENU_QUEUE_VR_RESOLVED)
         // pray that this doesnt fail!
         VersionDbPtr<uint8_t> ProcessHook(82082);
         TiltedPhoques::SwapCall(ProcessHook.Get() + kUIActiveMenuQueueSwapCallAddend, UI_AddToActiveQueue, &UI_AddToActiveQueue_Hook);

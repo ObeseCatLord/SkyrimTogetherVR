@@ -2,6 +2,7 @@
 
 #include "AvatarManager.h"
 #include "BridgeEndpoint.h"
+#include "VrHookDetachPolicy.h"
 
 #include <MinHook.h>
 
@@ -24,7 +25,56 @@ constexpr std::array<std::uint8_t, 16> kProjectileLaunchVrPrologue{
 Launch g_originalLaunch{};
 void* g_hookTarget{};
 std::atomic<bool> g_installAttempted{};
+VrHookDetachPolicy::HookState g_hookState{};
 thread_local std::uint32_t g_remoteLaunchAllowance{};
+
+[[nodiscard]] VrHookDetachPolicy::OperationResult DisableHook(void*) noexcept
+{
+    const auto status = MH_DisableHook(g_hookTarget);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_DISABLED)
+        return VrHookDetachPolicy::OperationResult::AlreadyDisabled;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook disable failed ({})",
+                     static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] VrHookDetachPolicy::OperationResult RemoveHook(void*) noexcept
+{
+    const auto status = MH_RemoveHook(g_hookTarget);
+    if (status == MH_OK)
+        return VrHookDetachPolicy::OperationResult::Complete;
+    if (status == MH_ERROR_NOT_CREATED)
+        return VrHookDetachPolicy::OperationResult::NotCreated;
+    SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook remove failed ({})",
+                     static_cast<int>(status));
+    return VrHookDetachPolicy::OperationResult::Failed;
+}
+
+[[nodiscard]] bool DetachHook() noexcept
+{
+    return VrHookDetachPolicy::Detach(
+        g_hookState, {DisableHook, RemoveHook, nullptr});
+}
+
+void ForgetDetachedHook() noexcept
+{
+    g_hookTarget = nullptr;
+    g_originalLaunch = nullptr;
+    g_hookState = {};
+}
+
+void LogRetainedHook(const char* a_operation) noexcept
+{
+    BridgeEndpoint::Get().Fault("Projectile::Launch hook rollback could not prove detachment");
+    SKSE::log::error(
+        "SkyrimTogetherVRGameplayBridge: Projectile::Launch {} could not prove detachment; retaining target and "
+        "trampoline so a possible live detour remains callable and the bridge stays loaded",
+        a_operation);
+}
 
 [[nodiscard]] bool IsBounded(const float a_value, const float a_limit) noexcept
 {
@@ -151,7 +201,7 @@ bool Install() noexcept
 {
     bool expected = false;
     if (!g_installAttempted.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-        return g_originalLaunch != nullptr;
+        return g_hookState.Created && g_originalLaunch != nullptr;
 
     const auto initialize = MH_Initialize();
     if (initialize != MH_OK && initialize != MH_ERROR_ALREADY_INITIALIZED) {
@@ -178,35 +228,45 @@ bool Install() noexcept
     if (create != MH_OK) {
         SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook creation failed ({})",
                          static_cast<int>(create));
-        g_hookTarget = nullptr;
-        g_originalLaunch = nullptr;
+        ForgetDetachedHook();
         g_installAttempted.store(false, std::memory_order_release);
         return false;
     }
+    g_hookState.Created = true;
 
+    // A failed MinHook enable does not prove that no target bytes changed.
+    // Treat it as potentially live until DisableHook confirms otherwise.
+    g_hookState.Enabled = true;
     const auto enable = MH_EnableHook(g_hookTarget);
     if (enable != MH_OK) {
         SKSE::log::error("SkyrimTogetherVRGameplayBridge: Projectile::Launch hook enable failed ({})",
                          static_cast<int>(enable));
-        MH_RemoveHook(g_hookTarget);
-        g_hookTarget = nullptr;
-        g_originalLaunch = nullptr;
-        g_installAttempted.store(false, std::memory_order_release);
-        return false;
+        if (DetachHook()) {
+            ForgetDetachedHook();
+            g_installAttempted.store(false, std::memory_order_release);
+            return false;
+        }
+        LogRetainedHook("install rollback");
+        return true;
     }
 
     SKSE::log::info("SkyrimTogetherVRGameplayBridge: installed exact Projectile::Launch hook at VR address ID 42928");
     return true;
 }
 
-void Uninstall() noexcept
+bool Uninstall() noexcept
 {
-    if (g_hookTarget) {
-        MH_DisableHook(g_hookTarget);
-        MH_RemoveHook(g_hookTarget);
+    if (!g_hookState.Created) {
+        ForgetDetachedHook();
+        g_installAttempted.store(false, std::memory_order_release);
+        return true;
     }
-    g_hookTarget = nullptr;
-    g_originalLaunch = nullptr;
+    if (!DetachHook()) {
+        LogRetainedHook("uninstall");
+        return false;
+    }
+    ForgetDetachedHook();
     g_installAttempted.store(false, std::memory_order_release);
+    return true;
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::ProjectileHooks
