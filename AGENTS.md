@@ -308,6 +308,13 @@ STVR_FORCE_PROTON=1 STVR_COMPATDATA="$PREFIX" STVR_PROTONPATH="$PROTON" \
   ./launch-skyrim-together-vr.sh
 ```
 
+For interactive and two-client tests, start the player in Realm of Lorkhan by
+default. Prefer a valid post-character Realm save when repeating a test, or
+complete the normal Realm new-game and RaceSex flow for a fresh-character
+gate. Use a different settled save only for a test that specifically requires
+that location; the Sleeping Giant Inn save is the calibration-transition
+fixture, not the normal multiplayer starting point.
+
 The directory name is retained because the transactional install was created
 during the earlier `c18ca1d8` bring-up. Its authoritative installed
 `SkyrimTogetherVR_BuildManifest.json` now reports exact build `c1ffb57e`; do not
