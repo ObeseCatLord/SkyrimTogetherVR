@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <limits>
 
 namespace SkyrimTogetherVR::GameplayAdapter::FaderRecovery
 {
@@ -67,38 +68,34 @@ struct MenuSnapshot
         return snapshot;
     }
 
-    bool hudSeen = false;
-    bool faderSeen = false;
-    bool unexpectedMenu = false;
+    FaderRecoveryPolicy::MenuStackAccumulator stack;
     for (const auto& menuHandle : ui->menuStack)
     {
         const auto* menu = menuHandle.get();
-        if (!menu || !menu->OnStack() || menu->Modal() || menu->ApplicationMenu())
-            return snapshot;
-
         if (menu == hudMenu.get())
         {
-            if (hudSeen)
-                return snapshot;
-            hudSeen = true;
+            stack.Observe(FaderRecoveryPolicy::MenuIdentity::Hud, menu != nullptr, menu && menu->OnStack());
             continue;
         }
         if (menu == faderMenu.get())
         {
-            if (faderSeen)
-                return snapshot;
-            faderSeen = true;
-            snapshot.FaderOnStack = true;
-            snapshot.FaderActive = static_cast<const RE::FaderMenu*>(menu)->GetRuntimeData().isActive;
+            const bool onStack = menu && menu->OnStack();
+            stack.Observe(FaderRecoveryPolicy::MenuIdentity::Fader, menu != nullptr, onStack);
+            if (onStack)
+            {
+                snapshot.FaderOnStack = true;
+                snapshot.FaderActive = static_cast<const RE::FaderMenu*>(menu)->GetRuntimeData().isActive;
+            }
             continue;
         }
 
-        // This rejects Main, RaceSex, Loading, MessageBox, and every other
-        // unrecognised presentation state without a generic menu-hide path.
-        unexpectedMenu = true;
+        // This rejects Main, RaceSex, Loading, MessageBox, calibration, and
+        // every other live presentation state without a generic hide path.
+        const bool onStack = menu && menu->OnStack();
+        stack.Observe(FaderRecoveryPolicy::MenuIdentity::Other, menu != nullptr, onStack);
     }
 
-    snapshot.ExactHudAndFader = hudSeen && faderSeen && !unexpectedMenu;
+    snapshot.ExactHudAndFader = stack.ExactHudAndFader();
     snapshot.UiAvailable = true;
     return snapshot;
 }
@@ -192,6 +189,16 @@ void ProcessOnCommandPumpOwner(const std::uint64_t aServerInstanceNonce, const s
             .LifecycleGeneration = lifecycleGeneration,
             .MenuGeneration = g_menuGeneration.load(std::memory_order_acquire),
         };
+
+        if (observation.FaderOnStack && !observation.ExactHudAndFader)
+        {
+            static std::uint64_t loggedBlockedMenuGeneration = std::numeric_limits<std::uint64_t>::max();
+            if (loggedBlockedMenuGeneration != observation.MenuGeneration)
+            {
+                loggedBlockedMenuGeneration = observation.MenuGeneration;
+                SKSE::log::info("SkyrimTogetherVR Fader recovery waiting for a safe HUD/Fader-only stack; blocker=additional_live_menu");
+            }
+        }
 
         switch (state.Observe(observation, nowMs))
         {

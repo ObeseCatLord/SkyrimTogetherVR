@@ -10,6 +10,47 @@ inline constexpr std::uint64_t kStableContextDwellMs = 1000;
 inline constexpr std::uint64_t kHideVerificationTimeoutMs = 2000;
 inline constexpr float kStablePositionTolerance = 8.0F;
 
+enum class MenuIdentity
+{
+    Hud,
+    Fader,
+    Other,
+};
+
+struct MenuStackAccumulator
+{
+    void Observe(const MenuIdentity aIdentity, const bool aExists, const bool aOnStack) noexcept
+    {
+        // Skyrim keeps inactive/null entries in the backing stack. They are
+        // not presentation blockers and must not invalidate the live view.
+        if (!aExists || !aOnStack)
+            return;
+
+        switch (aIdentity)
+        {
+        case MenuIdentity::Hud:
+            Invalid = Invalid || HudSeen;
+            HudSeen = true;
+            break;
+        case MenuIdentity::Fader:
+            Invalid = Invalid || FaderSeen;
+            FaderSeen = true;
+            break;
+        case MenuIdentity::Other: UnexpectedMenu = true; break;
+        }
+    }
+
+    [[nodiscard]] bool ExactHudAndFader() const noexcept
+    {
+        return HudSeen && FaderSeen && !UnexpectedMenu && !Invalid;
+    }
+
+    bool HudSeen{};
+    bool FaderSeen{};
+    bool UnexpectedMenu{};
+    bool Invalid{};
+};
+
 struct PlayerContext
 {
     std::uintptr_t Player{};
@@ -77,6 +118,11 @@ public:
         const bool sessionActive = acObservation.ServerInstanceNonce != 0 && acObservation.ConnectionGeneration != 0;
         if (!sessionActive)
         {
+            if (acObservation.LifecycleGeneration != m_lifecycleGeneration && acObservation.FaderOnStack)
+                m_pendingLifecycleEvidence = true;
+            if (acObservation.UiAvailable && !acObservation.FaderOnStack)
+                m_pendingLifecycleEvidence = false;
+
             m_serverInstanceNonce = 0;
             m_connectionGeneration = 0;
             m_lifecycleGeneration = acObservation.LifecycleGeneration;
@@ -97,6 +143,9 @@ public:
         }
 
         const bool lifecycleChanged = acObservation.LifecycleGeneration != m_lifecycleGeneration;
+        const bool lifecycleTransitionWithFader = lifecycleChanged && (m_faderOnStack || acObservation.FaderOnStack);
+        if (lifecycleTransitionWithFader)
+            m_pendingLifecycleEvidence = true;
         if (lifecycleChanged)
         {
             m_lifecycleGeneration = acObservation.LifecycleGeneration;
@@ -130,6 +179,7 @@ public:
             m_state = State::Monitoring;
             m_faderOnStackSinceMs = 0;
             m_generationIdentity = {};
+            m_pendingLifecycleEvidence = false;
             ResetCandidate();
             return action;
         }
@@ -145,7 +195,7 @@ public:
             ResetCandidate();
         }
 
-        if (sessionRolloverWithFader || cellContextChanged)
+        if (sessionRolloverWithFader || lifecycleTransitionWithFader || cellContextChanged || m_pendingLifecycleEvidence)
             m_recoveryEvidence = true;
 
         if (!m_generationIdentity.IsValid() && acObservation.Context.IsValid())
@@ -194,6 +244,7 @@ public:
 
         m_state = State::HideIssued;
         m_hideIssuedAtMs = aNowMs;
+        m_pendingLifecycleEvidence = false;
         return Action::Hide;
     }
 
@@ -272,5 +323,6 @@ private:
     bool m_faderOnStack{};
     bool m_faderActive{};
     bool m_recoveryEvidence{};
+    bool m_pendingLifecycleEvidence{};
 };
 } // namespace SkyrimTogetherVR::GameplayAdapter::FaderRecoveryPolicy

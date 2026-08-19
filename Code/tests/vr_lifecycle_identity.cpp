@@ -2,6 +2,8 @@
 
 #include <Services/VRLifecycleIdentity.h>
 
+#include <string_view>
+
 namespace
 {
 constexpr VRLifecycleReadinessSample MakeSample(
@@ -34,4 +36,25 @@ TEST_CASE("VR lifecycle identity retires changed player or base", "[skyrim-vr][l
     CHECK_FALSE(IsSameVRLifecycleIdentity(initial, changedBase));
     CHECK(RequiresVRLifecycleRetirement(initial, changedPlayer));
     CHECK(RequiresVRLifecycleRetirement(initial, changedBase));
+}
+
+TEST_CASE("VR lifecycle admission excludes the vanilla VR calibration playroom", "[skyrim-vr][lifecycle]")
+{
+    constexpr VRLifecycleAdmissionProbe settledSave{false, 0x000097EC};
+    constexpr VRLifecycleAdmissionProbe calibrationMenu{true, 0x000097EC};
+    constexpr VRLifecycleAdmissionProbe playroom{false, kVRPlayroomCellFormId};
+    constexpr VRLifecycleAdmissionProbe otherFullPluginCollision{false, 0x070008D4};
+    constexpr VRLifecycleAdmissionProbe lightPluginCollision{false, 0xFE0008D4};
+    constexpr VRLifecycleAdmissionProbe temporaryFormCollision{false, 0xFF0008D4};
+    constexpr VRLifecycleAdmissionProbe incompletePlayroomCell{false, 0};
+
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(settledSave) == VRLifecycleAdmissionBlocker::None);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(calibrationMenu) == VRLifecycleAdmissionBlocker::CalibrationOptionMenu);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(playroom) == VRLifecycleAdmissionBlocker::VRPlayroom);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(otherFullPluginCollision) == VRLifecycleAdmissionBlocker::None);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(lightPluginCollision) == VRLifecycleAdmissionBlocker::None);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(temporaryFormCollision) == VRLifecycleAdmissionBlocker::None);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlocker(incompletePlayroomCell) == VRLifecycleAdmissionBlocker::None);
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlockerReason(VRLifecycleAdmissionBlocker::CalibrationOptionMenu) == std::string_view("calibration_option_menu"));
+    STATIC_REQUIRE(GetVRLifecycleAdmissionBlockerReason(VRLifecycleAdmissionBlocker::VRPlayroom) == std::string_view("vr_playroom"));
 }

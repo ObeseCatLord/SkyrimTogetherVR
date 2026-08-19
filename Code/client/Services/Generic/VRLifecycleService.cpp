@@ -25,8 +25,10 @@ constexpr auto kRequiredStableDuration = std::chrono::milliseconds(250);
 constexpr double kStatusWriteInterval = 1.0;
 constexpr char kStatusFileName[] = "SkyrimTogetherVR.lifecycle";
 
-const char* GetBlockingMenuName() noexcept
+const char* GetBlockingMenuName(bool& arCalibrationOptionMenuOpen) noexcept
 {
+    arCalibrationOptionMenuOpen = false;
+
     auto* pUI = UI::Get();
     if (!pUI || !SkyrimTogetherVR::IsReadableVrMemory(pUI, sizeof(void*)))
     {
@@ -59,7 +61,28 @@ const char* GetBlockingMenuName() noexcept
         if (state == SkyrimTogetherVR::MenuOpenState::Open)
             return blockingMenu.Reason;
     }
+
+#if TP_SKYRIM_VR
+    // MessageBoxMenu remains an ordinary in-game menu; only VR calibration blocks admission.
+    static const BSFixedString s_calibrationOptionMenu("CalibrationOptionMenu");
+    const auto calibrationState = pUI->GetMenuOpen(s_calibrationOptionMenu);
+    if (calibrationState == SkyrimTogetherVR::MenuOpenState::Unavailable)
+        return "ui_unavailable";
+
+    arCalibrationOptionMenuOpen = calibrationState == SkyrimTogetherVR::MenuOpenState::Open;
+#endif
     return nullptr;
+}
+
+VRLifecycleAdmissionBlocker GetStartupAdmissionBlocker(const bool aCalibrationOptionMenuOpen, const TESObjectCELL* apCell) noexcept
+{
+#if TP_SKYRIM_VR
+    return GetVRLifecycleAdmissionBlocker({aCalibrationOptionMenuOpen, apCell->GetFormIdData()});
+#else
+    (void)aCalibrationOptionMenuOpen;
+    (void)apCell;
+    return VRLifecycleAdmissionBlocker::None;
+#endif
 }
 } // namespace
 
@@ -125,7 +148,8 @@ void VRLifecycleService::Update(double aDelta) noexcept
 
     ObserveBridgeLifecycleEpoch();
 
-    if (const char* pBlockingMenu = GetBlockingMenuName())
+    bool calibrationOptionMenuOpen = false;
+    if (const char* pBlockingMenu = GetBlockingMenuName(calibrationOptionMenuOpen))
     {
         Suspend(pBlockingMenu);
     }
@@ -151,6 +175,10 @@ void VRLifecycleService::Update(double aDelta) noexcept
             if (sample.PlayerFormId == 0 || sample.BaseFormId == 0 || sample.CellFormId == 0)
             {
                 Suspend("player_identity_incomplete");
+            }
+            else if (const auto blocker = GetStartupAdmissionBlocker(calibrationOptionMenuOpen, pCell); blocker != VRLifecycleAdmissionBlocker::None)
+            {
+                Suspend(GetVRLifecycleAdmissionBlockerReason(blocker));
             }
             else if (m_state != State::Stabilizing && m_state != State::Ready)
             {

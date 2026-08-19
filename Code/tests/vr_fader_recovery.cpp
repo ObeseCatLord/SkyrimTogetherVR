@@ -71,7 +71,9 @@ TEST_CASE("Fader recovery resets its hard timeout after a long loading transitio
     observation.TransitionActive = false;
     observation.LifecycleGeneration = 1;
     REQUIRE(state.Observe(observation, 15001) == Action::None);
-    REQUIRE(state.Observe(observation, 15001 + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::None);
+    REQUIRE(state.Observe(observation, 15001 + kFaderHardTimeoutMs - 1) == Action::None);
+    REQUIRE(state.Observe(observation, 15001 + kFaderHardTimeoutMs) == Action::Candidate);
+    REQUIRE(state.Observe(observation, 15001 + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::Hide);
 }
 
 TEST_CASE("Fader recovery handles an active stranded Fader only after the hard timeout")
@@ -96,6 +98,37 @@ TEST_CASE("Fader recovery rejects mixed menu states")
 
     REQUIRE(state.Observe(observation, 0) == Action::None);
     REQUIRE(state.Observe(observation, 30000) == Action::None);
+}
+
+TEST_CASE("Fader stack classification ignores inactive backing entries")
+{
+    MenuStackAccumulator stack;
+    stack.Observe(MenuIdentity::Other, false, false);
+    stack.Observe(MenuIdentity::Other, true, false);
+    stack.Observe(MenuIdentity::Hud, true, true);
+    stack.Observe(MenuIdentity::Fader, true, true);
+
+    REQUIRE(stack.ExactHudAndFader());
+}
+
+TEST_CASE("Fader stack classification rejects any additional live menu")
+{
+    MenuStackAccumulator stack;
+    stack.Observe(MenuIdentity::Hud, true, true);
+    stack.Observe(MenuIdentity::Fader, true, true);
+    stack.Observe(MenuIdentity::Other, true, true);
+
+    REQUIRE_FALSE(stack.ExactHudAndFader());
+}
+
+TEST_CASE("Fader stack classification rejects duplicate live expected menus")
+{
+    MenuStackAccumulator stack;
+    stack.Observe(MenuIdentity::Hud, true, true);
+    stack.Observe(MenuIdentity::Hud, true, true);
+    stack.Observe(MenuIdentity::Fader, true, true);
+
+    REQUIRE_FALSE(stack.ExactHudAndFader());
 }
 
 TEST_CASE("Fader recovery handles inactive stranded Faders only after the hard timeout")
@@ -170,7 +203,7 @@ TEST_CASE("Fader recovery rearms only after a real close and reopen")
     REQUIRE(state.Observe(observation, reopenedAt + kFaderHardTimeoutMs + kStableContextDwellMs + 1) == Action::Hide);
 }
 
-TEST_CASE("Fader recovery lifecycle reset clears evidence and restarts the hard timeout")
+TEST_CASE("Fader recovery treats an authenticated lifecycle transition as recovery evidence")
 {
     StateMachine state;
     auto observation = ExactFader();
@@ -185,7 +218,90 @@ TEST_CASE("Fader recovery lifecycle reset clears evidence and restarts the hard 
     observation.LifecycleGeneration = 1;
     const auto resetAt = firstHideAt + kHideVerificationTimeoutMs + 1;
     REQUIRE(state.Observe(observation, resetAt) == Action::None);
-    REQUIRE(state.Observe(observation, resetAt + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::None);
+    REQUIRE(state.Observe(observation, resetAt + kFaderHardTimeoutMs) == Action::Candidate);
+    REQUIRE(state.Observe(observation, resetAt + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::Hide);
+}
+
+TEST_CASE("Fader recovery preserves load evidence across temporary transport retirement")
+{
+    StateMachine state;
+    auto observation = ExactFader();
+
+    REQUIRE(state.Observe(observation, 0) == Action::None);
+
+    observation.ServerInstanceNonce = 0;
+    observation.ConnectionGeneration = 0;
+    observation.LifecycleGeneration = 1;
+    REQUIRE(state.Observe(observation, 100) == Action::None);
+
+    observation.ServerInstanceNonce = 0xA0;
+    observation.ConnectionGeneration = 0xB1;
+    REQUIRE(state.Observe(observation, 200) == Action::None);
+    REQUIRE(state.Observe(observation, 200 + kFaderHardTimeoutMs) == Action::Candidate);
+    REQUIRE(state.Observe(observation, 200 + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::Hide);
+}
+
+TEST_CASE("Fader recovery preserves offline load evidence across an unavailable UI snapshot")
+{
+    StateMachine state;
+    auto observation = ExactFader();
+
+    REQUIRE(state.Observe(observation, 0) == Action::None);
+
+    observation.ServerInstanceNonce = 0;
+    observation.ConnectionGeneration = 0;
+    observation.LifecycleGeneration = 1;
+    REQUIRE(state.Observe(observation, 100) == Action::None);
+
+    observation.UiAvailable = false;
+    observation.FaderOnStack = false;
+    observation.ExactHudAndFader = false;
+    REQUIRE(state.Observe(observation, 150) == Action::None);
+
+    observation = ExactFader();
+    observation.ConnectionGeneration = 0xB1;
+    observation.LifecycleGeneration = 1;
+    REQUIRE(state.Observe(observation, 200) == Action::None);
+    REQUIRE(state.Observe(observation, 200 + kFaderHardTimeoutMs) == Action::Candidate);
+    REQUIRE(state.Observe(observation, 200 + kFaderHardTimeoutMs + kStableContextDwellMs) == Action::Hide);
+}
+
+TEST_CASE("Fader recovery clears pending load evidence when the Fader closes offline")
+{
+    StateMachine state;
+    auto observation = ExactFader();
+    REQUIRE(state.Observe(observation, 0) == Action::None);
+
+    observation.ServerInstanceNonce = 0;
+    observation.ConnectionGeneration = 0;
+    observation.LifecycleGeneration = 1;
+    REQUIRE(state.Observe(observation, 100) == Action::None);
+
+    observation.FaderOnStack = false;
+    observation.ExactHudAndFader = false;
+    REQUIRE(state.Observe(observation, 200) == Action::None);
+
+    observation = ExactFader();
+    observation.ConnectionGeneration = 0xB1;
+    observation.LifecycleGeneration = 1;
+    REQUIRE(state.Observe(observation, 300) == Action::None);
+    REQUIRE(state.Observe(observation, 300 + 2 * kFaderHardTimeoutMs) == Action::None);
+}
+
+TEST_CASE("Fader recovery waits for additional live menus to close")
+{
+    StateMachine state;
+    auto observation = ExactFader();
+    REQUIRE(state.Observe(observation, 0) == Action::None);
+
+    observation.LifecycleGeneration = 1;
+    observation.ExactHudAndFader = false;
+    REQUIRE(state.Observe(observation, 100) == Action::None);
+    REQUIRE(state.Observe(observation, 100 + kFaderHardTimeoutMs) == Action::None);
+
+    observation.ExactHudAndFader = true;
+    REQUIRE(state.Observe(observation, 100 + kFaderHardTimeoutMs + 1) == Action::Candidate);
+    REQUIRE(state.Observe(observation, 100 + kFaderHardTimeoutMs + 1 + kStableContextDwellMs) == Action::Hide);
 }
 
 TEST_CASE("Fader recovery requires a cell transition and ignores a new player identity")
