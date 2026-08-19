@@ -1,11 +1,7 @@
 name: Build windows
 
 on:
-  pull_request:
-  push:
-    branches:
-      - master
-      - prerel
+  workflow_dispatch:
   workflow_call:
     inputs:
       build-mode:
