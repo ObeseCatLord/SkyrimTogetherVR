@@ -429,8 +429,10 @@ export YDOTOOL_SOCKET=/run/user/1000/stvr-ydotool.sock
 
 Main Menu -> New Game:
 
-1. Use `devbench_new_game.py`'s cached Win32 helper to send scan codes `End`,
-   then `Enter` inside the exact Proton prefix. Do not use host focus injection.
+1. Use `devbench_new_game.py`'s cached Win32 helper inside the exact Proton
+   prefix. It sends `End`, then `Enter` when no `.ess` saves exist. When saves
+   exist, it sends `End`, `Down`, then `Enter` so `Continue` cannot be loaded in
+   place of `New Game`. Do not use host focus injection.
 2. Publish XRizer `trigger` to accept Realm of Lorkhan's New Game confirmation.
 
 Automated RaceSex completion with XRizer:

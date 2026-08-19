@@ -1,5 +1,7 @@
 #include "VerifiedVrDeath.h"
 
+#include "ActorAuthorityHooks.h"
+
 #include <array>
 #include <cstring>
 
@@ -13,7 +15,6 @@ constexpr std::uint64_t kSetActorBaseFlagVrRva = 0x019C3B0;
 constexpr std::uint64_t kSetNoBleedoutRecoveryVrRva = 0x062C950;
 constexpr std::uint64_t kDispelAllSpellsVrRva = 0x0557070;
 constexpr std::uint64_t kGetCocPlacementInfoVrRva = 0x027A4C0;
-constexpr std::uint64_t kMoveToVrRva = 0x09E90E0;
 constexpr std::uint64_t kFadeOutGameVrRva = 0x0903080;
 constexpr REL::Version kSkyrimVrRuntime{1, 4, 15, 0};
 
@@ -32,10 +33,6 @@ constexpr std::array<std::uint8_t, 16> kDispelAllSpellsVrPrologue{
 constexpr std::array<std::uint8_t, 16> kGetCocPlacementInfoVrPrologue{
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
     0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48,
-};
-constexpr std::array<std::uint8_t, 16> kMoveToVrPrologue{
-    0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57,
-    0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
 };
 constexpr std::array<std::uint8_t, 16> kFadeOutGameVrPrologue{
     0x40, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41,
@@ -116,24 +113,23 @@ bool ResolveRespawnTargets(RespawnTargets& ar_targets) noexcept
         REL::Offset(kDispelAllSpellsVrRva)};
     static REL::Relocation<RespawnTargets::GetCocPlacementInfo> getCocPlacementInfo{
         REL::Offset(kGetCocPlacementInfoVrRva)};
-    static REL::Relocation<RespawnTargets::MoveTo> moveTo{
-        REL::Offset(kMoveToVrRva)};
+    auto* moveTo = reinterpret_cast<RespawnTargets::MoveTo*>(
+        ActorAuthorityHooks::GetVerifiedMoveToImplTrampoline());
 
     if (setNoBleedoutRecovery.offset() != kSetNoBleedoutRecoveryVrRva ||
         dispelAllSpells.offset() != kDispelAllSpellsVrRva ||
         getCocPlacementInfo.offset() != kGetCocPlacementInfoVrRva ||
-        moveTo.offset() != kMoveToVrRva ||
+        !moveTo ||
         !IsVerifiedExecutableTarget(setNoBleedoutRecovery.address(), kSetNoBleedoutRecoveryVrPrologue) ||
         !IsVerifiedExecutableTarget(dispelAllSpells.address(), kDispelAllSpellsVrPrologue) ||
-        !IsVerifiedExecutableTarget(getCocPlacementInfo.address(), kGetCocPlacementInfoVrPrologue) ||
-        !IsVerifiedExecutableTarget(moveTo.address(), kMoveToVrPrologue))
+        !IsVerifiedExecutableTarget(getCocPlacementInfo.address(), kGetCocPlacementInfoVrPrologue))
         return false;
 
     ar_targets = {
         .SetNoBleedout = setNoBleedoutRecovery.get(),
         .DispelAll = dispelAllSpells.get(),
         .GetCocPlacement = getCocPlacementInfo.get(),
-        .MoveToCell = moveTo.get(),
+        .MoveToCell = moveTo,
     };
     return true;
 }

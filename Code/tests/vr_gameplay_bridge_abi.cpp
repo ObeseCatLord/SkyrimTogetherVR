@@ -911,6 +911,18 @@ TEST_CASE("VR avatar status emits reconciled bridge loss attribution", "[skyrim-
     REQUIRE(source.find("bridge.eventRingDroppedPushes=") != std::string::npos);
 }
 
+TEST_CASE("VR respawn uses the authority hook's verified MoveTo trampoline", "[skyrim-vr][gameplay-bridge][respawn]")
+{
+    const auto deathSource = ReadRepositorySource("Code/vr_gameplay_bridge/VerifiedVrDeath.cpp");
+    const auto authoritySource = ReadRepositorySource("Code/vr_gameplay_bridge/ActorAuthorityHooks.cpp");
+    REQUIRE_FALSE(deathSource.empty());
+    REQUIRE_FALSE(authoritySource.empty());
+    REQUIRE(deathSource.find("ActorAuthorityHooks::GetVerifiedMoveToImplTrampoline()") != std::string::npos);
+    REQUIRE(deathSource.find("kMoveToVrRva") == std::string::npos);
+    REQUIRE(deathSource.find("kMoveToVrPrologue") == std::string::npos);
+    REQUIRE(authoritySource.find("return reinterpret_cast<void*>(g_originalMoveToImpl);") != std::string::npos);
+}
+
 TEST_CASE("VR gameplay bridge ring retains each MPMC record once", "[skyrim-vr][gameplay-bridge]")
 {
     constexpr std::uint64_t kProducerCount = 2;

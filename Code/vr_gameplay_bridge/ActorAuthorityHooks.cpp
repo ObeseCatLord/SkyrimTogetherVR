@@ -1290,6 +1290,13 @@ bool Install() noexcept
     }
 }
 
+void* GetVerifiedMoveToImplTrampoline() noexcept
+{
+    if (!g_installed.load(std::memory_order_acquire))
+        return nullptr;
+    return reinterpret_cast<void*>(g_originalMoveToImpl);
+}
+
 bool Uninstall() noexcept
 {
     try {

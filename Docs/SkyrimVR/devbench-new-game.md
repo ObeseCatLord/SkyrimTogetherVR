@@ -5,8 +5,9 @@ without headset input:
 
 1. waits for DevBench on `127.0.0.1:8921`;
 2. dismisses Skyrim VR calibration when present;
-3. compiles a small cached Win32 scan-code helper and sends `End`, then `Enter`
-   inside the active Proton prefix to select Skyrim VR's top New Game entry;
+3. compiles a small cached Win32 scan-code helper inside the active Proton
+   prefix; it sends `End`, then `Enter` when no `.ess` saves exist, or `End`,
+   `Down`, then `Enter` when `Continue` is present above `New Game`;
 4. publishes a bounded XRizer `trigger` command to accept Realm of Lorkhan's
    New Game confirmation;
 5. publishes XRizer `menu`, which is deliberately exposed as legacy OpenVR

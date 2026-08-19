@@ -384,6 +384,11 @@ public:
     ManagedRemoteActorOperation a_operation,
     void* a_context) noexcept;
 
+// Respawn must call the verified pre-detour implementation: the live Skyrim
+// entry point is patched by this module after installation and therefore no
+// longer has the executable prologue that was validated before hooking.
+[[nodiscard]] void* GetVerifiedMoveToImplTrampoline() noexcept;
+
 [[nodiscard]] bool Install() noexcept;
 [[nodiscard]] bool Uninstall() noexcept;
 } // namespace SkyrimTogetherVR::GameplayAdapter::ActorAuthorityHooks

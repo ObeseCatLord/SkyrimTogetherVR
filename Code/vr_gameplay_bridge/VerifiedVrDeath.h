@@ -33,9 +33,9 @@ struct RespawnTargets
     MoveTo* MoveToCell{};
 };
 
-// Respawn is available only when every raw target has exact Skyrim VR 1.4.15
-// prologue proof, so the literal desktop call order never observes a partial
-// target set.
+// Respawn is available only when each direct target has exact Skyrim VR
+// 1.4.15 prologue proof and MoveTo has the verified authority-hook trampoline,
+// so the literal desktop call order never observes a partial target set.
 [[nodiscard]] bool ResolveRespawnTargets(RespawnTargets& ar_targets) noexcept;
 
 [[nodiscard]] CommandStatus FadeScreen(

@@ -6,7 +6,10 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import tempfile
+import types
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -50,6 +53,102 @@ def ready_avatar_assignment() -> dict[str, str]:
         "assignmentBootstrapEndFailureMask": "0",
         "assignmentBootstrapAppearanceValidationFailureMask": "0",
     }
+
+
+class Win32InputTests(unittest.TestCase):
+    def test_helper_uses_regular_file_instead_of_inherited_capture_pipes(self) -> None:
+        args = types.SimpleNamespace()
+        observed = {}
+
+        def complete_helper(*command, **kwargs):
+            del command
+            observed["stdout_open"] = kwargs["stdout"].fileno() >= 0
+            observed["stdout_named"] = pathlib.Path(kwargs["stdout"].name).is_file()
+            return types.SimpleNamespace(returncode=0)
+
+        with (
+            mock.patch.object(DEV_BENCH, "compile_win32_input_helper", return_value=pathlib.Path("helper.exe")),
+            mock.patch.object(
+                DEV_BENCH,
+                "resolve_win32_input_route",
+                return_value=(pathlib.Path("wine64"), pathlib.Path("prefix")),
+            ),
+            mock.patch.object(DEV_BENCH.subprocess, "run", side_effect=complete_helper) as run,
+        ):
+            DEV_BENCH.select_new_game_with_win32_scancodes(args)
+
+        kwargs = run.call_args.kwargs
+        self.assertNotIn("capture_output", kwargs)
+        self.assertTrue(observed["stdout_open"])
+        self.assertTrue(observed["stdout_named"])
+        self.assertEqual(kwargs["stderr"], DEV_BENCH.subprocess.STDOUT)
+        self.assertEqual(kwargs["timeout"], DEV_BENCH.WIN32_INPUT_TIMEOUT)
+        self.assertEqual(
+            run.call_args.args[0][-1],
+            "--end-enter",
+        )
+
+    def test_save_roster_selects_the_row_below_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = pathlib.Path(temporary)
+            saves = prefix / DEV_BENCH.SKYRIM_VR_SAVES_RELATIVE_PATH
+            saves.mkdir(parents=True)
+            (saves / "Autosave1.ess").touch()
+
+            self.assertEqual(
+                DEV_BENCH.main_menu_new_game_input_mode(prefix),
+                "--end-down-enter",
+            )
+
+    def test_saved_prefix_passes_down_row_mode_to_helper(self) -> None:
+        args = types.SimpleNamespace()
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = pathlib.Path(temporary)
+            saves = prefix / DEV_BENCH.SKYRIM_VR_SAVES_RELATIVE_PATH
+            saves.mkdir(parents=True)
+            (saves / "ManualSave.ess").touch()
+
+            with (
+                mock.patch.object(
+                    DEV_BENCH,
+                    "compile_win32_input_helper",
+                    return_value=pathlib.Path("helper.exe"),
+                ),
+                mock.patch.object(
+                    DEV_BENCH,
+                    "resolve_win32_input_route",
+                    return_value=(pathlib.Path("wine64"), prefix),
+                ),
+                mock.patch.object(
+                    DEV_BENCH.subprocess,
+                    "run",
+                    return_value=types.SimpleNamespace(returncode=0),
+                ) as run,
+            ):
+                DEV_BENCH.select_new_game_with_win32_scancodes(args)
+
+        self.assertEqual(run.call_args.args[0][-1], "--end-down-enter")
+
+    def test_helper_failure_retains_bounded_file_diagnostics(self) -> None:
+        args = types.SimpleNamespace()
+
+        def fail_helper(*command, **kwargs):
+            del command
+            kwargs["stdout"].write("input helper failed")
+            kwargs["stdout"].flush()
+            return types.SimpleNamespace(returncode=7)
+
+        with (
+            mock.patch.object(DEV_BENCH, "compile_win32_input_helper", return_value=pathlib.Path("helper.exe")),
+            mock.patch.object(
+                DEV_BENCH,
+                "resolve_win32_input_route",
+                return_value=(pathlib.Path("wine64"), pathlib.Path("prefix")),
+            ),
+            mock.patch.object(DEV_BENCH.subprocess, "run", side_effect=fail_helper),
+        ):
+            with self.assertRaisesRegex(DEV_BENCH.AutomationError, "input helper failed"):
+                DEV_BENCH.select_new_game_with_win32_scancodes(args)
 
 
 class AvatarAssignmentReadyTests(unittest.TestCase):

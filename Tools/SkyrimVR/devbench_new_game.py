@@ -19,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -31,6 +32,7 @@ import vr_handoff
 STEAM_APP_ID = "611670"
 WIN32_INPUT_HELPER_NAME = "win32_scancode_input.cpp"
 WIN32_INPUT_CACHE_ENTRIES = 4
+WIN32_INPUT_TIMEOUT = 15.0
 
 XRIZER_INPUT_COMMANDS = frozenset({"menu", "trigger"})
 XRIZER_INPUT_CONSUME_TIMEOUT = 5.0
@@ -41,6 +43,9 @@ ASSIGNMENT_STABILITY_WINDOW = (
 )
 GAMEPLAY_BRIDGE_LOG_RELATIVE_PATH = pathlib.Path(
     "drive_c/users/steamuser/Documents/My Games/Skyrim VR/SKSE/SkyrimTogetherVRGameplayBridge.log"
+)
+SKYRIM_VR_SAVES_RELATIVE_PATH = pathlib.Path(
+    "drive_c/users/steamuser/Documents/My Games/Skyrim VR/Saves"
 )
 GAMEPLAY_BRIDGE_STARTUP_MARKER = "validated loader runtime="
 LAUNCH_NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -325,21 +330,59 @@ def compile_win32_input_helper() -> pathlib.Path:
     return target
 
 
+def main_menu_new_game_input_mode(wine_prefix: pathlib.Path) -> str:
+    """Choose the scan-code sequence from the active prefix's save roster."""
+    saves_directory = wine_prefix / SKYRIM_VR_SAVES_RELATIVE_PATH
+    try:
+        has_saves = any(
+            path.is_file() and path.suffix.casefold() == ".ess"
+            for path in saves_directory.iterdir()
+        )
+    except FileNotFoundError:
+        has_saves = False
+    except OSError as exc:
+        raise AutomationError(f"could not inspect Skyrim VR saves at {saves_directory}: {exc}") from exc
+    return "--end-down-enter" if has_saves else "--end-enter"
+
+
 def select_new_game_with_win32_scancodes(args: argparse.Namespace) -> None:
     helper = compile_win32_input_helper()
     wine64, prefix = resolve_win32_input_route(args)
+    input_mode = main_menu_new_game_input_mode(prefix)
     env = os.environ.copy()
     env["WINEPREFIX"] = str(prefix)
-    result = subprocess.run(
-        [str(wine64), str(helper), "--end-enter"],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise AutomationError(f"Win32 scan-code Main Menu input failed: {detail}")
+    # Wine descendants can inherit stdout/stderr after the helper exits. A
+    # captured pipe therefore waits forever for EOF even though the helper is
+    # already a zombie. A regular temporary file preserves diagnostics without
+    # coupling completion to descendant descriptor lifetime.
+    # Proton's wine64 crashes when a PE helper inherits Linux O_TMPFILE as its
+    # output descriptor. Keep this path-backed for Wine compatibility; the
+    # context still removes it immediately after the bounded invocation.
+    with tempfile.NamedTemporaryFile(
+        mode="w+",
+        encoding="utf-8",
+        errors="replace",
+        prefix="stvr-win32-input-",
+        suffix=".log",
+    ) as output:
+        try:
+            result = subprocess.run(
+                [str(wine64), str(helper), input_mode],
+                env=env,
+                text=True,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=WIN32_INPUT_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AutomationError(
+                f"Win32 scan-code Main Menu input timed out after {WIN32_INPUT_TIMEOUT:.0f}s"
+            ) from exc
+        if result.returncode != 0:
+            output.seek(0)
+            detail = output.read()[-4000:].strip() or f"exit status {result.returncode}"
+            raise AutomationError(f"Win32 scan-code Main Menu input failed: {detail}")
 
 
 def command_file_exists(path: pathlib.Path) -> bool:
@@ -1243,9 +1286,10 @@ def main() -> int:
         )
     else:
         if "RaceSex Menu" not in open_menus:
-            # Skyrim VR's Scaleform main-menu entries are indexed bottom-to-top:
-            # End selects the top New entry and Enter activates it. This route
-            # stays inside the game's Wine input stack, avoiding host injectors.
+            # End normalizes Skyrim VR's Main Menu to its top visible entry.
+            # The helper uses the active prefix's save roster: its saved-game
+            # route moves one row from Continue to New Game; the clean route
+            # activates top-row New Game. Both stay inside Wine's input stack.
             select_new_game_with_win32_scancodes(args)
             # Skyrim VR's modded-new-game confirmation is not a
             # MessageBoxMenu, so gate bounded trigger retries on observable

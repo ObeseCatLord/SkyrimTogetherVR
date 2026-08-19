@@ -7,6 +7,7 @@
 namespace {
 
 constexpr WORD kEndScanCode = 0x4F;
+constexpr WORD kDownScanCode = 0x50;
 constexpr WORD kEnterScanCode = 0x1C;
 constexpr DWORD kKeyCadenceMilliseconds = 700;
 constexpr wchar_t kSkyrimVrWindowTitle[] = L"Skyrim VR";
@@ -217,7 +218,7 @@ bool TapScanCode(HWND target, WORD scanCode, bool extended) {
 }
 
 void PrintUsage(const char* program) {
-    std::fprintf(stderr, "Usage: %s --end-enter | --check\n", program);
+    std::fprintf(stderr, "Usage: %s --end-enter | --end-down-enter | --check\n", program);
 }
 
 }  // namespace
@@ -231,7 +232,8 @@ int main(int argc, char* argv[]) {
         std::puts("win32_scancode_input: ready (no input sent)");
         return 0;
     }
-    if (std::strcmp(argv[1], "--end-enter") != 0) {
+    const bool continuePresent = std::strcmp(argv[1], "--end-down-enter") == 0;
+    if (!continuePresent && std::strcmp(argv[1], "--end-enter") != 0) {
         PrintUsage(argv[0]);
         return 2;
     }
@@ -242,9 +244,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Skyrim VR's Main Menu is indexed bottom-to-top: End selects New and
-    // Enter activates it. End is an extended scan code; Enter is not.
+    // End normalizes to the top visible Main Menu entry. With saves present,
+    // that is Continue; Down moves to the adjacent New Game row. Without
+    // saves, the top entry is already New Game. End and Down are extended scan
+    // codes; Enter is not.
     return TapScanCode(target, kEndScanCode, true) &&
+            (!continuePresent || TapScanCode(target, kDownScanCode, true)) &&
             TapScanCode(target, kEnterScanCode, false)
         ? 0
         : 1;
