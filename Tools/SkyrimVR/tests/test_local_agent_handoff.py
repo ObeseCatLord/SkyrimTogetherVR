@@ -251,7 +251,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("Start-ScheduledTask -TaskName $taskName", script)
         self.assertIn("run_winboat_powershell()", script)
         self.assertIn('"$winboat_scp" to-guest "$local_script" "$guest_script"', script)
-        self.assertIn('output=$("$winboat_powershell" "& \'$guest_script\'")', script)
+        self.assertIn("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force", script)
         self.assertNotIn('-NonInteractive -Command -', script)
         self.assertIn('task_preflight_output=$(run_winboat_powershell "$task_preflight_payload")', script)
 
@@ -260,7 +260,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
 
         self.assertIn("staged_verify_file=$(mktemp", script)
         self.assertIn('"$winboat_scp" to-guest "$staged_verify_file"', script)
-        self.assertIn("staged_result=$(\"$winboat_powershell\" \"& '$guest_verify_script'\")", script)
+        self.assertIn("& '$guest_verify_script'", script)
         self.assertNotIn('staged_result=$("$winboat_powershell" "$staged_verify")', script)
 
     def test_winboat_gameplay_build_polls_reusable_jobs_without_cleaning_active_work(self) -> None:

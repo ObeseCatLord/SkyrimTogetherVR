@@ -146,7 +146,8 @@ run_winboat_powershell() {
     guest_script="C:/Users/${winboat_windows_user}/AppData/Local/Temp/$(basename "$local_script")"
     printf '%s\n' "$1" >"$local_script"
     "$winboat_scp" to-guest "$local_script" "$guest_script"
-    output=$("$winboat_powershell" "& '$guest_script'") || status=$?
+    output=$("$winboat_powershell" \
+        "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; & '$guest_script'") || status=$?
     rm -f -- "$local_script"
     "$winboat_powershell" "Remove-Item -LiteralPath '$guest_script' -Force -ErrorAction SilentlyContinue" \
         >/dev/null || true

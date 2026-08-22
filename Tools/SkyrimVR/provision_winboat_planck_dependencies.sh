@@ -197,7 +197,8 @@ if [[ $guest_sksevr_state == MISSING ]]; then
     printf '%s\n' "$staged_verify" >"$staged_verify_file"
     "$winboat_scp" to-guest "$staged_verify_file" "${guest_verify_script//\\//}"
     staged_status=0
-    staged_result=$("$winboat_powershell" "& '$guest_verify_script'") || staged_status=$?
+    staged_result=$("$winboat_powershell" \
+        "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; & '$guest_verify_script'") || staged_status=$?
     rm -f -- "$staged_verify_file"
     "$winboat_powershell" "Remove-Item -LiteralPath '$guest_verify_script' -Force -ErrorAction SilentlyContinue" >/dev/null || true
     if ((staged_status != 0)); then
