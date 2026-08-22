@@ -217,6 +217,18 @@ modify the tracked Dockerfile, start a container, or stop the running server.
 Use `Docs/SkyrimVR/server-deployment.md` for the one-container deployment and
 verification procedure.
 
+Build and deploy the committed source to the Foundry ARM64 test server in one
+command:
+
+```bash
+Tools/SkyrimVR/server/deploy_foundry_server.sh
+```
+
+The deployer requires a clean tree and initialized submodules, incrementally
+syncs source over SSH, builds natively on Foundry, preserves the persistent
+server mounts, replaces only `skyrim-together-vr`, verifies UDP 26099 and zero
+restarts, rolls back on startup failure, and removes its temporary source tree.
+
 For a fast clean MSVC check of only the CommonLib gameplay bridge after a
 bridge-local compile fix, push the exact commit and run:
 

@@ -15,14 +15,20 @@ validate_provenance() {
     fi
 }
 
-if [[ -n $(git -C "$repo_root" status --porcelain=v1 --untracked-files=all) ]]; then
-    echo "Refusing to build a server image from a dirty source tree." >&2
-    exit 2
-fi
+if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [[ -n $(git -C "$repo_root" status --porcelain=v1 --untracked-files=all) ]]; then
+        echo "Refusing to build a server image from a dirty source tree." >&2
+        exit 2
+    fi
 
-branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
-network_version=$(git -C "$repo_root" describe --tags)
-source_revision=$(git -C "$repo_root" rev-parse --verify HEAD^{commit})
+    branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
+    network_version=$(git -C "$repo_root" describe --tags)
+    source_revision=$(git -C "$repo_root" rev-parse --verify HEAD^{commit})
+else
+    branch=${STVR_BUILD_BRANCH:-}
+    network_version=${STVR_BUILD_COMMIT:-}
+    source_revision=${STVR_SOURCE_REVISION:-}
+fi
 validate_provenance "branch" "$branch"
 validate_provenance "network version" "$network_version"
 if ((${#network_version} > 128)); then
