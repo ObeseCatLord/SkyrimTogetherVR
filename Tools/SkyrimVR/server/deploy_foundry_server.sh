@@ -197,7 +197,7 @@ replaced=true
 for _ in {1..15}; do
     if [[ $(docker inspect "$container" --format '{{.State.Running}} {{.RestartCount}}') == "true 0" ]] && \
        ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)26099$' && \
-       docker logs "$container" 2>&1 | grep -Fq "Server $network_version started on port 26099"; then
+       docker logs "$container" 2>&1 | grep -F "Server $network_version started on port 26099" >/dev/null; then
         break
     fi
     sleep 1
@@ -205,7 +205,7 @@ done
 
 [[ $(docker inspect "$container" --format '{{.State.Running}} {{.RestartCount}}') == "true 0" ]]
 ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)26099$'
-docker logs "$container" 2>&1 | grep -Fq "Server $network_version started on port 26099"
+docker logs "$container" 2>&1 | grep -F "Server $network_version started on port 26099" >/dev/null
 [[ $(docker ps --filter "name=^/${container}$" --format '{{.Names}}' | wc -l) -eq 1 ]]
 
 trap - ERR
