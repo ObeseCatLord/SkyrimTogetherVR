@@ -236,7 +236,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
         script = WINBOAT_BUILD.read_text(encoding="utf-8")
 
         self.assertIn("job_identity=${STVR_WINBOAT_JOB_ID:-$commit}", script)
-        self.assertIn("--ignore-submodules=dirty", script)
+        self.assertIn("--ignore-submodules=all", script)
         self.assertIn("winboat_task_name=\"STVR-SkyrimTogetherVR-Gameplay-", script)
         self.assertIn("guest_state=\"${guest_job_root}/state.txt\"", script)
         self.assertIn("guest_exit=\"${guest_job_root}/exit.txt\"", script)

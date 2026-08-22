@@ -112,8 +112,9 @@ trap cleanup_runtime EXIT
 
 # The Linux submodule worktree is not transferred to WinBoat; the guest checks
 # out the committed gitlink independently. Preserve local mod-development dirt
-# while still rejecting every superproject, gitlink, and untracked change.
-if [[ -n $(git status --porcelain=v1 --untracked-files=all --ignore-submodules=dirty) ]]; then
+# while still rejecting every superproject and untracked change. The committed
+# gitlink itself is resolved and checked in the fresh WinBoat worktree.
+if [[ -n $(git status --porcelain=v1 --untracked-files=all --ignore-submodules=all) ]]; then
     echo "Refusing WinBoat build from a dirty Linux worktree." >&2
     exit 2
 fi
