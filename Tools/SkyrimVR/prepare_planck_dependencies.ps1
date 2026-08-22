@@ -42,7 +42,7 @@ function Assert-ArchiveHash([string]$Path, [string]$ExpectedHash, [string]$Label
 
     $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $ExpectedHash) {
-        throw "$Label archive SHA256 mismatch. Expected $ExpectedHash, got $actualHash: $Path"
+        throw "$Label archive SHA256 mismatch. Expected ${ExpectedHash}, got ${actualHash}: ${Path}"
     }
 }
 
