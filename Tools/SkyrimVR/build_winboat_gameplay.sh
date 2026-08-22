@@ -128,6 +128,7 @@ if ! git merge-base --is-ancestor "$commit" FETCH_HEAD; then
 fi
 
 winboat_powershell=${WINBOAT_POWERSHELL:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-powershell}
+winboat_ssh=${WINBOAT_SSH:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-ssh}
 winboat_scp=${WINBOAT_SCP:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-scp}
 if [[ ! -x $winboat_powershell ]]; then
     echo "WinBoat PowerShell helper is not executable: $winboat_powershell" >&2
@@ -137,6 +138,17 @@ if [[ ! -x $winboat_scp ]]; then
     echo "WinBoat SCP helper is not executable: $winboat_scp" >&2
     exit 2
 fi
+if [[ ! -x $winboat_ssh ]]; then
+    echo "WinBoat SSH helper is not executable: $winboat_ssh" >&2
+    exit 2
+fi
+
+run_winboat_powershell() {
+    # PowerShell 5.1 reads the script from stdin, avoiding the Windows remote
+    # shell's encoded-command length ceiling for task lifecycle payloads.
+    printf '%s\n' "$1" | "$winboat_ssh" powershell.exe \
+        -NoLogo -NoProfile -NonInteractive -Command -
+}
 
 guest_havok_archive=""
 guest_planck_dependency_root=""
@@ -317,7 +329,7 @@ task_preflight_payload=${task_preflight_payload//__WINBOAT_REPO__/$winboat_repo}
 task_preflight_payload=${task_preflight_payload//__WINBOAT_BUILD__/$winboat_build}
 task_preflight_payload=${task_preflight_payload//__WINBOAT_RESULT__/$winboat_result}
 
-task_preflight_output=$("$winboat_powershell" "$task_preflight_payload")
+task_preflight_output=$(run_winboat_powershell "$task_preflight_payload")
 job_status=$(sed -n 's/^STVR_JOB_STATUS=//p' <<<"$task_preflight_output" | tail -n 1)
 if [[ -z $job_status ]]; then
     echo "WinBoat job preflight did not report a scheduled-task state." >&2
@@ -434,7 +446,7 @@ guest_maintenance_payload=${guest_maintenance_payload//__TASK_NAME__/$winboat_ta
 guest_maintenance_payload=${guest_maintenance_payload//__WINDOWS_USER__/$winboat_windows_user}
 guest_maintenance_payload=${guest_maintenance_payload//__WINBOAT_REPO__/$winboat_repo}
 guest_maintenance_payload=${guest_maintenance_payload//__GUEST_MUTEX_NAME__/$guest_mutex_name}
-guest_maintenance_output=$("$winboat_powershell" "$guest_maintenance_payload")
+guest_maintenance_output=$(run_winboat_powershell "$guest_maintenance_payload")
 printf '%s\n' "$guest_maintenance_output"
 guest_cleanup_status=$(sed -n 's/^STVR_GUEST_JOB_CLEANUP=//p' <<<"$guest_maintenance_output" | tail -n 1)
 guest_active_task=$(sed -n 's/^STVR_GUEST_ACTIVE_TASK=//p' <<<"$guest_maintenance_output" | tail -n 1)
@@ -639,7 +651,7 @@ POWERSHELL
     task_start_payload=${task_start_payload//__JOB_STATUS__/$job_status}
     task_start_payload=${task_start_payload//__WINBOAT_BUILD__/$winboat_build}
     task_start_payload=${task_start_payload//__WINBOAT_RESULT__/$winboat_result}
-    "$winboat_powershell" "$task_start_payload"
+    run_winboat_powershell "$task_start_payload"
 fi
 
 read -r -d '' task_status_payload <<'POWERSHELL' || true
@@ -729,7 +741,7 @@ task_status_payload=${task_status_payload//__WINBOAT_RESULT__/$winboat_result}
 
 poll_started=$SECONDS
 while :; do
-    task_status_output=$("$winboat_powershell" "$task_status_payload")
+    task_status_output=$(run_winboat_powershell "$task_status_payload")
     job_status=$(sed -n 's/^STVR_JOB_STATUS=//p' <<<"$task_status_output" | tail -n 1)
     case $job_status in
         COMPLETE)

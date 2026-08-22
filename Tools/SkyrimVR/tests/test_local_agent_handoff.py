@@ -249,7 +249,9 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("Get-ScheduledTask -TaskName $taskName", script)
         self.assertIn("Register-ScheduledTask -TaskName $taskName", script)
         self.assertIn("Start-ScheduledTask -TaskName $taskName", script)
-        self.assertNotIn('"$winboat_ssh" powershell.exe', script)
+        self.assertIn("run_winboat_powershell()", script)
+        self.assertIn('-NoLogo -NoProfile -NonInteractive -Command -', script)
+        self.assertIn('task_preflight_output=$(run_winboat_powershell "$task_preflight_payload")', script)
 
     def test_planck_provisioner_uses_a_file_for_long_staged_verification(self) -> None:
         script = (TOOLS / "provision_winboat_planck_dependencies.sh").read_text(encoding="utf-8")
