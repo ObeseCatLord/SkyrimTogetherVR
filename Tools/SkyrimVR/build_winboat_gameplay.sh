@@ -128,7 +128,6 @@ if ! git merge-base --is-ancestor "$commit" FETCH_HEAD; then
 fi
 
 winboat_powershell=${WINBOAT_POWERSHELL:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-powershell}
-winboat_ssh=${WINBOAT_SSH:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-ssh}
 winboat_scp=${WINBOAT_SCP:-$HOME/.codex/skills/winboat-ssh/scripts/winboat-scp}
 if [[ ! -x $winboat_powershell ]]; then
     echo "WinBoat PowerShell helper is not executable: $winboat_powershell" >&2
@@ -138,16 +137,21 @@ if [[ ! -x $winboat_scp ]]; then
     echo "WinBoat SCP helper is not executable: $winboat_scp" >&2
     exit 2
 fi
-if [[ ! -x $winboat_ssh ]]; then
-    echo "WinBoat SSH helper is not executable: $winboat_ssh" >&2
-    exit 2
-fi
-
 run_winboat_powershell() {
-    # PowerShell 5.1 reads the script from stdin, avoiding the Windows remote
-    # shell's encoded-command length ceiling for task lifecycle payloads.
-    printf '%s\n' "$1" | "$winboat_ssh" powershell.exe \
-        -NoLogo -NoProfile -NonInteractive -Command -
+    # Windows PowerShell 5.1 cannot reliably parse multiline function blocks
+    # from OpenSSH stdin, and encoded commands hit cmd.exe's length ceiling.
+    # Transfer an ephemeral script and invoke it with one short expression.
+    local local_script guest_script output status=0
+    local_script=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-task-XXXXXX.ps1")
+    guest_script="C:/Users/${winboat_windows_user}/AppData/Local/Temp/$(basename "$local_script")"
+    printf '%s\n' "$1" >"$local_script"
+    "$winboat_scp" to-guest "$local_script" "$guest_script"
+    output=$("$winboat_powershell" "& '$guest_script'") || status=$?
+    rm -f -- "$local_script"
+    "$winboat_powershell" "Remove-Item -LiteralPath '$guest_script' -Force -ErrorAction SilentlyContinue" \
+        >/dev/null || true
+    printf '%s\n' "$output"
+    return "$status"
 }
 
 guest_havok_archive=""
