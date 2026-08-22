@@ -1,6 +1,7 @@
 #include "LocalGameplayCapture.h"
 
 #include "ActorAuthorityHooks.h"
+#include "AvatarManager.h"
 #include "BridgeEndpoint.h"
 #include "AnimationGraphDescriptors.h"
 #include "DropHooks.h"

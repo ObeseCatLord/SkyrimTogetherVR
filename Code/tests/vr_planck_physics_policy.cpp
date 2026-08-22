@@ -5,9 +5,14 @@
 #include <limits>
 #include <type_traits>
 
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Allocator.hpp>
+#include <TiltedCore/Buffer.hpp>
+#include <TiltedCore/Serialization.hpp>
+#include <glm/glm.hpp>
+
 #include <Structs/GameplayCapabilities.h>
 #include <Structs/VRPlanckPhysicsEvent.h>
-#include <TiltedCore/Buffer.hpp>
 #include <vr_common/VRPlanckPhysicsBridge.h>
 
 namespace

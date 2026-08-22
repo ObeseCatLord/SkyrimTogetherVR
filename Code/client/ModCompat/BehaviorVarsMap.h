@@ -18,9 +18,9 @@ private:
     void operator=(BehaviorVarsMap const&) = delete;
 
 public:
-    const uint32_t find(const uint64_t acBehaviorVarKey, const TiltedPhoques::String acName);
+    const uint32_t find(const uint64_t acBehaviorVarKey, const TiltedPhoques::String acName) const;
 
-    const TiltedPhoques::String find(const uint64_t acBehaviorVarKey, const uint32_t acValue);
+    const TiltedPhoques::String find(const uint64_t acBehaviorVarKey, const uint32_t acValue) const;
     void Hashes(TiltedPhoques::Vector<uint64_t>& aHashes) const
     {
         aHashes.clear();

@@ -1,5 +1,11 @@
 #include <catch2/catch.hpp>
 
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Allocator.hpp>
+#include <TiltedCore/Buffer.hpp>
+#include <TiltedCore/Serialization.hpp>
+#include <glm/glm.hpp>
+
 #include <server/Services/RevisionedRecoveryPolicy.h>
 #include <Services/VRActorReplicationService.h>
 #include <Structs/GameplayCapabilities.h>

@@ -180,7 +180,7 @@ REQUIRED_VR_EFFECT_SOURCE_TOKENS = (
 REQUIRED_VR_EFFECT_PEX_TOKENS = (
     "SkyrimTogetherVRConnectionSpellEffect",
     "OnEffectStart",
-    "ToggleConfigured",
+    "OpenControlMenu",
 )
 
 REQUIRED_VR_MENU_ESP_TOKENS = (

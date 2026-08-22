@@ -4,7 +4,7 @@
 #include "../higgs_bridge/HiggsNodeName.h"
 #include "../vr_common/VRGameplayBridge.h"
 #include "../vr_common/VRPlanckPhysicsBridge.h"
-#include "../vr_gameplay_bridge/ActorActionHooks.h"
+#include "../vr_gameplay_bridge/ActorActionReplayPolicy.h"
 #include "../vr_gameplay_bridge/AnimationGraphDescriptors.h"
 #include "../vr_gameplay_bridge/QuestDialogueManager.h"
 #include "../vr_gameplay_bridge/QuestNativeAccess.h"
@@ -291,7 +291,7 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
                     SkyrimTogetherVR::AnimationGraphProtocol::kValuesPerChunk);
     REQUIRE(kMaximumInventoryTransactionRecords == 1538);
     REQUIRE(kMaximumInventoryTransactionRecords <= kDefaultCommandRingCapacity);
-    REQUIRE(kMaximumNpcSnapshotRecords == 928);
+    REQUIRE(kMaximumNpcSnapshotRecords == 930);
     REQUIRE(kMaximumNpcSnapshotRecords ==
             2 + kSkyrimActorValueCount + kNpcSnapshotGraphChunkCount + kMaximumNpcSnapshotItems * 2 +
                 kMaximumInventoryTransactionEffects + kMaximumNpcSnapshotFactions +
@@ -324,11 +324,11 @@ TEST_CASE("PLANCK local physics event ABI preserves the hit prefix and appends r
     REQUIRE(offsetof(LocalEvent, TtlSeconds) == 0xB0);
 
     LocalEvent event{};
-    event.Kind = EventKind::GripBegin;
+    event.Kind = SkyrimTogetherVR::PlanckBridge::EventKind::GripBegin;
     event.GripId = 7;
     event.Rotation.W = 1.0F;
     event.TtlSeconds = 0.2F;
-    REQUIRE(event.Kind == EventKind::GripBegin);
+    REQUIRE(event.Kind == SkyrimTogetherVR::PlanckBridge::EventKind::GripBegin);
     REQUIRE(event.GripId != 0);
     REQUIRE(event.Rotation.W == 1.0F);
 }
@@ -371,8 +371,8 @@ TEST_CASE("HIGGS physical mutations have one callback producer", "[skyrim-vr][hi
     REQUIRE(filter.find("kPulled") != std::string::npos);
     REQUIRE(filter.find("kGrabbed") != std::string::npos);
     REQUIRE(filter.find("kDropped") != std::string::npos);
-    REQUIRE(filter.find("kStashed") == std::string::npos);
-    REQUIRE(filter.find("kConsumed") == std::string::npos);
+    REQUIRE(filter.find("kStashed") != std::string::npos);
+    REQUIRE(filter.find("kConsumed") != std::string::npos);
 }
 
 TEST_CASE("HIGGS node names remain safe for the line-oriented handoff", "[skyrim-vr][higgs][abi]")
@@ -864,7 +864,7 @@ TEST_CASE("exact remote actor action transaction rolls back rejected graph and F
 
 TEST_CASE("server movement commit preserves animation descriptor identity", "[skyrim-vr][animation][source-audit]")
 {
-    const auto server = ReadTextFile(RepositoryRoot() / "Code/server/Services/CharacterService.cpp");
+    const auto server = ReadRepositorySource("Code/server/Services/CharacterService.cpp");
     const auto start = server.find("void SwapAnimationVariables");
     const auto end = server.find("struct PendingActorData", start);
     REQUIRE(start != std::string::npos);
@@ -896,27 +896,32 @@ TEST_CASE("animation graph assembly commits only complete current snapshots", "[
     booleanValues[0] = 1u << 3;
     std::uint32_t floatValues0[Animation::kValuesPerChunk]{};
     std::uint32_t floatValues1[Animation::kValuesPerChunk]{};
+    std::uint32_t floatValuesTail[Animation::kValuesPerChunk]{};
     std::uint32_t integerValues0[Animation::kValuesPerChunk]{};
     std::uint32_t integerValues1[Animation::kValuesPerChunk]{};
+    std::uint32_t integerValuesTail[Animation::kValuesPerChunk]{};
     for (std::size_t index = 0; index < Animation::kValuesPerChunk; ++index)
     {
         floatValues0[index] = std::bit_cast<std::uint32_t>(static_cast<float>(index));
         integerValues0[index] = static_cast<std::uint32_t>(index + 10);
         integerValues1[index] = static_cast<std::uint32_t>(index + 20);
     }
+    floatValuesTail[0] = floatValues0[0];
+    integerValuesTail[0] = integerValues0[0];
+    integerValuesTail[1] = integerValues0[1];
     REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::BooleanBits, 0, 60, 60, 1.0f, booleanValues) ==
             Animation::ChunkAcceptResult::Accepted);
     REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 0, 6, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Accepted);
     REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 6, 6, 13, 1.0f, floatValues1) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 12, 1, 13, 1.0f, floatValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 12, 1, 13, 1.0f, floatValuesTail) ==
             Animation::ChunkAcceptResult::Accepted);
     REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 0, 6, 14, 1.0f, integerValues0) ==
             Animation::ChunkAcceptResult::Accepted);
     REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 6, 6, 14, 1.0f, integerValues1) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 12, 2, 14, 1.0f, integerValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 12, 2, 14, 1.0f, integerValuesTail) ==
             Animation::ChunkAcceptResult::Complete);
     REQUIRE(snapshot.IsComplete());
     REQUIRE(snapshot.Booleans[3]);

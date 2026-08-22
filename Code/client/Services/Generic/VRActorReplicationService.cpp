@@ -66,6 +66,7 @@
 
 namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
 namespace ActorReplicationRecovery = SkyrimTogetherVR::ActorReplicationRecovery;
+namespace RevisionedCanonicalRecoveryPolicy = SkyrimTogether::Protocol::RevisionedCanonicalRecoveryPolicy;
 
 namespace
 {

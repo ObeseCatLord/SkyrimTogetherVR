@@ -1,5 +1,7 @@
 #include <catch2/catch.hpp>
 
+#include <TiltedCore/Meta.hpp>
+
 #include <Services/VRDeathRespawnService.h>
 
 namespace

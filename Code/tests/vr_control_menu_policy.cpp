@@ -96,7 +96,8 @@ TEST_CASE("VR control menu rejects stale lifecycle snapshots and invalid invitat
     REQUIRE(IsCompatibleForAction(visible, renamedPlayer));
     REQUIRE_FALSE(IsValidAction(renamedPlayer, Action::AdminTeleportToPlayer, 7, "Jenassa"));
 
-    const auto chatEnvelope = PapyrusBindingPolicy::BuildOnlineCommand("chat", visible.Identity, "message=delayed\n");
+    const auto chatEnvelope = SkyrimTogetherVR::GameplayAdapter::PapyrusBindingPolicy::BuildOnlineCommand(
+        "chat", visible.Identity, "message=delayed\n");
     REQUIRE(chatEnvelope.find("sessionId=77\n") != std::string::npos);
     REQUIRE_FALSE(IsCompatibleForAction(visible, reconnectedWithReusedPlayerId));
     REQUIRE(IsCompatibleForAction(visible, visible));

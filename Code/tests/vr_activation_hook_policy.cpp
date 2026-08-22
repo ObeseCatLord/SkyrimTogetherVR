@@ -1,7 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include <vr_gameplay_bridge/ActivationHooks.h>
-#include <vr_gameplay_bridge/ActorWorldManager.h>
+#include <vr_gameplay_bridge/OpenStatePolicy.h>
 
 namespace
 {

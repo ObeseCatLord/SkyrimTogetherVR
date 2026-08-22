@@ -268,7 +268,7 @@ inline void ClearForDrop(Transaction& arTransaction) noexcept
     const auto inverseRotate = Transpose(acParentWorld.Rotate);
     const auto inverseScale = 1.0F / acParentWorld.Scale;
     const auto inverseTranslate = Multiply(
-        inverseRotate, {-acParentWorld.Translate.X, -acParentWorld.Translate.Y, -acParentWorld.Translate.Z});
+        inverseRotate, Vector3{-acParentWorld.Translate.X, -acParentWorld.Translate.Y, -acParentWorld.Translate.Z});
     const auto rotatedWorld = Multiply(inverseRotate, acWorld.Translate);
     local.Translate = {rotatedWorld.X * inverseScale + inverseTranslate.X * inverseScale,
                        rotatedWorld.Y * inverseScale + inverseTranslate.Y * inverseScale,

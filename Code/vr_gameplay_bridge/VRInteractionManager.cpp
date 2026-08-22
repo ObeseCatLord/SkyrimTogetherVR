@@ -110,7 +110,7 @@ void ClearHiggsSpatialReplay(const RE::TESObjectREFR& ac_object) noexcept
     for (auto& replay : g_higgsSpatialReplays) {
         if ((replay.Transaction.Active || replay.BindingActive) && replay.Object.get() == std::addressof(ac_object)) {
             HiggsPolicy::ClearForDrop(replay.Transaction);
-            TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+            static_cast<void>(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
             replay = {};
         }
     }
@@ -122,7 +122,7 @@ void ClearHiggsSpatialReplaysForActor(const RE::Actor& ac_actor) noexcept
         if ((replay.Transaction.Active || replay.BindingActive) && replay.Actor.get() == std::addressof(ac_actor))
         {
             if (replay.Object)
-                TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+                static_cast<void>(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
             replay = {};
         }
     }
@@ -183,7 +183,7 @@ void ClearHiggsSpatialReplaysForActor(const RE::Actor& ac_actor) noexcept
     RE::NiPoint3 angles{};
     // False means the Euler representation is non-unique at gimbal lock; the
     // function still supplies a valid canonical angle triplet.
-    TP_UNUSED(rootWorld.rotate.ToEulerAnglesXYZ(angles));
+    static_cast<void>(rootWorld.rotate.ToEulerAnglesXYZ(angles));
     if (!std::isfinite(angles.x) || !std::isfinite(angles.y) || !std::isfinite(angles.z))
         return clear(CommandStatus::EngineRejected);
 
@@ -218,11 +218,11 @@ void ClearHiggsSpatialReplaysForActor(const RE::Actor& ac_actor) noexcept
     if (available == g_higgsSpatialReplays.end()) {
         available = g_higgsSpatialReplays.begin();
         if (available->Object)
-            TP_UNUSED(available->Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+            static_cast<void>(available->Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
     }
     *available = {};
     available->Actor = ac_actor;
-    available->Object = std::addressof(ar_object);
+    available->Object.reset(std::addressof(ar_object));
     available->ActorRoot.reset(ac_actor->Get3D());
     if (!available->ActorRoot || !AvatarManager::Get().IsManagedRemotePlayerActor(ac_actor.get()))
     {
@@ -658,7 +658,7 @@ template <class T>
     // command path.  It crosses only the bounded POD bridge, so no gameplay
     // command can accidentally turn a remote physical observation into a
     // direct RE/Havok or HIGGS hand operation.
-    TP_UNUSED(a_command);
+    static_cast<void>(a_command);
     return CommandStatus::Unsupported;
 }
 } // namespace
@@ -760,7 +760,7 @@ void VRInteractionManager::Reset() noexcept
     g_pvpEnabledSnapshot.store(false, std::memory_order_release);
     for (auto& replay : g_higgsSpatialReplays) {
         if ((replay.Transaction.Active || replay.BindingActive) && replay.Object)
-            TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+            static_cast<void>(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
     }
     g_higgsSpatialReplays = {};
     try {

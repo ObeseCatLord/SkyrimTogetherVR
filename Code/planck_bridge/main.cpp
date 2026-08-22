@@ -23,7 +23,7 @@ static constexpr std::uint32_t kPluginInfoVersion = 1;
 static constexpr std::uint32_t kInterfaceMessaging = 5;
 static constexpr std::uint32_t kSkseMessagePostPostLoad = 1;
 static constexpr std::uint32_t kPlanckMessageGetInterface = 0x92F38745;
-static constexpr std::uint32_t kPlanckInterfaceRevision = 2;
+static constexpr std::uint32_t kPlanckPluginInterfaceRevision = 2;
 static constexpr std::uint64_t kHandoffWriteIntervalMs = 250;
 // PLANCK 0.8.0 reports V00.08.00.00 as 80000. Interface revision, rather than
 // this diagnostic build number, is the public compatibility contract.
@@ -417,7 +417,7 @@ void WriteBridgeFile(std::uint32_t aSequence, bool aLoaded) noexcept
         file << "planck.interfaceRequestAttempted=" << (g_requestAttempted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
         file << "planck.interfaceRequestCount=" << g_requestCount.load(std::memory_order_acquire) << "\n";
         file << "planck.interfaceAvailable=" << (pPlanck ? "1" : "0") << "\n";
-        file << "planck.interfaceRevision=" << kPlanckInterfaceRevision << "\n";
+        file << "planck.interfaceRevision=" << kPlanckPluginInterfaceRevision << "\n";
         file << "planck.features=0x" << std::hex << g_planckFeatures.load(std::memory_order_acquire) << std::dec << "\n";
         file << "planck.interface002RequiredFeatures=0x" << std::hex << SkyrimTogetherVR::PlanckBridge::kRequiredFeatures << std::dec << "\n";
         file << "planck.damageAuthority=none_remote_physics_only\n";
@@ -499,14 +499,15 @@ bool RequestPlanckInterface()
     if (!message.GetApiFunction)
         return false;
 
-    auto* const pPlanck = static_cast<PlanckPluginAPI::IPlanckInterface002*>(message.GetApiFunction(kPlanckInterfaceRevision));
+    auto* const pPlanck = static_cast<PlanckPluginAPI::IPlanckInterface002*>(
+        message.GetApiFunction(kPlanckPluginInterfaceRevision));
     if (!pPlanck)
         return false;
     PlanckPluginAPI::CapsResult capabilities{sizeof(capabilities)};
     const PlanckPluginAPI::CapsRequest request{sizeof(request), 0};
     const auto result = pPlanck->GetCapabilities(request, capabilities);
     if (result.code != PlanckPluginAPI::ResultCode::Accepted ||
-        capabilities.interfaceRevision != kPlanckInterfaceRevision ||
+        capabilities.interfaceRevision != kPlanckPluginInterfaceRevision ||
         (capabilities.featureBits & SkyrimTogetherVR::PlanckBridge::kRequiredFeatures) !=
             SkyrimTogetherVR::PlanckBridge::kRequiredFeatures)
         return false;
@@ -538,7 +539,8 @@ SkyrimTogetherVR_Planck002_GetCapabilities(SkyrimTogetherVR::PlanckBridge::Capab
     if (!apResult || apResult->Size != sizeof(Capabilities)) return Result::Rejected;
     const auto* api = g_planck.load(std::memory_order_acquire);
     if (!api) return Result::Unavailable;
-    apResult->AbiRevision = kAbiRevision; apResult->InterfaceRevision = kPlanckInterfaceRevision;
+    apResult->AbiRevision = kAbiRevision;
+    apResult->InterfaceRevision = SkyrimTogetherVR::PlanckBridge::kPlanckInterfaceRevision;
     apResult->Reserved = 0; apResult->Features = g_planckFeatures.load(std::memory_order_acquire);
     apResult->BridgeEpoch = g_bridgeEpoch.load(std::memory_order_acquire);
     return (apResult->Features & kRequiredFeatures) == kRequiredFeatures ? Result::Accepted : Result::Unavailable;

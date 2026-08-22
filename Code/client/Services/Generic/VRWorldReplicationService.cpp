@@ -1310,7 +1310,7 @@ bool VRWorldReplicationService::SendObjectResyncRequest(
             SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
         return false;
 
-    RequestObjectResync request{};
+    ::RequestObjectResync request{};
     request.ServerId = aServerId;
     request.RequestId = arPending.RequestId;
     request.KnownRevision = arPending.KnownRevision;
@@ -1337,7 +1337,7 @@ bool VRWorldReplicationService::SendQuestResyncRequest(PendingQuestResync& arPen
     if (serverInstanceNonce == 0 || connectionGeneration == 0 || lifecycleEpoch == 0)
         return false;
 
-    RequestQuestResync request{};
+    ::RequestQuestResync request{};
     request.OwnerPlayerId = arPending.OwnerPlayerId;
     request.RequestId = arPending.RequestId;
     request.KnownRevision = arPending.KnownRevision;

@@ -172,7 +172,7 @@ bool HookActivateRef(
     // invocations cannot overwrite another activation's pre-state.
     LocalGameplayCapture::PendingActivationCapture capture{};
     if (g_installed.load(std::memory_order_acquire) && a_target && a_activator) {
-        TP_UNUSED(LocalGameplayCapture::CapturePreActivation(*a_target, *a_activator, capture));
+        static_cast<void>(LocalGameplayCapture::CapturePreActivation(*a_target, *a_activator, capture));
     }
 
     const auto accepted = original(a_target, a_activator, a_arg2, a_objectToGet, a_count, a_defaultProcessingOnly);

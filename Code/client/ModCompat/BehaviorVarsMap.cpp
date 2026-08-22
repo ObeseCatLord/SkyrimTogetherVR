@@ -1,6 +1,6 @@
 #include "BehaviorVarsMap.h"
 
-const uint32_t BehaviorVarsMap::find(const uint64_t acBehaviorVarsKey, const TiltedPhoques::String acName)
+const uint32_t BehaviorVarsMap::find(const uint64_t acBehaviorVarsKey, const TiltedPhoques::String acName) const
 {
     auto map = m_map.find(acBehaviorVarsKey);
 
@@ -15,7 +15,7 @@ const uint32_t BehaviorVarsMap::find(const uint64_t acBehaviorVarsKey, const Til
     return UINT32_MAX;
 }
 
-const TiltedPhoques::String BehaviorVarsMap::find(const uint64_t acBehaviorVarsKey, const uint32_t acValue)
+const TiltedPhoques::String BehaviorVarsMap::find(const uint64_t acBehaviorVarsKey, const uint32_t acValue) const
 {
     const TiltedPhoques::String empty;
 

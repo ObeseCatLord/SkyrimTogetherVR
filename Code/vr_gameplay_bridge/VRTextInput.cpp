@@ -9,7 +9,7 @@
 #include <utility>
 
 #if defined(_WIN32) && !defined(TP_VR_TEXT_INPUT_TESTING)
-#    include <RE/B/BSOpenVR.h>
+#    include <RE/Skyrim.h>
 #    include <SKSE/Logger.h>
 #endif
 
