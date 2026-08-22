@@ -154,9 +154,9 @@ void VRPlanckPhysicsRelayService::Expire(const uint64_t aNow) noexcept
         auto state = m_states.find(lease->second.OwnerPlayerId);
         if (state != m_states.end())
         {
-            state->second.GripTargets.erase(lease->second.GripId);
-            if (state->second.ActiveGripCount != 0)
-                --state->second.ActiveGripCount;
+            state.value().GripTargets.erase(lease->second.GripId);
+            if (state.value().ActiveGripCount != 0)
+                --state.value().ActiveGripCount;
         }
         m_actorGrips.erase(lease);
     }
@@ -223,8 +223,8 @@ void VRPlanckPhysicsRelayService::ReleasePlayerLeases(const uint32_t aPlayerId) 
     }
     if (auto state = m_states.find(aPlayerId); state != m_states.end())
     {
-        state->second.GripTargets.clear();
-        state->second.ActiveGripCount = 0;
+        state.value().GripTargets.clear();
+        state.value().ActiveGripCount = 0;
     }
 }
 
@@ -302,7 +302,7 @@ try
         // here silently lost that valid first event after clearing stale data.
         stateIt = m_states.try_emplace(playerId).first;
     }
-    auto& state = stateIt->second;
+    auto& state = stateIt.value();
     if (state.HasProducer && state.ProducerEpoch != event.ProducerEpoch)
     {
         Reject(RejectionReason::ProducerTransition);
@@ -435,7 +435,7 @@ try
     }
     else if (leaseMutation == LeaseMutation::Update)
     {
-        auto& lease = m_actorGrips.find(event.TargetActorId)->second;
+        auto& lease = m_actorGrips.find(event.TargetActorId).value();
         lease.ExpiryTick = stagedExpiry;
         lease.ExpiryRevision = stagedRevision;
         CommitExpiryRecord(event.TargetActorId, lease);
