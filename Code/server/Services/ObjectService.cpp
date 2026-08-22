@@ -1,5 +1,6 @@
 #include <Services/ObjectService.h>
 #include <server/Services/ServerAuthorityPolicy.h>
+#include <server/Services/RevisionedRecoveryPolicy.h>
 
 #include <GameServer.h>
 #include <World.h>
@@ -15,11 +16,14 @@
 #include <Messages/AssignObjectsResponse.h>
 #include <Messages/ScriptAnimationRequest.h>
 #include <Messages/NotifyScriptAnimation.h>
+#include <Messages/NotifyObjectResync.h>
+#include <Messages/RequestObjectResync.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace
@@ -27,6 +31,7 @@ namespace
 constexpr std::int32_t kMaximumObjectItemCount = 1'000'000;
 constexpr std::int32_t kMaximumGridCoordinate = 1'000'000;
 constexpr std::uint64_t kAuthorityRejectionLogInterval = 128;
+constexpr std::size_t kMaximumObjectSnapshotRevisions = 4096;
 
 enum class ObjectInteractionRejection : std::size_t
 {
@@ -208,6 +213,37 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
     m_activateConnection = aDispatcher.sink<PacketEvent<ActivateRequest>>().connect<&ObjectService::OnActivate>(this);
     m_lockChangeConnection = aDispatcher.sink<PacketEvent<LockChangeRequest>>().connect<&ObjectService::OnLockChange>(this);
     m_scriptAnimationConnection = aDispatcher.sink<PacketEvent<ScriptAnimationRequest>>().connect<&ObjectService::OnScriptAnimationRequest>(this);
+    m_objectResyncConnection = aDispatcher.sink<PacketEvent<RequestObjectResync>>().connect<&ObjectService::OnObjectResyncRequest>(this);
+    m_objectDestroyConnection = m_world.on_destroy<ObjectComponent>().connect<&ObjectService::OnObjectDestroy>(this);
+}
+
+std::uint64_t ObjectService::NextObjectSnapshotRevision(
+    const std::uint32_t aServerId, const std::uint64_t aKnownRevision) noexcept
+{
+    if (aServerId == 0)
+        return 0;
+    try
+    {
+        auto it = m_objectSnapshotRevisions.find(aServerId);
+        if (it == m_objectSnapshotRevisions.end())
+        {
+            if (m_objectSnapshotRevisions.size() >= kMaximumObjectSnapshotRevisions)
+                return 0;
+            it = m_objectSnapshotRevisions.emplace(aServerId, 0).first;
+        }
+        if (!SkyrimTogether::RevisionedRecovery::CanIssueSnapshot(it->second, aKnownRevision))
+            return 0;
+        return ++it->second;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+void ObjectService::OnObjectDestroy(entt::registry&, const entt::entity aEntity) noexcept
+{
+    m_objectSnapshotRevisions.erase(World::ToInteger(aEntity));
 }
 
 // TODO(cosideci): the cell handling of objects need to be revamped.
@@ -289,7 +325,11 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
             objectData.Id = formIdComponent.Id;
 
             auto& objectComponent = view.get<ObjectComponent>(*iter);
+            // The first owner established canonical state; a joining sender
+            // receives it and cannot replace it with a local observation.
             objectData.CurrentLockData = objectComponent.CurrentLockData;
+            objectData.HasCurrentOpenState = objectComponent.HasCurrentOpenState;
+            objectData.CurrentOpenState = objectComponent.CurrentOpenState;
 
             auto& inventoryComponent = view.get<InventoryComponent>(*iter);
             objectData.CurrentInventory = inventoryComponent.Content;
@@ -307,6 +347,8 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
 
             auto& objectComponent = m_world.emplace<ObjectComponent>(cEntity, acMessage.pPlayer);
             objectComponent.CurrentLockData = object.CurrentLockData;
+            objectComponent.HasCurrentOpenState = object.HasCurrentOpenState;
+            objectComponent.CurrentOpenState = object.CurrentOpenState;
 
             m_world.emplace<CellIdComponent>(cEntity, object.CellId, object.WorldSpaceId, object.CurrentCoords);
             auto& inventoryComp = m_world.emplace<InventoryComponent>(cEntity);
@@ -334,13 +376,22 @@ void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) co
 {
     entt::entity target{};
     std::uint32_t activatorId{};
-    if (!ResolveAuthorizedObjectInteraction(m_world, acMessage, true, target, activatorId))
+    if (!acMessage.Packet.IsDecodedValid || !acMessage.Packet.IsValid() ||
+        !ResolveAuthorizedObjectInteraction(m_world, acMessage, true, target, activatorId))
         return;
 
     NotifyActivate notifyActivate;
     notifyActivate.Id = acMessage.Packet.Id;
     notifyActivate.ActivatorId = activatorId;
     notifyActivate.PreActivationOpenState = acMessage.Packet.PreActivationOpenState;
+    notifyActivate.HasPostActivationOpenState = acMessage.Packet.HasPostActivationOpenState;
+    notifyActivate.PostActivationOpenState = acMessage.Packet.PostActivationOpenState;
+
+    auto& objectComponent = m_world.get<ObjectComponent>(target);
+    if (acMessage.Packet.HasPostActivationOpenState) {
+        objectComponent.HasCurrentOpenState = true;
+        objectComponent.CurrentOpenState = acMessage.Packet.PostActivationOpenState;
+    }
 
     if (!GameServer::Get()->SendToPlayersInRange(notifyActivate, target, acMessage.pPlayer))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
@@ -348,6 +399,50 @@ void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) co
 catch (...)
 {
     spdlog::error("Object activation relay failed");
+}
+
+void ObjectService::OnObjectResyncRequest(const PacketEvent<RequestObjectResync>& acMessage) noexcept try
+{
+    const auto& request = acMessage.Packet;
+    if (!acMessage.pPlayer || !request.IsDecodedValid || !request.IsValid() ||
+        !SkyrimTogether::Protocol::IsVrGameplayClient(acMessage.pPlayer->GetGameplayCapabilities()) ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return;
+
+    const auto entity = static_cast<entt::entity>(request.ServerId);
+    if (!m_world.valid(entity) ||
+        !m_world.all_of<FormIdComponent, ObjectComponent, InventoryComponent, CellIdComponent>(entity))
+        return;
+    const auto& cell = m_world.get<CellIdComponent>(entity);
+    if (!acMessage.pPlayer->GetCellComponent().IsInRange(cell, false))
+        return;
+    const auto revision = NextObjectSnapshotRevision(request.ServerId, request.KnownRevision);
+    if (revision == 0)
+        return;
+
+    const auto& form = m_world.get<FormIdComponent>(entity);
+    const auto& object = m_world.get<ObjectComponent>(entity);
+    const auto& inventory = m_world.get<InventoryComponent>(entity);
+    NotifyObjectResync response{};
+    response.ServerId = request.ServerId;
+    response.RequestId = request.RequestId;
+    response.CanonicalRevision = revision;
+    response.Snapshot.ServerId = request.ServerId;
+    response.Snapshot.Id = form.Id;
+    response.Snapshot.CellId = cell.Cell;
+    response.Snapshot.WorldSpaceId = cell.WorldSpaceId;
+    response.Snapshot.CurrentCoords = cell.CenterCoords;
+    response.Snapshot.CurrentLockData = object.CurrentLockData;
+    response.Snapshot.CurrentInventory = inventory.Content;
+    response.Snapshot.HasCurrentOpenState = object.HasCurrentOpenState;
+    response.Snapshot.CurrentOpenState = object.CurrentOpenState;
+    acMessage.pPlayer->Send(response);
+}
+catch (...)
+{
+    spdlog::error("Object resynchronization rejected after an allocation or serialization failure");
 }
 
 void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) const noexcept try

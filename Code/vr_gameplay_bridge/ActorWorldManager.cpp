@@ -852,11 +852,19 @@ void ResetPostRespawnState() noexcept
         auto* openClose = object->GetObjectReference() ? object->GetObjectReference()->As<RE::BGSOpenCloseForm>() : nullptr;
         if (!openClose)
             return CommandStatus::Unsupported;
-        if (payload.ValueA != 0)
-            openClose->HandleOpen(object, nullptr);
-        else
-            openClose->HandleClose(object, nullptr);
-        return CommandStatus::Success;
+        const auto desiredOpen = payload.ValueA != 0;
+        const auto observedRaw = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(object));
+        if (observedRaw < 0 || observedRaw > OpenStatePolicy::kMaximumObservedOpenState)
+            return CommandStatus::EngineRejected;
+        const auto observed = static_cast<std::uint8_t>(observedRaw);
+        if (OpenStatePolicy::RequiresNativeSet(observed, desiredOpen))
+            RE::BGSOpenCloseForm::SetOpenState(object, desiredOpen, true);
+        const auto settledRaw = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(object));
+        if (settledRaw < 0 || settledRaw > OpenStatePolicy::kMaximumObservedOpenState)
+            return CommandStatus::EngineRejected;
+        const auto settled = static_cast<std::uint8_t>(settledRaw);
+        return OpenStatePolicy::IsStableResult(settled, desiredOpen) ? CommandStatus::Success :
+                                                                     CommandStatus::EngineRejected;
     }
     case GameplayAction::SetOwnership:
         if (payload.LocalFormIdA != 0) {

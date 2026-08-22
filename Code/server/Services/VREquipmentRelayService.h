@@ -30,6 +30,7 @@ private:
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerEquipmentRelayState> m_playerEquipmentRelayState{};
+    uint64_t m_noRoutableCharacterCount{0};
     entt::scoped_connection m_vrEquipmentUpdateConnection;
     entt::scoped_connection m_playerLeaveConnection;
 };

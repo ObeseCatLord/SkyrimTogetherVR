@@ -65,9 +65,13 @@
 #include <Messages/RequestVRProjectileEvent.h>
 #include <Messages/RequestVRGrabEvent.h>
 #include <Messages/RequestVRHiggsState.h>
+#include <Messages/RequestVRPlanckPhysicsEvent.h>
 #include <Messages/RequestVRAppearance.h>
 #include <Messages/ClientActorActionRequest.h>
 #include <Messages/RequestActorResync.h>
+#include <Messages/RequestMountResync.h>
+#include <Messages/RequestObjectResync.h>
+#include <Messages/RequestQuestResync.h>
 
 using TiltedPhoques::UniquePtr;
 
@@ -83,7 +87,8 @@ struct ClientMessageFactory
             RequestOwnershipTransfer, RequestOwnershipClaim, RequestObjectInventoryChanges, SpellCastRequest, ProjectileLaunchRequest, InterruptCastRequest, AddTargetRequest, ScriptAnimationRequest, DrawWeaponRequest, MountRequest, NewPackageRequest, RequestRespawn, SyncExperienceRequest,
             RequestEquipmentChanges, SendChatMessageRequest, TeleportCommandRequest, PlayerRespawnRequest, DialogueRequest, SubtitleRequest, PlayerDialogueRequest, PlayerLevelRequest, TeleportRequest, RequestPlayerHealthUpdate, RequestWeatherChange, RequestCurrentWeather, RequestSetWaypoint,
             RequestRemoveWaypoint, RemoveSpellRequest, SetTimeCommandRequest, RequestVRPoseUpdate, RequestVRMovementUpdate, RequestVREquipmentUpdate, RequestVRActivationEvent, RequestVRMagicEffectEvent, RequestVRCombatHitEvent, RequestVRProjectileEvent, RequestVRGrabEvent,
-            RequestVRHiggsState, RequestVRAppearance, ClientActorActionRequest, RequestActorResync>;
+            RequestVRHiggsState, RequestVRPlanckPhysicsEvent, RequestVRAppearance, ClientActorActionRequest, RequestActorResync,
+            RequestMountResync, RequestObjectResync, RequestQuestResync>;
 
         return s_visitor(std::forward<T>(func));
     }

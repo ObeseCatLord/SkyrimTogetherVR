@@ -26,6 +26,7 @@
 
 #include <ScriptExtender.h>
 #include <VRGameplayBridge.h>
+#include <vr_common/VRPlanckPhysicsBridge.h>
 #include <VRRuntimeDiagnostics.h>
 #include <Services/DiscordService.h>
 #include <Services/VRLifecycleService.h>
@@ -46,8 +47,8 @@
 #define TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC 0
 #endif
 
-#ifndef TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
-#define TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY 0
+#ifndef TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
+#define TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE 0
 #endif
 
 #ifndef TP_SKYRIM_VR_ENABLE_POSE_SERVICE
@@ -88,6 +89,84 @@ using TiltedPhoques::Packet;
 
 namespace
 {
+#if TP_SKYRIM_VR
+struct PlanckInterface002PhysicsBridge
+{
+    SkyrimTogetherVR::PlanckBridge::GetCapabilitiesFn GetCapabilities{};
+    SkyrimTogetherVR::PlanckBridge::DequeueLocalEventFn DequeueLocalEvent{};
+    SkyrimTogetherVR::PlanckBridge::SubmitRemoteEventFn SubmitRemoteEvent{};
+    SkyrimTogetherVR::PlanckBridge::ClearRemoteSessionFn ClearRemoteSession{};
+    SkyrimTogetherVR::PlanckBridge::DiscardLocalEventsFn DiscardLocalEvents{};
+    SkyrimTogetherVR::PlanckBridge::Capabilities Capabilities{};
+};
+
+[[nodiscard]] bool ProbePlanckInterface002PhysicsBridge(PlanckInterface002PhysicsBridge& arBridge) noexcept
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+    const auto module = GetModuleHandleW(L"SkyrimTogetherVRPlanckBridge.dll");
+    if (!module)
+        return false;
+
+    arBridge.GetCapabilities = reinterpret_cast<GetCapabilitiesFn>(
+        GetProcAddress(module, kGetCapabilitiesExport));
+    arBridge.DequeueLocalEvent = reinterpret_cast<DequeueLocalEventFn>(
+        GetProcAddress(module, kDequeueLocalEventExport));
+    arBridge.SubmitRemoteEvent = reinterpret_cast<SubmitRemoteEventFn>(
+        GetProcAddress(module, kSubmitRemoteEventExport));
+    arBridge.ClearRemoteSession = reinterpret_cast<ClearRemoteSessionFn>(
+        GetProcAddress(module, kClearRemoteSessionExport));
+    arBridge.DiscardLocalEvents = reinterpret_cast<DiscardLocalEventsFn>(
+        GetProcAddress(module, kDiscardLocalEventsExport));
+    arBridge.Capabilities = {};
+    return arBridge.GetCapabilities && arBridge.DequeueLocalEvent && arBridge.SubmitRemoteEvent &&
+           arBridge.ClearRemoteSession && arBridge.DiscardLocalEvents &&
+           arBridge.GetCapabilities(&arBridge.Capabilities) == Result::Accepted &&
+           IsCompatibleCapabilities(arBridge.Capabilities);
+}
+
+[[nodiscard]] bool ProbePlanckInterface002PhysicsBridge() noexcept
+{
+    // Runtime health checks must not rebase or drain PLANCK's local queue.
+    PlanckInterface002PhysicsBridge bridge{};
+    return ProbePlanckInterface002PhysicsBridge(bridge);
+}
+
+[[nodiscard]] bool PreparePlanckInterface002PhysicsBridge() noexcept
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+    PlanckInterface002PhysicsBridge bridge{};
+    if (!ProbePlanckInterface002PhysicsBridge(bridge))
+        return false;
+
+    // Rebase first, then retain the bounded drain as a race guard for events
+    // captured between this call and authentication admission.
+    if (bridge.DiscardLocalEvents(bridge.Capabilities.BridgeEpoch) != Result::Accepted)
+        return false;
+
+    // PLANCK owns this queue across mapped-client disconnects. Events observed
+    // before authentication have no valid lifecycle generation and must not be
+    // rebound to this connection.
+    constexpr std::size_t kMaximumPreSessionPlanckEvents = 1024;
+    std::size_t discarded{};
+    for (; discarded < kMaximumPreSessionPlanckEvents; ++discarded)
+    {
+        LocalEvent event{};
+        const auto result = bridge.DequeueLocalEvent(&event);
+        if (result == Result::Empty)
+        {
+            if (discarded != 0)
+                spdlog::info("SkyrimTogetherVR discarded {} pre-session PLANCK physics events", discarded);
+            return true;
+        }
+        if (result != Result::Accepted)
+            return false;
+    }
+
+    spdlog::warn(
+        "SkyrimTogetherVR PLANCK interface002 admission blocked because the pre-session event queue did not drain");
+    return false;
+}
+#endif
 constexpr std::size_t kMaximumOutboundPacketBytes = 1u << 16;
 constexpr std::size_t kMaximumOutboundQueuePackets = 256;
 constexpr std::size_t kMaximumOutboundQueueBytes = 8u << 20;
@@ -390,6 +469,7 @@ void TransportService::CompleteGameplayRetirement() noexcept
         m_connectionGeneration = 0;
         m_acceptedServerVersion.clear();
         m_negotiatedGameplayCapabilities = 0;
+        m_negotiatedOptionalVRCapabilities = 0;
         m_gameplayIdentityClearPending = false;
         ClearGameplayRetirementState();
     }
@@ -534,37 +614,74 @@ void TransportService::RetryGameplayRetirement() noexcept
 #endif
 }
 
-void TransportService::QueueNativeParityContractClose() noexcept
+void TransportService::QueueNativeGameplayCoreContractClose() noexcept
 {
-#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
-    if (m_nativeParityCloseQueued)
+#if TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
+    if (m_nativeGameplayCoreCloseQueued)
         return;
 
-    const DeferredNativeParityCloseToken token{
+    const DeferredNativeGameplayCoreCloseToken token{
         m_serverInstanceNonce,
         m_connectionGeneration,
     };
-    if (!IsCurrentDeferredNativeParityClose(
+    if (!IsCurrentDeferredNativeGameplayCoreClose(
             token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
         return;
 
-    auto closeToken = ++m_nativeParityCloseToken;
+    auto closeToken = ++m_nativeGameplayCoreCloseToken;
     if (closeToken == 0)
-        closeToken = ++m_nativeParityCloseToken;
-    m_nativeParityCloseQueued = true;
+        closeToken = ++m_nativeGameplayCoreCloseToken;
+    m_nativeGameplayCoreCloseQueued = true;
     m_world.GetRunner().Queue([this, token, closeToken]() {
-        if (!m_nativeParityCloseQueued || m_nativeParityCloseToken != closeToken ||
-            !IsCurrentDeferredNativeParityClose(
+        if (!m_nativeGameplayCoreCloseQueued || m_nativeGameplayCoreCloseToken != closeToken ||
+            !IsCurrentDeferredNativeGameplayCoreClose(
                 token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
             return;
 
-        m_nativeParityCloseQueued = false;
+        m_nativeGameplayCoreCloseQueued = false;
         Client::Close();
 
         ConnectionErrorEvent errorEvent;
-        errorEvent.ErrorDetail = "{\"error\":\"native_gameplay_contract_lost\"}";
+        errorEvent.ErrorDetail = "{\"error\":\"native_gameplay_core_contract_lost\"}";
         m_dispatcher.trigger(errorEvent);
     });
+#endif
+}
+
+void TransportService::QueueOptionalVRCapabilityContractClose(
+    const SkyrimTogetherVR::OptionalVRCapabilityLoss aLoss) noexcept
+{
+#if TP_SKYRIM_VR
+    if (aLoss == SkyrimTogetherVR::OptionalVRCapabilityLoss::None || m_optionalVRCapabilityCloseQueued)
+        return;
+
+    const SkyrimTogetherVR::DeferredOptionalVRCapabilityCloseToken token{
+        m_serverInstanceNonce,
+        m_connectionGeneration,
+    };
+    if (!SkyrimTogetherVR::IsCurrentDeferredOptionalVRCapabilityClose(
+            token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
+        return;
+
+    auto closeToken = ++m_optionalVRCapabilityCloseToken;
+    if (closeToken == 0)
+        closeToken = ++m_optionalVRCapabilityCloseToken;
+    m_optionalVRCapabilityCloseQueued = true;
+    m_world.GetRunner().Queue([this, token, closeToken]() {
+        if (!m_optionalVRCapabilityCloseQueued || m_optionalVRCapabilityCloseToken != closeToken ||
+            !SkyrimTogetherVR::IsCurrentDeferredOptionalVRCapabilityClose(
+                token, m_connected, m_serverInstanceNonce, m_connectionGeneration))
+            return;
+
+        m_optionalVRCapabilityCloseQueued = false;
+        Client::Close();
+
+        ConnectionErrorEvent errorEvent;
+        errorEvent.ErrorDetail = "{\"error\":\"optional_vr_capability_contract_lost\"}";
+        m_dispatcher.trigger(errorEvent);
+    });
+#else
+    TP_UNUSED(aLoss);
 #endif
 }
 
@@ -646,30 +763,37 @@ void TransportService::OnConnected()
             "SkyrimTogetherVR HIGGS relay omitted from authentication because the HIGGS bridge is not operational");
     }
 #endif
+    // PLANCK physics is a separate optional extension.  Do not infer support
+    // from DLL presence or interface revision alone: every exact interface002
+    // feature used by the wire kinds must be available before admission.
+    if (PreparePlanckInterface002PhysicsBridge())
+        operationalDirectRelayCapabilities |= ToMask(GameplayCapability::PlanckPhysicsInterface002);
+    else
+        spdlog::info("SkyrimTogetherVR PLANCK interface002 physics relay omitted because the exact bridge feature set is unavailable");
     const auto nativeGameplayCapabilities = SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities();
     if (SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::ExactAnimationActions))
         supportsExactAnimationActions = true;
-#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
     profile = VRProductionProfile::Gameplay;
-    const bool hasNativeGameplayParity =
+    const bool hasNativeGameplayCore =
         SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
-        (nativeGameplayCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities) ==
-            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities;
+        (nativeGameplayCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities) ==
+            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities;
     const bool hasVRNpcOwnershipContract =
         SkyrimTogetherVR::GameplayBridgeClient::IsReady() &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::NpcOwnership) &&
         SkyrimTogetherVR::GameplayBridge::HasCapability(
             nativeGameplayCapabilities, SkyrimTogetherVR::GameplayBridge::Capability::InventoryStackTransactions);
-    if (!hasNativeGameplayParity || !hasVRNpcOwnershipContract)
+    if (!hasNativeGameplayCore || !hasVRNpcOwnershipContract)
     {
         spdlog::error(
-            "SkyrimTogetherVR native gameplay admission blocked: bridgeReady={}, activeCapabilities={:#x}, requiredParityCapabilities={:#x}, npcOwnershipReady={}",
+            "SkyrimTogetherVR native gameplay admission blocked: bridgeReady={}, activeCapabilities={:#x}, requiredCoreCapabilities={:#x}, npcOwnershipReady={}",
             SkyrimTogetherVR::GameplayBridgeClient::IsReady(),
             nativeGameplayCapabilities,
-            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities,
+            SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities,
             hasVRNpcOwnershipContract);
         ConnectionErrorEvent errorEvent;
         errorEvent.ErrorDetail = "{\"error\":\"native_gameplay_not_ready\"}";
@@ -848,6 +972,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
 #endif
     m_acceptedServerVersion.clear();
     m_negotiatedGameplayCapabilities = 0;
+    m_negotiatedOptionalVRCapabilities = 0;
 
     spdlog::warn("Disconnected from server: {} ({})", DisconnectReasonToString(aReason), static_cast<std::underlying_type_t<EDisconnectReason>>(aReason));
 
@@ -863,23 +988,54 @@ void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 {
 #if TP_SKYRIM_VR
     RetryGameplayRetirement();
-#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
-    if (m_connected && !m_nativeParityFaultReported)
+#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
+    if (m_connected && !m_nativeGameplayCoreFaultReported)
     {
         const auto activeCapabilities = SkyrimTogetherVR::GameplayBridgeClient::GetActiveCapabilities();
         if (!SkyrimTogetherVR::GameplayBridgeClient::IsReady() ||
-            (activeCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities) !=
-                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities)
+            (activeCapabilities & SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities) !=
+                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities)
         {
-            m_nativeParityFaultReported = true;
+            m_nativeGameplayCoreFaultReported = true;
             spdlog::error(
                 "SkyrimTogetherVR native gameplay contract disappeared while connected; scheduling a generation-bound close (active={:#x}, required={:#x})",
                 activeCapabilities,
-                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeParityCapabilities);
-            QueueNativeParityContractClose();
+                SkyrimTogetherVR::GameplayBridge::kMandatoryNativeGameplayCoreCapabilities);
+            QueueNativeGameplayCoreContractClose();
         }
     }
 #endif
+    if (m_connected && !m_optionalVRCapabilityFaultReported)
+    {
+        bool higgsOperational = true;
+        bool planckOperational = true;
+        using SkyrimTogether::Protocol::GameplayCapability;
+        using SkyrimTogether::Protocol::HasCapability;
+        if (HasCapability(m_negotiatedOptionalVRCapabilities, GameplayCapability::VRHiggsRelay))
+        {
+#if TP_SKYRIM_VR_ENABLE_HIGGS_OBSERVATION_SERVICE
+            const auto* const pHiggs = m_world.ctx().find<VRHiggsService>();
+            higgsOperational = pHiggs && pHiggs->IsLocalHiggsRelayOperational();
+#else
+            higgsOperational = false;
+#endif
+        }
+        if (HasCapability(m_negotiatedOptionalVRCapabilities, GameplayCapability::PlanckPhysicsInterface002))
+            planckOperational = ProbePlanckInterface002PhysicsBridge();
+
+        const auto loss = SkyrimTogetherVR::DetectOptionalVRCapabilityLoss(
+            m_negotiatedOptionalVRCapabilities, higgsOperational, planckOperational);
+        if (loss != SkyrimTogetherVR::OptionalVRCapabilityLoss::None)
+        {
+            m_optionalVRCapabilityFaultReported = true;
+            m_negotiatedGameplayCapabilities &= ~SkyrimTogetherVR::GetUnavailableNegotiatedOptionalVRCapabilities(
+                m_negotiatedOptionalVRCapabilities, higgsOperational, planckOperational);
+            spdlog::error(
+                "SkyrimTogetherVR negotiated optional VR capability {} disappeared while connected; scheduling a generation-bound close",
+                SkyrimTogetherVR::OptionalVRCapabilityLossName(loss));
+            QueueOptionalVRCapabilityContractClose(loss);
+        }
+    }
 #endif
     Update();
 }
@@ -894,9 +1050,12 @@ void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
 void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     m_localPlayerId = NULL;
-    m_nativeParityFaultReported = false;
-    m_nativeParityCloseQueued = false;
-    ++m_nativeParityCloseToken;
+    m_nativeGameplayCoreFaultReported = false;
+    m_nativeGameplayCoreCloseQueued = false;
+    ++m_nativeGameplayCoreCloseToken;
+    m_optionalVRCapabilityFaultReported = false;
+    m_optionalVRCapabilityCloseQueued = false;
+    ++m_optionalVRCapabilityCloseToken;
 }
 
 void TransportService::HandleAuthenticationResponse(const AuthenticationResponse& acMessage) noexcept
@@ -971,14 +1130,19 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         }
 
         m_connected = true;
-        m_nativeParityFaultReported = false;
-        m_nativeParityCloseQueued = false;
-        ++m_nativeParityCloseToken;
+        m_nativeGameplayCoreFaultReported = false;
+        m_nativeGameplayCoreCloseQueued = false;
+        ++m_nativeGameplayCoreCloseToken;
+        m_optionalVRCapabilityFaultReported = false;
+        m_optionalVRCapabilityCloseQueued = false;
+        ++m_optionalVRCapabilityCloseToken;
         m_localPlayerId = acMessage.PlayerId;
         m_connectionGeneration = acMessage.ConnectionGeneration;
         m_serverInstanceNonce = acMessage.ServerInstanceNonce;
         m_acceptedServerVersion = acMessage.Version;
         m_negotiatedGameplayCapabilities = acMessage.NegotiatedCapabilities;
+        m_negotiatedOptionalVRCapabilities = SkyrimTogetherVR::ExtractNegotiatedOptionalVRCapabilities(
+            acMessage.NegotiatedCapabilities);
 #if TP_SKYRIM_VR
         SkyrimTogetherVR::GameplayBridgeClient::UpdateSessionIdentity(
             m_serverInstanceNonce,

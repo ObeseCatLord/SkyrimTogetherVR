@@ -28,13 +28,15 @@ struct PartyService
     const Vector<uint32_t>& GetPartyMembers() const noexcept { return m_partyMembers; }
     const Map<uint32_t, String>& GetPlayers() const noexcept { return m_players; }
     Map<uint32_t, uint64_t>& GetInvitations() noexcept { return m_invitations; }
+    const Map<uint32_t, uint64_t>& GetInvitations() const noexcept { return m_invitations; }
 
-    void CreateParty() const noexcept;
-    void LeaveParty() const noexcept;
-    void CreateInvite(const uint32_t aPlayerId) const noexcept;
-    void AcceptInvite(const uint32_t aInviterId) const noexcept;
-    void KickPartyMember(const uint32_t aPlayerId) const noexcept;
-    void ChangePartyLeader(const uint32_t aPlayerId) const noexcept;
+    [[nodiscard]] bool CreateParty() const noexcept;
+    [[nodiscard]] bool LeaveParty() const noexcept;
+    [[nodiscard]] bool CreateInvite(uint32_t aPlayerId) const noexcept;
+    [[nodiscard]] bool AcceptInvite(uint32_t aInviterId) noexcept;
+    [[nodiscard]] bool DeclineInvite(uint32_t aInviterId) noexcept;
+    [[nodiscard]] bool KickPartyMember(uint32_t aPlayerId) const noexcept;
+    [[nodiscard]] bool ChangePartyLeader(uint32_t aPlayerId) const noexcept;
 
 protected:
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -54,7 +56,7 @@ private:
 
     bool m_inParty = false;
     bool m_isLeader = false;
-    uint32_t m_leaderPlayerId;
+    uint32_t m_leaderPlayerId{};
     Vector<uint32_t> m_partyMembers;
 
     World& m_world;

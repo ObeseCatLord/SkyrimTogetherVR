@@ -319,7 +319,7 @@ void WriteVRCompatibilityStatusFile(
     file << "higgsRelayPolicy=direct_optional_extension_not_core_readiness\n";
     file << "saveLoadPolicy=canonical_lifecycle_reconnect_runtime_gated\n";
     file << "higgsPolicy=direct_optional_external_bridge\n";
-    file << "planckPolicy=unsupported_no_remote_physical_replay\n";
+    file << "planckPolicy=optional_negotiated_interface002_not_core_readiness\n";
     file << "questPolicy=" << (acStatus.QuestMutationAvailable ? "canonical_runtime_gated" : "unsupported_quest_mutation_disabled") << "\n";
     file << "fbtPolicy=canonical_pose_optional_extension\n";
 

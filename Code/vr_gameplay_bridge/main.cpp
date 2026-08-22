@@ -3,6 +3,7 @@
 #include "ActorActionHooks.h"
 #include "ActorAuthorityHooks.h"
 #include "CalendarHooks.h"
+#include "DialogueProcessResponseHook.h"
 #include "DialogueHooks.h"
 #include "DropHooks.h"
 #include "EquipmentAuthorityHooks.h"
@@ -14,9 +15,11 @@
 #include "ProjectileHooks.h"
 #include "QuestNativeAccess.h"
 #include "RemoteSaveExclusion.h"
+#include "RemoteSolvedPosePresentation.h"
 #include "SummonAuthorityHooks.h"
 #include "WaypointHooks.h"
 #include "WeatherNativeAccess.h"
+#include "VRTextInput.h"
 #include "VrNoThrow.h"
 
 #include <cstdio>
@@ -46,6 +49,7 @@ void InitializeLogging() noexcept
 [[nodiscard]] bool DetachAllGameplayHooks() noexcept
 {
     bool detached = true;
+    detached = SkyrimTogetherVR::GameplayAdapter::RemoteSolvedPosePresentation::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::InvisibilityHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::EquipmentAuthorityHooks::Uninstall() && detached;
@@ -58,6 +62,7 @@ void InitializeLogging() noexcept
     detached = SkyrimTogetherVR::GameplayAdapter::CalendarHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::MagicHooks::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Uninstall() && detached;
+    detached = SkyrimTogetherVR::GameplayAdapter::DialogueProcessResponseHook::Uninstall() && detached;
     detached = SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Uninstall() && detached;
     return detached;
 }
@@ -140,6 +145,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         if (!SkyrimTogetherVR::GameplayAdapter::DialogueHooks::Install()) {
             return FinishFaultedLoad(endpoint, "exact Actor::SpeakSound hook installation failed");
         }
+        if (!SkyrimTogetherVR::GameplayAdapter::DialogueProcessResponseHook::Install()) {
+            return FinishFaultedLoad(endpoint, "exact AIProcess::ProcessResponse hook installation failed");
+        }
         if (!SkyrimTogetherVR::GameplayAdapter::ProjectileHooks::Install()) {
             return FinishFaultedLoad(endpoint, "exact Projectile::Launch hook installation failed");
         }
@@ -179,7 +187,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         if (!SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::Install()) {
             return FinishFaultedLoad(endpoint, "exact ActorMediator action hook installation failed");
         }
-
+        if (!SkyrimTogetherVR::GameplayAdapter::RemoteSolvedPosePresentation::Install()) {
+            return FinishFaultedLoad(endpoint, "exact Character::UpdateAnimation solved-pose hook installation failed");
+        }
         // SKSE exposes no callback unregister operation. Do all reversible
         // target validation and hook installation first. From the first
         // registration attempt onward, any failure keeps a faulted inert DLL
@@ -210,11 +220,24 @@ extern "C" __declspec(dllexport) std::uint32_t __cdecl STVRGameplayBridge_Proces
     const std::uint32_t a_maxCommands) noexcept
 {
     try {
-        return static_cast<std::uint32_t>(SkyrimTogetherVR::GameplayAdapter::ProcessCommands(
+        const auto result = SkyrimTogetherVR::GameplayAdapter::ProcessCommands(
             a_callerProcessId,
             a_callerThreadId,
             a_lifecycleEpoch,
-            a_maxCommands));
+            a_maxCommands);
+        if (result != SkyrimTogetherVR::GameplayBridge::CommandPumpResult::Success)
+            return static_cast<std::uint32_t>(result);
+
+        auto& textInput = SkyrimTogetherVR::GameplayAdapter::VRTextInput::Get();
+        static std::uint64_t lastTextInputLifecycleEpoch{};
+        if (lastTextInputLifecycleEpoch != 0 && lastTextInputLifecycleEpoch != a_lifecycleEpoch)
+            textInput.Shutdown();
+        // VR text entry is optional UI.  Its availability must never turn a
+        // successful gameplay command pump into a networking failure.
+        if (textInput.Initialize())
+            textInput.Pump();
+        lastTextInputLifecycleEpoch = a_lifecycleEpoch;
+        return static_cast<std::uint32_t>(result);
     } catch (...) {
         SkyrimTogetherVR::GameplayAdapter::NoThrow::BestEffort([] {
             SkyrimTogetherVR::GameplayAdapter::BridgeEndpoint::Get().Fault("exception during command pump");

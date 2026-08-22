@@ -213,6 +213,10 @@ def validate_runtime_evidence(
         raise ValueError("runtime evidence was not collected with --gameplay-bootstrap")
     if package_manifest.get("packageFlavor") != "gameplay" or package_manifest.get("gameplay") is not True:
         raise ValueError("runtime evidence package manifest is not gameplay")
+    planck = package_manifest.get("patchedPlanckArtifact")
+    if not isinstance(planck, dict) or planck.get("interface") != "interface002" or \
+            planck.get("packagePath") != "Data/SKSE/Plugins/activeragdoll.dll":
+        raise ValueError("runtime evidence package manifest is missing patched PLANCK interface002 provenance")
     source_revision = package_manifest.get("sourceRevision")
     expected_revision = expected_build_identity.get("sourceRevision")
     if source_revision != expected_revision:

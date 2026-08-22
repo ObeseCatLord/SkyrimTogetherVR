@@ -1,14 +1,14 @@
 Scriptname SkyrimTogetherVRConnectionMenu
 
 ; VR control surface for quest, book, lesser-power, or MCM bindings.
-; The VR ESP spell-effect entry point calls ToggleConfigured().
+; The VR ESP spell-effect entry point calls OpenControlMenu().
+
+bool Function OpenControlMenu() global
+    Return SkyrimTogetherUtils.OpenSkyrimTogetherVRControlMenu()
+EndFunction
 
 string Function DefaultEndpoint() global
     Return SkyrimTogetherUtils.GetSkyrimTogetherConfiguredEndpoint()
-EndFunction
-
-string Function DefaultPassword() global
-    Return SkyrimTogetherUtils.GetSkyrimTogetherConfiguredPassword()
 EndFunction
 
 string Function LocalhostEndpoint() global
@@ -55,7 +55,24 @@ EndFunction
 
 Function ShowPlayers() global
     Debug.MessageBox("Skyrim Together VR Players\n\n" \
-                   + SkyrimTogetherUtils.GetSkyrimTogetherPlayerList())
+                   + SkyrimTogetherUtils.GetSkyrimTogetherPlayersSummary())
+EndFunction
+
+; These pages are safe to bind to the existing lesser-power/menu entries. They
+; only present native snapshots; all party and command authority remains native.
+Function ShowControls() global
+    Debug.MessageBox("Skyrim Together VR Controls\n\n" \
+                   + SkyrimTogetherUtils.GetSkyrimTogetherControlSummary())
+EndFunction
+
+Function ShowParty() global
+    Debug.MessageBox("Skyrim Together VR Party\n\n" \
+                   + SkyrimTogetherUtils.GetSkyrimTogetherPartySummary())
+EndFunction
+
+Function ShowInvitations() global
+    Debug.MessageBox("Skyrim Together VR Invitations\n\n" \
+                   + SkyrimTogetherUtils.GetSkyrimTogetherInviteList())
 EndFunction
 
 bool Function SendChat(string message) global
@@ -78,12 +95,24 @@ bool Function AcceptInvite(int inviterId) global
     Return SkyrimTogetherUtils.AcceptSkyrimTogetherPartyInvite(inviterId)
 EndFunction
 
+bool Function DeclineInvite(int inviterId) global
+    Return SkyrimTogetherUtils.DeclineSkyrimTogetherPartyInvite(inviterId)
+EndFunction
+
 bool Function KickPlayer(int playerId) global
     Return SkyrimTogetherUtils.KickSkyrimTogetherPartyMember(playerId)
 EndFunction
 
 bool Function ChangeLeader(int playerId) global
     Return SkyrimTogetherUtils.ChangeSkyrimTogetherPartyLeader(playerId)
+EndFunction
+
+bool Function SetTime(int hours, int minutes) global
+    Return SkyrimTogetherUtils.SetSkyrimTogetherTime(hours, minutes)
+EndFunction
+
+bool Function TeleportToPlayer(int playerId) global
+    Return SkyrimTogetherUtils.TeleportSkyrimTogetherToPlayer(playerId)
 EndFunction
 
 Function ShowStatusAndTelemetry() global
@@ -115,7 +144,23 @@ bool Function ConnectLocalhost() global
 EndFunction
 
 bool Function ConnectConfigured() global
-    Return Connect(DefaultEndpoint(), DefaultPassword())
+    bool accepted = SkyrimTogetherUtils.ConnectToConfiguredSkyrimTogether()
+    string connectionState = SkyrimTogetherUtils.GetSkyrimTogetherConnectionState()
+    string endpoint = DefaultEndpoint()
+
+    If accepted
+        Debug.MessageBox("Skyrim Together VR\n\n" \
+                       + "Configured connection request queued.\n" \
+                       + "Endpoint: " + endpoint + "\n" \
+                       + "State: " + connectionState)
+    Else
+        Debug.MessageBox("Skyrim Together VR\n\n" \
+                       + "Configured connection request was not accepted.\n" \
+                       + "Endpoint: " + endpoint + "\n" \
+                       + "State: " + connectionState)
+    EndIf
+
+    Return accepted
 EndFunction
 
 bool Function Disconnect() global
@@ -148,5 +193,9 @@ bool Function ToggleLocalhost() global
 EndFunction
 
 bool Function ToggleConfigured() global
-    Return Toggle(DefaultEndpoint(), DefaultPassword())
+    If SkyrimTogetherUtils.IsSkyrimTogetherConnected()
+        Return Disconnect()
+    EndIf
+
+    Return ConnectConfigured()
 EndFunction

@@ -40,6 +40,7 @@ std::atomic<bool> g_installing{};
 std::atomic<bool> g_installed{};
 VrHookDetachPolicy::HookState g_hookState{};
 std::atomic<std::uint64_t> g_nextActionId{};
+std::atomic<std::uint64_t> g_actionRestoreFailures{};
 thread_local std::uint32_t g_remoteActionDepth{};
 
 struct PendingAction
@@ -60,6 +61,29 @@ struct PendingActionSlot
 };
 
 std::array<PendingActionSlot, kMaximumPendingActions> g_pendingActions{};
+
+void LogActionRestoreFailure(const CommandStatus a_status) noexcept
+{
+    // Continuing to replay after a rollback cannot restore the descriptor
+    // snapshot would compound an unknown graph state. Fault the bridge so
+    // exact action delivery fails closed until the normal recovery path.
+    NoThrow::BestEffort([] { BridgeEndpoint::Get().Fault("exact remote actor action graph rollback failed"); });
+    const auto count = g_actionRestoreFailures.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count & (count - 1)) != 0)
+        return;
+    NoThrow::BestEffort([&] { SKSE::log::error(
+        "SkyrimTogetherVRGameplayBridge: exact remote action graph restoration failed (status={}, aggregate count={})",
+        static_cast<std::uint32_t>(a_status), count); });
+}
+
+void LogForceActionResidualRisk(const ReplayTransactionResult& a_result) noexcept
+{
+    NoThrow::BestEffort([&] { SKSE::log::error(
+        "SkyrimTogetherVRGameplayBridge: exact remote action ForceAction {} after invocation; actor state and configured "
+        "graph rollback was attempted (graph restoration status={}). ForceAction side effects outside the captured "
+        "descriptor values cannot be proven reversible.",
+        a_result.ExceptionCaught ? "threw" : "rejected", static_cast<std::uint32_t>(a_result.GraphRestoreStatus)); });
+}
 
 [[nodiscard]] VrHookDetachPolicy::OperationResult DisablePerformActionHook(void*) noexcept
 {
@@ -211,6 +235,83 @@ public:
     ScopedRemoteAction& operator=(const ScopedRemoteAction&) = delete;
 };
 
+struct RemoteActionReplayContext
+{
+    RE::Actor& Actor;
+    RE::ActorState& ActorState;
+    RE::ActorState::ActorState1 PreviousState1;
+    RE::ActorState::ActorState2 PreviousState2;
+    const AnimationGraphProtocol::SnapshotBuffer& PreviousGraph;
+    const AnimationGraphProtocol::SnapshotBuffer& ReplayGraph;
+    std::uint32_t ReplayState1{};
+    std::uint32_t ReplayState2{};
+    void* Mediator{};
+    RE::TESActionData* Data{};
+
+    RemoteActionReplayContext(
+        RE::Actor& a_actor,
+        RE::ActorState& a_actorState,
+        const AnimationGraphProtocol::SnapshotBuffer& a_previousGraph,
+        const AnimationGraphProtocol::SnapshotBuffer& a_replayGraph,
+        const std::uint32_t a_replayState1,
+        const std::uint32_t a_replayState2,
+        void* a_mediator,
+        RE::TESActionData* a_data) noexcept
+        : Actor(a_actor)
+        , ActorState(a_actorState)
+        , PreviousState1(a_actorState.actorState1)
+        , PreviousState2(a_actorState.actorState2)
+        , PreviousGraph(a_previousGraph)
+        , ReplayGraph(a_replayGraph)
+        , ReplayState1(a_replayState1)
+        , ReplayState2(a_replayState2)
+        , Mediator(a_mediator)
+        , Data(a_data)
+    {
+    }
+};
+
+[[nodiscard]] RemoteActionReplayContext& ReplayContext(void* a_context) noexcept
+{
+    return *static_cast<RemoteActionReplayContext*>(a_context);
+}
+
+[[nodiscard]] CommandStatus ApplyReplayGraph(void* a_context) noexcept
+{
+    auto& context = ReplayContext(a_context);
+    // CaptureAnimationSnapshotForApply has already proved descriptor identity,
+    // value counts, index, and current graph applicability. This revalidates
+    // immediately before the first graph write to close a manager-swap race.
+    return AvatarManager::Get().ApplyAnimationSnapshotToActor(context.Actor, context.ReplayGraph);
+}
+
+[[nodiscard]] CommandStatus RestoreReplayGraph(void* a_context) noexcept
+{
+    auto& context = ReplayContext(a_context);
+    return AvatarManager::Get().ApplyAnimationSnapshotToActor(context.Actor, context.PreviousGraph);
+}
+
+void ApplyReplayActorState(void* a_context) noexcept
+{
+    auto& context = ReplayContext(a_context);
+    context.ActorState.actorState1 = std::bit_cast<RE::ActorState::ActorState1>(context.ReplayState1);
+    context.ActorState.actorState2 = std::bit_cast<RE::ActorState::ActorState2>(context.ReplayState2);
+}
+
+void RestoreReplayActorState(void* a_context) noexcept
+{
+    auto& context = ReplayContext(a_context);
+    context.ActorState.actorState1 = context.PreviousState1;
+    context.ActorState.actorState2 = context.PreviousState2;
+}
+
+[[nodiscard]] bool ForceReplayAction(void* a_context)
+{
+    auto& context = ReplayContext(a_context);
+    const ScopedRemoteAction remoteAction;
+    return VerifiedVrActorAction::ForceAction(context.Mediator, context.Data) != 0;
+}
+
 void PopulateGraphChunk(
     EventRecord& a_record,
     const AdapterHandle a_handle,
@@ -218,7 +319,8 @@ void PopulateGraphChunk(
     const std::uint64_t a_actionId,
     const AnimationGraphProtocol::ValueType a_type,
     const std::uint16_t a_start,
-    const std::uint16_t a_count, const std::uint16_t a_totalCount, const float a_direction) noexcept
+    const std::uint16_t a_count, const std::uint16_t a_totalCount, const float a_direction,
+    const std::uint64_t a_descriptorDigest, const std::uint16_t a_directionFloatIndex) noexcept
 {
     PopulateHeader(a_record, EventKind::LocalActorActionGraphChunk, a_actionId);
     auto& payload = a_record.Payload.LocalActorActionGraphChunk;
@@ -232,6 +334,8 @@ void PopulateGraphChunk(
     payload.TotalCount = a_totalCount;
     payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
     payload.Direction = a_direction;
+    payload.DescriptorDigest = a_descriptorDigest;
+    payload.DirectionFloatIndex = a_directionFloatIndex;
 }
 
 [[nodiscard]] bool AppendGraphRecords(
@@ -248,7 +352,8 @@ void PopulateGraphChunk(
     auto& booleanChunk = ar_records[ar_count++];
     PopulateGraphChunk(booleanChunk, a_handle, a_actorFormId, a_actionId,
                        AnimationGraphProtocol::ValueType::BooleanBits, 0,
-                       a_snapshot.BooleanCount, a_snapshot.BooleanCount, a_snapshot.Direction);
+                       a_snapshot.BooleanCount, a_snapshot.BooleanCount, a_snapshot.Direction,
+                       a_snapshot.DescriptorDigest, a_snapshot.DirectionFloatIndex);
     for (std::size_t index = 0; index < a_snapshot.BooleanCount; ++index) {
         if (a_snapshot.Booleans[index])
             booleanChunk.Payload.LocalActorActionGraphChunk.Values[index / 32] |= 1u << (index % 32);
@@ -259,7 +364,8 @@ void PopulateGraphChunk(
             std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, a_snapshot.FloatCount - start));
         auto& chunk = ar_records[ar_count++];
         PopulateGraphChunk(chunk, a_handle, a_actorFormId, a_actionId,
-                           AnimationGraphProtocol::ValueType::Float, start, count, a_snapshot.FloatCount, a_snapshot.Direction);
+                           AnimationGraphProtocol::ValueType::Float, start, count, a_snapshot.FloatCount, a_snapshot.Direction,
+                           a_snapshot.DescriptorDigest, a_snapshot.DirectionFloatIndex);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalActorActionGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(a_snapshot.Floats[start + index]);
     }
@@ -268,7 +374,8 @@ void PopulateGraphChunk(
             std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, a_snapshot.IntegerCount - start));
         auto& chunk = ar_records[ar_count++];
         PopulateGraphChunk(chunk, a_handle, a_actorFormId, a_actionId,
-                           AnimationGraphProtocol::ValueType::Integer, start, count, a_snapshot.IntegerCount, a_snapshot.Direction);
+                           AnimationGraphProtocol::ValueType::Integer, start, count, a_snapshot.IntegerCount, a_snapshot.Direction,
+                           a_snapshot.DescriptorDigest, a_snapshot.DirectionFloatIndex);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalActorActionGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(a_snapshot.Integers[start + index]);
     }
@@ -445,7 +552,7 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
 {
     const auto& payload = a_command.Payload.StageActorActionGraphChunk;
     if (payload.TargetHandle.Value == 0 || payload.ActorLocalFormId != 0 || payload.Reserved0 != 0 ||
-        payload.SnapshotId == 0 || payload.Reserved1 != 0 ||
+        payload.DescriptorDigest == 0 || payload.SnapshotId == 0 || payload.Reserved1 != 0 ||
         payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion ||
         payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot ||
         !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail))) {
@@ -456,7 +563,7 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
     const auto type = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
     if (!AnimationGraphProtocol::IsValidChunk(type, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||
         !AnimationGraphProtocol::AreChunkValuesValid(type, payload.ValueCount, payload.TotalCount, payload.Values) ||
-        !std::isfinite(payload.Direction)) {
+        !std::isfinite(payload.Direction) || payload.DirectionFloatIndex >= AnimationGraphProtocol::kMaximumFloatCount) {
         DiscardPending(payload.SnapshotId);
         return CommandStatus::Malformed;
     }
@@ -468,7 +575,8 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
         return CommandStatus::Malformed;
     }
     const auto accepted = AnimationGraphProtocol::AcceptChunk(
-        pending.Graph, payload.SnapshotId, type, payload.StartIndex, payload.ValueCount,
+        pending.Graph, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
+        type, payload.StartIndex, payload.ValueCount,
         payload.TotalCount, payload.Direction, payload.Values);
     if (accepted == AnimationGraphProtocol::ChunkAcceptResult::Malformed) {
         DiscardPending(payload.SnapshotId);
@@ -592,11 +700,14 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
     auto* actorState = actor->AsActorState();
     if (!actorState)
         return CommandStatus::EngineRejected;
-    actorState->actorState1 = std::bit_cast<RE::ActorState::ActorState1>(payload.State1);
-    actorState->actorState2 = std::bit_cast<RE::ActorState::ActorState2>(payload.State2);
-    const auto graphResult = AvatarManager::Get().ApplyAnimationSnapshotToActor(*actor, pending.Graph);
-    if (graphResult != CommandStatus::Success)
-        return graphResult;
+
+    // This is a read-only preflight. It proves the complete staged snapshot
+    // still matches the actor's active descriptor and snapshots every graph
+    // value the replay may alter before actor state or graph mutation begins.
+    AnimationGraphProtocol::SnapshotBuffer previousGraph{};
+    const auto graphPreflight = AvatarManager::Get().CaptureAnimationSnapshotForApply(*actor, pending.Graph, previousGraph);
+    if (graphPreflight != CommandStatus::Success)
+        return graphPreflight;
 
     VerifiedVrActorAction::ReplayActionData actionData;
     auto* data = actionData.Construct();
@@ -610,10 +721,28 @@ std::uint8_t HookPerformAction(void* a_mediator, RE::TESActionData* a_data) noex
     data->targetAnimEvent = text.data() + separator + 1;
     data->animObjIdle = idle;
     data->flags = (payload.Type & 0x4u) != 0 ? 1u : 0u;
+    // ForceAction performs the same input validation internally, but prove it
+    // before the transaction so malformed action data cannot trigger a graph
+    // or actor-state write.
+    if (!VerifiedVrActorAction::IsReady() || !VerifiedVrActorAction::IsTesActionData(data))
+        return CommandStatus::EngineRejected;
 
-    const ScopedRemoteAction remoteAction;
-    const auto result = VerifiedVrActorAction::ForceAction(mediator, data);
-    return result != 0 ? CommandStatus::Success : CommandStatus::EngineRejected;
+    RemoteActionReplayContext context{
+        *actor, *actorState, previousGraph, pending.Graph, payload.State1, payload.State2, mediator, data};
+    const ReplayTransactionCallbacks callbacks{
+        &context,
+        ApplyReplayGraph,
+        RestoreReplayGraph,
+        ApplyReplayActorState,
+        RestoreReplayActorState,
+        ForceReplayAction,
+    };
+    const auto transaction = RunReplayTransaction(graphPreflight, callbacks);
+    if (transaction.RollbackAttempted && transaction.GraphRestoreStatus != CommandStatus::Success)
+        LogActionRestoreFailure(transaction.GraphRestoreStatus);
+    if (transaction.ForceActionInvoked && transaction.Status != CommandStatus::Success)
+        LogForceActionResidualRisk(transaction);
+    return transaction.Status;
 }
 } // namespace
 

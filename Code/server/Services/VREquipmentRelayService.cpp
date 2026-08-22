@@ -1,4 +1,5 @@
 #include <Services/VREquipmentRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -60,7 +61,11 @@ void VREquipmentRelayService::OnVREquipmentUpdate(const PacketEvent<RequestVREqu
             notify, *character,
             kEquipmentCapability,
             acMessage.pPlayer))
-        spdlog::warn("VR relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR equipment relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 
 }
 catch (...)

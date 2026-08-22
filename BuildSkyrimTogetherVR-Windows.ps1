@@ -50,6 +50,10 @@ param(
 
     [string]$CefRuntimeDirectory = "",
 
+    [string]$PatchedPlanckArtifact = "",
+
+    [string]$PatchedPlanckProvenance = "",
+
     [string]$PackageRoot = "artifacts\SkyrimTogetherVR"
 )
 
@@ -108,6 +112,103 @@ function Copy-MatchingArtifact {
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -Force -LiteralPath $File.FullName -Destination $Destination
+}
+
+function Resolve-PatchedPlanckArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $artifactPath = Resolve-PathAgainstRepo -Path $Path
+    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+        throw "PatchedPlanckArtifact must be a regular activeragdoll.dll file: $artifactPath"
+    }
+
+    $artifact = Get-Item -LiteralPath $artifactPath -Force
+    if (($artifact.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "PatchedPlanckArtifact must be a regular file, not a reparse point: $artifactPath"
+    }
+    if ($artifact.Name -ine "activeragdoll.dll") {
+        throw "PatchedPlanckArtifact must be named activeragdoll.dll: $artifactPath"
+    }
+
+    try {
+        $stream = [System.IO.File]::Open($artifact.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            if ($stream.Length -lt 0x40 -or $reader.ReadUInt16() -ne 0x5A4D) {
+                throw "not a PE image"
+            }
+
+            $stream.Position = 0x3C
+            $peOffset = $reader.ReadUInt32()
+            if ($peOffset -gt ($stream.Length - 26)) {
+                throw "PE header is outside the file"
+            }
+
+            $stream.Position = $peOffset
+            if ($reader.ReadUInt32() -ne 0x00004550) {
+                throw "missing PE signature"
+            }
+            if ($reader.ReadUInt16() -ne 0x8664) {
+                throw "not an x64 PE image"
+            }
+
+            $stream.Position = $peOffset + 22
+            if (($reader.ReadUInt16() -band 0x2000) -eq 0) {
+                throw "PE image is not a DLL"
+            }
+            $stream.Position = $peOffset + 24
+            if ($reader.ReadUInt16() -ne 0x20B) {
+                throw "not a PE32+ image"
+            }
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch {
+        throw "PatchedPlanckArtifact is not a regular x64 PE DLL: $artifactPath ($($_.Exception.Message))"
+    }
+
+    return $artifact.FullName
+}
+
+function Resolve-PatchedPlanckProvenance {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$ArtifactPath)
+
+    $provenancePath = Resolve-PathAgainstRepo -Path $Path
+    if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
+        throw "PatchedPlanckProvenance must name a forced PLANCK rebuild marker: $provenancePath"
+    }
+    $provenanceItem = Get-Item -LiteralPath $provenancePath -Force
+    if (($provenanceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "PatchedPlanckProvenance must be a regular file, not a reparse point: $provenancePath"
+    }
+    try { $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "PatchedPlanckProvenance is not valid JSON: $provenancePath ($($_.Exception.Message))" }
+    if ($provenance.schema -ne 'stvr_planck_forced_build_v2' -or $provenance.artifactName -ne 'activeragdoll.dll' -or
+        $provenance.msbuildTarget -ne 'Rebuild' -or $provenance.planckCommit -notmatch '^[0-9a-fA-F]{40}$' -or
+        $provenance.planckSourceTreeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or $provenance.artifactSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "PatchedPlanckProvenance is missing required forced-build source identity fields: $provenancePath"
+    }
+    foreach ($field in @('havokArchiveSha256', 'havokSourceTreeSha256', 'sksevrArchiveSha256', 'sksevrSourceTreeSha256')) {
+        if ($provenance.$field -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "PatchedPlanckProvenance dependency field '$field' is missing or invalid: $provenancePath"
+        }
+    }
+    foreach ($field in @('havokSourceFileCount', 'sksevrSourceFileCount')) {
+        $parsedCount = 0L
+        if (-not [long]::TryParse([string]$provenance.$field, [ref]$parsedCount) -or $parsedCount -le 0) {
+            throw "PatchedPlanckProvenance dependency field '$field' is missing or invalid: $provenancePath"
+        }
+    }
+    $actualHash = (Get-FileHash -LiteralPath $ArtifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $provenance.artifactSha256.ToLowerInvariant()) {
+        throw "PatchedPlanckProvenance artifact SHA-256 does not match PatchedPlanckArtifact"
+    }
+    return $provenance
 }
 
 function Get-SourceTreeSha256 {
@@ -295,6 +396,19 @@ function Resolve-PathAgainstRepo {
     }
 
     return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
+
+$ResolvedPatchedPlanckArtifact = ""
+$ResolvedPatchedPlanckProvenance = $null
+if (-not [string]::IsNullOrWhiteSpace($PatchedPlanckArtifact)) {
+    if ([string]::IsNullOrWhiteSpace($PatchedPlanckProvenance)) {
+        throw "PatchedPlanckArtifact requires PatchedPlanckProvenance from a forced PLANCK rebuild."
+    }
+    $ResolvedPatchedPlanckArtifact = Resolve-PatchedPlanckArtifact -Path $PatchedPlanckArtifact
+    $ResolvedPatchedPlanckProvenance = Resolve-PatchedPlanckProvenance -Path $PatchedPlanckProvenance -ArtifactPath $ResolvedPatchedPlanckArtifact
+}
+elseif (-not [string]::IsNullOrWhiteSpace($PatchedPlanckProvenance)) {
+    throw "PatchedPlanckProvenance requires PatchedPlanckArtifact."
 }
 
 function Test-SkseVrSdkRoot {
@@ -1039,6 +1153,15 @@ if (-not $NoPackage) {
         }
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedPatchedPlanckArtifact)) {
+        $patchedPlanckDestination = Join-Path $packageDir "Data\SKSE\Plugins\activeragdoll.dll"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $patchedPlanckDestination) | Out-Null
+        Copy-Item -Force -LiteralPath $ResolvedPatchedPlanckArtifact -Destination $patchedPlanckDestination
+        $expectedArtifactNames.Add("activeragdoll.dll")
+        $copied.Add("activeragdoll.dll")
+        Write-Host "Copied explicit patched PLANCK artifact to $patchedPlanckDestination (overrides staged handoff overlay)"
+    }
+
     if ($BuildUi) {
         $uiDist = Join-Path $RepoRoot "Code\skyrim_ui\dist"
         if (Test-Path -LiteralPath $uiDist) {
@@ -1122,7 +1245,7 @@ if (-not $NoPackage) {
 
     $artifactSha256 = [ordered]@{}
     foreach ($artifactName in @($copied | Sort-Object -Unique)) {
-        if ($artifactName -like "SkyrimTogetherVR*Bridge.*") {
+        if ($artifactName -like "SkyrimTogetherVR*Bridge.*" -or $artifactName -ieq "activeragdoll.dll") {
             $artifactPath = Join-Path $packageDir (Join-Path "Data\SKSE\Plugins" $artifactName)
         }
         else {
@@ -1132,6 +1255,41 @@ if (-not $NoPackage) {
             throw "Cannot hash copied artifact because it is missing from the package: $artifactPath"
         }
         $artifactSha256[$artifactName] = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $patchedPlanckManifest = $null
+    $patchedPlanckProvenanceManifest = $null
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedPatchedPlanckArtifact)) {
+        $patchedPlanckProvenanceManifest = [ordered]@{
+            schema = $ResolvedPatchedPlanckProvenance.schema
+            artifactName = $ResolvedPatchedPlanckProvenance.artifactName
+            artifactSha256 = $ResolvedPatchedPlanckProvenance.artifactSha256.ToLowerInvariant()
+            planckCommit = $ResolvedPatchedPlanckProvenance.planckCommit.ToLowerInvariant()
+            planckSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.planckSourceTreeSha256.ToLowerInvariant()
+            havokArchiveSha256 = $ResolvedPatchedPlanckProvenance.havokArchiveSha256.ToLowerInvariant()
+            havokSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.havokSourceTreeSha256.ToLowerInvariant()
+            havokSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.havokSourceFileCount
+            sksevrArchiveSha256 = $ResolvedPatchedPlanckProvenance.sksevrArchiveSha256.ToLowerInvariant()
+            sksevrSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.sksevrSourceTreeSha256.ToLowerInvariant()
+            sksevrSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.sksevrSourceFileCount
+            msbuildTarget = $ResolvedPatchedPlanckProvenance.msbuildTarget
+        }
+        $patchedPlanckManifest = [ordered]@{
+            name = "activeragdoll.dll"
+            packagePath = "Data/SKSE/Plugins/activeragdoll.dll"
+            sha256 = $artifactSha256["activeragdoll.dll"]
+            interface = "interface002"
+            planckCommit = $ResolvedPatchedPlanckProvenance.planckCommit.ToLowerInvariant()
+            planckSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.planckSourceTreeSha256.ToLowerInvariant()
+            havokArchiveSha256 = $ResolvedPatchedPlanckProvenance.havokArchiveSha256.ToLowerInvariant()
+            havokSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.havokSourceTreeSha256.ToLowerInvariant()
+            havokSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.havokSourceFileCount
+            sksevrArchiveSha256 = $ResolvedPatchedPlanckProvenance.sksevrArchiveSha256.ToLowerInvariant()
+            sksevrSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.sksevrSourceTreeSha256.ToLowerInvariant()
+            sksevrSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.sksevrSourceFileCount
+            forcedBuildArtifactSha256 = $ResolvedPatchedPlanckProvenance.artifactSha256.ToLowerInvariant()
+            forcedBuildTarget = $ResolvedPatchedPlanckProvenance.msbuildTarget
+        }
     }
 
     $packageSnapshotDir = Join-Path $RepoRoot (Join-Path $PackageRoot (Join-Path "packages" $packageFlavor))
@@ -1165,6 +1323,8 @@ if (-not $NoPackage) {
         papyrusCompiler = $ResolvedPapyrusCompiler
         companionPanel = [bool](-not $SkipCompanionPanel)
         cefRuntime = $cefRuntimeManifest
+        patchedPlanckArtifact = $patchedPlanckManifest
+        patchedPlanckProvenance = $patchedPlanckProvenanceManifest
         generatedAtUtc = [DateTime]::UtcNow.ToString("o")
     }
     $manifestJson = $packageManifest | ConvertTo-Json -Depth 5

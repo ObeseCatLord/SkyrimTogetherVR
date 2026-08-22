@@ -160,7 +160,8 @@ void CountRejected(MappingHeader& a_header, const CommandStatus a_status) noexce
         const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
         if (a_command.Header.Identity.SequenceId == 0 || a_command.Header.Identity.ActionId != 0 ||
             payload.AvatarHandle.Value == 0 || payload.SnapshotId == 0 ||
-            payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved0 != 0 ||
+            payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved0 != 0 || payload.Reserved2 != 0 ||
+            payload.DescriptorDigest == 0 || payload.DirectionFloatIndex >= AnimationGraphProtocol::kMaximumFloatCount ||
             payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !std::isfinite(payload.Direction) ||
             !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) ||
             !AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) ||

@@ -16,7 +16,8 @@ target("TPTests")
     add_includedirs(
         ".", "../encoding", "../client", "..")
     add_headerfiles("**.h")
-    add_files("*.cpp|version_db.cpp")
+    add_files("*.cpp|version_db.cpp", "../vr_gameplay_bridge/VRTextInput.cpp")
+    add_defines("TP_VR_TEXT_INPUT_TESTING=1")
     add_deps("SkyrimEncoding")
     add_packages(
         "tiltedcore",

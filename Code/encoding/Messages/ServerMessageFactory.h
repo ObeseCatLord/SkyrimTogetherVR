@@ -69,8 +69,12 @@
 #include <Messages/NotifyVRProjectileEvent.h>
 #include <Messages/NotifyVRGrabEvent.h>
 #include <Messages/NotifyVRHiggsState.h>
+#include <Messages/NotifyVRPlanckPhysicsEvent.h>
 #include <Messages/NotifyVRAppearance.h>
 #include <Messages/NotifyActorResync.h>
+#include <Messages/NotifyMountResync.h>
+#include <Messages/NotifyObjectResync.h>
+#include <Messages/NotifyQuestResync.h>
 
 using TiltedPhoques::UniquePtr;
 
@@ -86,7 +90,8 @@ struct ServerMessageFactory
             NotifyProjectileLaunch, NotifyInterruptCast, NotifyAddTarget, NotifyScriptAnimation, NotifyDrawWeapon, NotifyMount, NotifyNewPackage, NotifyRespawn, NotifySyncExperience, NotifyEquipmentChanges, NotifyChatMessageBroadcast, TeleportCommandResponse, NotifyPlayerRespawn, NotifyDialogue,
             NotifySubtitle, NotifyPlayerDialogue, NotifyActorTeleport, NotifyRelinquishControl, NotifyPlayerLeft, NotifyPlayerJoined, NotifyPlayerLevel, NotifyPlayerCellChanged, NotifyTeleport, NotifyPlayerHealthUpdate, NotifySettingsChange,
             NotifyWeatherChange, NotifySetWaypoint, NotifyRemoveWaypoint, NotifySetTimeResult, NotifyRemoveSpell, NotifyVRPoseUpdate, NotifyVRMovementUpdate, NotifyVREquipmentUpdate, NotifyVRActivationEvent, NotifyVRMagicEffectEvent, NotifyVRCombatHitEvent, NotifyVRProjectileEvent, NotifyVRGrabEvent,
-            NotifyVRHiggsState, NotifyVRAppearance, NotifyActorResync>;
+            NotifyVRHiggsState, NotifyVRPlanckPhysicsEvent, NotifyVRAppearance, NotifyActorResync, NotifyMountResync,
+            NotifyObjectResync, NotifyQuestResync>;
 
         return s_visitor(std::forward<T>(func));
     }

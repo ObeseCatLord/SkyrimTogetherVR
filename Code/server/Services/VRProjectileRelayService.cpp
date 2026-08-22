@@ -1,4 +1,5 @@
 #include <Services/VRProjectileRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -65,7 +66,11 @@ void VRProjectileRelayService::OnVRProjectileEvent(const PacketEvent<RequestVRPr
             notify, *character,
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRProjectileRelay),
             acMessage.pPlayer))
-        spdlog::warn("VR relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR projectile relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 }
 catch (...)
 {

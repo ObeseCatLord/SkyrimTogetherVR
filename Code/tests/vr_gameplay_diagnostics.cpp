@@ -51,7 +51,9 @@ TEST_CASE("VR gameplay diagnostics expose operational readiness without claiming
     REQUIRE(diagnostics.find(".evidenceState=") != std::string::npos);
     REQUIRE(diagnostics.find("GameplayDomain::Quest, \"quest\", DomainPath::Canonical") != std::string::npos);
     REQUIRE(diagnostics.find("GameplayDomain::Combat, \"combat\", DomainPath::Canonical") != std::string::npos);
-    REQUIRE(diagnostics.find("no_remote_physical_replay") != std::string::npos);
+    REQUIRE(diagnostics.find("optional_negotiated_interface002") != std::string::npos);
+    REQUIRE(diagnostics.find("direct.planckInterface002Operational=") != std::string::npos);
+    REQUIRE(diagnostics.find("GameplayCapability::PlanckPhysicsInterface002") != std::string::npos);
     REQUIRE(diagnostics.find("kSummaryLogInterval = 30.0") != std::string::npos);
     REQUIRE(diagnostics.find("domain.save_load.evidenceType=lifecycle_rehydration") != std::string::npos);
     REQUIRE(diagnostics.find("domain.save_load.networkTraffic=not_applicable") != std::string::npos);
@@ -93,7 +95,7 @@ TEST_CASE("VR gameplay diagnostics surface bounded actor-authority aggregates", 
     REQUIRE_FALSE(diagnostics.empty());
     REQUIRE_FALSE(bridge.empty());
     REQUIRE_FALSE(shared.empty());
-    REQUIRE(shared.find("kMappingAbiVersion = 23") != std::string::npos);
+    REQUIRE(shared.find("kMappingAbiVersion = 24") != std::string::npos);
     REQUIRE(shared.find("AuthoritySuppressedDamageCount") != std::string::npos);
     REQUIRE(shared.find("AuthorityPublishedRemoteNpcHealthDeltaCount") != std::string::npos);
     REQUIRE(shared.find("AuthorityLeaseFailureCount") != std::string::npos);

@@ -15,6 +15,9 @@ struct AnimationVariables
     Vector<bool> Booleans{};
     Vector<uint32_t> Integers{};
     Vector<float> Floats{};
+    // Identifies the exact ordered variable lists, not merely their counts.
+    std::uint64_t DescriptorDigest{};
+    std::uint16_t DirectionFloatIndex{};
 
     bool operator==(const AnimationVariables& acRhs) const noexcept;
     bool operator!=(const AnimationVariables& acRhs) const noexcept;

@@ -16,4 +16,8 @@ struct ObjectComponent
 
     Player* pLastSender;
     LockData CurrentLockData{};
+    // Canonical current state is authenticated only by snapshots or an
+    // accepted activation's observed post-state; None is represented absent.
+    bool HasCurrentOpenState{};
+    std::uint8_t CurrentOpenState{};
 };

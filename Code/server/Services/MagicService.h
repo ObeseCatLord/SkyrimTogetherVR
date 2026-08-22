@@ -23,6 +23,11 @@ struct MagicService
     TP_NOCOPYMOVE(MagicService);
 
 protected:
+    // Cast, interrupt, projectile-adjacent, and AddTarget effect packets are
+    // transient edges. They are intentionally relay-only and must never be
+    // presented as a durable recovery snapshot. The legacy protocol supplies
+    // no server-authoritative learned-spell baseline, so full magic recovery
+    // remains unavailable until such a producer is introduced.
     /**
      * @brief Relays spell cast messages to other clients.
      */

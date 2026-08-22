@@ -221,6 +221,11 @@ GameServer::GameServer(Console::ConsoleRegistry& aConsole) noexcept
     m_pResources = MakeUnique<Resources::ResourceCollection>();
 }
 
+bool GameServer::IsPvpEnabled() const noexcept
+{
+    return bEnablePvp;
+}
+
 GameServer::~GameServer()
 {
     s_pInstance = nullptr;

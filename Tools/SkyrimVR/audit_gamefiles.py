@@ -72,7 +72,8 @@ REQUIRED_UTILS_NATIVE_TOKENS = (
     "SetSkyrimTogetherConnectionConfig",
     "GetSkyrimTogetherConnectionState",
     "GetSkyrimTogetherConfiguredEndpoint",
-    "GetSkyrimTogetherConfiguredPassword",
+    "ConnectToConfiguredSkyrimTogether",
+    "OpenSkyrimTogetherVRControlMenu",
     "GetSkyrimTogetherStatusSummary",
     "GetSkyrimTogetherTelemetryReadout",
 )
@@ -93,6 +94,7 @@ REQUIRED_VR_MENU_SOURCE_TOKENS = (
     "ShowTelemetry",
     "ShowStatusAndTelemetry",
     "GetSkyrimTogetherConfiguredEndpoint",
+    "OpenControlMenu",
     "Debug.MessageBox",
 )
 
@@ -158,12 +160,13 @@ REQUIRED_VR_MENU_PEX_TOKENS = (
     "GetSkyrimTogetherStatusSummary",
     "GetSkyrimTogetherTelemetryReadout",
     "GetSkyrimTogetherConfiguredEndpoint",
-    "GetSkyrimTogetherConfiguredPassword",
+    "ConnectToConfiguredSkyrimTogether",
+    "OpenSkyrimTogetherVRControlMenu",
     "Configure",
     "ConfigureAndConnect",
     "ConnectConfigured",
     "ToggleLocalhost",
-    "ToggleConfigured",
+    "OpenControlMenu",
     "ShowTelemetry",
 )
 
@@ -171,7 +174,7 @@ REQUIRED_VR_EFFECT_SOURCE_TOKENS = (
     "Scriptname SkyrimTogetherVRConnectionSpellEffect",
     "ActiveMagicEffect",
     "OnEffectStart",
-    "ToggleConfigured",
+    "OpenControlMenu",
 )
 
 REQUIRED_VR_EFFECT_PEX_TOKENS = (

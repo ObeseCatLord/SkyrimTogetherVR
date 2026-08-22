@@ -885,8 +885,12 @@ void RecordPeriodicPublication(const bool a_accepted) noexcept
         a_payload.LocalFormIdB == 0 && a_payload.LocalFormIdC == 0 && a_payload.LocalFormIdD == 0 &&
         a_payload.ValueA == 0 && a_payload.ValueB == 0 && a_payload.ScalarB == 0.0F &&
         a_payload.ScalarC == 0.0F && a_payload.ScalarD == 0.0F && a_payload.ActionFlags == 0;
+    const bool activation =
+        a_domain == GameplayDomain::Object && a_action == GameplayAction::Activate &&
+        ActivationPolicy::IsValidEncodedActivator(a_payload.TargetHandle, a_payload.TargetLocalFormId);
     if (!IsActionInDomain(a_domain, a_action) || !CanPublish(a_domain) ||
-        ((!objectSnapshot && !targetedRemoteNpcHealthDelta && a_payload.TargetHandle.Value != kLocalPlayerHandle.Value) ||
+        ((!objectSnapshot && !targetedRemoteNpcHealthDelta && !activation &&
+          a_payload.TargetHandle.Value != kLocalPlayerHandle.Value) ||
          (objectSnapshot && (a_payload.TargetHandle.Value != 0 || a_payload.TargetLocalFormId == 0))) ||
         a_payload.SecondaryHandle.Value != 0 ||
         !IsFinite(a_payload.ScalarA) || !IsFinite(a_payload.ScalarB) || !IsFinite(a_payload.ScalarC) || !IsFinite(a_payload.ScalarD))
@@ -1325,6 +1329,8 @@ catch (...)
                              a_type == AnimationGraphProtocol::ValueType::Float ? a_snapshot.Animation.FloatCount : a_snapshot.Animation.IntegerCount;
         payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
         payload.Direction = a_snapshot.Animation.Direction;
+        payload.DescriptorDigest = a_snapshot.Animation.DescriptorDigest;
+        payload.DirectionFloatIndex = a_snapshot.Animation.DirectionFloatIndex;
         return &payload;
     };
     GameplayActionPayload begin{};
@@ -2997,14 +3003,8 @@ void CaptureActorState(RE::PlayerCharacter& a_player, Snapshot& a_current) noexc
     auto mountFormId = RE::FormID{};
     if (a_player.GetMount(mount) && mount && IsValidFormId(mount->GetFormID()))
         mountFormId = mount->GetFormID();
-    // A zero mount is an internal cancellation signal. The original wire has
-    // no dismount action, so advance only the local baseline and preserve the
-    // independently captured HorseExit animation event.
-    if (mountFormId == 0) {
-        a_current.MountFormId = 0;
-        a_current.MountCaptured = g_snapshot.MountCaptured;
-    } else if ((!g_snapshot.MountCaptured && mountFormId != 0) ||
-        (g_snapshot.MountCaptured && g_snapshot.MountFormId != mountFormId)) {
+    if (MountCapturePolicy::ShouldPublishObservedMount(
+            mountFormId, g_snapshot.MountCaptured, g_snapshot.MountFormId)) {
         if (PublishMount(a_player, mountFormId)) {
             a_current.MountFormId = mountFormId;
             a_current.MountCaptured = true;
@@ -4434,7 +4434,12 @@ bool CaptureDialogueVoice(
             return false;
         auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_localActorFormId);
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!actor || actor == player || !a_resourcePath || a_resourcePath[0] == '\0')
+        const bool managedRemoteSpeaker = actor && AvatarManager::Get().IsManagedRemoteActor(actor);
+        if (!actor || !a_resourcePath || a_resourcePath[0] == '\0' ||
+            !DialogueHookPolicy::ShouldCaptureLocalNpcSpeaker(
+                true, player != nullptr, actor == player, managedRemoteSpeaker,
+                a_localActorFormId != 0,
+                IsNpcObserved(a_localActorFormId)))
             return false;
 
         GameplayActionPayload payload{};
@@ -4553,12 +4558,15 @@ void Reset() noexcept
 
 PreActivationCaptureResult CapturePreActivation(
     RE::TESObjectREFR& a_target,
-    RE::TESObjectREFR& a_activator) noexcept
+    RE::TESObjectREFR& a_activator,
+    PendingActivationCapture& ar_capture) noexcept
 {
     try {
+        ar_capture = {};
+        auto* activator = a_activator.As<RE::Actor>();
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || std::addressof(a_activator) != player)
-            return PreActivationCaptureResult::Ineligible;
+        const auto activatorFormId = activator ? activator->GetFormID() : 0;
+        const bool activatorIsLocalPlayer = activator && player && activator == player;
 
         const auto targetFormId = a_target.GetFormID();
         auto* base = a_target.GetBaseObject();
@@ -4568,7 +4576,10 @@ PreActivationCaptureResult CapturePreActivation(
         const bool validBase = base && IsValidFormId(base->GetFormID());
         const bool validCell = cell && IsValidFormId(cell->GetFormID());
         const bool isBook = base && base->GetFormType() == RE::FormType::Book;
-        if (!validTarget || !validBase || !validCell || isBook)
+        if (!ActivationPolicy::ShouldCapturePreActivation(
+                activator != nullptr, activatorFormId, activatorIsLocalPlayer,
+                validTarget, validBase, validCell, isBook) ||
+            !IsValidFormId(activatorFormId))
             return PreActivationCaptureResult::Ineligible;
         if (worldspace && !IsValidFormId(worldspace->GetFormID()))
             return PreActivationCaptureResult::Ineligible;
@@ -4578,22 +4589,49 @@ PreActivationCaptureResult CapturePreActivation(
             return PreActivationCaptureResult::Ineligible;
 
         GameplayActionPayload payload{};
-        if (!PreparePlayerPayload(payload, *player))
-            return PreActivationCaptureResult::PublicationRejected;
+        const auto encodedActivator = ActivationPolicy::EncodeActivator(activatorIsLocalPlayer, activatorFormId);
+        payload.TargetHandle = encodedActivator.TargetHandle;
+        payload.TargetLocalFormId = encodedActivator.TargetLocalFormId;
         payload.LocalFormIdA = targetFormId;
         payload.LocalFormIdB = cell->GetFormID();
         payload.LocalFormIdC = worldspace ? worldspace->GetFormID() : 0;
         payload.ValueA = static_cast<std::int32_t>(base->GetFormType());
-        // Read this before ActivateRef can toggle a door/container state.
+        // Retain the observed pre-state before ActivateRef can mutate it.
         payload.ValueB = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(&a_target));
         payload.ScalarA = position.x;
         payload.ScalarB = position.y;
         payload.ScalarC = position.z;
-        return Publish(GameplayDomain::Object, GameplayAction::Activate, payload) ?
-                   PreActivationCaptureResult::Published :
-                   PreActivationCaptureResult::PublicationRejected;
+        if (payload.ValueB < 0 || payload.ValueB > ActivationPolicy::kMaximumOpenState)
+            return PreActivationCaptureResult::Ineligible;
+        ar_capture.Payload = payload;
+        ar_capture.Valid = true;
+        return PreActivationCaptureResult::Captured;
     } catch (...) {
-        return PreActivationCaptureResult::PublicationRejected;
+        return PreActivationCaptureResult::Ineligible;
+    }
+}
+
+PostActivationCaptureResult CapturePostActivation(
+    const PendingActivationCapture& ac_capture,
+    RE::TESObjectREFR& a_target) noexcept
+{
+    try {
+        if (!ac_capture.Valid)
+            return PostActivationCaptureResult::Ineligible;
+
+        auto payload = ac_capture.Payload;
+        const auto postState = static_cast<std::int32_t>(RE::BGSOpenCloseForm::GetOpenState(&a_target));
+        if (postState < 0 || postState > ActivationPolicy::kMaximumOpenState)
+            return PostActivationCaptureResult::Ineligible;
+
+        // LocalFormIdD is unused by Activate and carries the optional
+        // meaningful post-activation state through the fixed bridge ABI.
+        payload.LocalFormIdD = static_cast<std::uint32_t>(postState);
+        return Publish(GameplayDomain::Object, GameplayAction::Activate, payload) ?
+                   PostActivationCaptureResult::Published :
+                   PostActivationCaptureResult::PublicationRejected;
+    } catch (...) {
+        return PostActivationCaptureResult::PublicationRejected;
     }
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter::LocalGameplayCapture

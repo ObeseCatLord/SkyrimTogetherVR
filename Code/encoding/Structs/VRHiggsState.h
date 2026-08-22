@@ -57,8 +57,14 @@ struct VRHiggsHandState
     bool Disabled{false};
     bool WeaponCollisionDisabled{false};
     GameId GrabbedObject{};
+    // HIGGS 1.10.5+ exposes the grabbed render node. The bounded, NUL-free
+    // identity selects that node for hand-relative replay; zero is root-only.
+    static constexpr std::size_t kMaximumGrabbedNodeNameBytes = 48;
+    std::array<char, kMaximumGrabbedNodeNameBytes> GrabbedNodeName{};
+    uint8_t GrabbedNodeNameLength{0};
     VRHiggsFingerState Fingers{};
     VRHiggsGrabTransform GrabTransform{};
+    bool IsDecodedValid{true};
 };
 
 struct VRHiggsEventSnapshot
@@ -87,8 +93,15 @@ struct VRHiggsEventSnapshot
     bool HasHand{false};
     bool IsLeft{false};
     GameId ObjectId{};
+    // Stash/consume callbacks receive a base form, not a reference. ObjectId
+    // remains the synchronously captured held reference; this is metadata only.
+    GameId InventoryBaseForm{};
     float Mass{0.0f};
     float SeparatingVelocity{0.0f};
+    VRHiggsGrabTransform GrabTransform{};
+    std::array<char, VRHiggsHandState::kMaximumGrabbedNodeNameBytes> GrabbedNodeName{};
+    uint8_t GrabbedNodeNameLength{0};
+    bool IsDecodedValid{true};
 };
 
 inline constexpr std::size_t kMaximumHiggsMutationEvents = 32;
@@ -103,9 +116,15 @@ struct VRHiggsState
     [[nodiscard]] bool IsMutationReplayValid() const noexcept;
 
     uint32_t Sequence{0};
+    // Nonzero bridge-producer identity. A different epoch atomically rebases
+    // HIGGS ledgers, pending edges, visual bindings, and server leases.
+    uint64_t ProducerEpoch{0};
     // Sequence is sampled bridge telemetry. Mutation events have their own
     // ordered sequence space and are replayed independently of telemetry.
     uint32_t MutationSequence{0};
+    // The bounded mutation window evicted an unseen edge. Receivers must
+    // discard stale mutation/binding state and rebuild from Left/Right.
+    bool MutationReplayRebased{false};
     bool BridgeLoaded{false};
     bool Detected{false};
     bool InterfaceAvailable{false};

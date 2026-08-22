@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include <vr_gameplay_bridge/ActivationHooks.h>
+#include <vr_gameplay_bridge/ActorWorldManager.h>
 
 namespace
 {
@@ -39,10 +40,29 @@ TEST_CASE("Activation capture only accepts valid non-book local interactions", "
 TEST_CASE("Activation policy captures before one non-blocking original call", "[skyrim-vr][activation]")
 {
     REQUIRE(Policy::MustCaptureBeforeOriginal());
+    REQUIRE(Policy::MustPublishAfterSuccessfulOriginal(true));
+    REQUIRE_FALSE(Policy::MustPublishAfterSuccessfulOriginal(false));
     REQUIRE(Policy::IsExactlyOneOriginalCallPolicy(true, 1));
     REQUIRE_FALSE(Policy::IsExactlyOneOriginalCallPolicy(false, 1));
     REQUIRE_FALSE(Policy::IsExactlyOneOriginalCallPolicy(true, 0));
     REQUIRE_FALSE(Policy::IsExactlyOneOriginalCallPolicy(true, 2));
+}
+
+TEST_CASE("Canonical open-state application settles observed direction", "[skyrim-vr][activation]")
+{
+    namespace Open = SkyrimTogetherVR::GameplayAdapter::OpenStatePolicy;
+
+    REQUIRE(Open::IsApplicableAuthoritativeOpenState(Open::kOpen));
+    REQUIRE(Open::IsApplicableAuthoritativeOpenState(Open::kOpening));
+    REQUIRE(Open::IsApplicableAuthoritativeOpenState(Open::kClosed));
+    REQUIRE(Open::IsApplicableAuthoritativeOpenState(Open::kClosing));
+    REQUIRE_FALSE(Open::IsApplicableAuthoritativeOpenState(Open::kNone));
+    REQUIRE(Open::IsOpenDirection(Open::kOpening));
+    REQUIRE_FALSE(Open::IsOpenDirection(Open::kClosing));
+    REQUIRE_FALSE(Open::RequiresNativeSet(Open::kOpen, true));
+    REQUIRE(Open::RequiresNativeSet(Open::kOpening, true));
+    REQUIRE_FALSE(Open::RequiresNativeSet(Open::kClosed, false));
+    REQUIRE(Open::RequiresNativeSet(Open::kClosing, false));
 }
 
 TEST_CASE("Activation detour replaces the post-state event sink and retains uncertain hooks", "[skyrim-vr][activation]")

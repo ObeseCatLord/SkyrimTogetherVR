@@ -4,6 +4,7 @@
 
 void RequestQuestUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
+    Serialization::WriteVarInt(aWriter, OwnerPlayerId);
     Id.Serialize(aWriter);
     aWriter.WriteBits(Stage, 16);
     aWriter.WriteBits(Status, 8);
@@ -13,6 +14,7 @@ void RequestQuestUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) co
 void RequestQuestUpdate::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
     ClientMessage::DeserializeRaw(aReader);
+    OwnerPlayerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     Id.Deserialize(aReader);
 
     uint64_t tmp;

@@ -11,9 +11,45 @@ inline constexpr std::uint32_t kFreezeFrameBackground = 0x20;
 inline constexpr std::uint32_t kFreezeFramePause = 0x1000000;
 inline constexpr std::uint32_t kClearedFlags = kPausesGame | kFreezeFrameBackground | kFreezeFramePause;
 
-inline constexpr std::array<std::string_view, 9> kAllowList = {
-    "TweenMenu", "MagicMenu", "StatsMenu", "InventoryMenu", "MessageBoxMenu", "ContainerMenu", "FavoritesMenu", "Tutorial Menu", "Console",
+// Names are taken from Skyrim VR's registered UI names in CommonLib's menu
+// definitions and InterfaceStrings. Keep engine/lifecycle menus (loading,
+// main/title, fader, HUD, character creation, and overlays) out of this list.
+inline constexpr auto kAllowList = std::array{
+    std::string_view{"TweenMenu"},
+    std::string_view{"MagicMenu"},
+    std::string_view{"StatsMenu"},
+    std::string_view{"InventoryMenu"},
+    std::string_view{"MessageBoxMenu"},
+    std::string_view{"ContainerMenu"},
+    std::string_view{"FavoritesMenu"},
+    std::string_view{"Tutorial Menu"},
+    std::string_view{"Console"},
+    std::string_view{"BarterMenu"},
+    std::string_view{"Book Menu"},
+    std::string_view{"Crafting Menu"},
+    std::string_view{"Dialogue Menu"},
+    std::string_view{"GiftMenu"},
+    std::string_view{"Lockpicking Menu"},
+    std::string_view{"Quantity Menu"},
+    std::string_view{"Sleep/Wait Menu"},
+    std::string_view{"Training Menu"},
+    std::string_view{"LevelUp Menu"},
 };
+
+[[nodiscard]] constexpr bool HasUniqueAllowlistNames() noexcept
+{
+    for (std::size_t left = 0; left < kAllowList.size(); ++left)
+    {
+        for (std::size_t right = left + 1; right < kAllowList.size(); ++right)
+        {
+            if (kAllowList[left] == kAllowList[right])
+                return false;
+        }
+    }
+    return true;
+}
+
+static_assert(HasUniqueAllowlistNames());
 
 enum class Action : std::uint8_t
 {

@@ -49,7 +49,7 @@ READOUT_FILES = {
     "saveload": "SkyrimTogetherVR.saveload",
 }
 
-GAMEPLAY_PROTOCOL_REVISION = 17
+GAMEPLAY_PROTOCOL_REVISION = 20
 GAMEPLAY_SNAPSHOT_SCHEMA_VERSION = 1
 GAMEPLAY_MANDATORY_CANONICAL_DOMAINS = (
     "animation", "appearance", "equipment", "inventory", "actor_state",
@@ -57,10 +57,11 @@ GAMEPLAY_MANDATORY_CANONICAL_DOMAINS = (
     "party", "world_state", "vr_body_pose", "npc_ownership", "movement",
     "save_load",
 )
-# These are deliberately outside the canonical parity contract.  HIGGS is a
-# separately exercised direct extension; PLANCK has no supported remote replay.
-GAMEPLAY_OPTIONAL_VR_EXTENSION_DOMAINS = ("higgs",)
-GAMEPLAY_UNSUPPORTED_VR_EXTENSION_DOMAINS = ("planck",)
+# These are deliberately outside the mandatory canonical parity contract.
+# They become active only when their exact local API and matching network
+# capability are negotiated; absence must not block the base gameplay profile.
+GAMEPLAY_OPTIONAL_VR_EXTENSION_DOMAINS = ("higgs", "planck")
+GAMEPLAY_UNSUPPORTED_VR_EXTENSION_DOMAINS = ()
 GAMEPLAY_LOCAL_COUNTER_EVIDENCE = {
     "evidence.scope": "local_process_counters",
     "evidence.twoClientProof": "0",
@@ -98,7 +99,7 @@ SUMMARY_FIELDS = {
     "compat": ("ready", "higgs.installed", "higgs.loaded", "planck.installed", "planck.loaded", "fbt.installed", "fbt.loaded", "vrPhysicsCompatibilityModInstalled", "hookMode", "gameplayMode", "remoteAvatarPolicy", "remotePlayerProxyPolicy", "discoveryPolicy", "playerCellPolicy", "movementPolicy", "equipmentPolicy", "activationPolicy", "inventoryPolicy", "magicPolicy", "combatPolicy", "projectilePolicy", "grabPolicy", "higgsRelayPolicy", "saveLoadPolicy", "bodyPoseCapturePolicy", "unvalidatedGameplayHooksSuppressed", "higgsPolicy", "planckPolicy", "fbtPolicy"),
     "higgs": ("bridge.loaded", "bridge.sequence", "higgs.detected", "higgs.interfaceAvailable", "higgs.callbacksRegistered", "higgs.snapshotAvailable", "higgs.snapshotSequence", "higgs.twoHanding", "bodyCapture.endpointFaulted", "bodyCapture.attemptCount", "bodyCapture.successCount", "bodyCapture.lastResult", "recentEventCount"),
     "higgsnet": ("ready", "localHiggsAvailable", "remoteHiggsCount"),
-    "planck": ("bridge.loaded", "bridge.sequence", "planck.detected", "planck.interfaceRequestAttempted", "planck.interfaceAvailable", "planck.buildNumber", "planck.currentHitEventAvailable", "planck.currentHitEventObservationOnly", "planck.lastHitDataAvailable", "planck.lastHitDataProbeEnabled", "planck.lastHitDataReason", "planck.lastHitDataBoundary", "planck.policy"),
+    "planck": ("bridge.loaded", "bridge.sequence", "bridge.epoch", "planck.detected", "planck.interfaceRequestAttempted", "planck.interfaceRequestCount", "planck.interfaceAvailable", "planck.interfaceRevision", "planck.features", "planck.interface002RequiredFeatures", "planck.damageAuthority", "planck.remotePhysicsReplay"),
     "saveload": ("ready", "loadGameObserved", "loadGameCount", "readyAfterLastLoad", "playerCell.serverBaseId", "playerWorldSpace.serverBaseId"),
 }
 
@@ -883,14 +884,11 @@ def build_planck_summary(readouts: dict[str, dict[str, str]]) -> dict[str, str]:
         "planckDetected": bool_summary(values.get("planck.detected")),
         "planckRequest": bool_summary(values.get("planck.interfaceRequestAttempted")),
         "planckInterface": bool_summary(values.get("planck.interfaceAvailable")),
-        "planckBuild": values.get("planck.buildNumber", "0"),
-        "planckCurrentHit": bool_summary(values.get("planck.currentHitEventAvailable")),
-        "planckCurrentHitObservationOnly": bool_summary(values.get("planck.currentHitEventObservationOnly")),
-        "planckLastHitData": bool_summary(values.get("planck.lastHitDataAvailable")),
-        "planckLastHitProbe": bool_summary(values.get("planck.lastHitDataProbeEnabled")),
-        "planckLastHitReason": values.get("planck.lastHitDataReason", "?"),
-        "planckLastHitBoundary": values.get("planck.lastHitDataBoundary", "?"),
-        "planckPolicy": values.get("planck.policy", "?"),
+        "planckInterfaceRevision": values.get("planck.interfaceRevision", "0"),
+        "planckFeatures": values.get("planck.features", "0x0"),
+        "planckRequiredFeatures": values.get("planck.interface002RequiredFeatures", "0x0"),
+        "planckDamageAuthority": values.get("planck.damageAuthority", "?"),
+        "planckRemotePhysics": values.get("planck.remotePhysicsReplay", "?"),
     }
 
 
@@ -1273,7 +1271,7 @@ function render(payload) {{
 
 	function renderPlanck(summary) {{
 	  planck.replaceChildren();
-	  const columns = ["planckBridge", "planckBridgeSeq", "planckDetected", "planckRequest", "planckInterface", "planckBuild", "planckCurrentHit", "planckCurrentHitObservationOnly", "planckLastHitData", "planckLastHitProbe", "planckLastHitReason", "planckLastHitBoundary", "planckPolicy"];
+	  const columns = ["planckBridge", "planckBridgeSeq", "planckDetected", "planckRequest", "planckInterface", "planckInterfaceRevision", "planckFeatures", "planckRequiredFeatures", "planckDamageAuthority", "planckRemotePhysics"];
 	  const table = document.createElement("table");
 	  const tbody = document.createElement("tbody");
 	  for (const column of columns) {{
@@ -1931,16 +1929,13 @@ def command_self_test(args: argparse.Namespace) -> int:
             "bridge.sequence=4\n"
             "planck.detected=1\n"
             "planck.interfaceRequestAttempted=1\n"
+            "planck.interfaceRequestCount=1\n"
             "planck.interfaceAvailable=1\n"
-            "planck.buildNumber=8\n"
-            "planck.currentHitEventAddress=0x1234\n"
-            "planck.currentHitEventAvailable=1\n"
-            "planck.currentHitEventObservationOnly=1\n"
-            "planck.lastHitDataAvailable=0\n"
-            "planck.lastHitDataProbeEnabled=0\n"
-            "planck.lastHitDataReason=not_polled_nontrivial_return_boundary\n"
-            "planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi\n"
-            "planck.policy=observation_only\n",
+            "planck.interfaceRevision=2\n"
+            "planck.features=0xf\n"
+            "planck.interface002RequiredFeatures=0xf\n"
+            "planck.damageAuthority=none_remote_physics_only\n"
+            "planck.remotePhysicsReplay=data_only_interface002\n",
         )
 
         values = read_readouts(handoff_dir)
@@ -2013,10 +2008,11 @@ def command_self_test(args: argparse.Namespace) -> int:
         assert payload["higgs"]["bodyCaptureSuccesses"] == "19"
         assert payload["higgs"]["bodyCaptureLastResult"] == "0"
         assert payload["planck"]["planckInterface"] == "yes"
-        assert payload["planck"]["planckCurrentHitObservationOnly"] == "yes"
-        assert payload["planck"]["planckLastHitProbe"] == "no"
-        assert payload["planck"]["planckLastHitReason"] == "not_polled_nontrivial_return_boundary"
-        assert payload["planck"]["planckLastHitBoundary"] == "disabled_unvalidated_by_value_abi"
+        assert payload["planck"]["planckInterfaceRevision"] == "2"
+        assert payload["planck"]["planckFeatures"] == "0xf"
+        assert payload["planck"]["planckRequiredFeatures"] == "0xf"
+        assert payload["planck"]["planckDamageAuthority"] == "none_remote_physics_only"
+        assert payload["planck"]["planckRemotePhysics"] == "data_only_interface002"
         assert payload["connectionConfig"]["endpoint"] == "127.0.0.1:10578"
         assert payload["connectionConfig"]["passwordSet"] == "1"
         remote_players = payload["remotePlayers"]

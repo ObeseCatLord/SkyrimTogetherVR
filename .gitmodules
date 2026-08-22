@@ -20,3 +20,7 @@
 	path = Libraries/CommonLibSSE-NG
 	url = https://github.com/ObeseCatLord/CommonLibSSE-NG.git
 	branch = stvr-exclusive-vr-6.1.1
+[submodule "Libraries/activeragdoll"]
+	path = Libraries/activeragdoll
+	url = https://github.com/ObeseCatLord/activeragdoll.git
+	branch = stvr-network-api

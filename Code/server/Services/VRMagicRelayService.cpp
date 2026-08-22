@@ -1,4 +1,5 @@
 #include <Services/VRMagicRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -64,7 +65,11 @@ void VRMagicRelayService::OnVRMagicEffectEvent(const PacketEvent<RequestVRMagicE
             notify, *character,
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRMagicRelay),
             acMessage.pPlayer))
-        spdlog::warn("VR relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR magic-effect relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 }
 catch (...)
 {

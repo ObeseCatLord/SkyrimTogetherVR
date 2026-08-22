@@ -47,8 +47,16 @@ private:
         LeaveParty,
         InviteToParty,
         AcceptPartyInvite,
+        DeclinePartyInvite,
         KickPartyMember,
         ChangePartyLeader
+    };
+
+    enum class CommandEnvelope
+    {
+        Internal,
+        Online,
+        LaunchBoundConnect
     };
 
     struct Command
@@ -59,12 +67,24 @@ private:
         std::string Message;
         std::string TargetPlayer;
         std::string Error;
+        std::string LaunchNonce;
+        CommandEnvelope Envelope{CommandEnvelope::Internal};
+        uint64_t LifecycleEpoch{};
+        uint64_t ConnectionGeneration{};
+        uint64_t SessionId{};
+        uint64_t ServerInstanceNonce{};
         uint32_t PlayerId{};
         uint8_t Hours{};
         uint8_t Minutes{};
         bool HasPlayerId{false};
         bool HasHours{false};
         bool HasMinutes{false};
+        bool HasEnvelope{false};
+        bool HasLaunchNonce{false};
+        bool HasLifecycleEpoch{false};
+        bool HasConnectionGeneration{false};
+        bool HasSessionId{false};
+        bool HasServerInstanceNonce{false};
     };
 
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
@@ -80,16 +100,19 @@ private:
     [[nodiscard]] bool RunCommand(const Command& acCommand) noexcept;
     void QueueConnect(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     void QueueDisconnect() noexcept;
-    [[nodiscard]] bool SendChat(const std::string& acMessage) noexcept;
+    [[nodiscard]] bool SendChat(const Command& acCommand) noexcept;
     [[nodiscard]] bool SendSetTimeCommand(const Command& acCommand) noexcept;
     [[nodiscard]] bool SendTeleportToPlayerCommand(const Command& acCommand) noexcept;
     [[nodiscard]] bool SendAdminTeleportCommand(const Command& acCommand) noexcept;
     [[nodiscard]] bool HasStableAuthenticatedTransport() const noexcept;
     [[nodiscard]] bool HasAuthenticatedTransportIdentity() const noexcept;
+    [[nodiscard]] bool HasCurrentOnlineCommandIdentity(const Command& acCommand) const noexcept;
+    [[nodiscard]] bool HasCurrentLaunchBoundConnectIdentity(const Command& acCommand) const noexcept;
+    [[nodiscard]] bool IsCurrentPartyMember(uint32_t aPlayerId) const noexcept;
     [[nodiscard]] static constexpr VRRehydrationProfile GetBuildRehydrationProfile() noexcept
     {
 #if TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC
-#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY
+#if TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
         return VRRehydrationProfile::Gameplay;
 #else
         return VRRehydrationProfile::AvatarSync;
@@ -106,12 +129,14 @@ private:
     void ArchiveCommandFile(const char* apSuffix) noexcept;
     void SetStatus(std::string aState, std::string aError = {}) noexcept;
     void WriteStatusFile() noexcept;
+    void WriteControlsSnapshot() noexcept;
 
     World& m_world;
     TransportService& m_transport;
     std::filesystem::path m_handoffDir;
     std::filesystem::path m_commandPath;
     std::filesystem::path m_statusPath;
+    std::filesystem::path m_controlsPath;
     std::string m_state{"offline"};
     std::string m_lastError;
     std::string m_rehydrationFailure;

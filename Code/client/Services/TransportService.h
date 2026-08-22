@@ -10,7 +10,8 @@
 #include <thread>
 #include <vector>
 
-#include <Services/DeferredNativeParityClose.h>
+#include <Services/DeferredNativeGameplayCoreClose.h>
+#include <Services/OptionalVRCapabilityLossPolicy.h>
 
 struct ImguiService;
 struct UpdateEvent;
@@ -115,7 +116,8 @@ private:
         std::uint64_t aOriginLifecycleEpoch) noexcept;
     void CompleteGameplayRetirement() noexcept;
     void RetryGameplayRetirement() noexcept;
-    void QueueNativeParityContractClose() noexcept;
+    void QueueNativeGameplayCoreContractClose() noexcept;
+    void QueueOptionalVRCapabilityContractClose(SkyrimTogetherVR::OptionalVRCapabilityLoss aLoss) noexcept;
     [[nodiscard]] bool IsGameplayRetirementRequestCurrent() const noexcept;
     [[nodiscard]] bool AttemptGameplayRetirement() noexcept;
     [[nodiscard]] OutboundPacketPreflightResult SerializeOutboundPacket(
@@ -132,13 +134,19 @@ private:
     uint64_t m_serverInstanceNonce = 0;
     String m_acceptedServerVersion{};
     uint64_t m_negotiatedGameplayCapabilities = 0;
+    // Retains the accepted optional bits even if a runtime loss removes them
+    // from the active routing mask before the generation-bound close runs.
+    uint64_t m_negotiatedOptionalVRCapabilities = 0;
     uint64_t m_requestedGameplayCapabilities = 0;
     GameplayRetirementRequest m_gameplayRetirement{};
     bool m_gameplayCleanupRequired = false;
     bool m_gameplayIdentityClearPending = false;
-    bool m_nativeParityFaultReported = false;
-    bool m_nativeParityCloseQueued = false;
-    std::uint64_t m_nativeParityCloseToken{};
+    bool m_nativeGameplayCoreFaultReported = false;
+    bool m_nativeGameplayCoreCloseQueued = false;
+    std::uint64_t m_nativeGameplayCoreCloseToken{};
+    bool m_optionalVRCapabilityFaultReported = false;
+    bool m_optionalVRCapabilityCloseQueued = false;
+    std::uint64_t m_optionalVRCapabilityCloseToken{};
     std::deque<PendingOutboundPacket> m_outboundQueue{};
     std::size_t m_outboundQueueBytes{};
     bool m_drainingOutboundQueue{};

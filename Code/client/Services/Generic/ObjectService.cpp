@@ -26,6 +26,14 @@
 #include <array>
 #include <inttypes.h>
 
+#ifndef TP_SKYRIM_VR
+#define TP_SKYRIM_VR 0
+#endif
+
+#ifndef TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE
+#define TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE 0
+#endif
+
 namespace
 {
 void LogObjectServiceFailure(const char* apMessage) noexcept
@@ -53,7 +61,9 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&ObjectService::OnDisconnected>(this);
     m_cellChangeConnection = aDispatcher.sink<CellChangeEvent>().connect<&ObjectService::OnCellChange>(this);
     m_onActivateConnection = aDispatcher.sink<ActivateEvent>().connect<&ObjectService::OnActivate>(this);
+#if !(TP_SKYRIM_VR && TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE)
     m_activateConnection = aDispatcher.sink<NotifyActivate>().connect<&ObjectService::OnActivateNotify>(this);
+#endif
     m_lockChangeConnection = aDispatcher.sink<LockChangeEvent>().connect<&ObjectService::OnLockChange>(this);
     m_lockChangeNotifyConnection = aDispatcher.sink<NotifyLockChange>().connect<&ObjectService::OnLockChangeNotify>(this);
     m_assignObjectConnection = aDispatcher.sink<AssignObjectsResponse>().connect<&ObjectService::OnAssignObjectsResponse>(this);

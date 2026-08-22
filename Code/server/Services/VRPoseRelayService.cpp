@@ -1,4 +1,5 @@
 #include <Services/VRPoseRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -56,7 +57,11 @@ void VRPoseRelayService::OnVRPoseUpdate(const PacketEvent<RequestVRPoseUpdate>& 
             notify, *character,
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRPoseRelay),
             acMessage.pPlayer))
-        spdlog::warn("VR relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR pose relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 }
 catch (...)
 {

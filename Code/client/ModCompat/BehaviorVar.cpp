@@ -282,17 +282,48 @@ const AnimationGraphDescriptor* BehaviorVar::ConstructModdedDescriptor(
     if (foundCount)
         spdlog::info(__FUNCTION__ ": now have {} intVar descriptors after searching {} BehavivorVar strings", intVar.size(), acReplacer.syncIntegerVar.size());
 
-    // We need the sets sorted, and TiltedPhoques::Set is not. Copying to an std::set
-    // isn't the most efficient approach, but it is simple and doesn't happen often enough
-    // to worry about. And doing it here isolates/minimizes use of std::set.
-    std::set<uint32_t> boolVarSorted(boolVar.begin(), boolVar.end());
-    std::set<uint32_t> floatVarSorted(floatVar.begin(), floatVar.end());
-    std::set<uint32_t> intVarSorted(intVar.begin(), intVar.end());
-
-    // Reshape the (sorted, unique) sets to vectors
-    TiltedPhoques::Vector<uint32_t> boolVector(boolVarSorted.begin(), boolVarSorted.end());
-    TiltedPhoques::Vector<uint32_t> floatVector(floatVarSorted.begin(), floatVarSorted.end());
-    TiltedPhoques::Vector<uint32_t> intVector(intVarSorted.begin(), intVarSorted.end());
+    // Ordering is wire-visible. Preserve the original descriptor's selected
+    // order, then append valid configured names in file order. The old numeric
+    // sort was deterministic only for one runtime and could disagree with the
+    // VR bridge's ordered-name descriptor contract.
+    const auto makeOrdered = [&acReverseMap, &acReplacer](const auto& a_original,
+                                                           const auto& a_configured,
+                                                           const auto& a_selected) {
+        TiltedPhoques::Vector<uint32_t> result;
+        const auto append = [&result, &acReverseMap, &a_selected](const TiltedPhoques::String& a_name) {
+            const auto found = acReverseMap.find(a_name);
+            if (found == acReverseMap.end() || a_selected.find(found->second) == a_selected.end() ||
+                std::find(result.begin(), result.end(), found->second) != result.end())
+                return;
+            result.push_back(found->second);
+        };
+        if (acReplacer.origHash) {
+            const auto* original = AnimationGraphDescriptorManager::Get().GetDescriptor(acReplacer.origHash);
+            if (original) {
+                const auto& originals = BehaviorVarsMap::getInstance();
+                for (const auto index : a_original(*original)) {
+                    const auto name = originals.find(acReplacer.origHash, index);
+                    if (!name.empty())
+                        append(name);
+                }
+            }
+        }
+        for (const auto& name : a_configured)
+            append(name);
+        return result;
+    };
+    const auto boolVector = makeOrdered(
+        [](const AnimationGraphDescriptor& a_descriptor) -> const TiltedPhoques::Vector<uint32_t>& { return a_descriptor.BooleanLookUpTable; },
+        acReplacer.syncBooleanVar, boolVar);
+    const auto floatVector = makeOrdered(
+        [](const AnimationGraphDescriptor& a_descriptor) -> const TiltedPhoques::Vector<uint32_t>& { return a_descriptor.FloatLookupTable; },
+        acReplacer.syncFloatVar, floatVar);
+    const auto intVector = makeOrdered(
+        [](const AnimationGraphDescriptor& a_descriptor) -> const TiltedPhoques::Vector<uint32_t>& { return a_descriptor.IntegerLookupTable; },
+        acReplacer.syncIntegerVar, intVar);
+    if (boolVector.empty() || floatVector.empty() || intVector.empty() || boolVector.size() > 64 ||
+        floatVector.size() > 64 || intVector.size() > 64)
+        return nullptr;
 
     // Construct a new descriptor
     auto panimGraphDescriptor = new AnimationGraphDescriptor();
@@ -302,6 +333,17 @@ const AnimationGraphDescriptor* BehaviorVar::ConstructModdedDescriptor(
     panimGraphDescriptor->BooleanLookUpTable = boolVector;
     panimGraphDescriptor->FloatLookupTable = floatVector;
     panimGraphDescriptor->IntegerLookupTable = intVector;
+
+    // Keep the name-to-slot map for the newly constructed behavior as well as
+    // its original base behavior. Animation snapshots use the ordered names
+    // as their cross-client descriptor identity.
+    BehaviorVars descriptorVariables;
+    descriptorVariables.m_key = acNewHash;
+    for (const auto& [name, index] : acReverseMap) {
+        descriptorVariables.m_nameMap[name] = index;
+        descriptorVariables.m_valueMap[index] = name;
+    }
+    BehaviorVarsMap::getInstance().Register(descriptorVariables);
 
     // Add the new graph to the known behavior graphs
     // TODO: doesn't handle case of the acNewHash already existing.
@@ -417,8 +459,8 @@ const AnimationGraphDescriptor* BehaviorVar::Patch(BSAnimationGraphManager* apMa
         spdlog::critical(__FUNCTION__ ": multiple behavior replacers have the same signature, this must be corrected:");
         for (auto& item : matchedReplacers)
             spdlog::critical("   {}", behaviorPool[item].creatureName);
-        spdlog::warn("Multiple behavior replacers have the same signature, choosing the first one.");
-        break;
+        FailList(hash);
+        return nullptr;
     }
 
     auto& foundRep = behaviorPool[matchedReplacers[0]];
@@ -469,6 +511,7 @@ TiltedPhoques::Vector<std::filesystem::path> BehaviorVar::LoadDirs(const std::fi
     for (auto& p : std::filesystem::directory_iterator(acPath))
         if (p.is_directory())
             result.push_back(p.path().string());
+    std::sort(result.begin(), result.end());
     return result;
 }
 
@@ -531,6 +574,9 @@ BehaviorVar::Replacer* BehaviorVar::LoadReplacerFromDir(const std::filesystem::p
             spdlog::debug("bool file: {}", path);
         }
     }
+    std::sort(floatVarsFile.begin(), floatVarsFile.end());
+    std::sort(intVarsFile.begin(), intVarsFile.end());
+    std::sort(boolVarsFile.begin(), boolVarsFile.end());
 
     // Check that there is a signature file (an identifying variable)
     // When an Actor's behavior is modified, it's animation signature doesn't match
@@ -595,6 +641,9 @@ BehaviorVar::Replacer* BehaviorVar::LoadReplacerFromDir(const std::filesystem::p
         {
             while (std::getline(file, tempString))
             {
+                erase_if(tempString, isspace);
+                if (tempString.empty())
+                    continue;
                 floatVar.push_back(tempString);
 
                 spdlog::debug("    " + tempString);
@@ -612,6 +661,9 @@ BehaviorVar::Replacer* BehaviorVar::LoadReplacerFromDir(const std::filesystem::p
         {
             while (std::getline(file, tempString))
             {
+                erase_if(tempString, isspace);
+                if (tempString.empty())
+                    continue;
                 intVar.push_back(tempString);
 
                 spdlog::debug("    " + tempString);
@@ -629,6 +681,9 @@ BehaviorVar::Replacer* BehaviorVar::LoadReplacerFromDir(const std::filesystem::p
         {
             while (std::getline(file, tempString))
             {
+                erase_if(tempString, isspace);
+                if (tempString.empty())
+                    continue;
                 boolVar.push_back(tempString);
 
                 spdlog::debug("     " + tempString);
@@ -636,6 +691,15 @@ BehaviorVar::Replacer* BehaviorVar::LoadReplacerFromDir(const std::filesystem::p
             file.close();
         }
     }
+
+    const auto hasDuplicates = [](const auto& a_names) {
+        for (auto current = a_names.begin(); current != a_names.end(); ++current)
+            if (std::find(current + 1, a_names.end(), *current) != a_names.end())
+                return true;
+        return false;
+    };
+    if (hasDuplicates(boolVar) || hasDuplicates(floatVar) || hasDuplicates(intVar))
+        return nullptr;
 
     // Create the replacer
     Replacer* result = new Replacer();

@@ -190,7 +190,7 @@ REQUIRED_TOKENS = {
         'file << "ready=0',
         'file << "readinessSource=SkyrimTogetherVR.gameplay',
         'file << "higgsPolicy=direct_optional_external_bridge',
-        'file << "planckPolicy=unsupported_no_remote_physical_replay',
+        'file << "planckPolicy=optional_negotiated_interface002_not_core_readiness',
         'file << "fbtPolicy=canonical_pose_optional_extension',
         'file << "posePolicy=" << GetObservationPolicy(acStatus.PoseService)',
     ),

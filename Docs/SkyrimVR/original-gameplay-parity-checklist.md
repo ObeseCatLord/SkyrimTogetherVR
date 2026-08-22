@@ -37,10 +37,37 @@ for the review disposition and gates. `parity-safety-stage-20260802.md` remains
 dated historical context, not current build or runtime proof.
 
 Current runtime record: `9eba3bb5` authenticated on protocol revision 17 with
-all mandatory native parity capabilities negotiated, lifecycle and rehydration
+all mandatory native gameplay-core capabilities negotiated, lifecycle and rehydration
 ready, and no bridge ring drops or rejected commands. This does not check off
 the two-client gameplay runtime items below. See
 `runtime-connection-result-20260819-9eba3bb5.md`.
+
+## 2026-08-19 Independent Completeness Audit
+
+- [~] Source pending build: configured in-game connections now read the saved
+  password inside the native bridge and never return it to Papyrus or overwrite
+  it with an empty value. The telemetry native now emits a bounded allowlist of
+  connection, session, lifecycle, protocol, and bridge counters instead of
+  aliasing the connection-state string.
+- [~] Source pending build: the optional VRIK and HIGGS bridge DLLs now reject
+  invalid SKSE plugin handles and failed listener registration before publishing
+  a loaded handoff. Missing optional APIs remain non-fatal and explicitly
+  unavailable.
+- [~] Source pending build: a controller-accessible native menu exposes saved
+  connect/disconnect, chat through the runtime keyboard, party invitations and
+  membership actions, time, player travel, and server-validated admin teleport.
+  It snapshots lifecycle/session identity and revalidates every command before
+  atomically publishing it to the authenticated client owner.
+- [~] Source pending build: the pinned PLANCK fork exposes a data-only
+  `IPlanckInterface002` for local physical events and remote hit impulse,
+  ragdoll, bounded actor-grip, and session-clear replay. Protocol revision 20
+  introduced that optional capability; protocol revision 21 retains it only
+  when every required local export and feature bit is operational, and adds
+  owner-scoped quest recovery. Canonical actor-value replication remains the
+  sole damage authority.
+- [ ] Runtime: no domain has current-revision paired-client convergence proof.
+  Source wiring, local counters, one-client authentication, and a live server do
+  not establish multiplayer parity.
 
 ## 2026-08-19 Exact-Equivalence Source Update
 
@@ -54,10 +81,11 @@ the two-client gameplay runtime items below. See
   recovery, drop-event synchronicity, weather/save lifecycle targets, or
   remote AI detection/flee behavior. Two current-revision clients must prove
   those paths before this release changes classification.
-- [ ] Optional extension: direct remote PLANCK physical grab/ragdoll replay is
-  outside desktop parity pending a stable public API or separate native design.
-  PLANCK damage deduplication and pose/physics non-interference remain runtime
-  gates.
+- [ ] VR extension target: direct remote PLANCK physical grab/ragdoll replay is
+  outside desktop parity but remains required by this project's broader VR
+  compatibility goal. It needs a stable public API or a separately verified
+  native design. PLANCK damage deduplication and pose/physics non-interference
+  remain runtime gates.
 
 ## Native Boundary
 
@@ -78,18 +106,20 @@ the two-client gameplay runtime items below. See
   storage, flat desktop actor construction, or Papyrus-maintained state.
 - [x] Source: the fixed bridge ABI carries nonce, connection generation,
   lifecycle epoch, entity generation, action ID, and sequence ID.
-- [x] Source: mapping ABI is 23. ABI 20 introduced
+- [~] Source pending build: mapping ABI is 24. ABI 20 introduced
   `CommandStatus::Degraded`; later assignment/bootstrap records raised it again,
   so readers reject every incompatible fixed bridge layout.
-- [x] Source: exact-match gameplay protocol revision 17 separates VR process
+- [~] Source pending build: exact-match gameplay protocol revision 21 separates VR process
   identity, full gameplay-client intent, and mandatory native-parity admission.
   It additionally identity-authorizes attacker-originated NPC health deltas
   against an owned player entity and rejects replayed action nonces while retaining token-bound
   NPC ownership, final-equipment, version-3
   full-body/finger-pose wire layouts, and
-  bounded ordered HIGGS mutation batches
-  before either endpoint decodes them. Body formats 1 and 2 remain decodable
-  inside a revision-17 endpoint for fixture and persisted-data compatibility.
+  bounded ordered HIGGS mutation batches, revisioned canonical recovery with
+  owner/revision-authenticated quest updates and owner-scoped snapshots, and
+  the optional PLANCK interface-002 relay before either endpoint decodes them.
+  Body formats 1 and 2 remain decodable by the current endpoint for fixture and
+  persisted-data compatibility.
 - [x] Source: bridge capability revision 34 requires aggregate local capture
   event-sink registration and native quest mutation before a gameplay client
   can authenticate. Optional direct relays cannot masquerade as canonical
@@ -317,14 +347,17 @@ the two-client gameplay runtime items below. See
   canonical health/effect messages own damage.
 - [x] Source: network skeleton writes stop while a remote actor is in ragdoll,
   preventing pose replication from fighting PLANCK physics.
-- [x] Source: PLANCK interface revision 1 acquisition occurs only at SKSE
-  PostPostLoad, as required by its public API, without polling transient hit
-  pointers. Diagnostic handoff refreshes ride the existing VRIK/HIGGS
-  game-thread callback; no unload-unsafe writer thread exists. Canonical engine
-  hit events remain the sole replicated damage authority.
-- [ ] External API: direct remote physical grab/ragdoll replay. No stable public
-  remote-actor PLANCK API is available, and invoking local-player physics entry
-  points for a remote actor is unsafe.
+- [~] Source pending build: the patched PLANCK 0.8.0 fork preserves revision 1
+  and adds revision 2 only for bounded POD requests. Acquisition occurs only at
+  SKSE `PostPostLoad`; the adapter verifies the exact revision and feature mask,
+  and never invokes local-player HIGGS hand APIs for remote actors.
+- [~] Source pending build: local actor hits, ragdoll transitions, and bounded
+  actor grips are captured by PLANCK, relayed under server identity/range/PVP
+  policy, and replayed through interface 002 with lifecycle-scoped ordering,
+  retries, suppression, terminal cleanup, and aggregate rate-limited logging.
+  Ordinary object grabs remain HIGGS-owned.
+- [ ] Build: the patched `activeragdoll.dll`, PLANCK bridge, protocol-21 client,
+  and matching server have not yet passed the final exact-source Windows build.
 - [ ] Runtime: PLANCK and non-PLANCK clients prove hit/damage deduplication,
   ragdoll stability, recovery, and compatibility with HIGGS/VRIK.
 

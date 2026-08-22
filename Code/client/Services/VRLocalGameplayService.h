@@ -25,6 +25,40 @@ struct World;
 namespace SkyrimTogetherVR
 {
 struct LocalGameplayBridgeEvent;
+
+namespace VRLocalGameplayPolicy
+{
+inline constexpr std::uint32_t kPlayerReferenceFormId = 0x14;
+
+[[nodiscard]] constexpr bool IsBoundedLocalReferenceFormId(const std::uint32_t a_formId) noexcept
+{
+    return a_formId != 0 && a_formId != 0xFFFFFFFFu;
+}
+
+// This is intentionally scoped to Activate. Other gameplay actions remain
+// bound to the local-player adapter handle in their existing validation paths.
+[[nodiscard]] constexpr bool IsValidActivateActivator(
+    const GameplayBridge::AdapterHandle a_targetHandle,
+    const std::uint32_t a_targetLocalFormId) noexcept
+{
+    if (!IsBoundedLocalReferenceFormId(a_targetLocalFormId))
+        return false;
+    if (a_targetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value)
+        return a_targetLocalFormId == kPlayerReferenceFormId;
+    return a_targetHandle.Value == 0 && a_targetLocalFormId != kPlayerReferenceFormId;
+}
+
+// The caller supplies only the ID resolved from the encoded local actor. In
+// particular, an unresolved non-player actor cannot fall back to the local
+// player's server ID.
+[[nodiscard]] constexpr std::uint32_t ResolveActivateActivatorServerId(
+    const GameplayBridge::AdapterHandle a_targetHandle,
+    const std::uint32_t a_targetLocalFormId,
+    const std::uint32_t a_resolvedServerId) noexcept
+{
+    return IsValidActivateActivator(a_targetHandle, a_targetLocalFormId) ? a_resolvedServerId : 0;
+}
+} // namespace VRLocalGameplayPolicy
 }
 
 /**
@@ -201,6 +235,7 @@ private:
     PendingInventoryDeltaSuppression m_pendingInventoryDeltaSuppression{};
     std::uint32_t m_localServerId{0};
     std::uint16_t m_lastPublishedPlayerLevel{0};
+    bool m_hasPendingMount{false};
     std::uint32_t m_pendingMountLocalReference{0};
     std::size_t m_pendingMountDomainIndex{};
     std::uint64_t m_pendingMountActionId{};

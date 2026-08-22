@@ -21,30 +21,43 @@ Tools/SkyrimVR/build_winboat_candidate.sh
 
 The candidate helper snapshots `HEAD`'s complete tracked delta with
 `git diff --binary --full-index`, including binary changes and staged changes,
-without altering the Linux index or creating a Linux commit. It refuses
-untracked files, dirty/unresolved submodules, and changed submodule pointers
-other than the explicitly supported `Libraries/CommonLibSSE-NG` advancement.
-For that one submodule it verifies ancestry against the pinned base and trusted
-alandtse upstream, bundles the exact target commit for WinBoat, and validates
-the transferred bundle hash before checkout. This prevents an incomplete
+without altering the Linux index or creating a Linux commit. It refuses root
+untracked files, unresolved submodules, and unsupported dirty submodules or
+changed pointers; only the explicit CommonLib advancement and local-only PLANCK
+snapshot flow below are accepted.
+For CommonLib it verifies ancestry against the pinned base and trusted alandtse
+upstream, bundles the exact target commit for WinBoat, and validates the
+transferred bundle hash before checkout. A dirty `Libraries/activeragdoll`
+(PLANCK) submodule is also supported only by materializing its complete state
+into a local-only synthetic commit and self-contained bundle that retains the
+pinned source history needed by an empty WinBoat repository, then materializing
+an exact local-only root snapshot bundle. Neither synthetic object updates a
+real branch or remote; both hashes and commits are retained in candidate
+provenance and independently verified by WinBoat. This prevents an incomplete
 overlay or untrusted dependency commit from being presented as build proof.
-The current `HEAD` is the required already-pushed base. WinBoat verifies that
-it is an ancestor of `refs/remotes/origin/main`; it fetches only
-`origin/main` once when the cached remote-tracking ref is absent or does not
-prove that ancestry, then fails if the proof is still unavailable.
+The current `HEAD` is the candidate base. When it is not yet reachable from the
+trusted remote main branch, the helper creates and verifies a minimal Git bundle
+from their common ancestor and transfers that base privately to WinBoat. The
+guest independently fetches trusted `origin/main`, verifies the ancestry and
+bundle identity, then applies the working-tree patch. A candidate build therefore
+does not require publishing unverified source first.
 
 On WinBoat it removes only stale `SkyrimTogetherVR-candidate-*` output after
-confirming no candidate process is active, creates a detached worktree at that
-base, initializes the pinned submodules, verifies the transferred patch hash,
-applies the snapshot, and makes one guest-local ephemeral commit so the audited
-Windows package wrapper sees a clean provenance revision. It runs:
+confirming no candidate process is active, initializes the base pinned
+submodules, applies the root patch before bootstrapping a newly added PLANCK
+path from its verified local bundle, and checks out the exact synthetic
+root/PLANCK snapshot so the audited Windows package wrapper
+sees clean, immutable provenance. It runs:
 
-```bat
-BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```powershell
+.\BuildCompleteSkyrimTogetherVR-Windows.ps1 `
+  -HavokArchive "$env:LOCALAPPDATA\SkyrimTogetherVR\planck-build\archives\hk2010_2_0_r1.7z" `
+  -DependencyRoot "$env:LOCALAPPDATA\SkyrimTogetherVR\planck-build\dependencies" `
+  -Configuration Release
 ```
 
-Candidate artifacts remain inside the disposable guest worktree. The helper
-does not import artifacts to Linux, create/modify a handoff, deploy files, or
+Candidate artifacts are imported only to the private Linux candidate-result
+state directory. The helper does not create/modify a handoff, deploy files, or
 launch Skyrim. Its trap and guest `finally` remove the Linux patch, guest patch,
 temporary PowerShell payload, disposable worktree, and stale candidate output.
 It prints `STVR_CANDIDATE_BASE`, `STVR_CANDIDATE_EPHEMERAL_REVISION`, and
@@ -79,11 +92,20 @@ the new worktree it removes prior generated WinBoat build worktrees so the VM
 disk cannot grow by several gigabytes per iteration. Per-build cleanup does not
 run `Optimize-Volume`; retrim is optional maintenance and must not block a build.
 
-```bat
-BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```powershell
+.\BuildCompleteSkyrimTogetherVR-Windows.ps1 `
+  -HavokArchive "$env:LOCALAPPDATA\SkyrimTogetherVR\planck-build\archives\hk2010_2_0_r1.7z" `
+  -DependencyRoot "$env:LOCALAPPDATA\SkyrimTogetherVR\planck-build\dependencies" `
+  -Configuration Release
 ```
 
-That Windows wrapper configures xmake, regenerates all required Papyrus PEX
+Before either build, the host provisioner hash-verifies
+`STVR_HAVOK_ARCHIVE` (defaulting to the private local Havok archive) and the
+pinned staged SKSEVR source tree, then creates or reuses the durable private
+guest paths shown above. Neither dependency is copied into source, package,
+evidence, or handoff output. The complete Windows wrapper force-rebuilds the
+exact worktree's PLANCK checkout, then configures xmake and regenerates all required
+Papyrus PEX
 files, builds and runs `TPTests`, builds the gameplay launcher and all bridge
 DLLs, packages them, audits the package, collects build evidence, and audits
 the evidence archive. It never installs files or launches Skyrim. Caprica is
@@ -331,9 +353,9 @@ the logged `candidate` -> `hide issued` -> `verified closed` recovery sequence.
 
 Require the status, lifecycle, player-cell, avatar, and gameplay readouts to
 pass the fresh launch identity gate. `SkyrimTogetherVR.status` must also report
-equal nonempty client/server versions, protocol revision 17, and nonzero
+equal nonempty client/server versions, protocol revision 21, and nonzero
 server, session, and connection-generation identities. The matching bridge
-mapping must validate ABI 23 and capability revision 34.
+mapping must validate ABI 24 and capability revision 34.
 `ready=1` is required only for gameplay and gameplay-bootstrap profiles; every
 profile still requires a fresh structurally valid gameplay snapshot. Then
 correlate that identity with Foundry's `STVR auth accepted` line. The current exact acceptance is recorded in
@@ -394,30 +416,28 @@ matching Monado OpenXR manifest/state; use short client roots because the
 private Unix socket is limited to 107 bytes. Exact operation, checks, and
 limitations are in `Docs/SkyrimVR/linux-local-multi-client.md`.
 
-## GitHub CI Builds
+## Build Execution Policy
 
-Pushes and pull requests targeting `main` run two build paths:
+GitHub Actions are manual reference workflows only. Pushes, pull requests,
+tags, and schedules must not start project builds, and agents must not trigger
+`workflow_dispatch`. The authoritative client build runs under MSVC on WinBoat
+through the scripts in this runbook; the authoritative Linux server build runs
+locally through `Tools/SkyrimVR/server/build_server_image.sh`.
 
-- `.github/workflows/linux.yml` builds and tests the Linux dedicated server.
-- `.github/workflows/skyrim-vr-client.yml` uses the audited Windows gameplay
-  wrapper to compile, run `TPTests`, rebuild the VR Papyrus scripts, package the
-  gameplay client, audit it, collect build evidence, and upload both outputs as
-  GitHub Actions artifacts.
+For comparison, the retained manual Windows workflow must use the same complete
+patched-PLANCK command:
 
-The Windows workflow is the CI equivalent of:
-
-```bat
-BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay -- -Mode releasedbg
+```powershell
+.\BuildCompleteSkyrimTogetherVR-Windows.ps1 `
+  -HavokArchive "D:\archives\hk2010_2_0_r1.7z" `
+  -DependencyRoot "D:\SkyrimTogetherVR-planck-dependencies" `
+  -Configuration Release -Mode releasedbg
 ```
 
-It downloads the pinned public Caprica 0.3.0 release and lets the existing build
-script download and checksum the official SKSEVR 2.0.12 SDK. It does not need a
-Skyrim installation and therefore cannot perform installed-prerequisite or live
-VR checks. Treat a green artifact as compile/package evidence, then perform the
-documented target-machine audit and runtime test before release acceptance.
-Linux CI also runs the Monado-instance self-test, fake-systemd instance and
-client-unit fixtures, staging fixture, and launcher-runtime fixture. These
-validate isolation and command construction without starting Monado or Skyrim.
+Do not use that workflow as build evidence. Run the documented WinBoat candidate
+and clean-build paths instead, followed by target-machine and live VR checks.
+Linux fixture checks remain available through the repository's local scripts;
+run them locally when their behavior is affected.
 
 The persistent synthetic keyboard socket is:
 
@@ -553,3 +573,32 @@ process:
   with no owner mismatch, starvation, reentrancy, or new crash dump.
 
 Use `Tools/SkyrimVR/audit_runtime_handoff.py` for the local post-run audit.
+
+## Patched PLANCK Complete Gameplay Package
+
+To produce the authoritative full gameplay package with the patched PLANCK
+`interface002` DLL, run this from a Windows checkout. `HavokArchive` is always
+caller-supplied; the helper never downloads Havok, never deploys to a game
+install, and keeps PLANCK dependencies outside the repository.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\BuildCompleteSkyrimTogetherVR-Windows.ps1 `
+  -HavokArchive "D:\archives\havok2010_2_0_r1.7z" `
+  -DependencyRoot "D:\SkyrimTogetherVR-planck-dependencies" `
+  -SKSEVRArchive "D:\archives\sksevr_2_00_12.7z" `
+  -SevenZipPath "C:\Program Files\7-Zip\7z.exe" `
+  -Configuration Release
+```
+
+The wrapper builds `Libraries\activeragdoll\x64\Release\activeragdoll.dll`,
+passes that exact artifact through the existing gameplay build/audit/collect
+path, and then requires the resulting manifest's `interface002` marker, package
+path, and SHA-256 to match `Data\SKSE\Plugins\activeragdoll.dll`. The package
+copy happens after staged handoff game files, so it overrides any stock PLANCK
+overlay for installation on each gameplay client. Before every forced rebuild it
+freshly extracts and hashes every file in the complete private Havok build-input
+tree and complete SKSEVR build tree. The forced provenance and package manifest
+bind both archive SHA-256 values and both tree digests/counts; the package audit
+rejects a missing, malformed, or mismatched binding. Ordinary gameplay builds
+do not add or require this DLL unless `-PatchedPlanckArtifact` is explicitly
+supplied.

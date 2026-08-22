@@ -15,6 +15,61 @@ class TESWorldSpace;
 
 namespace SkyrimTogetherVR::GameplayAdapter::LocalGameplayCapture
 {
+namespace ActivationPolicy
+{
+inline constexpr std::uint32_t kPlayerReferenceFormId = 0x14;
+inline constexpr std::int32_t kMaximumOpenState = 4;
+
+struct EncodedActivator
+{
+    GameplayBridge::AdapterHandle TargetHandle{};
+    std::uint32_t TargetLocalFormId{};
+};
+
+// Only the exact pre-activation path may encode a non-player actor. Its
+// reference form ID is a bounded identifier for the mapped client; it is not
+// an adapter handle and therefore cannot impersonate the player.
+[[nodiscard]] constexpr bool IsBoundedLocalReferenceFormId(const std::uint32_t a_formId) noexcept
+{
+    return a_formId != 0 && a_formId != 0xFFFFFFFFu;
+}
+
+[[nodiscard]] constexpr bool ShouldCapturePreActivation(
+    const bool a_activatorIsActor,
+    const std::uint32_t a_activatorFormId,
+    const bool a_activatorIsLocalPlayer,
+    const bool a_validTarget,
+    const bool a_validBase,
+    const bool a_validCell,
+    const bool a_isBook) noexcept
+{
+    return a_activatorIsActor && IsBoundedLocalReferenceFormId(a_activatorFormId) &&
+           (!a_activatorIsLocalPlayer || a_activatorFormId == kPlayerReferenceFormId) &&
+           a_validTarget && a_validBase && a_validCell && !a_isBook;
+}
+
+[[nodiscard]] constexpr EncodedActivator EncodeActivator(
+    const bool a_activatorIsLocalPlayer,
+    const std::uint32_t a_activatorFormId) noexcept
+{
+    return {
+        a_activatorIsLocalPlayer ? GameplayBridge::kLocalPlayerHandle : GameplayBridge::AdapterHandle{},
+        a_activatorFormId,
+    };
+}
+
+[[nodiscard]] constexpr bool IsValidEncodedActivator(
+    const GameplayBridge::AdapterHandle a_targetHandle,
+    const std::uint32_t a_targetLocalFormId) noexcept
+{
+    if (!IsBoundedLocalReferenceFormId(a_targetLocalFormId))
+        return false;
+    if (a_targetHandle.Value == GameplayBridge::kLocalPlayerHandle.Value)
+        return a_targetLocalFormId == kPlayerReferenceFormId;
+    return a_targetHandle.Value == 0 && a_targetLocalFormId != kPlayerReferenceFormId;
+}
+} // namespace ActivationPolicy
+
 // These entry points are owned by the bridge's game-thread integration.  They
 // never expose game pointers or variable-size game data through the bridge.
 void Initialize() noexcept;
@@ -41,16 +96,33 @@ void RefreshInventoryBaseline(std::uint32_t a_ownerFormId) noexcept;
 void CapturePeriodic() noexcept;
 enum class PreActivationCaptureResult : std::uint8_t
 {
+    Captured,
+    Ineligible,
+};
+struct PendingActivationCapture
+{
+    GameplayBridge::GameplayActionPayload Payload{};
+    bool Valid{};
+};
+enum class PostActivationCaptureResult : std::uint8_t
+{
     Published,
     Ineligible,
     PublicationRejected,
 };
-// The exact TESObjectREFR::ActivateRef detour calls this synchronously before
-// the original engine body. It copies only canonical wire data and retains no
-// game pointer after returning; rejection must never block local activation.
+// The exact TESObjectREFR::ActivateRef detour retains its pre-state in this
+// stack-owned value before calling the original engine body. It contains only
+// copied wire data and never retains a game pointer.
 [[nodiscard]] PreActivationCaptureResult CapturePreActivation(
     RE::TESObjectREFR& a_target,
-    RE::TESObjectREFR& a_activator) noexcept;
+    RE::TESObjectREFR& a_activator,
+    PendingActivationCapture& ar_capture) noexcept;
+// Called only when the original ActivateRef body accepted the activation. The
+// post-state is sampled immediately from the still-synchronous target and then
+// published together with the retained pre-state.
+[[nodiscard]] PostActivationCaptureResult CapturePostActivation(
+    const PendingActivationCapture& ac_capture,
+    RE::TESObjectREFR& a_target) noexcept;
 enum class ExactWaypointCaptureResult : std::uint8_t
 {
     Published,
@@ -117,9 +189,9 @@ void CancelLockSuppression(LockSuppressionToken a_token) noexcept;
 bool StartNpcObservation(std::uint32_t a_localReferenceFormId) noexcept;
 void StopNpcObservation(std::uint32_t a_localReferenceFormId) noexcept;
 [[nodiscard]] bool IsNpcObserved(std::uint32_t a_localReferenceFormId) noexcept;
-// Called by the exact VR Actor::SpeakSound hook after the engine accepts a
-// locally simulated NPC voice line. The mapped client resolves ownership and
-// the canonical server actor ID; no game pointer crosses this boundary.
+// Called by the exact VR Actor::SpeakSound hook before native presentation.
+// Only a locally observed NPC can have a mapped server actor ID; no game
+// pointer crosses this boundary.
 bool CaptureDialogueVoice(std::uint32_t a_localActorFormId, const char* a_resourcePath) noexcept;
 // Called after the verified MenuTopicManager::PlayDialogueOption body accepts
 // a local index. The text and opaque baseline identity are captured before

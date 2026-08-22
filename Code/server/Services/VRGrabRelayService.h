@@ -47,6 +47,7 @@ struct Batch
 [[nodiscard]] bool BeginBatch(Batch& arBatch, uint64_t aTick) noexcept;
 [[nodiscard]] bool TryApplyOperation(Batch& arBatch, const Operation& acOperation,
                                      uint32_t aPlayerId, uint64_t aTick) noexcept;
+void ReleasePlayer(Batch& arBatch, uint32_t aPlayerId) noexcept;
 [[nodiscard]] bool CommitBatch(Batch&& arBatch) noexcept;
 [[nodiscard]] bool AcquireOrRenew(const GameId& acObjectId, uint32_t aPlayerId, uint64_t aTick);
 [[nodiscard]] bool Release(const GameId& acObjectId, uint32_t aPlayerId) noexcept;
@@ -78,7 +79,7 @@ private:
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
     void OnUpdate(const UpdateEvent&) noexcept;
     [[nodiscard]] bool PrepareRelayDecision(const PlayerGrabRelayState& acPrevious,
-                                            uint32_t aPlayerId, const RequestVRGrabEvent& acRequest,
+                                            const class Player& acPlayer, uint32_t aPlayerId, const RequestVRGrabEvent& acRequest,
                                             RelayDecision& arDecision,
                                             VRObjectAuthority::Batch& arAuthorityBatch) const noexcept;
     static void CommitRelayDecision(PlayerGrabRelayState& arState,
@@ -86,6 +87,7 @@ private:
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerGrabRelayState> m_playerGrabRelayState{};
+    uint64_t m_noRoutableCharacterCount{0};
     entt::scoped_connection m_vrGrabEventConnection;
     entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_updateConnection;

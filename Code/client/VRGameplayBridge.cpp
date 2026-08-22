@@ -454,7 +454,8 @@ constexpr CapabilityMask kRequestedCapabilities =
         const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
         return identity.EntityId != 0 && identity.EntityGeneration != 0 && identity.ActionId == 0 &&
                payload.AvatarHandle.Value != 0 && payload.SnapshotId != 0 &&
-               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 &&
+               payload.DescriptorVersion == AnimationGraphProtocol::kDescriptorVersion && payload.Reserved0 == 0 && payload.Reserved2 == 0 &&
+               payload.DescriptorDigest != 0 && payload.DirectionFloatIndex < AnimationGraphProtocol::kMaximumFloatCount &&
                payload.ChunkFlags == AnimationGraphProtocol::FullSnapshot && std::isfinite(payload.Direction) &&
                IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)) &&
                AnimationGraphProtocol::IsValidChunk(valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount) &&
@@ -1150,7 +1151,7 @@ bool TrySubmitCommandBatch(CommandRecord* apCommands, const std::size_t aCommand
                 return false;
             }
             const auto result = AnimationGraphProtocol::AcceptChunk(
-                graphSnapshot, payload.SnapshotId,
+                graphSnapshot, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
                 static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType),
                 payload.StartIndex, payload.ValueCount, payload.TotalCount, payload.Direction, payload.Values);
             if (result == AnimationGraphProtocol::ChunkAcceptResult::Malformed ||

@@ -1,4 +1,5 @@
 #include <Services/VRAppearanceRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <Events/PlayerJoinEvent.h>
 #include <Events/PlayerLeaveEvent.h>
@@ -74,7 +75,11 @@ void VRAppearanceRelayService::OnVRAppearance(const PacketEvent<RequestVRAppeara
     if (!character)
         return;
     if (!GameServer::Get()->SendToPlayersWithCapabilitiesInRange(notify, *character, kAppearanceCapability, acMessage.pPlayer))
-        spdlog::warn("VR appearance relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR appearance relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 }
 
 void VRAppearanceRelayService::OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) noexcept

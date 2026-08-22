@@ -23,9 +23,11 @@ struct NotifyDialogue;
 struct NotifyLockChange;
 struct NotifyNewPackage;
 struct NotifyObjectInventoryChanges;
+struct NotifyObjectResync;
 struct NotifyPlayerDialogue;
 struct NotifyPartyInfo;
 struct NotifyQuestUpdate;
+struct NotifyQuestResync;
 struct NotifyRemoveWaypoint;
 struct NotifyScriptAnimation;
 struct NotifySetWaypoint;
@@ -59,6 +61,17 @@ struct VRWorldReplicationService
 private:
     static constexpr std::size_t kMaximumPendingRemoteCommands = 128;
     static constexpr std::size_t kMaximumPendingWorldInventoryTransactions = 128;
+    static constexpr std::size_t kMaximumPendingCanonicalResyncs = 64;
+
+    enum class CanonicalRecoveryOperation : std::uint8_t
+    {
+        None,
+        Activation,
+        ActivationPostState,
+        ObjectLock,
+        ObjectOpenState,
+        Quest,
+    };
 
     struct RetainedState
     {
@@ -84,6 +97,12 @@ private:
     struct PendingRemoteCommand
     {
         SkyrimTogetherVR::GameplayBridge::CommandRecord Command{};
+        std::uint64_t CanonicalRevision{};
+        std::uint8_t AuthoritativeOpenState{};
+        std::uint32_t CanonicalServerId{};
+        std::uint32_t CanonicalOwnerPlayerId{};
+        GameId CanonicalQuestId{};
+        CanonicalRecoveryOperation RecoveryOperation{CanonicalRecoveryOperation::None};
         double RetryDelay{0.0};
         double LifetimeRemaining{0.0};
         double ResultRemaining{0.0};
@@ -103,12 +122,45 @@ private:
         std::uint64_t EndActionId{};
         std::uint64_t NextResultActionId{};
         std::uint32_t TargetLocalFormId{};
+        std::uint32_t CanonicalServerId{};
+        std::uint64_t CanonicalRevision{};
         double RetryDelay{};
         double ResultRemaining{};
         std::uint8_t Attempts{};
         bool Reset{};
         bool AwaitingResult{};
         bool Terminal{};
+        bool RecoveryCompletionReported{};
+    };
+
+    struct PendingCanonicalResync
+    {
+        std::uint64_t KnownRevision{};
+        std::uint64_t ApplyingRevision{};
+        double RetryElapsed{};
+        std::uint32_t RequestId{};
+        std::uint8_t Attempts{};
+        std::uint8_t PendingApplyMask{};
+        bool Applying{};
+        bool RequestSent{};
+    };
+
+    struct QuestRecoveryEntry
+    {
+        GameId Id{};
+        std::uint16_t Stage{};
+        bool Stop{};
+    };
+
+    struct PendingQuestResync : PendingCanonicalResync
+    {
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+        std::uint64_t LifecycleEpoch{};
+        std::uint32_t OwnerPlayerId{};
+        std::vector<QuestRecoveryEntry> Entries{};
+        std::unordered_map<GameId, std::uint16_t> SnapshotStages{};
+        std::size_t NextEntry{};
     };
 
     void OnActivate(const NotifyActivate& acMessage) noexcept;
@@ -121,6 +173,8 @@ private:
     void OnObjectInventory(const NotifyObjectInventoryChanges& acMessage) noexcept;
     void OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noexcept;
     void OnQuestUpdate(const NotifyQuestUpdate& acMessage) noexcept;
+    void OnObjectResync(const NotifyObjectResync& acMessage) noexcept;
+    void OnQuestResync(const NotifyQuestResync& acMessage) noexcept;
     void OnRemoveWaypoint(const NotifyRemoveWaypoint& acMessage) noexcept;
     void OnScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept;
     void OnSetWaypoint(const NotifySetWaypoint& acMessage) noexcept;
@@ -156,13 +210,20 @@ private:
                                         std::uint64_t aConnectionGeneration) noexcept;
     void ResetInFlightState() noexcept;
     void ResetSubtitleTextState() noexcept;
-    void SubmitRemoteCommand(SkyrimTogetherVR::GameplayBridge::CommandRecord aCommand) noexcept;
+    bool SubmitRemoteCommand(
+        SkyrimTogetherVR::GameplayBridge::CommandRecord aCommand,
+        CanonicalRecoveryOperation aRecoveryOperation = CanonicalRecoveryOperation::None,
+        std::uint32_t aCanonicalServerId = 0, std::uint64_t aCanonicalRevision = 0,
+        std::uint8_t aAuthoritativeOpenState = 0, std::uint32_t aCanonicalOwnerPlayerId = 0,
+        const GameId& acCanonicalQuestId = {}) noexcept;
     void RetryPendingRemoteCommands(double aDelta) noexcept;
     void TrySubmitPendingRemoteCommand(PendingRemoteCommand& arPending) noexcept;
-    void HandlePendingRemoteCommandResult(const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
+    [[nodiscard]] bool HandlePendingRemoteCommandResult(
+        const SkyrimTogetherVR::GameplayBridge::EventRecord& acRecord) noexcept;
     [[nodiscard]] bool IsPendingRemoteCommandCurrent(const PendingRemoteCommand& acPending) const noexcept;
-    void QueueWorldInventoryTransaction(const GameId& acTargetId, const Inventory& acInventory,
-                                        bool aReset) noexcept;
+    [[nodiscard]] bool QueueWorldInventoryTransaction(const GameId& acTargetId, const Inventory& acInventory,
+                                                       bool aReset, std::uint32_t aCanonicalServerId = 0,
+                                                       std::uint64_t aCanonicalRevision = 0) noexcept;
     [[nodiscard]] bool BuildWorldInventoryTransactionCommands(
         const PendingWorldInventoryTransaction& acPending,
         std::vector<SkyrimTogetherVR::GameplayBridge::CommandRecord>& arCommands) const noexcept;
@@ -173,6 +234,23 @@ private:
     [[nodiscard]] bool IsPendingWorldInventoryTransactionCurrent(
         const PendingWorldInventoryTransaction& acPending) const noexcept;
     void ClearPendingWorldInventoryTransactions() noexcept;
+    [[nodiscard]] std::uint32_t FindObjectServerId(const GameId& acObjectId) const noexcept;
+    void RequestObjectResync(std::uint32_t aServerId) noexcept;
+    void RequestQuestResync(std::uint32_t aOwnerPlayerId) noexcept;
+    void RetryCanonicalResyncs(double aDelta) noexcept;
+    [[nodiscard]] bool SendObjectResyncRequest(std::uint32_t aServerId,
+                                               PendingCanonicalResync& arPending) noexcept;
+    [[nodiscard]] bool SendQuestResyncRequest(PendingQuestResync& arPending) noexcept;
+    void CompleteObjectRecoveryInventory(std::uint32_t aServerId, std::uint64_t aRevision,
+                                         bool aSucceeded) noexcept;
+    void CompleteCanonicalRecoveryCommand(const PendingRemoteCommand& acPending,
+                                          bool aSucceeded) noexcept;
+    void TryApplyQuestRecovery() noexcept;
+    void FailObjectRecovery(std::uint32_t aServerId, std::uint64_t aRevision) noexcept;
+    void FailQuestRecovery(std::uint32_t aOwnerPlayerId, std::uint64_t aRevision) noexcept;
+    [[nodiscard]] bool IsQuestRecoveryCurrent(const PendingQuestResync& acPending) const noexcept;
+    void ResetCanonicalRecovery() noexcept;
+    void RecordCanonicalRecoveryDiagnostic(const char* apReason) noexcept;
     void SubmitText(SkyrimTogetherVR::GameplayBridge::CommandRecord aBase,
                     std::uint64_t aTextId, std::string_view acText) noexcept;
     void RetryPendingText() noexcept;
@@ -193,6 +271,15 @@ private:
     std::array<PendingRemoteCommand, kMaximumPendingRemoteCommands> m_pendingRemoteCommands{};
     std::unordered_map<GameId, std::deque<PendingWorldInventoryTransaction>> m_pendingWorldInventoryTransactions{};
     std::size_t m_pendingWorldInventoryTransactionCount{};
+    std::unordered_map<GameId, std::uint32_t> m_objectServerIds{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_lastObjectSnapshotRevisionByServer{};
+    std::unordered_map<std::uint32_t, PendingCanonicalResync> m_pendingObjectResyncs{};
+    std::unordered_map<std::uint32_t, PendingQuestResync> m_pendingQuestResyncs{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_lastQuestSnapshotRevisionByOwner{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_latestQuestRevisionByOwner{};
+    std::unordered_map<std::uint32_t, std::unordered_map<GameId, std::uint16_t>> m_canonicalQuestStagesByOwner{};
+    std::uint32_t m_nextCanonicalResyncRequestId{1};
+    std::uint32_t m_canonicalRecoveryDiagnosticCount{};
     RetainedState m_calendarState{};
     RetainedState m_weatherState{};
     RetainedState m_settingsState{};
@@ -268,8 +355,10 @@ private:
     entt::scoped_connection m_lockConnection;
     entt::scoped_connection m_packageConnection;
     entt::scoped_connection m_objectInventoryConnection;
+    entt::scoped_connection m_objectResyncConnection;
     entt::scoped_connection m_playerDialogueConnection;
     entt::scoped_connection m_questConnection;
+    entt::scoped_connection m_questResyncConnection;
     entt::scoped_connection m_removeWaypointConnection;
     entt::scoped_connection m_scriptAnimationConnection;
     entt::scoped_connection m_setWaypointConnection;

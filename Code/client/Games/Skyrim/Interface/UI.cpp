@@ -13,6 +13,7 @@
 #include <atomic>
 #include <limits>
 #include <mutex>
+#include <utility>
 
 static bool g_RequestUnpauseAll{false};
 
@@ -214,10 +215,14 @@ template <std::size_t Index> IMenu* CreateVrParityMenu()
     return menu;
 }
 
-static constexpr std::array<MenuCreator, SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()> kVrParityCreators = {
-    &CreateVrParityMenu<0>, &CreateVrParityMenu<1>, &CreateVrParityMenu<2>, &CreateVrParityMenu<3>, &CreateVrParityMenu<4>,
-    &CreateVrParityMenu<5>, &CreateVrParityMenu<6>, &CreateVrParityMenu<7>, &CreateVrParityMenu<8>,
-};
+template <std::size_t... Indices>
+[[nodiscard]] constexpr auto MakeVrParityCreators(std::index_sequence<Indices...>)
+{
+    return std::array<MenuCreator, sizeof...(Indices)>{&CreateVrParityMenu<Indices>...};
+}
+
+static constexpr auto kVrParityCreators = MakeVrParityCreators(std::make_index_sequence<SkyrimTogetherVR::MenuPausePolicy::kAllowList.size()>{});
+static_assert(kVrParityCreators.size() == SkyrimTogetherVR::MenuPausePolicy::kAllowList.size());
 
 void TryInstallVrMenuPausePolicy(UI* apUI)
 {

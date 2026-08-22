@@ -22,6 +22,7 @@ struct CharacterRemoveEvent;
 struct CharacterExteriorCellChangeEvent;
 struct RequestOwnershipClaim;
 struct RequestActorResync;
+struct RequestMountResync;
 struct OwnershipTransferEvent;
 struct MountRequest;
 struct NewPackageRequest;
@@ -59,7 +60,8 @@ protected:
     void OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept;
     void OnActorActionRequest(const PacketEvent<ClientActorActionRequest>& acMessage) const noexcept;
     void OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept;
-    void OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept;
+    void OnMountRequest(const PacketEvent<MountRequest>& acMessage) noexcept;
+    void OnMountResyncRequest(const PacketEvent<RequestMountResync>& acMessage) noexcept;
     void OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept;
     void OnRequestRespawn(const PacketEvent<RequestRespawn>& acMessage) const noexcept;
     void OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept;
@@ -80,6 +82,8 @@ protected:
     void ProcessMovementChanges() const noexcept;
     [[nodiscard]] std::uint64_t NextActorSnapshotRevision(
         std::uint32_t aServerId, std::uint64_t aKnownRevision) noexcept;
+    [[nodiscard]] std::uint64_t NextMountSnapshotRevision(
+        std::uint32_t aServerId, std::uint64_t aKnownRevision) noexcept;
 
 private:
     struct PendingOwnershipGrant
@@ -99,6 +103,7 @@ private:
     World& m_world;
     mutable std::unordered_map<std::uint32_t, PendingOwnershipGrant> m_pendingOwnershipGrants{};
     std::unordered_map<std::uint32_t, std::uint64_t> m_actorSnapshotRevisions{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_mountSnapshotRevisions{};
     mutable std::uint64_t m_nextOwnershipGrantToken{1};
 
     entt::scoped_connection m_updateConnection;
@@ -121,4 +126,5 @@ private:
     entt::scoped_connection m_dialogueConnection;
     entt::scoped_connection m_subtitleConnection;
     entt::scoped_connection m_actorResyncConnection;
+    entt::scoped_connection m_mountResyncConnection;
 };

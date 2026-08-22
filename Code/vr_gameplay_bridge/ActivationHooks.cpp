@@ -168,19 +168,23 @@ bool HookActivateRef(
         return false;
     }
 
-    // Capture uses the target's state before the original routine can mutate
-    // doors, containers, or scripted activators. It owns no native pointer
-    // after this synchronous call returns and never blocks local activation.
+    // Keep this stack-local across the original call so nested ActivateRef
+    // invocations cannot overwrite another activation's pre-state.
+    LocalGameplayCapture::PendingActivationCapture capture{};
     if (g_installed.load(std::memory_order_acquire) && a_target && a_activator) {
-        const auto capture = LocalGameplayCapture::CapturePreActivation(
-            *a_target, *a_activator);
-        if (capture == LocalGameplayCapture::PreActivationCaptureResult::Published)
-            g_published.fetch_add(1, std::memory_order_relaxed);
-        else if (capture == LocalGameplayCapture::PreActivationCaptureResult::PublicationRejected)
-            RecordPublicationRejection("publication was rejected");
+        TP_UNUSED(LocalGameplayCapture::CapturePreActivation(*a_target, *a_activator, capture));
     }
 
-    return original(a_target, a_activator, a_arg2, a_objectToGet, a_count, a_defaultProcessingOnly);
+    const auto accepted = original(a_target, a_activator, a_arg2, a_objectToGet, a_count, a_defaultProcessingOnly);
+    if (!ActivationHookPolicy::MustPublishAfterSuccessfulOriginal(accepted) || !capture.Valid)
+        return accepted;
+
+    const auto published = LocalGameplayCapture::CapturePostActivation(capture, *a_target);
+    if (published == LocalGameplayCapture::PostActivationCaptureResult::Published)
+        g_published.fetch_add(1, std::memory_order_relaxed);
+    else if (published == LocalGameplayCapture::PostActivationCaptureResult::PublicationRejected)
+        RecordPublicationRejection("post-activation publication was rejected");
+    return accepted;
     } catch (...) {
         return false;
     }
@@ -266,7 +270,7 @@ bool Install() noexcept
 
         g_installed.store(true, std::memory_order_release);
         SKSE::log::info(
-            "SkyrimTogetherVRGameplayBridge: installed exact pre-activation TESObjectREFR::ActivateRef capture at RVA 0x{:X}",
+            "SkyrimTogetherVRGameplayBridge: installed exact post-activation TESObjectREFR::ActivateRef capture at RVA 0x{:X}",
             ActivationHookPolicy::kActivateRefVrRva);
         return true;
     } catch (...) {
@@ -298,7 +302,7 @@ bool Uninstall() noexcept
     }
 
     SKSE::log::info(
-        "SkyrimTogetherVRGameplayBridge: removed pre-activation TESObjectREFR::ActivateRef capture (published={}, rejected={})",
+        "SkyrimTogetherVRGameplayBridge: removed post-activation TESObjectREFR::ActivateRef capture (published={}, rejected={})",
         g_published.load(std::memory_order_relaxed),
         g_publicationRejections.load(std::memory_order_relaxed));
     ForgetDetachedHook();

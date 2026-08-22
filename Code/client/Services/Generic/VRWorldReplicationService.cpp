@@ -18,9 +18,11 @@
 #include <Messages/NotifyLockChange.h>
 #include <Messages/NotifyNewPackage.h>
 #include <Messages/NotifyObjectInventoryChanges.h>
+#include <Messages/NotifyObjectResync.h>
 #include <Messages/NotifyPartyInfo.h>
 #include <Messages/NotifyPlayerDialogue.h>
 #include <Messages/NotifyQuestUpdate.h>
+#include <Messages/NotifyQuestResync.h>
 #include <Messages/NotifyRemoveWaypoint.h>
 #include <Messages/NotifyScriptAnimation.h>
 #include <Messages/NotifySetWaypoint.h>
@@ -31,6 +33,8 @@
 #include <Messages/PlayerDialogueRequest.h>
 #include <Messages/RequestCurrentWeather.h>
 #include <Messages/RequestRemoveWaypoint.h>
+#include <Messages/RequestObjectResync.h>
+#include <Messages/RequestQuestResync.h>
 #include <Messages/RequestSetWaypoint.h>
 #include <Messages/RequestWeatherChange.h>
 #include <Messages/ServerTimeSettings.h>
@@ -40,6 +44,7 @@
 #include <Services/VRAvatarService.h>
 #include <Services/VRNpcOwnershipService.h>
 #include <Structs/ServerSettings.h>
+#include <Structs/GameplayCapabilities.h>
 #include <VRGameplayBridge.h>
 #include <World.h>
 
@@ -57,6 +62,11 @@ namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
 namespace
 {
 constexpr std::size_t kMaximumRetainedLockStates = 128;
+constexpr std::uint8_t kMaximumCanonicalResyncAttempts = 3;
+constexpr double kCanonicalResyncRetrySeconds = 2.0;
+constexpr std::uint8_t kObjectRecoveryInventory = 1u << 0;
+constexpr std::uint8_t kObjectRecoveryLock = 1u << 1;
+constexpr std::uint8_t kObjectRecoveryOpenState = 1u << 2;
 constexpr std::uint8_t kMaximumReconcileAttempts = 3;
 constexpr double kReconcileIntervalSeconds = 0.25;
 constexpr std::size_t kMaximumPendingTextTransactions = 64;
@@ -320,8 +330,10 @@ VRWorldReplicationService::VRWorldReplicationService(
     m_lockConnection = aDispatcher.sink<NotifyLockChange>().connect<&VRWorldReplicationService::OnLockChange>(this);
     m_packageConnection = aDispatcher.sink<NotifyNewPackage>().connect<&VRWorldReplicationService::OnNewPackage>(this);
     m_objectInventoryConnection = aDispatcher.sink<NotifyObjectInventoryChanges>().connect<&VRWorldReplicationService::OnObjectInventory>(this);
+    m_objectResyncConnection = aDispatcher.sink<NotifyObjectResync>().connect<&VRWorldReplicationService::OnObjectResync>(this);
     m_playerDialogueConnection = aDispatcher.sink<NotifyPlayerDialogue>().connect<&VRWorldReplicationService::OnPlayerDialogue>(this);
     m_questConnection = aDispatcher.sink<NotifyQuestUpdate>().connect<&VRWorldReplicationService::OnQuestUpdate>(this);
+    m_questResyncConnection = aDispatcher.sink<NotifyQuestResync>().connect<&VRWorldReplicationService::OnQuestResync>(this);
     m_removeWaypointConnection = aDispatcher.sink<NotifyRemoveWaypoint>().connect<&VRWorldReplicationService::OnRemoveWaypoint>(this);
     m_scriptAnimationConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&VRWorldReplicationService::OnScriptAnimation>(this);
     m_setWaypointConnection = aDispatcher.sink<NotifySetWaypoint>().connect<&VRWorldReplicationService::OnSetWaypoint>(this);
@@ -345,7 +357,11 @@ VRWorldReplicationService::VRWorldReplicationService(
         .connect<&VRWorldReplicationService::OnGameplayResult>(this);
 }
 
-void VRWorldReplicationService::SubmitRemoteCommand(GameplayBridge::CommandRecord aCommand) noexcept
+bool VRWorldReplicationService::SubmitRemoteCommand(
+    GameplayBridge::CommandRecord aCommand, const CanonicalRecoveryOperation aRecoveryOperation,
+    const std::uint32_t aCanonicalServerId, const std::uint64_t aCanonicalRevision,
+    const std::uint8_t aAuthoritativeOpenState, const std::uint32_t aCanonicalOwnerPlayerId,
+    const GameId& acCanonicalQuestId) noexcept
 {
     ObserveSession();
     const auto domain = static_cast<GameplayBridge::GameplayDomain>(aCommand.Payload.ApplyGameplayAction.Domain);
@@ -354,7 +370,7 @@ void VRWorldReplicationService::SubmitRemoteCommand(GameplayBridge::CommandRecor
         !GameplayBridge::IsActionInDomain(domain, action))
     {
         spdlog::warn("VR world replication refused untrackable gameplay command");
-        return;
+        return false;
     }
 
     const auto slot = std::find_if(m_pendingRemoteCommands.begin(), m_pendingRemoteCommands.end(),
@@ -362,16 +378,25 @@ void VRWorldReplicationService::SubmitRemoteCommand(GameplayBridge::CommandRecor
     if (slot == m_pendingRemoteCommands.end())
     {
         spdlog::warn("VR world replication remote command ledger reached {} entries", m_pendingRemoteCommands.size());
-        return;
+        if (aRecoveryOperation == CanonicalRecoveryOperation::Quest && aCanonicalOwnerPlayerId != 0)
+            RequestQuestResync(aCanonicalOwnerPlayerId);
+        return false;
     }
 
     *slot = {};
     slot->Command = std::move(aCommand);
+    slot->RecoveryOperation = aRecoveryOperation;
+    slot->CanonicalServerId = aCanonicalServerId;
+    slot->CanonicalRevision = aCanonicalRevision;
+    slot->AuthoritativeOpenState = aAuthoritativeOpenState;
+    slot->CanonicalOwnerPlayerId = aCanonicalOwnerPlayerId;
+    slot->CanonicalQuestId = acCanonicalQuestId;
     // ActionId is claimed only by the bridge for each admission attempt.
     slot->Command.Header.Identity.ActionId = 0;
     slot->LifetimeRemaining = kRemoteCommandLifetimeSeconds;
     slot->Occupied = true;
     TrySubmitPendingRemoteCommand(*slot);
+    return true;
 }
 
 bool VRWorldReplicationService::IsPendingRemoteCommandCurrent(const PendingRemoteCommand& acPending) const noexcept
@@ -388,8 +413,9 @@ bool VRWorldReplicationService::IsPendingRemoteCommandCurrent(const PendingRemot
            identity.LifecycleEpoch == m_observedLifecycleEpoch;
 }
 
-void VRWorldReplicationService::QueueWorldInventoryTransaction(
-    const GameId& acTargetId, const Inventory& acInventory, const bool aReset) noexcept try
+bool VRWorldReplicationService::QueueWorldInventoryTransaction(
+    const GameId& acTargetId, const Inventory& acInventory, const bool aReset,
+    const std::uint32_t aCanonicalServerId, const std::uint64_t aCanonicalRevision) noexcept try
 {
     ObserveSession();
     if (!acInventory.IsDecodedValid ||
@@ -398,19 +424,30 @@ void VRWorldReplicationService::QueueWorldInventoryTransaction(
         if (m_pendingWorldInventoryTransactionCount >= kMaximumPendingWorldInventoryTransactions)
             spdlog::warn("VR world inventory transaction ledger reached {} entries",
                          kMaximumPendingWorldInventoryTransactions);
-        return;
+        if (aCanonicalServerId != 0 && aCanonicalRevision != 0)
+            FailObjectRecovery(aCanonicalServerId, aCanonicalRevision);
+        else if (const auto serverId = FindObjectServerId(acTargetId); serverId != 0)
+            RequestObjectResync(serverId);
+        return false;
     }
 
     PendingWorldInventoryTransaction pending{};
     pending.TargetId = acTargetId;
     pending.Entries.assign(acInventory.Entries.begin(), acInventory.Entries.end());
     pending.Reset = aReset;
+    pending.CanonicalServerId = aCanonicalServerId;
+    pending.CanonicalRevision = aCanonicalRevision;
 
     // Build before queueing so an unmapped form or invalid stack cannot block a
     // target's FIFO behind a transaction that can never be admitted.
     std::vector<GameplayBridge::CommandRecord> commands;
-    if (!BuildWorldInventoryTransactionCommands(pending, commands))
-        return;
+    if (!BuildWorldInventoryTransactionCommands(pending, commands)) {
+        if (aCanonicalServerId != 0 && aCanonicalRevision != 0)
+            FailObjectRecovery(aCanonicalServerId, aCanonicalRevision);
+        else if (const auto serverId = FindObjectServerId(acTargetId); serverId != 0)
+            RequestObjectResync(serverId);
+        return false;
+    }
 
     const auto& identity = commands.front().Header.Identity;
     pending.ServerInstanceNonce = identity.ServerInstanceNonce;
@@ -423,20 +460,31 @@ void VRWorldReplicationService::QueueWorldInventoryTransaction(
     queue->second.emplace_back(std::move(pending));
     ++m_pendingWorldInventoryTransactionCount;
     if (queue->second.size() != 1)
-        return;
+        return true;
 
     TrySubmitPendingWorldInventoryTransaction(queue->second.front());
     if (!queue->second.front().Terminal)
-        return;
+        return true;
 
+    auto& terminal = queue->second.front();
+    if (!terminal.RecoveryCompletionReported) {
+        terminal.RecoveryCompletionReported = true;
+        CompleteObjectRecoveryInventory(terminal.CanonicalServerId, terminal.CanonicalRevision, false);
+    }
     queue->second.pop_front();
     --m_pendingWorldInventoryTransactionCount;
     if (queue->second.empty())
         m_pendingWorldInventoryTransactions.erase(queue);
+    return false;
 }
 catch (...)
 {
     spdlog::debug("VR world inventory transaction construction failed");
+    if (aCanonicalServerId != 0 && aCanonicalRevision != 0)
+        FailObjectRecovery(aCanonicalServerId, aCanonicalRevision);
+    else if (const auto serverId = FindObjectServerId(acTargetId); serverId != 0)
+        RequestObjectResync(serverId);
+    return false;
 }
 
 bool VRWorldReplicationService::BuildWorldInventoryTransactionCommands(
@@ -716,6 +764,10 @@ void VRWorldReplicationService::RetryPendingWorldInventoryTransactions(const dou
 
         if (pending.Terminal)
         {
+            if (!pending.RecoveryCompletionReported) {
+                pending.RecoveryCompletionReported = true;
+                CompleteObjectRecoveryInventory(pending.CanonicalServerId, pending.CanonicalRevision, false);
+            }
             transactions.pop_front();
             --m_pendingWorldInventoryTransactionCount;
         }
@@ -777,7 +829,10 @@ void VRWorldReplicationService::HandlePendingWorldInventoryTransactionResult(
         if (identity.ActionId == pending.EndActionId)
         {
             // End owns engine application. A failure here is never replayable.
+            const bool succeeded = status == GameplayBridge::CommandStatus::Success;
             pending.Terminal = true;
+            pending.RecoveryCompletionReported = true;
+            CompleteObjectRecoveryInventory(pending.CanonicalServerId, pending.CanonicalRevision, succeeded);
             return;
         }
         if (status == GameplayBridge::CommandStatus::Success)
@@ -804,12 +859,14 @@ void VRWorldReplicationService::TrySubmitPendingRemoteCommand(PendingRemoteComma
 {
     if (!IsPendingRemoteCommandCurrent(arPending))
     {
+        CompleteCanonicalRecoveryCommand(arPending, false);
         arPending = {};
         return;
     }
     if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
     {
         spdlog::warn("Dropping VR world remote command after {} admission attempts", arPending.Attempts);
+        CompleteCanonicalRecoveryCommand(arPending, false);
         arPending = {};
         return;
     }
@@ -825,6 +882,7 @@ void VRWorldReplicationService::TrySubmitPendingRemoteCommand(PendingRemoteComma
         if (arPending.Attempts >= kMaximumRemoteCommandAttempts)
         {
             spdlog::warn("Dropping VR world remote command after {} admission attempts", arPending.Attempts);
+            CompleteCanonicalRecoveryCommand(arPending, false);
             arPending = {};
             return;
         }
@@ -839,6 +897,7 @@ void VRWorldReplicationService::TrySubmitPendingRemoteCommand(PendingRemoteComma
         submitted.LifecycleEpoch != expected.LifecycleEpoch)
     {
         // A session change after admission cannot be replayed safely.
+        CompleteCanonicalRecoveryCommand(arPending, false);
         arPending = {};
         return;
     }
@@ -861,6 +920,7 @@ void VRWorldReplicationService::RetryPendingRemoteCommands(const double aDelta) 
             continue;
         if (!IsPendingRemoteCommandCurrent(pending))
         {
+            CompleteCanonicalRecoveryCommand(pending, false);
             pending = {};
             continue;
         }
@@ -869,6 +929,7 @@ void VRWorldReplicationService::RetryPendingRemoteCommands(const double aDelta) 
         if (pending.LifetimeRemaining <= 0.0)
         {
             spdlog::debug("Expiring VR world remote command before a terminal result");
+            CompleteCanonicalRecoveryCommand(pending, false);
             pending = {};
             continue;
         }
@@ -879,6 +940,7 @@ void VRWorldReplicationService::RetryPendingRemoteCommands(const double aDelta) 
             {
                 // The command may have mutated the engine; do not replay it.
                 spdlog::debug("Expiring VR world remote command after result timeout");
+                CompleteCanonicalRecoveryCommand(pending, false);
                 pending = {};
             }
             continue;
@@ -890,7 +952,7 @@ void VRWorldReplicationService::RetryPendingRemoteCommands(const double aDelta) 
     }
 }
 
-void VRWorldReplicationService::HandlePendingRemoteCommandResult(
+bool VRWorldReplicationService::HandlePendingRemoteCommandResult(
     const GameplayBridge::EventRecord& acRecord) noexcept
 {
     const auto& result = acRecord.Payload.RemoteGameplayActionState;
@@ -917,8 +979,9 @@ void VRWorldReplicationService::HandlePendingRemoteCommandResult(
         const auto status = static_cast<GameplayBridge::CommandStatus>(result.Status);
         if (status == GameplayBridge::CommandStatus::Success)
         {
+            CompleteCanonicalRecoveryCommand(pending, true);
             pending = {};
-            return;
+            return true;
         }
         if (IsRetryableRemoteCommandStatus(status) && pending.Attempts < kMaximumRemoteCommandAttempts &&
             pending.LifetimeRemaining > 0.0)
@@ -927,13 +990,15 @@ void VRWorldReplicationService::HandlePendingRemoteCommandResult(
             pending.AwaitingResult = false;
             pending.ResultRemaining = 0.0;
             pending.RetryDelay = RemoteCommandRetryDelay(pending.Attempts);
-            return;
+            return true;
         }
 
         // All other bridge statuses may follow partial or ambiguous engine work.
+        CompleteCanonicalRecoveryCommand(pending, false);
         pending = {};
-        return;
+        return true;
     }
+    return false;
 }
 
 void VRWorldReplicationService::SubmitText(
@@ -987,7 +1052,10 @@ void VRWorldReplicationService::OnAssignObjects(const AssignObjectsResponse& acM
     for (const auto& object : acMessage.Objects)
     {
         const auto objectFormId = ToLocalForm(m_world, object.Id);
-        if (objectFormId == 0 || object.IsSenderFirst || !object.IsDecodedValid)
+        if (!object.IsDecodedValid || !object.Id || object.ServerId == 0)
+            continue;
+        m_objectServerIds.insert_or_assign(object.Id, object.ServerId);
+        if (objectFormId == 0 || object.IsSenderFirst)
             continue;
 
         if (object.CurrentLockData != LockData{})
@@ -1008,7 +1076,7 @@ void VRWorldReplicationService::OnAssignObjects(const AssignObjectsResponse& acM
 
         // Reset transactions intentionally include Begin+End for an empty
         // inventory so the native adapter can authoritatively clear a container.
-        QueueWorldInventoryTransaction(object.Id, object.CurrentInventory, true);
+        TP_UNUSED(QueueWorldInventoryTransaction(object.Id, object.CurrentInventory, true));
     }
     Reconcile();
 }
@@ -1018,6 +1086,9 @@ catch (...)
 
 void VRWorldReplicationService::OnActivate(const NotifyActivate& acMessage) noexcept
 {
+    if (!acMessage.IsDecodedValid || !acMessage.IsValid() ||
+        acMessage.ActivatorId == m_transport.GetLocalPlayerId())
+        return;
     GameplayBridge::CommandRecord command{};
     if (!m_avatars.BuildRemoteGameplayCommandForServerId(
             acMessage.ActivatorId, GameplayBridge::GameplayDomain::Object,
@@ -1027,7 +1098,10 @@ void VRWorldReplicationService::OnActivate(const NotifyActivate& acMessage) noex
     payload.TargetLocalFormId = ToLocalForm(m_world, acMessage.Id);
     payload.ValueA = acMessage.PreActivationOpenState;
     if (payload.TargetLocalFormId != 0)
-        SubmitRemoteCommand(command);
+        SubmitRemoteCommand(command,
+                            acMessage.HasPostActivationOpenState ? CanonicalRecoveryOperation::Activation :
+                                                                    CanonicalRecoveryOperation::None,
+                            0, 0, acMessage.PostActivationOpenState);
 }
 
 void VRWorldReplicationService::OnActorTeleport(const NotifyActorTeleport& acMessage) noexcept
@@ -1120,7 +1194,7 @@ void VRWorldReplicationService::OnObjectInventory(const NotifyObjectInventoryCha
 {
     for (const auto& [objectId, inventory] : acMessage.Changes)
     {
-        QueueWorldInventoryTransaction(objectId, inventory, false);
+        TP_UNUSED(QueueWorldInventoryTransaction(objectId, inventory, false));
     }
 }
 
@@ -1141,6 +1215,34 @@ catch (...)
 
 void VRWorldReplicationService::OnQuestUpdate(const NotifyQuestUpdate& acMessage) noexcept
 {
+    if (!acMessage.IsValid())
+        return;
+
+    if (!m_latestQuestRevisionByOwner.contains(acMessage.OwnerPlayerId) &&
+        m_latestQuestRevisionByOwner.size() >= kMaximumPendingCanonicalResyncs) {
+        RecordCanonicalRecoveryDiagnostic("quest owner revision ledger reached its bounded capacity");
+        return;
+    }
+
+    const auto committed = m_lastQuestSnapshotRevisionByOwner.find(acMessage.OwnerPlayerId);
+    if (committed != m_lastQuestSnapshotRevisionByOwner.end() &&
+        acMessage.CanonicalRevision <= committed->second)
+        return;
+
+    auto& latestRevision = m_latestQuestRevisionByOwner[acMessage.OwnerPlayerId];
+    if (acMessage.CanonicalRevision <= latestRevision)
+        return;
+    latestRevision = acMessage.CanonicalRevision;
+
+    // The update is newer than an in-flight snapshot. Let the native result
+    // of the older work fail closed and request this owner's current log.
+    if (const auto pending = m_pendingQuestResyncs.find(acMessage.OwnerPlayerId);
+        pending != m_pendingQuestResyncs.end() && pending->second.Applying &&
+        SkyrimTogether::Protocol::RevisionedCanonicalRecoveryPolicy::DoesQuestUpdateSupersedeSnapshot(
+            pending->second.OwnerPlayerId, pending->second.ApplyingRevision,
+            acMessage.OwnerPlayerId, acMessage.CanonicalRevision))
+        m_pendingQuestResyncs.erase(pending);
+
     const auto action = acMessage.Status == NotifyQuestUpdate::StageUpdate ?
         GameplayBridge::GameplayAction::SetQuestStage : GameplayBridge::GameplayAction::SetQuestState;
     GameplayBridge::CommandRecord command{};
@@ -1151,8 +1253,507 @@ void VRWorldReplicationService::OnQuestUpdate(const NotifyQuestUpdate& acMessage
     payload.ValueA = acMessage.Stage;
     payload.ValueB = acMessage.Status;
     payload.ActionFlags = acMessage.ClientQuestType;
-    if (payload.TargetLocalFormId != 0)
-        SubmitRemoteCommand(command);
+    if (payload.TargetLocalFormId == 0 ||
+        !SubmitRemoteCommand(command, CanonicalRecoveryOperation::Quest, 0,
+                             acMessage.CanonicalRevision, 0, acMessage.OwnerPlayerId, acMessage.Id))
+        RequestQuestResync(acMessage.OwnerPlayerId);
+}
+
+std::uint32_t VRWorldReplicationService::FindObjectServerId(const GameId& acObjectId) const noexcept
+{
+    const auto found = m_objectServerIds.find(acObjectId);
+    return found != m_objectServerIds.end() ? found->second : 0;
+}
+
+void VRWorldReplicationService::RequestObjectResync(const std::uint32_t aServerId) noexcept
+{
+    if (aServerId == 0 || m_pendingObjectResyncs.contains(aServerId) ||
+        m_pendingObjectResyncs.size() >= kMaximumPendingCanonicalResyncs)
+        return;
+
+    auto& pending = m_pendingObjectResyncs[aServerId];
+    pending.RequestId = m_nextCanonicalResyncRequestId++;
+    if (m_nextCanonicalResyncRequestId == 0)
+        m_nextCanonicalResyncRequestId = 1;
+    if (pending.RequestId == 0)
+        pending.RequestId = m_nextCanonicalResyncRequestId++;
+    const auto known = m_lastObjectSnapshotRevisionByServer.find(aServerId);
+    pending.KnownRevision = known != m_lastObjectSnapshotRevisionByServer.end() ? known->second : 0;
+    TP_UNUSED(SendObjectResyncRequest(aServerId, pending));
+}
+
+void VRWorldReplicationService::RequestQuestResync(const std::uint32_t aOwnerPlayerId) noexcept
+{
+    if (aOwnerPlayerId == 0 || m_pendingQuestResyncs.contains(aOwnerPlayerId))
+        return;
+    if (m_pendingQuestResyncs.size() >= kMaximumPendingCanonicalResyncs) {
+        RecordCanonicalRecoveryDiagnostic("quest canonical resync ledger reached its bounded capacity");
+        return;
+    }
+
+    auto& pending = m_pendingQuestResyncs[aOwnerPlayerId];
+    pending.OwnerPlayerId = aOwnerPlayerId;
+    pending.RequestId = SkyrimTogether::Protocol::RevisionedCanonicalRecoveryPolicy::NextNonZeroRequestId(
+        m_nextCanonicalResyncRequestId);
+    const auto known = m_lastQuestSnapshotRevisionByOwner.find(aOwnerPlayerId);
+    pending.KnownRevision = known != m_lastQuestSnapshotRevisionByOwner.end() ? known->second : 0;
+    TP_UNUSED(SendQuestResyncRequest(pending));
+}
+
+bool VRWorldReplicationService::SendObjectResyncRequest(
+    const std::uint32_t aServerId, PendingCanonicalResync& arPending) noexcept
+{
+    if (aServerId == 0 || arPending.RequestId == 0 || !m_transport.IsOnline() ||
+        m_transport.IsGameplayCleanupRequired() ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return false;
+
+    RequestObjectResync request{};
+    request.ServerId = aServerId;
+    request.RequestId = arPending.RequestId;
+    request.KnownRevision = arPending.KnownRevision;
+    if (!m_transport.Send(request))
+        return false;
+    ++arPending.Attempts;
+    arPending.RetryElapsed = 0.0;
+    arPending.RequestSent = true;
+    return true;
+}
+
+bool VRWorldReplicationService::SendQuestResyncRequest(PendingQuestResync& arPending) noexcept
+{
+    if (arPending.OwnerPlayerId == 0 || arPending.RequestId == 0 || m_transport.GetLocalPlayerId() == 0 || !m_transport.IsOnline() ||
+        m_transport.IsGameplayCleanupRequired() ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return false;
+
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    const auto lifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (serverInstanceNonce == 0 || connectionGeneration == 0 || lifecycleEpoch == 0)
+        return false;
+
+    RequestQuestResync request{};
+    request.OwnerPlayerId = arPending.OwnerPlayerId;
+    request.RequestId = arPending.RequestId;
+    request.KnownRevision = arPending.KnownRevision;
+    if (!m_transport.Send(request))
+        return false;
+    arPending.ServerInstanceNonce = serverInstanceNonce;
+    arPending.ConnectionGeneration = connectionGeneration;
+    arPending.LifecycleEpoch = lifecycleEpoch;
+    ++arPending.Attempts;
+    arPending.RetryElapsed = 0.0;
+    arPending.RequestSent = true;
+    return true;
+}
+
+bool VRWorldReplicationService::IsQuestRecoveryCurrent(const PendingQuestResync& acPending) const noexcept
+{
+    return acPending.OwnerPlayerId != 0 && acPending.ServerInstanceNonce != 0 &&
+           acPending.ConnectionGeneration != 0 && acPending.LifecycleEpoch != 0 &&
+           m_transport.IsOnline() &&
+           acPending.ServerInstanceNonce == m_transport.GetServerInstanceNonce() &&
+           acPending.ConnectionGeneration == m_transport.GetConnectionGeneration() &&
+           acPending.LifecycleEpoch == SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+}
+
+void VRWorldReplicationService::OnObjectResync(const NotifyObjectResync& acMessage) noexcept
+{
+    if (!acMessage.IsDecodedValid || !acMessage.IsValid())
+        return;
+    const auto pending = m_pendingObjectResyncs.find(acMessage.ServerId);
+    if (pending == m_pendingObjectResyncs.end() || pending->second.Applying || !pending->second.RequestSent ||
+        pending->second.RequestId != acMessage.RequestId ||
+        acMessage.CanonicalRevision < pending->second.KnownRevision ||
+        FindObjectServerId(acMessage.Snapshot.Id) != acMessage.ServerId)
+        return;
+    const auto applied = m_lastObjectSnapshotRevisionByServer.find(acMessage.ServerId);
+    if (applied != m_lastObjectSnapshotRevisionByServer.end() &&
+        acMessage.CanonicalRevision <= applied->second)
+        return;
+
+    const auto localFormId = ToLocalForm(m_world, acMessage.Snapshot.Id);
+    if (localFormId == 0)
+        return;
+
+    auto& recovery = pending->second;
+    recovery.Applying = true;
+    recovery.ApplyingRevision = acMessage.CanonicalRevision;
+    recovery.PendingApplyMask = kObjectRecoveryInventory | kObjectRecoveryLock |
+        (acMessage.Snapshot.HasCurrentOpenState ? kObjectRecoveryOpenState : 0);
+    if (!QueueWorldInventoryTransaction(acMessage.Snapshot.Id, acMessage.Snapshot.CurrentInventory, true,
+                                        acMessage.ServerId, acMessage.CanonicalRevision))
+        return;
+
+    GameplayBridge::CommandRecord lock{};
+    if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Object,
+                           GameplayBridge::GameplayAction::SetLockState, lock)) {
+        FailObjectRecovery(acMessage.ServerId, acMessage.CanonicalRevision);
+        return;
+    }
+    auto& payload = lock.Payload.ApplyGameplayAction;
+    payload.TargetLocalFormId = localFormId;
+    payload.ValueA = acMessage.Snapshot.CurrentLockData.IsLocked ? 1 : 0;
+    payload.ValueB = acMessage.Snapshot.CurrentLockData.IsLocked ?
+        static_cast<std::int32_t>(acMessage.Snapshot.CurrentLockData.LockLevel) : -1;
+    if (!SubmitRemoteCommand(lock, CanonicalRecoveryOperation::ObjectLock,
+                             acMessage.ServerId, acMessage.CanonicalRevision)) {
+        FailObjectRecovery(acMessage.ServerId, acMessage.CanonicalRevision);
+        return;
+    }
+
+    if (acMessage.Snapshot.HasCurrentOpenState) {
+        GameplayBridge::CommandRecord openState{};
+        if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Object,
+                               GameplayBridge::GameplayAction::SetOpenState, openState)) {
+            FailObjectRecovery(acMessage.ServerId, acMessage.CanonicalRevision);
+            return;
+        }
+        auto& openPayload = openState.Payload.ApplyGameplayAction;
+        openPayload.TargetLocalFormId = localFormId;
+        openPayload.ValueA = acMessage.Snapshot.CurrentOpenState == 1 ||
+                                     acMessage.Snapshot.CurrentOpenState == 2 ? 1 : 0;
+        if (!SubmitRemoteCommand(openState, CanonicalRecoveryOperation::ObjectOpenState,
+                                 acMessage.ServerId, acMessage.CanonicalRevision,
+                                 acMessage.Snapshot.CurrentOpenState))
+            FailObjectRecovery(acMessage.ServerId, acMessage.CanonicalRevision);
+    }
+}
+
+void VRWorldReplicationService::OnQuestResync(const NotifyQuestResync& acMessage) noexcept try
+{
+    if (!acMessage.IsDecodedValid || !acMessage.IsValid())
+        return;
+    const auto pending = m_pendingQuestResyncs.find(acMessage.OwnerPlayerId);
+    if (pending == m_pendingQuestResyncs.end() || pending->second.Applying || !pending->second.RequestSent ||
+        !IsQuestRecoveryCurrent(pending->second))
+        return;
+
+    const auto committed = m_lastQuestSnapshotRevisionByOwner.find(acMessage.OwnerPlayerId);
+    const auto latest = m_latestQuestRevisionByOwner.find(acMessage.OwnerPlayerId);
+    if (!SkyrimTogether::Protocol::RevisionedCanonicalRecoveryPolicy::CanCommitQuestSnapshot(
+            pending->second.OwnerPlayerId, acMessage.OwnerPlayerId, pending->second.RequestId,
+            acMessage.RequestId, pending->second.KnownRevision,
+            committed != m_lastQuestSnapshotRevisionByOwner.end() ? committed->second : 0,
+            latest != m_latestQuestRevisionByOwner.end() ? latest->second : 0,
+            acMessage.CanonicalRevision))
+        return;
+
+    std::unordered_map<GameId, std::uint16_t> snapshotStages;
+    snapshotStages.reserve(acMessage.Snapshot.Entries.size());
+    for (const auto& entry : acMessage.Snapshot.Entries) {
+        if (ToLocalForm(m_world, entry.Id) == 0)
+            return;
+        snapshotStages.emplace(entry.Id, entry.Stage);
+    }
+
+    std::vector<QuestRecoveryEntry> entries;
+    const auto canonical = m_canonicalQuestStagesByOwner.find(acMessage.OwnerPlayerId);
+    const auto canonicalCount = canonical != m_canonicalQuestStagesByOwner.end() ? canonical->second.size() : 0;
+    entries.reserve(canonicalCount + snapshotStages.size());
+    // Only remove quests this recovery lane previously established. The
+    // canonical snapshot is complete for that lane, not authority over local-only quests.
+    if (canonical != m_canonicalQuestStagesByOwner.end()) {
+        for (const auto& [id, stage] : canonical->second) {
+            if (!snapshotStages.contains(id)) {
+                if (ToLocalForm(m_world, id) == 0)
+                    return;
+                entries.push_back({id, stage, true});
+            }
+        }
+    }
+    for (const auto& [id, stage] : snapshotStages)
+        entries.push_back({id, stage, false});
+
+    auto& recovery = pending->second;
+    recovery.Entries = std::move(entries);
+    recovery.SnapshotStages = std::move(snapshotStages);
+    recovery.NextEntry = 0;
+    recovery.Applying = true;
+    recovery.ApplyingRevision = acMessage.CanonicalRevision;
+    m_latestQuestRevisionByOwner.insert_or_assign(acMessage.OwnerPlayerId, acMessage.CanonicalRevision);
+    TryApplyQuestRecovery();
+}
+catch (...)
+{
+    const auto pending = m_pendingQuestResyncs.find(acMessage.OwnerPlayerId);
+    if (pending != m_pendingQuestResyncs.end())
+        FailQuestRecovery(acMessage.OwnerPlayerId, pending->second.ApplyingRevision);
+}
+
+void VRWorldReplicationService::TryApplyQuestRecovery() noexcept
+{
+    auto pending = std::find_if(m_pendingQuestResyncs.begin(), m_pendingQuestResyncs.end(),
+                                [](const auto& acEntry) { return acEntry.second.Applying; });
+    if (pending == m_pendingQuestResyncs.end())
+        return;
+    auto& recovery = pending->second;
+    if (!IsQuestRecoveryCurrent(recovery)) {
+        m_pendingQuestResyncs.erase(pending);
+        return;
+    }
+    if (recovery.NextEntry == recovery.Entries.size()) {
+        m_lastQuestSnapshotRevisionByOwner.insert_or_assign(recovery.OwnerPlayerId, recovery.ApplyingRevision);
+        m_latestQuestRevisionByOwner.insert_or_assign(recovery.OwnerPlayerId, recovery.ApplyingRevision);
+        m_canonicalQuestStagesByOwner.insert_or_assign(recovery.OwnerPlayerId, std::move(recovery.SnapshotStages));
+        m_pendingQuestResyncs.erase(pending);
+        return;
+    }
+
+    const auto& entry = recovery.Entries[recovery.NextEntry];
+    GameplayBridge::CommandRecord command{};
+    if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Quest,
+                           GameplayBridge::GameplayAction::SetQuestState, command)) {
+        FailQuestRecovery(recovery.OwnerPlayerId, recovery.ApplyingRevision);
+        return;
+    }
+    auto& payload = command.Payload.ApplyGameplayAction;
+    payload.TargetLocalFormId = ToLocalForm(m_world, entry.Id);
+    payload.ValueA = entry.Stage;
+    payload.ValueB = entry.Stop ? NotifyQuestUpdate::Stopped : NotifyQuestUpdate::Started;
+    if (payload.TargetLocalFormId == 0 ||
+        !SubmitRemoteCommand(command, CanonicalRecoveryOperation::Quest, 0,
+                             recovery.ApplyingRevision, 0, recovery.OwnerPlayerId, entry.Id))
+        FailQuestRecovery(recovery.OwnerPlayerId, recovery.ApplyingRevision);
+}
+
+void VRWorldReplicationService::CompleteObjectRecoveryInventory(
+    const std::uint32_t aServerId, const std::uint64_t aRevision, const bool aSucceeded) noexcept
+{
+    if (aServerId == 0 || aRevision == 0)
+        return;
+    const auto pending = m_pendingObjectResyncs.find(aServerId);
+    if (pending == m_pendingObjectResyncs.end() || !pending->second.Applying ||
+        pending->second.ApplyingRevision != aRevision)
+        return;
+    if (!aSucceeded) {
+        FailObjectRecovery(aServerId, aRevision);
+        return;
+    }
+
+    pending->second.PendingApplyMask &= ~kObjectRecoveryInventory;
+    if (pending->second.PendingApplyMask != 0)
+        return;
+    m_lastObjectSnapshotRevisionByServer.insert_or_assign(aServerId, aRevision);
+    m_pendingObjectResyncs.erase(pending);
+}
+
+void VRWorldReplicationService::CompleteCanonicalRecoveryCommand(
+    const PendingRemoteCommand& acPending, const bool aSucceeded) noexcept
+{
+    if (acPending.RecoveryOperation == CanonicalRecoveryOperation::Activation) {
+        if (!aSucceeded)
+            return;
+        GameplayBridge::CommandRecord correction{};
+        if (!BuildWorldCommand(m_transport, GameplayBridge::GameplayDomain::Object,
+                               GameplayBridge::GameplayAction::SetOpenState, correction)) {
+            RecordCanonicalRecoveryDiagnostic("activation post-state correction could not be constructed");
+            return;
+        }
+        auto& payload = correction.Payload.ApplyGameplayAction;
+        payload.TargetLocalFormId = acPending.Command.Payload.ApplyGameplayAction.TargetLocalFormId;
+        payload.ValueA = acPending.AuthoritativeOpenState == 1 || acPending.AuthoritativeOpenState == 2 ? 1 : 0;
+        if (payload.TargetLocalFormId == 0 ||
+            !SubmitRemoteCommand(correction, CanonicalRecoveryOperation::ActivationPostState, 0, 0,
+                                 acPending.AuthoritativeOpenState))
+            RecordCanonicalRecoveryDiagnostic("activation post-state correction could not be admitted");
+        return;
+    }
+
+    if (acPending.RecoveryOperation == CanonicalRecoveryOperation::ActivationPostState) {
+        if (!aSucceeded)
+            RecordCanonicalRecoveryDiagnostic("activation post-state correction did not reach a stable native state");
+        return;
+    }
+
+    if (acPending.RecoveryOperation == CanonicalRecoveryOperation::ObjectLock) {
+        const auto pending = m_pendingObjectResyncs.find(acPending.CanonicalServerId);
+        if (pending == m_pendingObjectResyncs.end() || !pending->second.Applying ||
+            pending->second.ApplyingRevision != acPending.CanonicalRevision)
+            return;
+        if (!aSucceeded) {
+            FailObjectRecovery(acPending.CanonicalServerId, acPending.CanonicalRevision);
+            return;
+        }
+
+        pending->second.PendingApplyMask &= ~kObjectRecoveryLock;
+        if (pending->second.PendingApplyMask != 0)
+            return;
+        m_lastObjectSnapshotRevisionByServer.insert_or_assign(acPending.CanonicalServerId,
+                                                               acPending.CanonicalRevision);
+        m_pendingObjectResyncs.erase(pending);
+        return;
+    }
+
+    if (acPending.RecoveryOperation == CanonicalRecoveryOperation::ObjectOpenState) {
+        const auto pending = m_pendingObjectResyncs.find(acPending.CanonicalServerId);
+        if (pending == m_pendingObjectResyncs.end() || !pending->second.Applying ||
+            pending->second.ApplyingRevision != acPending.CanonicalRevision)
+            return;
+        if (!aSucceeded) {
+            FailObjectRecovery(acPending.CanonicalServerId, acPending.CanonicalRevision);
+            return;
+        }
+
+        pending->second.PendingApplyMask &= ~kObjectRecoveryOpenState;
+        if (pending->second.PendingApplyMask != 0)
+            return;
+        m_lastObjectSnapshotRevisionByServer.insert_or_assign(acPending.CanonicalServerId,
+                                                               acPending.CanonicalRevision);
+        m_pendingObjectResyncs.erase(pending);
+        return;
+    }
+
+    if (acPending.RecoveryOperation != CanonicalRecoveryOperation::Quest ||
+        acPending.CanonicalOwnerPlayerId == 0)
+        return;
+
+    const auto latest = m_latestQuestRevisionByOwner.find(acPending.CanonicalOwnerPlayerId);
+    if (latest == m_latestQuestRevisionByOwner.end() || latest->second != acPending.CanonicalRevision) {
+        // A late native result may have overwritten a newer owner update.
+        RequestQuestResync(acPending.CanonicalOwnerPlayerId);
+        return;
+    }
+
+    const auto pending = m_pendingQuestResyncs.find(acPending.CanonicalOwnerPlayerId);
+    if (pending != m_pendingQuestResyncs.end() && pending->second.Applying &&
+        pending->second.ApplyingRevision == acPending.CanonicalRevision) {
+        if (!aSucceeded) {
+            FailQuestRecovery(acPending.CanonicalOwnerPlayerId, acPending.CanonicalRevision);
+            return;
+        }
+        ++pending->second.NextEntry;
+        TryApplyQuestRecovery();
+        return;
+    }
+
+    if (!aSucceeded) {
+        RequestQuestResync(acPending.CanonicalOwnerPlayerId);
+        return;
+    }
+
+    if (!acPending.CanonicalQuestId) {
+        RequestQuestResync(acPending.CanonicalOwnerPlayerId);
+        return;
+    }
+    auto& stages = m_canonicalQuestStagesByOwner[acPending.CanonicalOwnerPlayerId];
+    const auto& payload = acPending.Command.Payload.ApplyGameplayAction;
+    if (payload.ValueB == NotifyQuestUpdate::Stopped)
+        stages.erase(acPending.CanonicalQuestId);
+    else
+        stages.insert_or_assign(acPending.CanonicalQuestId, static_cast<std::uint16_t>(payload.ValueA));
+    m_lastQuestSnapshotRevisionByOwner.insert_or_assign(acPending.CanonicalOwnerPlayerId,
+                                                         acPending.CanonicalRevision);
+}
+
+void VRWorldReplicationService::FailObjectRecovery(
+    const std::uint32_t aServerId, const std::uint64_t aRevision) noexcept
+{
+    const auto pending = m_pendingObjectResyncs.find(aServerId);
+    if (pending == m_pendingObjectResyncs.end() || !pending->second.Applying ||
+        pending->second.ApplyingRevision != aRevision)
+        return;
+    pending->second.Applying = false;
+    pending->second.PendingApplyMask = 0;
+    pending->second.ApplyingRevision = 0;
+    pending->second.RetryElapsed = 0.0;
+    pending->second.RequestSent = false;
+    RecordCanonicalRecoveryDiagnostic("object canonical recovery application was ambiguous or failed");
+}
+
+void VRWorldReplicationService::FailQuestRecovery(
+    const std::uint32_t aOwnerPlayerId, const std::uint64_t aRevision) noexcept
+{
+    const auto pending = m_pendingQuestResyncs.find(aOwnerPlayerId);
+    if (pending == m_pendingQuestResyncs.end() || !pending->second.Applying ||
+        pending->second.ApplyingRevision != aRevision)
+        return;
+    pending->second.Entries.clear();
+    pending->second.SnapshotStages.clear();
+    pending->second.NextEntry = 0;
+    pending->second.Applying = false;
+    pending->second.ApplyingRevision = 0;
+    pending->second.RetryElapsed = 0.0;
+    pending->second.RequestSent = false;
+    RecordCanonicalRecoveryDiagnostic("quest canonical recovery did not observe the requested native completion");
+}
+
+void VRWorldReplicationService::RecordCanonicalRecoveryDiagnostic(const char* const apReason) noexcept
+{
+    if (m_canonicalRecoveryDiagnosticCount != (std::numeric_limits<std::uint32_t>::max)())
+        ++m_canonicalRecoveryDiagnosticCount;
+    const auto count = m_canonicalRecoveryDiagnosticCount;
+    if (count != 0 && (count & (count - 1)) == 0)
+        spdlog::warn("VR canonical recovery: {} (aggregate count {})", apReason, count);
+}
+
+void VRWorldReplicationService::RetryCanonicalResyncs(const double aDelta) noexcept
+{
+    if (!std::isfinite(aDelta) || aDelta < 0.0)
+        return;
+    const auto delta = std::min(aDelta, kCanonicalResyncRetrySeconds);
+    for (auto pending = m_pendingObjectResyncs.begin(); pending != m_pendingObjectResyncs.end();) {
+        if (pending->second.Applying) {
+            ++pending;
+            continue;
+        }
+        pending->second.RetryElapsed += delta;
+        if (pending->second.RetryElapsed < kCanonicalResyncRetrySeconds) {
+            ++pending;
+            continue;
+        }
+        if (pending->second.Attempts >= kMaximumCanonicalResyncAttempts) {
+            RecordCanonicalRecoveryDiagnostic("object canonical resync request budget exhausted");
+            pending = m_pendingObjectResyncs.erase(pending);
+            continue;
+        }
+        if (!SendObjectResyncRequest(pending->first, pending->second))
+            pending->second.RetryElapsed = 0.0;
+        ++pending;
+    }
+
+    for (auto pending = m_pendingQuestResyncs.begin(); pending != m_pendingQuestResyncs.end();) {
+        auto& recovery = pending->second;
+        if (!IsQuestRecoveryCurrent(recovery)) {
+            pending = m_pendingQuestResyncs.erase(pending);
+            continue;
+        }
+        if (recovery.Applying) {
+            ++pending;
+            continue;
+        }
+        recovery.RetryElapsed += delta;
+        if (recovery.RetryElapsed < kCanonicalResyncRetrySeconds) {
+            ++pending;
+            continue;
+        }
+        if (recovery.Attempts >= kMaximumCanonicalResyncAttempts) {
+            RecordCanonicalRecoveryDiagnostic("quest canonical resync request budget exhausted");
+            pending = m_pendingQuestResyncs.erase(pending);
+            continue;
+        }
+        if (!SendQuestResyncRequest(recovery))
+            recovery.RetryElapsed = 0.0;
+        ++pending;
+    }
+}
+
+void VRWorldReplicationService::ResetCanonicalRecovery() noexcept
+{
+    m_objectServerIds.clear();
+    m_lastObjectSnapshotRevisionByServer.clear();
+    m_pendingObjectResyncs.clear();
+    m_pendingQuestResyncs.clear();
+    m_lastQuestSnapshotRevisionByOwner.clear();
+    m_latestQuestRevisionByOwner.clear();
+    m_canonicalQuestStagesByOwner.clear();
+    m_nextCanonicalResyncRequestId = 1;
+    m_canonicalRecoveryDiagnosticCount = 0;
 }
 
 void VRWorldReplicationService::OnRemoveWaypoint(const NotifyRemoveWaypoint&) noexcept
@@ -1291,6 +1892,8 @@ void VRWorldReplicationService::OnPartyJoined(const PartyJoinedEvent& acEvent) n
         return;
     m_partyRoleKnown = true;
     m_partyLeader = acEvent.IsLeader;
+    m_pendingQuestResyncs.erase(m_transport.GetLocalPlayerId());
+    RequestQuestResync(m_transport.GetLocalPlayerId());
     RetainServerSettings(m_world.GetServerSettings());
     if (acEvent.IsLeader)
         SubmitReleaseWeather();
@@ -1666,6 +2269,7 @@ void VRWorldReplicationService::SubmitReleaseWeather() noexcept
 void VRWorldReplicationService::OnConnected(const ConnectedEvent&) noexcept
 {
     ObserveSession();
+    RequestQuestResync(m_transport.GetLocalPlayerId());
     Reconcile();
 }
 
@@ -1695,6 +2299,7 @@ void VRWorldReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept
 {
     ObserveSession();
     TrySendPendingOutbound();
+    RetryCanonicalResyncs(acEvent.Delta);
     RetryPendingWorldInventoryTransactions(acEvent.Delta);
     RetryPendingRemoteCommands(acEvent.Delta);
     if (m_subtitleText.Valid) {
@@ -1783,6 +2388,7 @@ void VRWorldReplicationService::ObserveSession() noexcept
         ResetSubtitleTextState();
         m_pendingRemoteCommands = {};
         ClearPendingWorldInventoryTransactions();
+        ResetCanonicalRecovery();
         m_pendingText.clear();
         m_pendingOutbound.clear();
         m_pendingOutboundServerInstanceNonce = 0;
@@ -1801,6 +2407,7 @@ void VRWorldReplicationService::ObserveSession() noexcept
         ResetSubtitleTextState();
         m_pendingRemoteCommands = {};
         ClearPendingWorldInventoryTransactions();
+        ResetCanonicalRecovery();
         m_pendingText.clear();
         m_pendingOutbound.clear();
         m_pendingOutboundServerInstanceNonce = 0;
@@ -1915,6 +2522,7 @@ void VRWorldReplicationService::ResetRetainedState() noexcept
     m_partyLeader = false;
     m_lastLocalActionIdByDomain.fill(0);
     m_lockStates.clear();
+    ResetCanonicalRecovery();
 }
 
 void VRWorldReplicationService::ResetSubtitleTextState() noexcept
@@ -1979,6 +2587,9 @@ void VRWorldReplicationService::OnGameplayResult(
         return;
 
     const auto& result = record.Payload.RemoteGameplayActionState;
+    if (HandlePendingRemoteCommandResult(record))
+        return;
+
     RetainedState* state = nullptr;
     const auto domain = static_cast<GameplayBridge::GameplayDomain>(result.Domain);
     const auto action = static_cast<GameplayBridge::GameplayAction>(result.Action);
@@ -2022,9 +2633,17 @@ void VRWorldReplicationService::OnGameplayResult(
                                status == GameplayBridge::CommandStatus::EngineRejected ||
                                status == GameplayBridge::CommandStatus::QueueOverflow;
         state->Dirty = retryable && state->Attempts < kMaximumReconcileAttempts;
+        if (domain == GameplayBridge::GameplayDomain::Object) {
+            for (const auto& [objectId, serverId] : m_objectServerIds) {
+                if (ToLocalForm(m_world, objectId) == result.TargetLocalFormId) {
+                    RequestObjectResync(serverId);
+                    break;
+                }
+            }
+        }
         return;
     }
 
     HandlePendingWorldInventoryTransactionResult(record);
-    HandlePendingRemoteCommandResult(record);
+    TP_UNUSED(HandlePendingRemoteCommandResult(record));
 }

@@ -5,7 +5,7 @@ using TiltedPhoques::Serialization;
 
 bool ObjectData::operator==(const ObjectData& acRhs) const noexcept
 {
-    return ServerId == acRhs.ServerId && Id == acRhs.Id && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && CurrentCoords == acRhs.CurrentCoords && CurrentLockData == acRhs.CurrentLockData && CurrentInventory == acRhs.CurrentInventory && IsSenderFirst == acRhs.IsSenderFirst;
+    return ServerId == acRhs.ServerId && Id == acRhs.Id && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && CurrentCoords == acRhs.CurrentCoords && CurrentLockData == acRhs.CurrentLockData && CurrentInventory == acRhs.CurrentInventory && HasCurrentOpenState == acRhs.HasCurrentOpenState && CurrentOpenState == acRhs.CurrentOpenState && IsSenderFirst == acRhs.IsSenderFirst;
 }
 
 bool ObjectData::operator!=(const ObjectData& acRhs) const noexcept
@@ -22,6 +22,8 @@ void ObjectData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcep
     CurrentCoords.Serialize(aWriter);
     CurrentLockData.Serialize(aWriter);
     CurrentInventory.Serialize(aWriter);
+    Serialization::WriteBool(aWriter, HasCurrentOpenState);
+    aWriter.WriteBits(CurrentOpenState, 8);
     Serialization::WriteBool(aWriter, IsSenderFirst);
 }
 
@@ -40,5 +42,14 @@ void ObjectData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
         IsDecodedValid = false;
         return;
     }
+    HasCurrentOpenState = Serialization::ReadBool(aReader);
+    uint64_t currentOpenState{};
+    if (!aReader.ReadBits(currentOpenState, 8))
+    {
+        IsDecodedValid = false;
+        return;
+    }
+    CurrentOpenState = currentOpenState & 0xFF;
     IsSenderFirst = Serialization::ReadBool(aReader);
+    IsDecodedValid = HasValidCurrentOpenState();
 }

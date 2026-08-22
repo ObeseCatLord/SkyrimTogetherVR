@@ -4,6 +4,8 @@
 
 void NotifyQuestUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
+    Serialization::WriteVarInt(aWriter, OwnerPlayerId);
+    Serialization::WriteVarInt(aWriter, CanonicalRevision);
     Id.Serialize(aWriter);
     aWriter.WriteBits(Stage, 16);
     aWriter.WriteBits(Status, 8);
@@ -13,6 +15,8 @@ void NotifyQuestUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) con
 void NotifyQuestUpdate::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
     ServerMessage::DeserializeRaw(aReader);
+    OwnerPlayerId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    CanonicalRevision = Serialization::ReadVarInt(aReader);
     Id.Deserialize(aReader);
 
     uint64_t tmp;

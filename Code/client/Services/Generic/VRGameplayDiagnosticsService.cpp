@@ -10,6 +10,7 @@
 #include <Events/UpdateEvent.h>
 #include <Services/TransportService.h>
 #include <Services/VRConnectionService.h>
+#include <Structs/GameplayCapabilities.h>
 #include <VRCompatibilityStatus.h>
 #include <VRGameplayBridge.h>
 #include <vr_common/VRHandoffPath.h>
@@ -67,8 +68,8 @@ constexpr std::array kDomains{
     DomainDescriptor{GameplayBridge::GameplayDomain::VrBodyPose, "vr_body_pose", DomainPath::Canonical, "", true},
     DomainDescriptor{GameplayBridge::GameplayDomain::Higgs, "higgs", DomainPath::Direct,
                      "optional_external_bridge", false},
-    DomainDescriptor{GameplayBridge::GameplayDomain::Planck, "planck", DomainPath::Unsupported,
-                     "no_remote_physical_replay", false},
+    DomainDescriptor{GameplayBridge::GameplayDomain::Planck, "planck", DomainPath::Direct,
+                     "optional_negotiated_interface002", false},
     DomainDescriptor{GameplayBridge::GameplayDomain::NpcOwnership, "npc_ownership", DomainPath::Canonical, "", true},
 };
 
@@ -112,7 +113,8 @@ bool HasActiveCapability(
 const char* DomainState(
     const DomainDescriptor& acDescriptor,
     const SkyrimTogetherVR::GameplayBridgeClient::Diagnostics& acDiagnostics,
-    const bool aOnline) noexcept
+    const bool aOnline,
+    const bool aPlanckInterface002Operational) noexcept
 {
     if (acDescriptor.Path == DomainPath::Unsupported)
         return "unsupported";
@@ -120,7 +122,9 @@ const char* DomainState(
         return "degraded";
     if (!acDiagnostics.Ready)
         return "waiting_bridge";
-    if (!HasActiveCapability(acDiagnostics, acDescriptor.Domain))
+    const bool capabilityActive = acDescriptor.Domain == GameplayBridge::GameplayDomain::Planck ?
+        aPlanckInterface002Operational : HasActiveCapability(acDiagnostics, acDescriptor.Domain);
+    if (!capabilityActive)
         return "blocked_capability";
     if (!aOnline)
         return "waiting_transport";
@@ -130,9 +134,12 @@ const char* DomainState(
 bool IsMandatoryDomainReady(
     const DomainDescriptor& acDescriptor,
     const SkyrimTogetherVR::GameplayBridgeClient::Diagnostics& acDiagnostics,
-    const bool aOnline) noexcept
+    const bool aOnline,
+    const bool aPlanckInterface002Operational) noexcept
 {
-    return !acDescriptor.Mandatory || std::string_view(DomainState(acDescriptor, acDiagnostics, aOnline)) == "active";
+    return !acDescriptor.Mandatory ||
+           std::string_view(DomainState(
+               acDescriptor, acDiagnostics, aOnline, aPlanckInterface002Operational)) == "active";
 }
 
 const char* EvidenceState(const VRGameplayDiagnosticsService::DomainCounters& acCounters) noexcept
@@ -200,17 +207,22 @@ bool WriteGameplayStatusSnapshot(
 {
     const bool transportOnline = apTransport && apTransport->IsOnline();
     const bool online = apConnection && apConnection->IsReadyForGameplay();
+    const bool planckInterface002Operational = apTransport &&
+        SkyrimTogether::Protocol::HasCapability(
+            apTransport->GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::PlanckPhysicsInterface002);
     const bool localEventSinksActive = GameplayBridge::HasCapability(
         acDiagnostics.ActiveCapabilities, GameplayBridge::Capability::LocalEventSinks);
     const bool localCaptureSinksActive = GameplayBridge::HasCapability(
         acDiagnostics.ActiveCapabilities, GameplayBridge::Capability::LocalCaptureSinks);
-    const bool nativeParityContractActive =
-        (acDiagnostics.ActiveCapabilities & GameplayBridge::kMandatoryNativeParityCapabilities) ==
-        GameplayBridge::kMandatoryNativeParityCapabilities;
+    const bool nativeGameplayCoreContractActive =
+        (acDiagnostics.ActiveCapabilities & GameplayBridge::kMandatoryNativeGameplayCoreCapabilities) ==
+        GameplayBridge::kMandatoryNativeGameplayCoreCapabilities;
     bool mandatoryReady = aRegistered && acDiagnostics.Ready && online && localCaptureSinksActive &&
-                          nativeParityContractActive;
+                          nativeGameplayCoreContractActive;
     for (const auto& domain : kDomains)
-        mandatoryReady = mandatoryReady && IsMandatoryDomainReady(domain, acDiagnostics, online);
+        mandatoryReady = mandatoryReady && IsMandatoryDomainReady(
+            domain, acDiagnostics, online, planckInterface002Operational);
 
     std::size_t observedDomainCount{};
     std::size_t partialDomainCount{};
@@ -254,6 +266,8 @@ bool WriteGameplayStatusSnapshot(
             file << "canonical.path=commonlib_bridge\n";
             file << "direct.path=separate_extension_relays\n";
             file << "direct.state=not_a_core_readiness_signal\n";
+            file << "direct.planckInterface002Operational=" <<
+                (planckInterface002Operational ? "1" : "0") << "\n";
             file << "bridge.initialized=" << (acDiagnostics.Initialized ? "1" : "0") << "\n";
             file << "bridge.ready=" << (acDiagnostics.Ready ? "1" : "0") << "\n";
             file << "bridge.retired=" << (acDiagnostics.Retired ? "1" : "0") << "\n";
@@ -263,7 +277,7 @@ bool WriteGameplayStatusSnapshot(
             file << "bridge.activeCapabilities=" << acDiagnostics.ActiveCapabilities << "\n";
             file << "bridge.localEventSinksActive=" << (localEventSinksActive ? "1" : "0") << "\n";
             file << "bridge.localCaptureSinksActive=" << (localCaptureSinksActive ? "1" : "0") << "\n";
-            file << "bridge.nativeParityContractActive=" << (nativeParityContractActive ? "1" : "0") << "\n";
+            file << "bridge.nativeGameplayCoreContractActive=" << (nativeGameplayCoreContractActive ? "1" : "0") << "\n";
             file << "bridge.producedEvents=" << acDiagnostics.ProducedEventCount << "\n";
             file << "bridge.consumedEvents=" << acDiagnostics.ConsumedEventCount << "\n";
             file << "bridge.submittedCommands=" << acDiagnostics.SubmittedCommandCount << "\n";
@@ -318,8 +332,9 @@ bool WriteGameplayStatusSnapshot(
                 const auto& counters = acCounters[index];
                 file << "domain." << domain.Name << ".path=" << ToString(domain.Path) << "\n";
                 file << "domain." << domain.Name << ".availability=" <<
-                    DomainState(domain, acDiagnostics, online) << "\n";
-                file << "domain." << domain.Name << ".state=" << DomainState(domain, acDiagnostics, online) << "\n";
+                    DomainState(domain, acDiagnostics, online, planckInterface002Operational) << "\n";
+                file << "domain." << domain.Name << ".state=" <<
+                    DomainState(domain, acDiagnostics, online, planckInterface002Operational) << "\n";
                 file << "domain." << domain.Name << ".evidenceState=" << EvidenceState(counters) << "\n";
                 if (domain.FixedReason[0] != '\0')
                     file << "domain." << domain.Name << ".reason=" << domain.FixedReason << "\n";
@@ -561,17 +576,21 @@ void VRGameplayDiagnosticsService::WriteSnapshot(const bool aForce) noexcept
         diagnostics.ActiveCapabilities, GameplayBridge::Capability::LocalEventSinks);
     const bool localCaptureSinksActive = GameplayBridge::HasCapability(
         diagnostics.ActiveCapabilities, GameplayBridge::Capability::LocalCaptureSinks);
-    const bool nativeParityContractActive =
-        (diagnostics.ActiveCapabilities & GameplayBridge::kMandatoryNativeParityCapabilities) ==
-        GameplayBridge::kMandatoryNativeParityCapabilities;
-    bool mandatoryReady = diagnostics.Ready && online && localCaptureSinksActive && nativeParityContractActive;
+    const bool nativeGameplayCoreContractActive =
+        (diagnostics.ActiveCapabilities & GameplayBridge::kMandatoryNativeGameplayCoreCapabilities) ==
+        GameplayBridge::kMandatoryNativeGameplayCoreCapabilities;
+    const bool planckInterface002Operational = SkyrimTogether::Protocol::HasCapability(
+        m_transport.GetNegotiatedGameplayCapabilities(),
+        SkyrimTogether::Protocol::GameplayCapability::PlanckPhysicsInterface002);
+    bool mandatoryReady = diagnostics.Ready && online && localCaptureSinksActive && nativeGameplayCoreContractActive;
     const char* reason = "ready";
     for (const auto& domain : kDomains)
     {
-        if (!IsMandatoryDomainReady(domain, diagnostics, online))
+        if (!IsMandatoryDomainReady(domain, diagnostics, online, planckInterface002Operational))
         {
             mandatoryReady = false;
-            reason = domain.FixedReason[0] != '\0' ? domain.FixedReason : DomainState(domain, diagnostics, online);
+            reason = domain.FixedReason[0] != '\0' ? domain.FixedReason :
+                DomainState(domain, diagnostics, online, planckInterface002Operational);
             break;
         }
     }
@@ -601,10 +620,10 @@ void VRGameplayDiagnosticsService::WriteSnapshot(const bool aForce) noexcept
             state = "degraded";
             reason = "local_capture_sinks_inactive";
         }
-        else if (!nativeParityContractActive)
+        else if (!nativeGameplayCoreContractActive)
         {
             state = "degraded";
-            reason = "native_parity_contract_inactive";
+            reason = "native_gameplay_core_contract_inactive";
         }
         else if (!online)
         {

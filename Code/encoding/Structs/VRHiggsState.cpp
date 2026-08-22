@@ -1,6 +1,7 @@
 #include <Structs/VRHiggsState.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include <TiltedCore/Serialization.hpp>
 
@@ -11,6 +12,69 @@ namespace
 bool IsNewerMutationSequence(const uint32_t aCandidate, const uint32_t aCurrent) noexcept
 {
     return static_cast<int32_t>(aCandidate - aCurrent) > 0;
+}
+
+template <std::size_t N>
+[[nodiscard]] bool IsValidNodeName(
+    const std::array<char, N>& acName, const std::uint8_t aLength) noexcept
+{
+    // Replay passes this fixed buffer to BSFixedString, so one byte must
+    // remain zero-terminated even for a packet constructed by a peer.
+    if (aLength >= acName.size())
+        return false;
+    return std::none_of(acName.begin(), acName.begin() + aLength,
+                        [](const char aCharacter) noexcept { return aCharacter == '\0'; });
+}
+
+[[nodiscard]] bool IsFiniteVector(const glm::vec3& acValue) noexcept
+{
+    return std::isfinite(acValue.x) && std::isfinite(acValue.y) && std::isfinite(acValue.z);
+}
+
+[[nodiscard]] float Dot(const glm::vec3& acLeft, const glm::vec3& acRight) noexcept
+{
+    return acLeft.x * acRight.x + acLeft.y * acRight.y + acLeft.z * acRight.z;
+}
+
+[[nodiscard]] bool IsValidGrabTransform(const VRHiggsGrabTransform& acTransform) noexcept
+{
+    if (!acTransform.Valid)
+        return true;
+    constexpr float kAxisTolerance = 0.02F;
+    return IsFiniteVector(acTransform.Translate) && IsFiniteVector(acTransform.AxisX) &&
+           IsFiniteVector(acTransform.AxisY) && IsFiniteVector(acTransform.AxisZ) &&
+           std::isfinite(acTransform.Scale) && acTransform.Scale >= 0.001F && acTransform.Scale <= 1000.0F &&
+           std::abs(Dot(acTransform.AxisX, acTransform.AxisX) - 1.0F) <= kAxisTolerance &&
+           std::abs(Dot(acTransform.AxisY, acTransform.AxisY) - 1.0F) <= kAxisTolerance &&
+           std::abs(Dot(acTransform.AxisZ, acTransform.AxisZ) - 1.0F) <= kAxisTolerance &&
+           std::abs(Dot(acTransform.AxisX, acTransform.AxisY)) <= kAxisTolerance &&
+           std::abs(Dot(acTransform.AxisX, acTransform.AxisZ)) <= kAxisTolerance &&
+           std::abs(Dot(acTransform.AxisY, acTransform.AxisZ)) <= kAxisTolerance;
+}
+
+[[nodiscard]] bool IsValidFingerState(const VRHiggsFingerState& acFingers) noexcept
+{
+    if (!acFingers.Valid)
+        return true;
+    const auto valid = [](const float aValue) noexcept {
+        return std::isfinite(aValue) && aValue >= 0.0F && aValue <= 1.0F;
+    };
+    return valid(acFingers.Thumb) && valid(acFingers.Index) && valid(acFingers.Middle) &&
+           valid(acFingers.Ring) && valid(acFingers.Pinky);
+}
+
+[[nodiscard]] bool IsValidHandState(const VRHiggsHandState& acHand) noexcept
+{
+    if (!acHand.IsDecodedValid)
+        return false;
+    if (!acHand.Valid)
+        return true;
+    if (!IsValidNodeName(acHand.GrabbedNodeName, acHand.GrabbedNodeNameLength) ||
+        !IsValidFingerState(acHand.Fingers) || !IsValidGrabTransform(acHand.GrabTransform))
+        return false;
+    if (acHand.HoldingObject)
+        return static_cast<bool>(acHand.GrabbedObject) && acHand.GrabTransform.Valid;
+    return !acHand.GrabTransform.Valid && acHand.GrabbedNodeNameLength == 0;
 }
 
 void SerializeVector3(TiltedPhoques::Buffer::Writer& aWriter, const glm::vec3& acValue) noexcept
@@ -130,7 +194,7 @@ void VRHiggsGrabTransform::Deserialize(TiltedPhoques::Buffer::Reader& aReader) n
 
 bool VRHiggsHandState::operator==(const VRHiggsHandState& acRhs) const noexcept
 {
-    if (Valid != acRhs.Valid)
+    if (IsDecodedValid != acRhs.IsDecodedValid || Valid != acRhs.Valid)
         return false;
 
     if (!Valid)
@@ -139,7 +203,8 @@ bool VRHiggsHandState::operator==(const VRHiggsHandState& acRhs) const noexcept
     return HoldingObject == acRhs.HoldingObject && CanGrabObject == acRhs.CanGrabObject &&
            HandInGrabbableState == acRhs.HandInGrabbableState && Disabled == acRhs.Disabled &&
            WeaponCollisionDisabled == acRhs.WeaponCollisionDisabled &&
-           GrabbedObject == acRhs.GrabbedObject && Fingers == acRhs.Fingers &&
+           GrabbedObject == acRhs.GrabbedObject && GrabbedNodeName == acRhs.GrabbedNodeName &&
+           GrabbedNodeNameLength == acRhs.GrabbedNodeNameLength && Fingers == acRhs.Fingers &&
            GrabTransform == acRhs.GrabTransform;
 }
 
@@ -160,12 +225,19 @@ void VRHiggsHandState::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const n
     TiltedPhoques::Serialization::WriteBool(aWriter, Disabled);
     TiltedPhoques::Serialization::WriteBool(aWriter, WeaponCollisionDisabled);
     GrabbedObject.Serialize(aWriter);
+    const auto nodeNameLength = IsValidNodeName(GrabbedNodeName, GrabbedNodeNameLength) ?
+        GrabbedNodeNameLength : 0;
+    aWriter.WriteBits(nodeNameLength, 8);
+    for (std::size_t index = 0; index < nodeNameLength; ++index)
+        aWriter.WriteBits(static_cast<uint8_t>(GrabbedNodeName[index]), 8);
     Fingers.Serialize(aWriter);
     GrabTransform.Serialize(aWriter);
 }
 
 void VRHiggsHandState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
+    IsDecodedValid = true;
     Valid = TiltedPhoques::Serialization::ReadBool(aReader);
     if (!Valid)
     {
@@ -186,15 +258,39 @@ void VRHiggsHandState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexc
     Disabled = TiltedPhoques::Serialization::ReadBool(aReader);
     WeaponCollisionDisabled = TiltedPhoques::Serialization::ReadBool(aReader);
     GrabbedObject.Deserialize(aReader);
+    uint64_t nodeNameLength{};
+    aReader.ReadBits(nodeNameLength, 8);
+    if (nodeNameLength > GrabbedNodeName.size())
+    {
+        Valid = false;
+        IsDecodedValid = false;
+        GrabbedNodeName = {};
+        GrabbedNodeNameLength = 0;
+        return;
+    }
+    GrabbedNodeName = {};
+    GrabbedNodeNameLength = static_cast<uint8_t>(nodeNameLength);
+    for (std::size_t index = 0; index < GrabbedNodeNameLength; ++index) {
+        uint64_t character{};
+        aReader.ReadBits(character, 8);
+        GrabbedNodeName[index] = static_cast<char>(character);
+    }
+    if (!IsValidNodeName(GrabbedNodeName, GrabbedNodeNameLength)) {
+        Valid = false;
+        IsDecodedValid = false;
+        return;
+    }
     Fingers.Deserialize(aReader);
     GrabTransform.Deserialize(aReader);
 }
 
 bool VRHiggsEventSnapshot::operator==(const VRHiggsEventSnapshot& acRhs) const noexcept
 {
-    return Sequence == acRhs.Sequence && EventKind == acRhs.EventKind &&
+    return IsDecodedValid == acRhs.IsDecodedValid && Sequence == acRhs.Sequence && EventKind == acRhs.EventKind &&
            HasHand == acRhs.HasHand && IsLeft == acRhs.IsLeft && ObjectId == acRhs.ObjectId &&
-           Mass == acRhs.Mass && SeparatingVelocity == acRhs.SeparatingVelocity;
+           InventoryBaseForm == acRhs.InventoryBaseForm && Mass == acRhs.Mass &&
+           SeparatingVelocity == acRhs.SeparatingVelocity && GrabTransform == acRhs.GrabTransform &&
+           GrabbedNodeName == acRhs.GrabbedNodeName && GrabbedNodeNameLength == acRhs.GrabbedNodeNameLength;
 }
 
 bool VRHiggsEventSnapshot::operator!=(const VRHiggsEventSnapshot& acRhs) const noexcept
@@ -209,12 +305,21 @@ void VRHiggsEventSnapshot::Serialize(TiltedPhoques::Buffer::Writer& aWriter) con
     TiltedPhoques::Serialization::WriteBool(aWriter, HasHand);
     TiltedPhoques::Serialization::WriteBool(aWriter, IsLeft);
     ObjectId.Serialize(aWriter);
+    InventoryBaseForm.Serialize(aWriter);
     TiltedPhoques::Serialization::WriteFloat(aWriter, Mass);
     TiltedPhoques::Serialization::WriteFloat(aWriter, SeparatingVelocity);
+    GrabTransform.Serialize(aWriter);
+    const auto nodeNameLength = IsValidNodeName(GrabbedNodeName, GrabbedNodeNameLength) ?
+        GrabbedNodeNameLength : 0;
+    aWriter.WriteBits(nodeNameLength, 8);
+    for (std::size_t index = 0; index < nodeNameLength; ++index)
+        aWriter.WriteBits(static_cast<uint8_t>(GrabbedNodeName[index]), 8);
 }
 
 void VRHiggsEventSnapshot::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    *this = {};
+    IsDecodedValid = true;
     Sequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
 
     uint64_t kind{};
@@ -224,8 +329,28 @@ void VRHiggsEventSnapshot::Deserialize(TiltedPhoques::Buffer::Reader& aReader) n
     HasHand = TiltedPhoques::Serialization::ReadBool(aReader);
     IsLeft = TiltedPhoques::Serialization::ReadBool(aReader);
     ObjectId.Deserialize(aReader);
+    InventoryBaseForm.Deserialize(aReader);
     Mass = TiltedPhoques::Serialization::ReadFloat(aReader);
     SeparatingVelocity = TiltedPhoques::Serialization::ReadFloat(aReader);
+    GrabTransform.Deserialize(aReader);
+    uint64_t nodeNameLength{};
+    aReader.ReadBits(nodeNameLength, 8);
+    GrabbedNodeName = {};
+    if (nodeNameLength <= GrabbedNodeName.size()) {
+        GrabbedNodeNameLength = static_cast<uint8_t>(nodeNameLength);
+        for (std::size_t index = 0; index < GrabbedNodeNameLength; ++index) {
+            uint64_t character{};
+            aReader.ReadBits(character, 8);
+            GrabbedNodeName[index] = static_cast<char>(character);
+        }
+        if (!IsValidNodeName(GrabbedNodeName, GrabbedNodeNameLength)) {
+            GrabbedNodeNameLength = 0;
+            IsDecodedValid = false;
+        }
+    } else {
+        GrabbedNodeNameLength = 0;
+        IsDecodedValid = false;
+    }
 }
 
 bool VRHiggsState::operator==(const VRHiggsState& acRhs) const noexcept
@@ -233,7 +358,8 @@ bool VRHiggsState::operator==(const VRHiggsState& acRhs) const noexcept
     const auto eventCount = std::min<std::size_t>(MutationEventCount, MutationEvents.size());
     const auto rhsEventCount = std::min<std::size_t>(acRhs.MutationEventCount, acRhs.MutationEvents.size());
     return IsDecodedValid == acRhs.IsDecodedValid &&
-           Sequence == acRhs.Sequence && MutationSequence == acRhs.MutationSequence &&
+           Sequence == acRhs.Sequence && ProducerEpoch == acRhs.ProducerEpoch &&
+           MutationSequence == acRhs.MutationSequence && MutationReplayRebased == acRhs.MutationReplayRebased &&
            BridgeLoaded == acRhs.BridgeLoaded &&
            Detected == acRhs.Detected && InterfaceAvailable == acRhs.InterfaceAvailable &&
            CallbacksRegistered == acRhs.CallbacksRegistered &&
@@ -257,7 +383,9 @@ void VRHiggsState::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexc
     // intentionally clamped rather than becoming an invalid packet.
     const auto mutationSequence = eventCount != 0 ? MutationEvents[eventCount - 1].Sequence : 0;
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Sequence);
+    TiltedPhoques::Serialization::WriteVarInt(aWriter, ProducerEpoch);
     TiltedPhoques::Serialization::WriteVarInt(aWriter, mutationSequence);
+    TiltedPhoques::Serialization::WriteBool(aWriter, MutationReplayRebased);
     TiltedPhoques::Serialization::WriteBool(aWriter, BridgeLoaded);
     TiltedPhoques::Serialization::WriteBool(aWriter, Detected);
     TiltedPhoques::Serialization::WriteBool(aWriter, InterfaceAvailable);
@@ -277,7 +405,9 @@ void VRHiggsState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     *this = {};
     IsDecodedValid = true;
     Sequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    ProducerEpoch = TiltedPhoques::Serialization::ReadVarInt(aReader);
     MutationSequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    MutationReplayRebased = TiltedPhoques::Serialization::ReadBool(aReader);
     BridgeLoaded = TiltedPhoques::Serialization::ReadBool(aReader);
     Detected = TiltedPhoques::Serialization::ReadBool(aReader);
     InterfaceAvailable = TiltedPhoques::Serialization::ReadBool(aReader);
@@ -286,7 +416,17 @@ void VRHiggsState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     SnapshotSequence = TiltedPhoques::Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     TwoHanding = TiltedPhoques::Serialization::ReadBool(aReader);
     Left.Deserialize(aReader);
+    if (!Left.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
     Right.Deserialize(aReader);
+    if (!Right.IsDecodedValid)
+    {
+        IsDecodedValid = false;
+        return;
+    }
 
     MutationEvents = {};
     const auto eventCount = TiltedPhoques::Serialization::ReadVarInt(aReader);
@@ -297,13 +437,20 @@ void VRHiggsState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
         return;
     }
     MutationEventCount = static_cast<uint8_t>(eventCount);
-    for (std::size_t index = 0; index < MutationEventCount; ++index)
+    for (std::size_t index = 0; index < MutationEventCount; ++index) {
         MutationEvents[index].Deserialize(aReader);
+        if (!MutationEvents[index].IsDecodedValid)
+        {
+            IsDecodedValid = false;
+            return;
+        }
+    }
 }
 
 bool VRHiggsState::IsMutationReplayValid() const noexcept
 {
-    if (!IsDecodedValid || MutationEventCount > MutationEvents.size())
+    if (!IsDecodedValid || ProducerEpoch == 0 || MutationEventCount > MutationEvents.size() ||
+        !IsValidHandState(Left) || !IsValidHandState(Right))
         return false;
     if (MutationEventCount == 0)
         return MutationSequence == 0;
@@ -313,7 +460,10 @@ bool VRHiggsState::IsMutationReplayValid() const noexcept
     {
         const auto& event = MutationEvents[index];
         const auto sequence = event.Sequence;
-        if (sequence == 0 || !SkyrimTogether::VR::IsHiggsMutationPayloadValid(
+        if (sequence == 0 || !event.IsDecodedValid ||
+            !IsValidNodeName(event.GrabbedNodeName, event.GrabbedNodeNameLength) ||
+            !IsValidGrabTransform(event.GrabTransform) ||
+            !SkyrimTogether::VR::IsHiggsMutationPayloadValid(
                                  event.Mass, event.SeparatingVelocity) ||
             (index != 0 && !IsNewerMutationSequence(sequence, previousSequence)))
             return false;

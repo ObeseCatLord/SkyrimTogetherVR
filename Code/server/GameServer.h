@@ -72,6 +72,7 @@ struct GameServer final : Server
 
     bool IsRunning() const noexcept { return !m_requestStop; }
     bool IsPasswordProtected() const noexcept { return m_isPasswordProtected; }
+    [[nodiscard]] bool IsPvpEnabled() const noexcept;
     [[nodiscard]] uint64_t GetServerInstanceNonce() const noexcept { return m_serverInstanceNonce; }
 
     template <class T> void ForEachAdmin(const T& aFunctor)

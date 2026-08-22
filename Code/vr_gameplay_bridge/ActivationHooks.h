@@ -58,6 +58,11 @@ inline constexpr std::array<std::uint8_t, 32> kActivateRefVrPrologue{
     return true;
 }
 
+[[nodiscard]] constexpr bool MustPublishAfterSuccessfulOriginal(const bool a_originalAccepted) noexcept
+{
+    return a_originalAccepted;
+}
+
 [[nodiscard]] constexpr bool IsExactlyOneOriginalCallPolicy(
     const bool a_hasTrampoline,
     const std::uint32_t a_originalCallCount) noexcept

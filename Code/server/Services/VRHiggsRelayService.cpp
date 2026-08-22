@@ -1,13 +1,17 @@
 #include <Services/VRHiggsRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 #include <Services/VRGrabRelayService.h>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 #include <GameServer.h>
+#include <World.h>
 #include <Game/Player.h>
+#include <Components.h>
 #include <Events/PlayerLeaveEvent.h>
 #include <Messages/NotifyVRHiggsState.h>
 #include <Messages/RequestVRHiggsState.h>
@@ -17,7 +21,15 @@
 
 namespace
 {
-constexpr uint64_t kMinHiggsRelayIntervalMs = 200;
+constexpr uint64_t kMinHiggsRelayIntervalMs = 50;
+
+bool RecordAggregate(uint64_t& arCount) noexcept
+{
+    if (arCount == std::numeric_limits<uint64_t>::max())
+        return false;
+    ++arCount;
+    return (arCount & (arCount - 1)) == 0;
+}
 
 bool IsNewerSequence(const uint32_t aCandidate, const uint32_t aCurrent) noexcept
 {
@@ -50,6 +62,42 @@ bool IsHeldObject(const VRHiggsHandState& acHand) noexcept
 {
     return acHand.HoldingObject && static_cast<bool>(acHand.GrabbedObject);
 }
+
+void ClearHeldObject(VRHiggsHandState& arHand) noexcept
+{
+    arHand.HoldingObject = false;
+    arHand.GrabbedObject = {};
+    arHand.GrabbedNodeName = {};
+    arHand.GrabbedNodeNameLength = 0;
+    arHand.GrabTransform = {};
+}
+
+bool IsActorReference(World& arWorld, const GameId& acObjectId) noexcept
+{
+    const auto actors = arWorld.view<FormIdComponent, CharacterComponent>();
+    return std::any_of(actors.begin(), actors.end(), [&actors, &acObjectId](const entt::entity entity) {
+        return actors.get<FormIdComponent>(entity).Id == acObjectId;
+    });
+}
+
+bool IsLeaseAcquisitionInSenderRange(World& arWorld, const Player& acPlayer, const GameId& acObjectId) noexcept
+{
+    const auto character = acPlayer.GetCharacter();
+    if (!character || !arWorld.valid(*character) ||
+        !arWorld.all_of<CharacterComponent, CellIdComponent>(*character))
+        return false;
+    const auto objects = arWorld.view<FormIdComponent, ObjectComponent, CellIdComponent>();
+    const auto object = std::find_if(objects.begin(), objects.end(), [&objects, &acObjectId](const entt::entity entity) {
+        return objects.get<FormIdComponent>(entity).Id == acObjectId;
+    });
+    if (object == objects.end())
+        return false;
+    const auto& senderCell = acPlayer.GetCellComponent();
+    const auto& characterCell = arWorld.get<CellIdComponent>(*character);
+    const auto& objectCell = objects.get<CellIdComponent>(*object);
+    return senderCell.IsInRange(characterCell, false) && senderCell.IsInRange(objectCell, false) &&
+           characterCell.IsInRange(objectCell, false);
+}
 } // namespace
 
 VRHiggsRelayService::VRHiggsRelayService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
@@ -61,8 +109,6 @@ VRHiggsRelayService::VRHiggsRelayService(World& aWorld, entt::dispatcher& aDispa
 
 void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>& acMessage) noexcept try
 {
-    TP_UNUSED(m_world);
-
     if (!acMessage.pPlayer)
     {
         static bool s_loggedMissingPlayer = false;
@@ -79,22 +125,37 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
         return;
 
     const auto playerId = acMessage.pPlayer->GetId();
-    auto [relayState, inserted] = m_playerHiggsRelayState.try_emplace(playerId);
-    TP_UNUSED(inserted);
+    const PlayerHiggsRelayState emptyState{};
+    const auto existing = m_playerHiggsRelayState.find(playerId);
+    const auto& relayState = existing != m_playerHiggsRelayState.end() ? existing->second : emptyState;
 
     RelayDecision decision{};
-    if (!BuildRelayDecision(relayState->second, acMessage.Packet, decision))
+    if (!BuildRelayDecision(relayState, *acMessage.pPlayer, acMessage.Packet, decision))
+    {
+        if (RecordAggregate(m_rejectionCount))
+            spdlog::warn("VR HIGGS relay rejected an invalid producer state (aggregate count: {})", m_rejectionCount);
         return;
+    }
 
     VRObjectAuthority::Batch authorityBatch{};
-    if (!PrepareObjectAuthority(decision, playerId, authorityBatch))
+    if (!PrepareObjectAuthority(decision, *acMessage.pPlayer, playerId, authorityBatch))
+    {
+        if (RecordAggregate(m_rejectionCount))
+            spdlog::warn("VR HIGGS relay rejected an authority transaction (aggregate count: {})", m_rejectionCount);
         return;
+    }
 
     // A conflict-only replay has no recipient-visible state. Its terminal
     // classification still must be remembered so it cannot block later edges.
     if (!decision.ForwardObservation && !decision.HasMutationReplay)
     {
-        CommitRelayDecision(relayState.value(), decision);
+        // A producer/connection rebase drops old leases. Do not record the
+        // new binding until that authority change can commit atomically.
+        if (decision.ResetReplayState)
+            return;
+        auto [state, inserted] = m_playerHiggsRelayState.try_emplace(playerId);
+        TP_UNUSED(inserted);
+        CommitRelayDecision(state.value(), decision);
         return;
     }
 
@@ -108,7 +169,9 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRHiggsRelay),
             acMessage.pPlayer))
     {
-        spdlog::warn("VR relay dropped because sender has no routable character");
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR HIGGS relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
         return;
     }
 
@@ -117,7 +180,12 @@ void VRHiggsRelayService::OnVRHiggsState(const PacketEvent<RequestVRHiggsState>&
     // the corresponding accepted mutation prefix.
     if (!VRObjectAuthority::CommitBatch(std::move(authorityBatch)))
         return;
-    CommitRelayDecision(relayState.value(), decision);
+    auto [state, inserted] = m_playerHiggsRelayState.try_emplace(playerId);
+    TP_UNUSED(inserted);
+    CommitRelayDecision(state.value(), decision);
+    if (decision.RebaseProducer && RecordAggregate(m_producerRebaseCount))
+        spdlog::warn("VR HIGGS relay accepted a producer replay rebase (aggregate count: {})",
+                     m_producerRebaseCount);
 }
 catch (...)
 {
@@ -134,16 +202,38 @@ void VRHiggsRelayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcep
 }
 
 bool VRHiggsRelayService::BuildRelayDecision(
-    const PlayerHiggsRelayState& acPrevious, const RequestVRHiggsState& acRequest,
+    const PlayerHiggsRelayState& acPrevious, const Player& acPlayer, const RequestVRHiggsState& acRequest,
     RelayDecision& arDecision) const noexcept
 {
     const auto& statePacket = acRequest.State;
-    if (!statePacket.IsDecodedValid || !statePacket.IsMutationReplayValid() ||
+    if (!statePacket.IsDecodedValid || !statePacket.IsMutationReplayValid() || statePacket.ProducerEpoch == 0 ||
         statePacket.Sequence == 0 || !HasHiggsObservation(statePacket))
         return false;
 
+    const auto connectionGeneration = acPlayer.GetConnectionGeneration();
+    if (connectionGeneration == 0)
+        return false;
+    const bool connectionRebased = acPrevious.HasConnectionGeneration &&
+                                   acPrevious.ConnectionGeneration != connectionGeneration;
+    const bool producerEpochChanged = acPrevious.HasConnectionGeneration &&
+                                      acPrevious.ProducerEpoch != statePacket.ProducerEpoch;
+    const bool producerRebased = statePacket.MutationReplayRebased;
     const auto now = GameServer::Get()->GetTick();
-    const bool hasNewObservation = !acPrevious.HasObservationSequence ||
+
+    // Rebase is an authenticated, baseline-only transaction. A marker is
+    // meaningful only for a bound producer and cannot smuggle retained
+    // mutations through the lease release.
+    if (producerRebased)
+    {
+        if (!producerEpochChanged || statePacket.MutationEventCount != 0 || statePacket.MutationSequence != 0 ||
+            !IsVRHiggsRelayOperational(statePacket))
+            return false;
+    }
+    else if (producerEpochChanged)
+        return false;
+
+    const bool resetReplayState = connectionRebased || producerRebased;
+    const bool hasNewObservation = resetReplayState || !acPrevious.HasObservationSequence ||
         IsNewerSequence(statePacket.Sequence, acPrevious.LastObservationSequence);
     const bool observationIntervalElapsed = acPrevious.LastObservationRelayTick == 0 ||
         now < acPrevious.LastObservationRelayTick ||
@@ -151,10 +241,16 @@ bool VRHiggsRelayService::BuildRelayDecision(
 
     arDecision = {};
     arDecision.State = statePacket;
+    // MutationReplayRebased is a sender-to-relay control marker, not state
+    // receivers must retain after the relay has committed the new baseline.
+    arDecision.State.MutationReplayRebased = false;
     arDecision.State.MutationEvents = {};
     arDecision.State.MutationEventCount = 0;
     arDecision.State.MutationSequence = 0;
+    arDecision.ConnectionGeneration = connectionGeneration;
     arDecision.Tick = now;
+    arDecision.ResetReplayState = resetReplayState;
+    arDecision.RebaseProducer = producerRebased;
     arDecision.ForwardObservation = hasNewObservation && observationIntervalElapsed;
 
     const auto appendForwardedMutation = [&arDecision](const VRHiggsEventSnapshot& acEvent) noexcept {
@@ -171,12 +267,12 @@ bool VRHiggsRelayService::BuildRelayDecision(
             !SkyrimTogether::VR::IsHiggsMutationPayloadValid(event.Mass, event.SeparatingVelocity))
             return false;
 
-        const auto terminal = std::find_if(
-            acPrevious.MutationTerminals.begin(),
-            acPrevious.MutationTerminals.begin() + acPrevious.MutationTerminalCount,
-            [&event](const PlayerHiggsRelayState::MutationTerminal& acTerminal) noexcept {
-                return acTerminal.Sequence == event.Sequence;
-            });
+        const auto terminal = resetReplayState ? acPrevious.MutationTerminals.begin() + acPrevious.MutationTerminalCount :
+            std::find_if(acPrevious.MutationTerminals.begin(),
+                         acPrevious.MutationTerminals.begin() + acPrevious.MutationTerminalCount,
+                         [&event](const PlayerHiggsRelayState::MutationTerminal& acTerminal) noexcept {
+                             return acTerminal.Sequence == event.Sequence;
+                         });
         if (terminal != acPrevious.MutationTerminals.begin() + acPrevious.MutationTerminalCount)
         {
             if (terminal->Forwarded && !appendForwardedMutation(event))
@@ -186,7 +282,7 @@ bool VRHiggsRelayService::BuildRelayDecision(
 
         // The retained sender window can contain an evicted old terminal.
         // It is already resolved and must not be evaluated again.
-        if (acPrevious.HasTerminalMutationSequence &&
+        if (!resetReplayState && acPrevious.HasTerminalMutationSequence &&
             !IsNewerSequence(event.Sequence, acPrevious.LastTerminalMutationSequence))
             continue;
 
@@ -199,10 +295,12 @@ bool VRHiggsRelayService::BuildRelayDecision(
 }
 
 bool VRHiggsRelayService::PrepareObjectAuthority(
-    RelayDecision& arDecision, const uint32_t aPlayerId, VRObjectAuthority::Batch& arBatch) noexcept
+    RelayDecision& arDecision, const Player& acPlayer, const uint32_t aPlayerId, VRObjectAuthority::Batch& arBatch) noexcept
 {
     if (!VRObjectAuthority::BeginBatch(arBatch, arDecision.Tick))
         return false;
+    if (arDecision.ResetReplayState)
+        VRObjectAuthority::ReleasePlayer(arBatch, aPlayerId);
 
     const auto appendForwardedMutation = [&arDecision](const VRHiggsEventSnapshot& acEvent) noexcept {
         if (arDecision.State.MutationEventCount >= arDecision.State.MutationEvents.size())
@@ -218,7 +316,10 @@ bool VRHiggsRelayService::PrepareObjectAuthority(
             event.ObjectId,
             IsLeaseReleaseEvent(event.EventKind) ? VRObjectAuthority::OperationKind::Release :
                                                    VRObjectAuthority::OperationKind::AcquireOrRenew};
-        const bool accepted = VRObjectAuthority::TryApplyOperation(arBatch, operation, aPlayerId, arDecision.Tick);
+        const bool isAcquire = operation.Kind == VRObjectAuthority::OperationKind::AcquireOrRenew;
+        const bool accepted = !IsActorReference(m_world, event.ObjectId) &&
+            (!isAcquire || IsLeaseAcquisitionInSenderRange(m_world, acPlayer, event.ObjectId)) ?
+            VRObjectAuthority::TryApplyOperation(arBatch, operation, aPlayerId, arDecision.Tick) : false;
         if (arDecision.NewTerminalCount >= arDecision.NewTerminals.size())
             return false;
         arDecision.NewTerminals[arDecision.NewTerminalCount++] = {event.Sequence, accepted};
@@ -227,14 +328,17 @@ bool VRHiggsRelayService::PrepareObjectAuthority(
     }
 
     // Observed hand state may renew an existing lease, but it cannot acquire
-    // an object without an ordered mutation edge. A failed renewal is merely
-    // stale telemetry and never invalidates accepted later mutations.
-    const auto renewHeldObject = [&arBatch, aPlayerId, &arDecision](const VRHiggsHandState& acHand) noexcept {
-        if (!IsHeldObject(acHand))
+    // an object without an ordered mutation edge. Never forward a held
+    // object unless that renewal succeeds: stale held metadata would let a
+    // receiver present an object the sender no longer owns.
+    const auto renewHeldObject = [this, &arBatch, aPlayerId, &arDecision](VRHiggsHandState& arHand) noexcept {
+        if (!IsHeldObject(arHand))
             return;
         const VRObjectAuthority::Operation operation{
-            acHand.GrabbedObject, VRObjectAuthority::OperationKind::RenewExisting};
-        TP_UNUSED(VRObjectAuthority::TryApplyOperation(arBatch, operation, aPlayerId, arDecision.Tick));
+            arHand.GrabbedObject, VRObjectAuthority::OperationKind::RenewExisting};
+        if (IsActorReference(m_world, arHand.GrabbedObject) ||
+            !VRObjectAuthority::TryApplyOperation(arBatch, operation, aPlayerId, arDecision.Tick))
+            ClearHeldObject(arHand);
     };
     renewHeldObject(arDecision.State.Left);
     renewHeldObject(arDecision.State.Right);
@@ -248,6 +352,16 @@ bool VRHiggsRelayService::PrepareObjectAuthority(
 void VRHiggsRelayService::CommitRelayDecision(
     PlayerHiggsRelayState& arState, const RelayDecision& acDecision) noexcept
 {
+    if (acDecision.ResetReplayState)
+        arState = {};
+    arState.ConnectionGeneration = acDecision.ConnectionGeneration;
+    arState.HasConnectionGeneration = true;
+    arState.ProducerEpoch = acDecision.State.ProducerEpoch;
+    if (acDecision.RebaseProducer)
+    {
+        arState.LastProducerRebaseTick = acDecision.Tick;
+        arState.HasProducerRebaseTick = true;
+    }
     if (acDecision.ForwardObservation)
     {
         arState.LastObservationSequence = acDecision.State.Sequence;

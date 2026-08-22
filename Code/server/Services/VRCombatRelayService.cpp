@@ -1,4 +1,5 @@
 #include <Services/VRCombatRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <GameServer.h>
 #include <Game/Player.h>
@@ -87,7 +88,11 @@ void VRCombatRelayService::OnVRCombatHitEvent(const PacketEvent<RequestVRCombatH
             notify, *character,
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRCombatPlanckRelay),
             acMessage.pPlayer))
-        spdlog::warn("VR relay dropped because sender has no routable character");
+    {
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR combat-hit relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
+    }
 }
 catch (...)
 {

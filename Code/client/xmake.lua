@@ -18,7 +18,7 @@ local function build_vr_client(name, options)
     end
     local pose_service = options.pose_service or false
     local remote_player_proxy = options.remote_player_proxy or false
-    local native_gameplay_parity = options.native_gameplay_parity or false
+    local native_gameplay_core = options.native_gameplay_core or false
     local unvalidated_hooks = options.unvalidated_hooks or false
     local flat_overlay = options.flat_overlay or false
 
@@ -33,7 +33,7 @@ target(name)
     add_defines("TP_SKYRIM_VR_ENABLE_FLAT_OVERLAY=" .. vr_define_value(flat_overlay))
     add_defines("TP_SKYRIM_VR_ENABLE_CONNECTION_ONLY=" .. vr_define_value(connection_only))
     add_defines("TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=" .. vr_define_value(remote_avatar_sync))
-    add_defines("TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_PARITY=" .. vr_define_value(native_gameplay_parity))
+    add_defines("TP_SKYRIM_VR_ENABLE_NATIVE_GAMEPLAY_CORE=" .. vr_define_value(native_gameplay_core))
     add_defines("TP_SKYRIM_VR_ENABLE_DISCOVERY_SERVICE=1")
     add_defines("TP_SKYRIM_VR_ENABLE_PLAYER_CELL_SERVICE=1")
     add_defines("TP_SKYRIM_VR_ENABLE_MOVEMENT_OBSERVATION_SERVICE=" .. vr_define_value(observation_services))
@@ -139,5 +139,5 @@ build_vr_client("SkyrimTogetherVRGameplayClient", {
     higgs_service = true,
     pose_service = true,
     remote_player_proxy = true,
-    native_gameplay_parity = true,
+    native_gameplay_core = true,
 })

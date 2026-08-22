@@ -29,6 +29,7 @@ private:
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerPoseRelayState> m_playerPoseRelayState{};
+    uint64_t m_noRoutableCharacterCount{0};
     entt::scoped_connection m_vrPoseUpdateConnection;
     entt::scoped_connection m_playerLeaveConnection;
 };

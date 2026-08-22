@@ -837,11 +837,20 @@ void VRAvatarService::HandleBridgeLocalAnimationGraphChunk(const GameplayBridge:
         return;
 
     const auto& payload = acEvent.Payload.LocalAnimationGraphChunk;
+    if (payload.AvatarHandle.Value != GameplayBridge::kLocalPlayerHandle.Value || payload.SnapshotId == 0 ||
+        payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved0 != 0 ||
+        payload.Reserved2 != 0 || payload.DescriptorDigest == 0 ||
+        payload.DirectionFloatIndex >= AnimationGraphProtocol::kMaximumFloatCount ||
+        payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !IsFinite(payload.Direction) ||
+        !std::all_of(std::begin(payload.ReservedTail), std::end(payload.ReservedTail),
+                     [](const std::uint8_t aValue) noexcept { return aValue == 0; }))
+        return;
     if (payload.SnapshotId <= m_localAnimationSnapshot.SnapshotId)
         return;
     const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
     const auto accepted = AnimationGraphProtocol::AcceptChunk(
-        m_pendingLocalAnimationSnapshot, payload.SnapshotId, valueType, payload.StartIndex, payload.ValueCount,
+        m_pendingLocalAnimationSnapshot, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
+        valueType, payload.StartIndex, payload.ValueCount,
         payload.TotalCount, payload.Direction, payload.Values);
     if (accepted == AnimationGraphProtocol::ChunkAcceptResult::Complete)
     {
@@ -2019,6 +2028,8 @@ void VRAvatarService::TryRequestLocalAssignment() noexcept
         if (m_localAnimationSnapshot.IsComplete())
         {
             auto& variables = request.LatestAction.Variables;
+            variables.DescriptorDigest = m_localAnimationSnapshot.DescriptorDigest;
+            variables.DirectionFloatIndex = m_localAnimationSnapshot.DirectionFloatIndex;
             variables.Booleans.resize(m_localAnimationSnapshot.BooleanCount);
             variables.Floats.resize(m_localAnimationSnapshot.FloatCount);
             variables.Integers.resize(m_localAnimationSnapshot.IntegerCount);
@@ -2095,6 +2106,8 @@ void VRAvatarService::SendLocalMovement() noexcept try
     movement.Rotation = rotation;
     if (HasAnimationCapabilities() && m_localAnimationSnapshot.IsComplete())
     {
+        movement.Variables.DescriptorDigest = m_localAnimationSnapshot.DescriptorDigest;
+        movement.Variables.DirectionFloatIndex = m_localAnimationSnapshot.DirectionFloatIndex;
         movement.Variables.Booleans.resize(m_localAnimationSnapshot.BooleanCount);
         movement.Variables.Floats.resize(m_localAnimationSnapshot.FloatCount);
         movement.Variables.Integers.resize(m_localAnimationSnapshot.IntegerCount);
@@ -2362,8 +2375,9 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
     const AnimationVariables& acVariables,
     const float aDirection) noexcept try
 {
-    if (!IsFinite(aDirection) || !AnimationGraphProtocol::IsKnownShape(
-            acVariables.Booleans.size(), acVariables.Floats.size(), acVariables.Integers.size()))
+    if (!IsFinite(aDirection) || !AnimationGraphProtocol::IsValidDescriptorContract(
+            acVariables.Booleans.size(), acVariables.Floats.size(), acVariables.Integers.size(),
+            acVariables.DescriptorDigest, acVariables.DirectionFloatIndex))
         return false;
 
     AnimationSnapshot snapshot{};
@@ -2371,6 +2385,8 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
     if (snapshot.SnapshotId == 0)
         snapshot.SnapshotId = ++arAvatar.NextAnimationSnapshotId;
     snapshot.Direction = aDirection;
+    snapshot.DescriptorDigest = acVariables.DescriptorDigest;
+    snapshot.DirectionFloatIndex = acVariables.DirectionFloatIndex;
     snapshot.BooleanCount = static_cast<std::uint16_t>(acVariables.Booleans.size());
     snapshot.FloatCount = static_cast<std::uint16_t>(acVariables.Floats.size());
     snapshot.IntegerCount = static_cast<std::uint16_t>(acVariables.Integers.size());
@@ -2382,6 +2398,9 @@ bool VRAvatarService::StageRemoteAnimationSnapshot(
             return false;
         snapshot.Floats[index] = acVariables.Floats[index];
     }
+    if (std::bit_cast<std::uint32_t>(snapshot.Direction) !=
+        std::bit_cast<std::uint32_t>(snapshot.Floats[snapshot.DirectionFloatIndex]))
+        return false;
     for (std::size_t index = 0; index < snapshot.IntegerCount; ++index)
         snapshot.Integers[index] = std::bit_cast<std::int32_t>(acVariables.Integers[index]);
     snapshot.BooleanChunkMask = AnimationGraphProtocol::ExpectedChunkMask(AnimationGraphProtocol::ValueType::BooleanBits, snapshot.BooleanCount);
@@ -2429,6 +2448,8 @@ void VRAvatarService::SubmitRemoteAnimationSnapshot(const std::uint32_t aServerI
         payload.TotalCount = arAvatar.PendingAnimation.Count(aType);
         payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
         payload.Direction = arAvatar.PendingAnimation.Direction;
+        payload.DescriptorDigest = arAvatar.PendingAnimation.DescriptorDigest;
+        payload.DirectionFloatIndex = arAvatar.PendingAnimation.DirectionFloatIndex;
         if (aType == AnimationGraphProtocol::ValueType::BooleanBits)
         {
             for (std::size_t index = 0; index < arAvatar.PendingAnimation.BooleanCount; ++index)

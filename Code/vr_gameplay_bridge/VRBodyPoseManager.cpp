@@ -1,6 +1,9 @@
 #include "VRBodyPoseManager.h"
 
 #include "AvatarManager.h"
+#include "RemoteSolvedPosePresentation.h"
+
+#include <Windows.h>
 
 #include <array>
 #include <cmath>
@@ -32,6 +35,8 @@ constexpr std::size_t kMaximumPendingActors = 64;
 constexpr std::uint16_t kMaximumPendingAttempts = 600;
 
 using PoseNode = GameplayPoseNode;
+static_assert(RemoteSolvedPosePresentation::kPoseNodeCount == static_cast<std::size_t>(PoseNode::Count));
+static_assert(RemoteSolvedPosePresentation::kJointCount == kVrikJointRotationCount);
 
 struct DecodedPoseChunk
 {
@@ -80,6 +85,8 @@ struct PendingActorPose
     std::uint32_t ExpectedNodeMask{};
     std::uint16_t Attempts{};
     bool CommitReceived{};
+    bool CacheAdmitted{};
+    BridgeIdentity Identity{};
 };
 std::unordered_map<std::uint64_t, PendingActorPose> s_pendingPoses;
 
@@ -103,6 +110,8 @@ struct PendingActorJointPose
     std::uint32_t ExpectedJointMask{};
     std::uint16_t Attempts{};
     bool CommitReceived{};
+    bool CacheAdmitted{};
+    BridgeIdentity Identity{};
 };
 std::unordered_map<std::uint64_t, PendingActorJointPose> s_pendingJointPoses;
 
@@ -633,6 +642,7 @@ private:
         ar_pending.RootGeneration = a_rootGeneration;
         ar_pending.ExpectedNodeMask = 0;
         ar_pending.CommitReceived = false;
+        ar_pending.CacheAdmitted = false;
     } else if (ar_pending.RootGeneration != a_rootGeneration) {
         return false;
     }
@@ -682,6 +692,65 @@ private:
     return true;
 }
 
+[[nodiscard]] RemoteSolvedPosePresentation::Quaternion MatrixToQuaternion(
+    const RE::NiMatrix3& a_matrix) noexcept
+{
+    const auto trace = a_matrix.entry[0][0] + a_matrix.entry[1][1] + a_matrix.entry[2][2];
+    RemoteSolvedPosePresentation::Quaternion result{};
+    if (trace > 0.0F) {
+        const auto scale = std::sqrt(trace + 1.0F) * 2.0F;
+        result = {(a_matrix.entry[2][1] - a_matrix.entry[1][2]) / scale,
+                  (a_matrix.entry[0][2] - a_matrix.entry[2][0]) / scale,
+                  (a_matrix.entry[1][0] - a_matrix.entry[0][1]) / scale, 0.25F * scale};
+    } else if (a_matrix.entry[0][0] > a_matrix.entry[1][1] && a_matrix.entry[0][0] > a_matrix.entry[2][2]) {
+        const auto scale = std::sqrt(1.0F + a_matrix.entry[0][0] - a_matrix.entry[1][1] - a_matrix.entry[2][2]) * 2.0F;
+        result = {0.25F * scale, (a_matrix.entry[0][1] + a_matrix.entry[1][0]) / scale,
+                  (a_matrix.entry[0][2] + a_matrix.entry[2][0]) / scale, (a_matrix.entry[2][1] - a_matrix.entry[1][2]) / scale};
+    } else if (a_matrix.entry[1][1] > a_matrix.entry[2][2]) {
+        const auto scale = std::sqrt(1.0F + a_matrix.entry[1][1] - a_matrix.entry[0][0] - a_matrix.entry[2][2]) * 2.0F;
+        result = {(a_matrix.entry[0][1] + a_matrix.entry[1][0]) / scale, 0.25F * scale,
+                  (a_matrix.entry[1][2] + a_matrix.entry[2][1]) / scale, (a_matrix.entry[0][2] - a_matrix.entry[2][0]) / scale};
+    } else {
+        const auto scale = std::sqrt(1.0F + a_matrix.entry[2][2] - a_matrix.entry[0][0] - a_matrix.entry[1][1]) * 2.0F;
+        result = {(a_matrix.entry[0][2] + a_matrix.entry[2][0]) / scale,
+                  (a_matrix.entry[1][2] + a_matrix.entry[2][1]) / scale, 0.25F * scale,
+                  (a_matrix.entry[1][0] - a_matrix.entry[0][1]) / scale};
+    }
+    return RemoteSolvedPosePresentation::Normalize(result);
+}
+
+[[nodiscard]] bool AdmitCommittedPose(
+    const PendingActorPose& a_pending,
+    const RE::Actor& a_actor,
+    const RE::NiAVObject& a_root) noexcept
+{
+    if (!IsCommittedFrameComplete(a_pending) || a_pending.Identity.LifecycleEpoch == 0)
+        return false;
+    RemoteSolvedPosePresentation::Frame frame{};
+    frame.ActorHandle = a_pending.TargetHandle;
+    frame.ActorAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_actor));
+    frame.RootAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_root));
+    frame.ServerInstanceNonce = a_pending.Identity.ServerInstanceNonce;
+    frame.ConnectionGeneration = a_pending.Identity.ConnectionGeneration;
+    frame.LifecycleEpoch = a_pending.Identity.LifecycleEpoch;
+    frame.RootGeneration = a_pending.RootGeneration;
+    frame.Sequence = a_pending.Sequence;
+    frame.AdmittedAtMilliseconds = GetTickCount64();
+    frame.NodeMask = a_pending.ExpectedNodeMask;
+    for (std::size_t index = 0; index < a_pending.Nodes.size(); ++index) {
+        if ((frame.NodeMask & (1u << index)) == 0)
+            continue;
+        const auto& pose = a_pending.Nodes[index];
+        // Do not let quaternion conversion normalize malformed/non-finite
+        // source bases into an apparently safe identity rotation.
+        if (!IsOrthonormal(pose.Rotation))
+            return false;
+        frame.Nodes[index] = {pose.Position.x, pose.Position.y, pose.Position.z,
+                              MatrixToQuaternion(pose.Rotation), pose.Scale};
+    }
+    return RemoteSolvedPosePresentation::GetFrameCache().Admit(frame);
+}
+
 [[nodiscard]] bool PreparePendingJointFrame(
     PendingActorJointPose& ar_pending,
     const std::uint32_t a_sequence,
@@ -697,6 +766,7 @@ private:
         ar_pending.RootGeneration = a_rootGeneration;
         ar_pending.ExpectedJointMask = 0;
         ar_pending.CommitReceived = false;
+        ar_pending.CacheAdmitted = false;
     } else if (ar_pending.RootGeneration != a_rootGeneration) {
         return false;
     }
@@ -756,6 +826,31 @@ private:
             return false;
     }
     return true;
+}
+
+[[nodiscard]] bool AdmitCommittedJointPose(
+    const PendingActorJointPose& a_pending,
+    const RE::Actor& a_actor,
+    const RE::NiAVObject& a_root) noexcept
+{
+    if (!IsCommittedJointFrameComplete(a_pending) || a_pending.Identity.LifecycleEpoch == 0)
+        return false;
+    RemoteSolvedPosePresentation::Frame frame{};
+    frame.ActorHandle = a_pending.TargetHandle;
+    frame.ActorAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_actor));
+    frame.RootAddress = reinterpret_cast<std::uintptr_t>(std::addressof(a_root));
+    frame.ServerInstanceNonce = a_pending.Identity.ServerInstanceNonce;
+    frame.ConnectionGeneration = a_pending.Identity.ConnectionGeneration;
+    frame.LifecycleEpoch = a_pending.Identity.LifecycleEpoch;
+    frame.RootGeneration = a_pending.RootGeneration;
+    frame.Sequence = a_pending.Sequence;
+    frame.AdmittedAtMilliseconds = GetTickCount64();
+    frame.JointMask = a_pending.ExpectedJointMask;
+    for (std::size_t index = 0; index < a_pending.Joints.size(); ++index) {
+        if ((frame.JointMask & (1u << index)) != 0)
+            frame.Joints[index] = MatrixToQuaternion(a_pending.Joints[index].Rotation);
+    }
+    return RemoteSolvedPosePresentation::GetFrameCache().Admit(frame);
 }
 
 [[nodiscard]] bool ApplyCommittedJointPose(
@@ -921,7 +1016,8 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         const auto actorStatus = AvatarManager::Get().ResolveGameplayActor(a_command, actor);
         if (actorStatus != CommandStatus::Success)
             return actorStatus;
-        if ((isJointRotation || isJointCommit) && !AvatarManager::Get().IsManagedRemoteActor(actor.get()))
+        if ((isPhysicalPose || isPhysicalCommit || isJointRotation || isJointCommit) &&
+            !AvatarManager::Get().IsManagedRemoteActor(actor.get()))
             return CommandStatus::InvalidHandle;
 
         if (isLegacyPose) {
@@ -959,12 +1055,15 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
                 return CommandStatus::StaleEntity;
             pendingJoint->ExpectedJointMask = jointCommitMask;
             pendingJoint->CommitReceived = true;
+            pendingJoint->Identity = a_command.Header.Identity;
             if (!IsCommittedJointFrameComplete(*pendingJoint))
                 return CommandStatus::Success;
 
             RE::NiPointer<RE::NiAVObject> root{actor->Get3D()};
             if (!root)
                 return CommandStatus::Success;
+            if (!pendingJoint->CacheAdmitted)
+                pendingJoint->CacheAdmitted = AdmitCommittedJointPose(*pendingJoint, *actor, *root);
             if (ApplyCommittedJointPose(*actor, *root, *pendingJoint))
                 s_pendingJointPoses.erase(payload.TargetHandle.Value);
             return CommandStatus::Success;
@@ -984,6 +1083,7 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
             return CommandStatus::StaleEntity;
         pending->ExpectedNodeMask = commitNodeMask;
         pending->CommitReceived = true;
+        pending->Identity = a_command.Header.Identity;
         if (!IsCommittedFrameComplete(*pending))
             return CommandStatus::Success;
 
@@ -991,6 +1091,8 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
         if (!root)
             return CommandStatus::Success;
 
+        if (!pending->CacheAdmitted)
+            pending->CacheAdmitted = AdmitCommittedPose(*pending, *actor, *root);
         if (ApplyCommittedPose(*actor, *root, *pending))
             s_pendingPoses.erase(payload.TargetHandle.Value);
         return CommandStatus::Success;
@@ -1002,9 +1104,12 @@ CommandStatus VRBodyPoseManager::Execute(const CommandRecord& a_command) noexcep
 void VRBodyPoseManager::ProcessPending() noexcept
 {
     try {
+        RemoteSolvedPosePresentation::ProcessDiagnostics();
         for (auto it = s_pendingPoses.begin(); it != s_pendingPoses.end();) {
             auto actor = it->second.Actor.get();
-            if (!actor || ++it->second.Attempts >= kMaximumPendingAttempts) {
+            if (!actor || !AvatarManager::Get().IsManagedRemoteActor(actor.get()) ||
+                ++it->second.Attempts >= kMaximumPendingAttempts) {
+                s_appliedPoseRoots.erase(it->first);
                 it = s_pendingPoses.erase(it);
                 continue;
             }
@@ -1022,6 +1127,8 @@ void VRBodyPoseManager::ProcessPending() noexcept
                 ++it;
                 continue;
             }
+            if (!it->second.CacheAdmitted)
+                it->second.CacheAdmitted = AdmitCommittedPose(it->second, *actor, *root);
             it = ApplyCommittedPose(*actor, *root, it->second) ? s_pendingPoses.erase(it) : std::next(it);
         }
         for (auto it = s_pendingJointPoses.begin(); it != s_pendingJointPoses.end();) {
@@ -1046,6 +1153,8 @@ void VRBodyPoseManager::ProcessPending() noexcept
                 ++it;
                 continue;
             }
+            if (!it->second.CacheAdmitted)
+                it->second.CacheAdmitted = AdmitCommittedJointPose(it->second, *actor, *root);
             if (ApplyCommittedJointPose(*actor, *root, it->second))
                 it = s_pendingJointPoses.erase(it);
             else
@@ -1061,5 +1170,6 @@ void VRBodyPoseManager::Reset() noexcept
     s_pendingJointPoses.clear();
     s_appliedPoseRoots.clear();
     s_appliedJointRoots.clear();
+    RemoteSolvedPosePresentation::GetFrameCache().Reset();
 }
 } // namespace SkyrimTogetherVR::GameplayAdapter

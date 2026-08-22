@@ -5,6 +5,7 @@
 #include "AnimationGraphDescriptors.h"
 #include "LocalGameplayCapture.h"
 #include "RemoteSaveExclusion.h"
+#include "RemoteSolvedPosePresentation.h"
 #include "remote_actor_admission_policy.h"
 
 #include <vr_common/VRCanonicalEntity.h>
@@ -850,6 +851,19 @@ bool AvatarManager::IsPlayerAvatar(const BridgeIdentity& a_identity, const Adapt
     return found != _avatars.end() && found->second.Token.Value == a_handle.Value && found->second.IsPlayer;
 }
 
+CommandStatus AvatarManager::CaptureAnimationSnapshotForApply(
+    RE::Actor& a_actor, const AnimationGraphProtocol::SnapshotBuffer& a_expected,
+    AnimationGraphProtocol::SnapshotBuffer& ar_previous) noexcept
+{
+    if (!IsCommandPumpOwner())
+        return CommandStatus::WrongThread;
+    if (!a_expected.IsComplete())
+        return CommandStatus::Malformed;
+    return AnimationGraphs::CaptureForApply(a_actor, a_expected, ar_previous) ?
+               CommandStatus::Success :
+               CommandStatus::EngineRejected;
+}
+
 CommandStatus AvatarManager::ApplyAnimationSnapshotToActor(RE::Actor& a_actor, const AnimationGraphProtocol::SnapshotBuffer& a_snapshot) noexcept
 {
     if (!IsCommandPumpOwner())
@@ -893,7 +907,8 @@ AvatarCommandResult AvatarManager::ApplyRemoteAnimationGraphChunk(const CommandR
         auto& snapshot = record.PendingAnimation;
         const auto valueType = static_cast<AnimationGraphProtocol::ValueType>(payload.ValueType);
         const auto accepted = AnimationGraphProtocol::AcceptChunk(
-            snapshot, payload.SnapshotId, valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount, payload.Direction, payload.Values);
+            snapshot, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
+            valueType, payload.StartIndex, payload.ValueCount, payload.TotalCount, payload.Direction, payload.Values);
         if (accepted == AnimationGraphProtocol::ChunkAcceptResult::Malformed)
             return ResultFor(record, CommandStatus::Malformed);
         if (accepted == AnimationGraphProtocol::ChunkAcceptResult::Stale || accepted == AnimationGraphProtocol::ChunkAcceptResult::Accepted)
@@ -1443,22 +1458,11 @@ bool AvatarManager::MoveActorToLocation(
 
 bool AvatarManager::ApplyAnimationSnapshot(RE::Actor& a_actor, const AvatarRecord::PendingAnimationSnapshot& a_snapshot) noexcept
 {
-    AnimationGraphs::ResolvedDescriptor descriptor;
-    if (!a_snapshot.IsComplete() || !AnimationGraphs::Resolve(a_actor, descriptor) || !AnimationGraphs::MatchesCounts(descriptor, a_snapshot))
-        return false;
     AvatarRecord::PendingAnimationSnapshot previous{};
-    previous.BooleanCount = a_snapshot.BooleanCount;
-    previous.FloatCount = a_snapshot.FloatCount;
-    previous.IntegerCount = a_snapshot.IntegerCount;
-    for (std::size_t i = 0; i < previous.BooleanCount; ++i)
-        if (!a_actor.GetGraphVariableBool(RE::BSFixedString(descriptor.Descriptor->Booleans[i].data()), previous.Booleans[i]))
-            return false;
-    for (std::size_t i = 0; i < previous.FloatCount; ++i)
-        if (!a_actor.GetGraphVariableFloat(RE::BSFixedString(descriptor.Descriptor->Floats[i].data()), previous.Floats[i]))
-            return false;
-    for (std::size_t i = 0; i < previous.IntegerCount; ++i)
-        if (!a_actor.GetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[i].data()), previous.Integers[i]))
-            return false;
+    AnimationGraphs::ResolvedDescriptor descriptor;
+    if (!AnimationGraphs::CaptureForApply(a_actor, a_snapshot, previous) || !AnimationGraphs::Resolve(a_actor, descriptor) ||
+        !AnimationGraphs::MatchesCounts(descriptor, a_snapshot))
+        return false;
     const auto managerUnchanged = [&]() noexcept
     {
         return AnimationGraphs::ManagerMatches(a_actor, descriptor);
@@ -1478,31 +1482,53 @@ bool AvatarManager::ApplyAnimationSnapshot(RE::Actor& a_actor, const AvatarRecor
             a_actor.SetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[i].data()), previous.Integers[i]);
     };
 
-    for (; booleansWritten < a_snapshot.BooleanCount; ++booleansWritten)
+    for (; booleansWritten < a_snapshot.BooleanCount;)
     {
-        if (!managerUnchanged() || !a_actor.SetGraphVariableBool(RE::BSFixedString(descriptor.Descriptor->Booleans[booleansWritten].data()), a_snapshot.Booleans[booleansWritten]))
+        if (!managerUnchanged())
+        {
+            rollback();
+            return false;
+        }
+        const auto index = booleansWritten++;
+        // A failed engine setter is conservatively treated as a possible
+        // write, so rollback includes this value as well as earlier values.
+        if (!a_actor.SetGraphVariableBool(RE::BSFixedString(descriptor.Descriptor->Booleans[index].data()), a_snapshot.Booleans[index]))
         {
             rollback();
             return false;
         }
     }
-    for (; floatsWritten < a_snapshot.FloatCount; ++floatsWritten)
+    for (; floatsWritten < a_snapshot.FloatCount;)
     {
-        if (!managerUnchanged() || !a_actor.SetGraphVariableFloat(RE::BSFixedString(descriptor.Descriptor->Floats[floatsWritten].data()), a_snapshot.Floats[floatsWritten]))
+        if (!managerUnchanged())
+        {
+            rollback();
+            return false;
+        }
+        const auto index = floatsWritten++;
+        if (!a_actor.SetGraphVariableFloat(RE::BSFixedString(descriptor.Descriptor->Floats[index].data()), a_snapshot.Floats[index]))
         {
             rollback();
             return false;
         }
     }
-    for (; integersWritten < a_snapshot.IntegerCount; ++integersWritten)
+    for (; integersWritten < a_snapshot.IntegerCount;)
     {
-        if (!managerUnchanged() || !a_actor.SetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[integersWritten].data()), a_snapshot.Integers[integersWritten]))
+        if (!managerUnchanged())
+        {
+            rollback();
+            return false;
+        }
+        const auto index = integersWritten++;
+        if (!a_actor.SetGraphVariableInt(RE::BSFixedString(descriptor.Descriptor->Integers[index].data()), a_snapshot.Integers[index]))
         {
             rollback();
             return false;
         }
     }
-    if (!managerUnchanged() || !a_actor.SetGraphVariableFloat(RE::BSFixedString("Direction"), a_snapshot.Direction) || !managerUnchanged())
+    if (!managerUnchanged() || !a_actor.SetGraphVariableFloat(
+            RE::BSFixedString(descriptor.Descriptor->Floats[a_snapshot.DirectionFloatIndex].data()),
+            a_snapshot.Direction) || !managerUnchanged())
     {
         rollback();
         return false;
@@ -1544,6 +1570,10 @@ bool AvatarManager::DestroyRecord(AvatarRecord& a_record) noexcept
         RecordRemoteAvatarAiAdmissionFailure("failed to restore existing remote actor state during retirement");
         return false;
     }
+    // Clear both bounded pose histories while this command-pump path still
+    // owns the retired record and before actor/root references can be released
+    // or allocator addresses reused by a new remote avatar.
+    RemoteSolvedPosePresentation::GetFrameCache().Evict(a_record.Token.Value);
     if (a_record.OwnsActor)
     {
         if (actor)

@@ -111,7 +111,8 @@ constexpr std::uint64_t kPlayerLevelSendCoalesceKey = kAppearanceSendCoalesceKey
     // The local-player bridge target binds the event to this client but has no
     // representation in the original request payload.
     if (aDomain == GameplayBridge::GameplayDomain::Object &&
-        aAction == GameplayBridge::GameplayAction::SetLockState)
+        (aAction == GameplayBridge::GameplayAction::SetLockState ||
+         aAction == GameplayBridge::GameplayAction::Activate))
         return false;
     if (aDomain == GameplayBridge::GameplayDomain::Magic &&
         (aAction == GameplayBridge::GameplayAction::CastSpell ||
@@ -471,21 +472,31 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
     case GameplayBridge::GameplayAction::Activate:
     {
         if (domain != GameplayBridge::GameplayDomain::Object || payload.LocalFormIdA == 0 ||
-            payload.LocalFormIdB == 0 || payload.LocalFormIdD != 0 || payload.ValueA < 0 ||
+            payload.LocalFormIdB == 0 || payload.LocalFormIdD > ObjectData::kMaximumOpenState || payload.ValueA < 0 ||
             payload.ValueA > std::numeric_limits<std::uint8_t>::max() || payload.ValueB < 0 ||
-            payload.ValueB > std::numeric_limits<std::uint8_t>::max() || payload.ScalarA < -kMaximumNetworkPosition ||
+            payload.ValueB > ObjectData::kMaximumOpenState || payload.ScalarA < -kMaximumNetworkPosition ||
             payload.ScalarA > kMaximumNetworkPosition || payload.ScalarB < -kMaximumNetworkPosition ||
             payload.ScalarB > kMaximumNetworkPosition || payload.ScalarC < -kMaximumNetworkPosition ||
             payload.ScalarC > kMaximumNetworkPosition || payload.ScalarD != 0.0F || payload.ActionFlags != 0 ||
-            static_cast<FormType>(payload.ValueA) == FormType::Book)
+            static_cast<FormType>(payload.ValueA) == FormType::Book ||
+            !SkyrimTogetherVR::VRLocalGameplayPolicy::IsValidActivateActivator(
+                payload.TargetHandle, payload.TargetLocalFormId))
             return;
 
         ActivateRequest request{};
         if (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, request.Id) || !request.Id ||
             !m_world.GetModSystem().GetServerModId(payload.LocalFormIdB, request.CellId) || !request.CellId)
             return;
-        request.ActivatorId = m_localServerId;
+        const auto resolvedActivatorId = GetServerIdForLocalActor(payload.TargetLocalFormId);
+        request.ActivatorId = SkyrimTogetherVR::VRLocalGameplayPolicy::ResolveActivateActivatorServerId(
+            payload.TargetHandle, payload.TargetLocalFormId, resolvedActivatorId);
+        if (request.ActivatorId == 0)
+            return;
         request.PreActivationOpenState = static_cast<std::uint8_t>(payload.ValueB);
+        request.HasPostActivationOpenState = payload.LocalFormIdD != 0;
+        request.PostActivationOpenState = static_cast<std::uint8_t>(payload.LocalFormIdD);
+        if (!request.IsValid())
+            return;
 
         TP_UNUSED(SendStateful(std::move(request), domainIndex, record.Header.Identity.ActionId, true,
                                static_cast<std::uint64_t>(action) << 32 | payload.LocalFormIdA));
@@ -672,6 +683,7 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
             payload.ScalarB != 0.0F || payload.ScalarC != 0.0F || payload.ScalarD != 0.0F ||
             payload.ActionFlags != 0)
             return;
+        m_hasPendingMount = true;
         m_pendingMountLocalReference = payload.LocalFormIdA;
         m_pendingMountDomainIndex = domainIndex;
         m_pendingMountActionId = record.Header.Identity.ActionId;
@@ -720,7 +732,12 @@ void VRLocalGameplayService::OnLocalGameplayBridgeEvent(
             return;
         }
 
+        const auto ownerPlayerId = m_transport.GetLocalPlayerId();
+        if (ownerPlayerId == 0)
+            return;
+
         RequestQuestUpdate request{};
+        request.OwnerPlayerId = ownerPlayerId;
         if (!m_world.GetModSystem().GetServerModId(payload.LocalFormIdA, request.Id) || !request.Id)
             return;
         request.Stage = static_cast<std::uint16_t>(payload.ValueA);
@@ -1256,7 +1273,7 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
             payload.LocalFormIdA == 0 ||
             payload.LocalFormIdC > kMaximumObjectSnapshotItems ||
             payload.LocalFormIdD != 0 ||
-            payload.ValueA < 0 || payload.ValueA > 2 || payload.ValueB < -1 || payload.ValueB > 255 ||
+            payload.ValueA < 0 || payload.ValueA > ObjectData::kMaximumOpenState || payload.ValueB < -1 || payload.ValueB > 255 ||
             payload.ScalarA < -kMaximumNetworkPosition || payload.ScalarA > kMaximumNetworkPosition ||
             payload.ScalarB < -kMaximumNetworkPosition || payload.ScalarB > kMaximumNetworkPosition ||
             payload.ScalarC < -kMaximumNetworkPosition || payload.ScalarC > kMaximumNetworkPosition ||
@@ -1294,6 +1311,8 @@ bool VRLocalGameplayService::ApplyObjectSnapshot(const GameplayBridge::EventReco
             pending.Data.CurrentLockData.IsLocked = payload.ValueB >= 0;
             pending.Data.CurrentLockData.LockLevel = payload.ValueB >= 0 ?
                 static_cast<std::uint8_t>(payload.ValueB) : 0;
+            pending.Data.HasCurrentOpenState = payload.ValueA != 0;
+            pending.Data.CurrentOpenState = static_cast<std::uint8_t>(payload.ValueA);
         }
         m_pendingObjectSnapshots.insert_or_assign(payload.TargetLocalFormId, std::move(pending));
         return true;
@@ -2024,21 +2043,25 @@ void VRLocalGameplayService::FlushPendingHealthDelta() noexcept
 
 void VRLocalGameplayService::TrySendPendingMount() noexcept
 {
-    if (m_pendingMountLocalReference == 0 || !m_transport.IsOnline() || m_localServerId == 0)
+    if (!m_hasPendingMount || !m_transport.IsOnline() || m_localServerId == 0)
         return;
-    auto* ownership = m_world.ctx().find<VRNpcOwnershipService>();
-    if (!ownership)
-        return;
-    TP_UNUSED(ownership->RequestOwnershipForLocalReference(m_pendingMountLocalReference));
-    const auto mountServerId = ownership ? ownership->GetServerIdForLocalReference(m_pendingMountLocalReference) : 0;
-    if (mountServerId == 0)
-        return;
+    std::uint32_t mountServerId{};
+    if (m_pendingMountLocalReference != 0) {
+        auto* ownership = m_world.ctx().find<VRNpcOwnershipService>();
+        if (!ownership)
+            return;
+        TP_UNUSED(ownership->RequestOwnershipForLocalReference(m_pendingMountLocalReference));
+        mountServerId = ownership->GetServerIdForLocalReference(m_pendingMountLocalReference);
+        if (mountServerId == 0)
+            return;
+    }
     MountRequest request{};
     request.RiderId = m_localServerId;
     request.MountId = mountServerId;
     if (m_pendingStatefulSends.empty() && m_pendingInventoryDeltas.empty() && m_transport.Send(request))
     {
         MarkActionAccepted(m_pendingMountDomainIndex, m_pendingMountActionId);
+        m_hasPendingMount = false;
         m_pendingMountLocalReference = 0;
         m_pendingMountDomainIndex = 0;
         m_pendingMountActionId = 0;
@@ -2089,7 +2112,10 @@ bool VRLocalGameplayService::AcceptAction(const GameplayBridge::EventRecord& acR
     const bool inventoryTransaction = domain == GameplayBridge::GameplayDomain::Inventory &&
         GameplayBridge::IsInventoryTransactionAction(action);
     const bool targetedRemoteNpcHealthDelta = IsTargetedRemoteNpcHealthDelta(payload);
-    if ((!objectSnapshot && !inventoryTransaction && !targetedRemoteNpcHealthDelta &&
+    const bool activateWithLocalActor =
+        domain == GameplayBridge::GameplayDomain::Object && action == GameplayBridge::GameplayAction::Activate &&
+        SkyrimTogetherVR::VRLocalGameplayPolicy::IsValidActivateActivator(payload.TargetHandle, payload.TargetLocalFormId);
+    if ((!objectSnapshot && !inventoryTransaction && !targetedRemoteNpcHealthDelta && !activateWithLocalActor &&
          payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value) ||
         (inventoryTransaction &&
          (payload.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value || payload.TargetLocalFormId == 0)) ||
@@ -2206,6 +2232,7 @@ void VRLocalGameplayService::ResetSessionState() noexcept
     CancelGoldInventoryDeltaSuppression();
     m_localServerId = 0;
     m_lastPublishedPlayerLevel = 0;
+    m_hasPendingMount = false;
     m_pendingMountLocalReference = 0;
     m_pendingMountDomainIndex = 0;
     m_pendingMountActionId = 0;

@@ -44,6 +44,9 @@ public:
     [[nodiscard]] bool IsManagedRemoteActor(const RE::Actor* a_actor) const noexcept;
     [[nodiscard]] bool IsManagedRemotePlayerActor(const RE::Actor* a_actor) const noexcept;
     [[nodiscard]] bool IsPlayerAvatar(const BridgeIdentity& a_identity, AdapterHandle a_handle) const noexcept;
+    [[nodiscard]] CommandStatus CaptureAnimationSnapshotForApply(
+        RE::Actor& a_actor, const AnimationGraphProtocol::SnapshotBuffer& a_expected,
+        AnimationGraphProtocol::SnapshotBuffer& ar_previous) noexcept;
     [[nodiscard]] CommandStatus ApplyAnimationSnapshotToActor(RE::Actor& a_actor, const AnimationGraphProtocol::SnapshotBuffer& a_snapshot) noexcept;
     void ProcessPendingAnimationSnapshots() noexcept;
     void ProcessAuthoritativeRemoteActors() noexcept;

@@ -1,18 +1,26 @@
 #include <catch2/catch.hpp>
 
 #include "../higgs_bridge/HiggsMutationDedup.h"
+#include "../higgs_bridge/HiggsNodeName.h"
 #include "../vr_common/VRGameplayBridge.h"
+#include "../vr_common/VRPlanckPhysicsBridge.h"
+#include "../vr_gameplay_bridge/ActorActionHooks.h"
+#include "../vr_gameplay_bridge/AnimationGraphDescriptors.h"
 #include "../vr_gameplay_bridge/QuestDialogueManager.h"
 #include "../vr_gameplay_bridge/QuestNativeAccess.h"
 #include <Structs/MovementOrdering.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace
@@ -78,12 +86,120 @@ std::size_t CountOccurrences(const std::string& a_text, const std::string& a_nee
         ++count;
     return count;
 }
+
+struct ReplayPolicyFixture
+{
+    std::uint32_t ActorState{17};
+    std::uint32_t PreviousActorState{ActorState};
+    std::uint32_t ReplayActorState{91};
+    std::uint32_t GraphValue{23};
+    std::uint32_t PreviousGraphValue{GraphValue};
+    std::uint32_t ReplayGraphValue{67};
+    CommandStatus ApplyGraphStatus{CommandStatus::Success};
+    CommandStatus RestoreGraphStatus{CommandStatus::Success};
+    bool ForceAccepted{};
+    bool ThrowFromForce{};
+    std::uint32_t ApplyGraphCalls{};
+    std::uint32_t RestoreGraphCalls{};
+    std::uint32_t ApplyActorStateCalls{};
+    std::uint32_t RestoreActorStateCalls{};
+    std::uint32_t ForceActionCalls{};
+
+    [[nodiscard]] static ReplayPolicyFixture& From(void* a_context) noexcept
+    {
+        return *static_cast<ReplayPolicyFixture*>(a_context);
+    }
+
+    [[nodiscard]] static CommandStatus ApplyGraph(void* a_context)
+    {
+        auto& fixture = From(a_context);
+        ++fixture.ApplyGraphCalls;
+        // Simulate a setter that can report failure after changing a value.
+        fixture.GraphValue = fixture.ReplayGraphValue;
+        return fixture.ApplyGraphStatus;
+    }
+
+    [[nodiscard]] static CommandStatus RestoreGraph(void* a_context)
+    {
+        auto& fixture = From(a_context);
+        ++fixture.RestoreGraphCalls;
+        fixture.GraphValue = fixture.PreviousGraphValue;
+        return fixture.RestoreGraphStatus;
+    }
+
+    static void ApplyActorState(void* a_context)
+    {
+        auto& fixture = From(a_context);
+        ++fixture.ApplyActorStateCalls;
+        fixture.ActorState = fixture.ReplayActorState;
+    }
+
+    static void RestoreActorState(void* a_context)
+    {
+        auto& fixture = From(a_context);
+        ++fixture.RestoreActorStateCalls;
+        fixture.ActorState = fixture.PreviousActorState;
+    }
+
+    [[nodiscard]] static bool ForceAction(void* a_context)
+    {
+        auto& fixture = From(a_context);
+        ++fixture.ForceActionCalls;
+        if (fixture.ThrowFromForce)
+            throw std::runtime_error("ForceAction fixture failure");
+        return fixture.ForceAccepted;
+    }
+
+    [[nodiscard]] SkyrimTogetherVR::GameplayAdapter::ActorActionHooks::ReplayTransactionCallbacks Callbacks() noexcept
+    {
+        return {
+            this,
+            ApplyGraph,
+            RestoreGraph,
+            ApplyActorState,
+            RestoreActorState,
+            ForceAction,
+        };
+    }
+};
 } // namespace
+
+TEST_CASE("VR animation descriptor configuration follows desktop behavior files", "[skyrim-vr][animation]")
+{
+    namespace Graphs = SkyrimTogetherVR::GameplayAdapter::AnimationGraphs;
+    const auto root = std::filesystem::temp_directory_path() / "stvr-animation-descriptor-config-test";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Example", error);
+    REQUIRE_FALSE(error);
+    {
+        std::ofstream(root / "Example" / "Example__sig.txt") << " !NoSuchVariable,CustomSignature \n";
+        std::ofstream(root / "Example" / "Example__hash.txt") << "  17585368238253125375  \n";
+        std::ofstream(root / "Example" / "Example__bool.txt") << "ConfiguredBool\n";
+        std::ofstream(root / "Example" / "Second__bool.txt") << "ConfiguredBool\nAnotherBool\n";
+        std::ofstream(root / "Example" / "Example__float.txt") << "ConfiguredFloat\n";
+        std::ofstream(root / "Example" / "Example__int.txt") << "ConfiguredInt\n";
+    }
+
+    const auto descriptors = Graphs::LoadConfiguredAnimationGraphDescriptors(root);
+    REQUIRE(descriptors.size() == 1);
+    const auto& descriptor = descriptors.front();
+    REQUIRE(descriptor.Name == "Example");
+    REQUIRE(descriptor.Signature == "!NoSuchVariable,CustomSignature");
+    REQUIRE(descriptor.OriginalKey == 17585368238253125375ull);
+    REQUIRE(descriptor.Booleans.size() == 3);
+    REQUIRE(std::count(descriptor.Booleans.begin(), descriptor.Booleans.end(), "ConfiguredBool") == 2);
+    REQUIRE(std::find(descriptor.Booleans.begin(), descriptor.Booleans.end(), "AnotherBool") != descriptor.Booleans.end());
+    REQUIRE(descriptor.Floats == std::vector<std::string>{"ConfiguredFloat"});
+    REQUIRE(descriptor.Integers == std::vector<std::string>{"ConfiguredInt"});
+    std::filesystem::remove_all(root, error);
+    REQUIRE_FALSE(error);
+}
 
 TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-bridge]")
 {
     REQUIRE(kMappingMagic == 0x42564753);
-    REQUIRE(kMappingAbiVersion == 23);
+    REQUIRE(kMappingAbiVersion == 24);
     REQUIRE(kCapabilityRevision == 34);
     REQUIRE(kSkyrimVrRuntimeVersion == 0x010400F0);
     REQUIRE(kSkseVrInterfaceRuntimeVersion == 0x010400F1);
@@ -121,7 +237,11 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(offsetof(ApplyProjectileLaunchPayload, LaunchFlags) == 0x40);
     REQUIRE(offsetof(ActorActionPayload, SnapshotId) == 0x28);
     REQUIRE(offsetof(ActorActionPayload, TextId) == 0x30);
-    REQUIRE(offsetof(ActorActionGraphChunkPayload, Values) == 0x2C);
+    REQUIRE(offsetof(AnimationGraphChunkPayload, DescriptorDigest) == 0x40);
+    REQUIRE(offsetof(AnimationGraphChunkPayload, DirectionFloatIndex) == 0x48);
+    REQUIRE(offsetof(ActorActionGraphChunkPayload, DirectionFloatIndex) == 0x0C);
+    REQUIRE(offsetof(ActorActionGraphChunkPayload, DescriptorDigest) == 0x10);
+    REQUIRE(offsetof(ActorActionGraphChunkPayload, Values) == 0x34);
     REQUIRE(kProjectileLaunchKnownFlags == 0x3F);
     REQUIRE(sizeof(MappingHeader) == 0x100);
     REQUIRE(offsetof(MappingHeader, AuthoritySuppressedDamageCount) == 0x90);
@@ -147,8 +267,8 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(HasCapability(kInitialCapabilities, Capability::InventoryStackTransactions));
     REQUIRE(static_cast<CapabilityMask>(Capability::QuestMutation) == (1ull << 23));
     REQUIRE(static_cast<CapabilityMask>(Capability::LocalCaptureSinks) == (1ull << 25));
-    REQUIRE(HasCapability(kMandatoryNativeParityCapabilities, Capability::LocalCaptureSinks));
-    REQUIRE_FALSE(HasCapability(kMandatoryNativeParityCapabilities, Capability::LocalEventSinks));
+    REQUIRE(HasCapability(kMandatoryNativeGameplayCoreCapabilities, Capability::LocalCaptureSinks));
+    REQUIRE_FALSE(HasCapability(kMandatoryNativeGameplayCoreCapabilities, Capability::LocalEventSinks));
     REQUIRE(CapabilityForDomain(GameplayDomain::Quest) == Capability::QuestMutation);
     REQUIRE(CapabilityForDomain(GameplayDomain::Dialogue) == Capability::QuestAndDialogue);
     REQUIRE(CapabilityForDomain(GameplayDomain::Party) == Capability::QuestAndDialogue);
@@ -187,6 +307,30 @@ TEST_CASE("VR gameplay bridge ABI constants and layout", "[skyrim-vr][gameplay-b
     REQUIRE(IsActionInDomain(GameplayDomain::Inventory, GameplayAction::InventoryTransactionItemEffect));
     REQUIRE(kInventoryTransactionDynamicEnchantmentFormId == std::numeric_limits<std::uint32_t>::max());
     REQUIRE(kInventoryTransactionBeginKnownFlags == kInventoryTransactionReset);
+}
+
+TEST_CASE("PLANCK local physics event ABI preserves the hit prefix and appends rich state", "[skyrim-vr][planck][abi]")
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+
+    REQUIRE(kLocalEventSize == 184);
+    REQUIRE(sizeof(LocalEvent) == kLocalEventSize);
+    REQUIRE(offsetof(LocalEvent, EventId) == 0x08);
+    REQUIRE(offsetof(LocalEvent, NodeName) == 0x2C);
+    REQUIRE(offsetof(LocalEvent, Kind) == 0x6C);
+    REQUIRE(offsetof(LocalEvent, GripId) == 0x70);
+    REQUIRE(offsetof(LocalEvent, Rotation) == 0x78);
+    REQUIRE(offsetof(LocalEvent, SourcePosition) == 0xA0);
+    REQUIRE(offsetof(LocalEvent, TtlSeconds) == 0xB0);
+
+    LocalEvent event{};
+    event.Kind = EventKind::GripBegin;
+    event.GripId = 7;
+    event.Rotation.W = 1.0F;
+    event.TtlSeconds = 0.2F;
+    REQUIRE(event.Kind == EventKind::GripBegin);
+    REQUIRE(event.GripId != 0);
+    REQUIRE(event.Rotation.W == 1.0F);
 }
 
 TEST_CASE("HIGGS physical mutations have one callback producer", "[skyrim-vr][higgs][grab]")
@@ -229,6 +373,40 @@ TEST_CASE("HIGGS physical mutations have one callback producer", "[skyrim-vr][hi
     REQUIRE(filter.find("kDropped") != std::string::npos);
     REQUIRE(filter.find("kStashed") == std::string::npos);
     REQUIRE(filter.find("kConsumed") == std::string::npos);
+}
+
+TEST_CASE("HIGGS node names remain safe for the line-oriented handoff", "[skyrim-vr][higgs][abi]")
+{
+    using SkyrimTogetherVR::HiggsBridge::CopyLineSafeNodeName;
+
+    char destination[48]{};
+    std::uint8_t length{};
+    constexpr char kNormalNodeName[] = "NPC Pelvis [Pelv]";
+    REQUIRE(CopyLineSafeNodeName(kNormalNodeName, destination, length));
+    REQUIRE(std::string_view(destination, length) == kNormalNodeName);
+    REQUIRE(destination[length] == '\0');
+
+    for (const auto control : std::array<unsigned char, 4>{0x01, 0x09, 0x0A, 0x7F})
+    {
+        const char malformed[] = {'N', 'o', 'd', 'e', static_cast<char>(control), '\0'};
+        REQUIRE_FALSE(CopyLineSafeNodeName(malformed, destination, length));
+        REQUIRE(length == 0);
+        REQUIRE(destination[0] == '\0');
+    }
+
+    std::array<char, 48> maximum{};
+    maximum.fill('N');
+    maximum.back() = '\0';
+    REQUIRE(CopyLineSafeNodeName(maximum.data(), destination, length));
+    REQUIRE(length == 47);
+    REQUIRE(destination[length] == '\0');
+
+    std::array<char, 49> oversized{};
+    oversized.fill('N');
+    oversized.back() = '\0';
+    REQUIRE_FALSE(CopyLineSafeNodeName(oversized.data(), destination, length));
+    REQUIRE(length == 0);
+    REQUIRE(destination[0] == '\0');
 }
 
 TEST_CASE("VR gameplay bridge classifies degraded appearance commits", "[skyrim-vr][gameplay-bridge]")
@@ -550,7 +728,7 @@ TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values
     REQUIRE(Animation::kMaximumBooleanCount == 64);
     REQUIRE(Animation::kMaximumFloatCount == 64);
     REQUIRE(Animation::kMaximumIntegerCount == 64);
-    REQUIRE(Animation::kValuesPerChunk == 7);
+    REQUIRE(Animation::kValuesPerChunk == 6);
     REQUIRE(Animation::kKnownDescriptorShapeCount == 25);
     const auto* humanoid = Animation::FindKnownShape(60, 13, 14);
     REQUIRE(humanoid != nullptr);
@@ -558,14 +736,14 @@ TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values
     REQUIRE(humanoid->DirectionFloatIndex < humanoid->FloatCount);
     REQUIRE_FALSE(Animation::IsKnownShape(60, 13, 13));
     REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::BooleanBits, 60) == 1);
-    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Float, 13) == 3);
-    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Integer, 14) == 3);
+    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Float, 13) == 7);
+    REQUIRE(Animation::ExpectedChunkMask(Animation::ValueType::Integer, 14) == 7);
     REQUIRE(Animation::IsValidChunk(Animation::ValueType::BooleanBits, 0, 60, 60));
-    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 0, 7, 13));
-    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 7, 6, 13));
-    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Integer, 7, 7, 14));
-    REQUIRE_FALSE(Animation::IsValidChunk(Animation::ValueType::Float, 1, 7, 13));
-    REQUIRE_FALSE(Animation::IsValidChunk(Animation::ValueType::Integer, 7, 6, 14));
+    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 0, 6, 13));
+    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Float, 12, 1, 13));
+    REQUIRE(Animation::IsValidChunk(Animation::ValueType::Integer, 6, 6, 14));
+    REQUIRE_FALSE(Animation::IsValidChunk(Animation::ValueType::Float, 1, 6, 13));
+    REQUIRE_FALSE(Animation::IsValidChunk(Animation::ValueType::Integer, 6, 5, 14));
 
     CommandRecord command{};
     command.Header.Kind = static_cast<std::uint16_t>(CommandKind::ApplyRemoteAnimationGraphChunk);
@@ -573,34 +751,127 @@ TEST_CASE("VR animation graph chunks are bounded and preserve fixed-width values
     command.Payload.ApplyRemoteAnimationGraphChunk.SnapshotId = 12;
     command.Payload.ApplyRemoteAnimationGraphChunk.DescriptorVersion = Animation::kDescriptorVersion;
     command.Payload.ApplyRemoteAnimationGraphChunk.ValueType = static_cast<std::uint16_t>(Animation::ValueType::Float);
-    command.Payload.ApplyRemoteAnimationGraphChunk.StartIndex = 7;
+    command.Payload.ApplyRemoteAnimationGraphChunk.StartIndex = 6;
     command.Payload.ApplyRemoteAnimationGraphChunk.ValueCount = 6;
     command.Payload.ApplyRemoteAnimationGraphChunk.TotalCount = 13;
     command.Payload.ApplyRemoteAnimationGraphChunk.ChunkFlags = Animation::FullSnapshot;
+    command.Payload.ApplyRemoteAnimationGraphChunk.DescriptorDigest = 1;
+    command.Payload.ApplyRemoteAnimationGraphChunk.DirectionFloatIndex = 1;
     command.Payload.ApplyRemoteAnimationGraphChunk.Values[0] = 0x3F800000;
     const auto roundTrip = command;
     REQUIRE(roundTrip.Payload.ApplyRemoteAnimationGraphChunk.SnapshotId == 12);
     REQUIRE(roundTrip.Payload.ApplyRemoteAnimationGraphChunk.Values[0] == 0x3F800000);
 }
 
-TEST_CASE("VR animation graph protocol rejects unknown complete shapes", "[skyrim-vr][gameplay-bridge]")
+TEST_CASE("VR animation graph protocol accepts bounded configured shapes", "[skyrim-vr][gameplay-bridge]")
 {
     namespace Animation = SkyrimTogetherVR::AnimationGraphProtocol;
     Animation::SnapshotBuffer snapshot{};
     std::uint32_t booleanValues[Animation::kValuesPerChunk]{};
     std::uint32_t floatValues0[Animation::kValuesPerChunk]{};
-    std::uint32_t floatValues1[Animation::kValuesPerChunk]{};
     std::uint32_t integerValues[Animation::kValuesPerChunk]{};
 
-    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::BooleanBits, 0, 60, 60, 0.0F,
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, 0x1234, 1, Animation::ValueType::BooleanBits, 0, 2, 2, 0.0F,
                                    booleanValues) == Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Float, 0, 7, 13, 0.0F,
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, 0x1234, 1, Animation::ValueType::Float, 0, 3, 3, 0.0F,
                                    floatValues0) == Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Float, 7, 6, 13, 0.0F,
-                                   floatValues1) == Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 1, Animation::ValueType::Integer, 0, 7, 13, 0.0F,
-                                   integerValues) == Animation::ChunkAcceptResult::Malformed);
-    REQUIRE_FALSE(snapshot.IsComplete());
+    REQUIRE(Animation::AcceptChunk(snapshot, 1, 0x1234, 1, Animation::ValueType::Integer, 0, 4, 4, 0.0F,
+                                   integerValues) == Animation::ChunkAcceptResult::Complete);
+    REQUIRE(snapshot.IsComplete());
+    REQUIRE(Animation::AcceptChunk(snapshot, 2, 0x9999, 1, Animation::ValueType::BooleanBits, 0, 2, 2, 0.0F,
+                                   booleanValues) == Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 2, 0x9998, 1, Animation::ValueType::Float, 0, 3, 3, 0.0F,
+                                   floatValues0) == Animation::ChunkAcceptResult::Malformed);
+}
+
+TEST_CASE("exact remote actor action transaction rejects invalid preflight without mutation", "[skyrim-vr][gameplay-bridge]")
+{
+    using namespace SkyrimTogetherVR::GameplayAdapter::ActorActionHooks;
+    ReplayPolicyFixture fixture;
+
+    const auto result = RunReplayTransaction(CommandStatus::Malformed, fixture.Callbacks());
+
+    REQUIRE(result.Status == CommandStatus::Malformed);
+    REQUIRE_FALSE(result.RollbackAttempted);
+    REQUIRE_FALSE(result.ForceActionInvoked);
+    REQUIRE(fixture.ActorState == fixture.PreviousActorState);
+    REQUIRE(fixture.GraphValue == fixture.PreviousGraphValue);
+    REQUIRE(fixture.ApplyGraphCalls == 0);
+    REQUIRE(fixture.ApplyActorStateCalls == 0);
+    REQUIRE(fixture.ForceActionCalls == 0);
+    REQUIRE(fixture.RestoreGraphCalls == 0);
+    REQUIRE(fixture.RestoreActorStateCalls == 0);
+}
+
+TEST_CASE("exact remote actor action transaction rolls back rejected graph and ForceAction", "[skyrim-vr][gameplay-bridge]")
+{
+    using namespace SkyrimTogetherVR::GameplayAdapter::ActorActionHooks;
+
+    SECTION("a graph setter that rejects after a write is restored before actor state changes")
+    {
+        ReplayPolicyFixture fixture;
+        fixture.ApplyGraphStatus = CommandStatus::EngineRejected;
+
+        const auto result = RunReplayTransaction(CommandStatus::Success, fixture.Callbacks());
+
+        REQUIRE(result.Status == CommandStatus::EngineRejected);
+        REQUIRE(result.RollbackAttempted);
+        REQUIRE_FALSE(result.ForceActionInvoked);
+        REQUIRE(result.GraphRestoreStatus == CommandStatus::Success);
+        REQUIRE(fixture.GraphValue == fixture.PreviousGraphValue);
+        REQUIRE(fixture.ActorState == fixture.PreviousActorState);
+        REQUIRE(fixture.ApplyActorStateCalls == 0);
+        REQUIRE(fixture.ForceActionCalls == 0);
+        REQUIRE(fixture.RestoreGraphCalls == 1);
+        REQUIRE(fixture.RestoreActorStateCalls == 0);
+    }
+
+    SECTION("a ForceAction rejection restores actor state and graph values")
+    {
+        ReplayPolicyFixture fixture;
+
+        const auto result = RunReplayTransaction(CommandStatus::Success, fixture.Callbacks());
+
+        REQUIRE(result.Status == CommandStatus::EngineRejected);
+        REQUIRE(result.RollbackAttempted);
+        REQUIRE(result.ForceActionInvoked);
+        REQUIRE_FALSE(result.ExceptionCaught);
+        REQUIRE(result.GraphRestoreStatus == CommandStatus::Success);
+        REQUIRE(fixture.GraphValue == fixture.PreviousGraphValue);
+        REQUIRE(fixture.ActorState == fixture.PreviousActorState);
+        REQUIRE(fixture.RestoreGraphCalls == 1);
+        REQUIRE(fixture.RestoreActorStateCalls == 1);
+    }
+
+    SECTION("a ForceAction exception restores actor state and graph values")
+    {
+        ReplayPolicyFixture fixture;
+        fixture.ThrowFromForce = true;
+
+        const auto result = RunReplayTransaction(CommandStatus::Success, fixture.Callbacks());
+
+        REQUIRE(result.Status == CommandStatus::EngineRejected);
+        REQUIRE(result.RollbackAttempted);
+        REQUIRE(result.ForceActionInvoked);
+        REQUIRE(result.ExceptionCaught);
+        REQUIRE(result.GraphRestoreStatus == CommandStatus::Success);
+        REQUIRE(fixture.GraphValue == fixture.PreviousGraphValue);
+        REQUIRE(fixture.ActorState == fixture.PreviousActorState);
+        REQUIRE(fixture.RestoreGraphCalls == 1);
+        REQUIRE(fixture.RestoreActorStateCalls == 1);
+    }
+}
+
+TEST_CASE("server movement commit preserves animation descriptor identity", "[skyrim-vr][animation][source-audit]")
+{
+    const auto server = ReadTextFile(RepositoryRoot() / "Code/server/Services/CharacterService.cpp");
+    const auto start = server.find("void SwapAnimationVariables");
+    const auto end = server.find("struct PendingActorData", start);
+    REQUIRE(start != std::string::npos);
+    REQUIRE(end != std::string::npos);
+    const auto swapFunction = server.substr(start, end - start);
+    REQUIRE(swapFunction.find("swap(aLeft.DescriptorDigest, aRight.DescriptorDigest)") != std::string::npos);
+    REQUIRE(swapFunction.find("swap(aLeft.DirectionFloatIndex, aRight.DirectionFloatIndex)") != std::string::npos);
 }
 
 TEST_CASE("movement tick ordering accepts an initial zero and rejects stale updates", "[skyrim-vr][movement]")
@@ -633,28 +904,29 @@ TEST_CASE("animation graph assembly commits only complete current snapshots", "[
         integerValues0[index] = static_cast<std::uint32_t>(index + 10);
         integerValues1[index] = static_cast<std::uint32_t>(index + 20);
     }
-    for (std::size_t index = 0; index < 13 - Animation::kValuesPerChunk; ++index)
-        floatValues1[index] = std::bit_cast<std::uint32_t>(static_cast<float>(index + 7));
-
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::Float, 7, 6, 13, 1.0f, floatValues1) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::BooleanBits, 0, 60, 60, 1.0f, booleanValues) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::BooleanBits, 0, 60, 60, 1.0f, booleanValues) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 0, 6, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::Integer, 7, 7, 14, 1.0f, integerValues1) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 6, 6, 13, 1.0f, floatValues1) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::Float, 0, 7, 13, 1.0f, floatValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Float, 12, 1, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Accepted);
-    REQUIRE(Animation::AcceptChunk(snapshot, 4, Animation::ValueType::Integer, 0, 7, 14, 1.0f, integerValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 0, 6, 14, 1.0f, integerValues0) ==
+            Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 6, 6, 14, 1.0f, integerValues1) ==
+            Animation::ChunkAcceptResult::Accepted);
+    REQUIRE(Animation::AcceptChunk(snapshot, 4, 0x7654, 1, Animation::ValueType::Integer, 12, 2, 14, 1.0f, integerValues0) ==
             Animation::ChunkAcceptResult::Complete);
     REQUIRE(snapshot.IsComplete());
     REQUIRE(snapshot.Booleans[3]);
-    REQUIRE(snapshot.Floats[12] == 12.0f);
-    REQUIRE(snapshot.Integers[13] == 26);
+    REQUIRE(snapshot.Floats[12] == 0.0f);
+    REQUIRE(snapshot.Integers[13] == 11);
 
-    REQUIRE(Animation::AcceptChunk(snapshot, 3, Animation::ValueType::Float, 0, 7, 13, 1.0f, floatValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 3, 0x7654, 1, Animation::ValueType::Float, 0, 6, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Stale);
     floatValues0[0] = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
-    REQUIRE(Animation::AcceptChunk(snapshot, 5, Animation::ValueType::Float, 0, 7, 13, 1.0f, floatValues0) ==
+    REQUIRE(Animation::AcceptChunk(snapshot, 5, 0x7654, 1, Animation::ValueType::Float, 0, 6, 13, 1.0f, floatValues0) ==
             Animation::ChunkAcceptResult::Malformed);
     REQUIRE(snapshot.IsComplete());
     REQUIRE(snapshot.SnapshotId == 4);

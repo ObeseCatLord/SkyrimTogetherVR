@@ -61,6 +61,7 @@ SCRIPT_TOKENS = (
     '[string]$GameFilesRoot = "GameFiles\\SkyrimVR"',
     '[string]$CompanionToolRoot = "Tools\\SkyrimVR"',
     '[string]$CefRuntimeDirectory = ""',
+    '[string]$PatchedPlanckArtifact = ""',
     '$CefRuntimeVersion = "141.0.11"',
     "$CefRuntimeRequiredFiles = @(",
     "Resolve-CefRuntimeDirectory",
@@ -157,6 +158,26 @@ SCRIPT_TOKENS = (
     "$packageManifest | ConvertTo-Json -Depth 5",
     "Wrote SkyrimTogetherVR build manifest",
     "Copied SkyrimTogetherVR package snapshot to $packageSnapshotDir",
+    "Resolve-PatchedPlanckArtifact",
+    "activeragdoll.dll",
+    "overrides staged handoff overlay",
+    "interface002",
+    "patchedPlanckArtifact = $patchedPlanckManifest",
+)
+
+COMPLETE_PLANCK_BUILD_TOKENS = (
+    "BuildPlanckSkyrimTogetherVR-Windows.bat",
+    "BuildAuditCollectSkyrimTogetherVR-Windows.bat",
+    "HavokArchive",
+    "DependencyRoot",
+    "SKSEVRArchive",
+    "SevenZipPath",
+    "Configuration",
+    "Libraries\\activeragdoll\\x64",
+    "-PatchedPlanckArtifact",
+    "--require-patched-planck-interface002",
+    "interface002",
+    "never deploys to a game install",
 )
 
 DLL_BATCH_TOKENS = (
@@ -735,6 +756,7 @@ def main():
     client_dll_alias_batch_path = root / "BuildSkyrimTogetherVR-ClientDLL-Windows.bat"
     avatar_sync_batch_path = root / "BuildSkyrimTogetherVR-AvatarSync-Windows.bat"
     gameplay_batch_path = root / "BuildSkyrimTogetherVR-Gameplay-Windows.bat"
+    complete_planck_build_path = root / "BuildCompleteSkyrimTogetherVR-Windows.ps1"
     build_and_audit_batch_path = root / "BuildAndAuditSkyrimTogetherVR-Windows.bat"
     build_audit_collect_batch_path = root / "BuildAuditCollectSkyrimTogetherVR-Windows.bat"
     prepare_handoff_batch_path = root / "PrepareSkyrimTogetherVRWindowsHandoff-Windows.bat"
@@ -759,6 +781,7 @@ def main():
     client_dll_alias_batch = read_text(client_dll_alias_batch_path) if client_dll_alias_batch_path.exists() else ""
     avatar_sync_batch = read_text(avatar_sync_batch_path) if avatar_sync_batch_path.exists() else ""
     gameplay_batch = read_text(gameplay_batch_path) if gameplay_batch_path.exists() else ""
+    complete_planck_build = read_text(complete_planck_build_path) if complete_planck_build_path.exists() else ""
     build_and_audit_batch = read_text(build_and_audit_batch_path) if build_and_audit_batch_path.exists() else ""
     build_audit_collect_batch = read_text(build_audit_collect_batch_path) if build_audit_collect_batch_path.exists() else ""
     prepare_handoff_batch = read_text(prepare_handoff_batch_path) if prepare_handoff_batch_path.exists() else ""
@@ -792,6 +815,9 @@ def main():
     ]
     missing_avatar_sync_batch_tokens = [token for token in AVATAR_SYNC_BATCH_TOKENS if token not in avatar_sync_batch]
     missing_gameplay_batch_tokens = [token for token in GAMEPLAY_BATCH_TOKENS if token not in gameplay_batch]
+    missing_complete_planck_build_tokens = [
+        token for token in COMPLETE_PLANCK_BUILD_TOKENS if token not in complete_planck_build
+    ]
     missing_build_and_audit_batch_tokens = [token for token in BUILD_AND_AUDIT_BATCH_TOKENS if token not in build_and_audit_batch]
     missing_build_audit_collect_batch_tokens = [
         token for token in BUILD_AUDIT_COLLECT_BATCH_TOKENS if token not in build_audit_collect_batch
@@ -870,6 +896,13 @@ def main():
         failures.append(f"Gameplay build batch file is missing: {gameplay_batch_path}")
     if missing_gameplay_batch_tokens:
         failures.append(f"Gameplay build batch tokens missing: {', '.join(missing_gameplay_batch_tokens)}")
+    if not complete_planck_build_path.exists():
+        failures.append(f"Complete PLANCK gameplay build wrapper is missing: {complete_planck_build_path}")
+    if missing_complete_planck_build_tokens:
+        failures.append(
+            "Complete PLANCK gameplay build wrapper tokens missing: "
+            + ", ".join(missing_complete_planck_build_tokens)
+        )
     if not build_and_audit_batch_path.exists():
         failures.append(f"Build-and-audit batch file is missing: {build_and_audit_batch_path}")
     if missing_build_and_audit_batch_tokens:
@@ -1013,6 +1046,7 @@ def main():
     print(f"Missing DLL build-and-audit batch tokens: {len(missing_dll_build_and_audit_batch_tokens)}")
     print(f"Missing avatar-sync build batch tokens: {len(missing_avatar_sync_batch_tokens)}")
     print(f"Missing gameplay build batch tokens: {len(missing_gameplay_batch_tokens)}")
+    print(f"Missing complete PLANCK gameplay build wrapper tokens: {len(missing_complete_planck_build_tokens)}")
     print(f"Missing readiness batch tokens: {len(missing_readiness_batch_tokens)}")
     print(f"Missing Wine script tokens: {len(missing_wine_script_tokens)}")
     print(f"Missing launcher tokens: {len(missing_launcher_tokens)}")

@@ -298,6 +298,21 @@ function Assert-BuildManifest {
         (Get-ObjectProperty $provenance "sourceRevision") -ne $ExpectedRevision) {
         throw "nested gameplay package does not report clean, matching source provenance"
     }
+    $planck = Get-ObjectProperty $Manifest "patchedPlanckArtifact"
+    if ($null -eq $planck -or (Get-ObjectProperty $planck "interface") -ne "interface002" -or
+        (Get-ObjectProperty $planck "name") -ne "activeragdoll.dll" -or
+        (Get-ObjectProperty $planck "packagePath") -ne "Data/SKSE/Plugins/activeragdoll.dll" -or
+        (Get-ObjectProperty $planck "sha256") -notmatch "^[0-9a-f]{64}$" -or
+        (Get-ObjectProperty $planck "forcedBuildArtifactSha256") -ne (Get-ObjectProperty $planck "sha256") -or
+        (Get-ObjectProperty $planck "forcedBuildTarget") -ne "Rebuild" -or
+        (Get-ObjectProperty $planck "planckCommit") -notmatch "^[0-9a-f]{40}$" -or
+        (Get-ObjectProperty $planck "planckSourceTreeSha256") -notmatch "^[0-9a-f]{64}$") {
+        throw "nested gameplay package is missing valid patched PLANCK interface002 forced-build provenance"
+    }
+    $packageHashes = Get-ObjectProperty $Manifest "packageFileSha256"
+    if ($null -eq $packageHashes -or (Get-ObjectProperty $packageHashes "Data/SKSE/Plugins/activeragdoll.dll") -ne (Get-ObjectProperty $planck "sha256")) {
+        throw "nested gameplay package patched PLANCK hash is not bound to its package path"
+    }
 }
 
 function Validate-GameplayPackage {
@@ -790,7 +805,21 @@ function New-InstallOperations {
             }
         }
     }
-    return $operations
+    $deduplicated = New-Object 'System.Collections.Generic.List[object]'
+    $indices = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($operation in $operations) {
+        $key = "$($operation.targetScope)`0$($operation.targetRoot)`0$($operation.targetRelative)"
+        if ($indices.ContainsKey($key)) {
+            # Package operations are appended last and therefore replace an
+            # overlay operation for the same Windows destination.
+            $deduplicated[$indices[$key]] = $operation
+        }
+        else {
+            $indices.Add($key, $deduplicated.Count)
+            $deduplicated.Add($operation)
+        }
+    }
+    return @($deduplicated)
 }
 
 function Test-InstallIsCurrent {

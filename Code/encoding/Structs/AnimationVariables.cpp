@@ -5,7 +5,8 @@
 
 bool AnimationVariables::operator==(const AnimationVariables& acRhs) const noexcept
 {
-    return Booleans == acRhs.Booleans && Integers == acRhs.Integers && Floats == acRhs.Floats;
+    return Booleans == acRhs.Booleans && Integers == acRhs.Integers && Floats == acRhs.Floats &&
+           DescriptorDigest == acRhs.DescriptorDigest && DirectionFloatIndex == acRhs.DirectionFloatIndex;
 }
 
 bool AnimationVariables::operator!=(const AnimationVariables& acRhs) const noexcept
@@ -89,6 +90,8 @@ void AnimationVariables::GenerateDiff(const AnimationVariables& aPrevious, Tilte
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Booleans.size());
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Integers.size());
     TiltedPhoques::Serialization::WriteVarInt(aWriter, Floats.size());
+    aWriter.WriteBits(DescriptorDigest, 64);
+    aWriter.WriteBits(DirectionFloatIndex, 16);
 
     TiltedPhoques::String chars;
     VectorBool_to_String(changedVector, chars);
@@ -119,6 +122,18 @@ bool AnimationVariables::ApplyDiff(TiltedPhoques::Buffer::Reader& aReader) noexc
         if (booleansSize > kMaximumBooleanCount || integersSize > kMaximumIntegerCount ||
             floatsSize > kMaximumFloatCount || booleansSize > kMaximumTotalCount - integersSize ||
             booleansSize + integersSize > kMaximumTotalCount - floatsSize)
+        {
+            IsDecodedValid = false;
+            return false;
+        }
+
+        std::uint64_t descriptorDigest{};
+        std::uint64_t directionFloatIndex{};
+        if (!aReader.ReadBits(descriptorDigest, 64) || !aReader.ReadBits(directionFloatIndex, 16) ||
+            ((booleansSize != 0 || integersSize != 0 || floatsSize != 0) &&
+             (descriptorDigest == 0 || floatsSize == 0 || directionFloatIndex >= floatsSize)) ||
+            (booleansSize == 0 && integersSize == 0 && floatsSize == 0 &&
+             (descriptorDigest != 0 || directionFloatIndex != 0)))
         {
             IsDecodedValid = false;
             return false;
@@ -163,6 +178,8 @@ bool AnimationVariables::ApplyDiff(TiltedPhoques::Buffer::Reader& aReader) noexc
         Booleans = std::move(booleans);
         Integers = std::move(integers);
         Floats = std::move(floats);
+        DescriptorDigest = descriptorDigest;
+        DirectionFloatIndex = static_cast<std::uint16_t>(directionFloatIndex);
         IsDecodedValid = true;
         return true;
     }

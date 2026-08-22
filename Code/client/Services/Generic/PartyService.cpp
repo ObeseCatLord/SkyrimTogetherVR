@@ -25,6 +25,8 @@
 
 #include <Forms/TESGlobal.h>
 
+#include <algorithm>
+
 PartyService::PartyService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransportService) noexcept
     : m_world(aWorld)
     , m_transport(aTransportService)
@@ -39,47 +41,79 @@ PartyService::PartyService(World& aWorld, entt::dispatcher& aDispatcher, Transpo
     m_partyLeftConnection = aDispatcher.sink<NotifyPartyLeft>().connect<&PartyService::OnPartyLeft>(this);
 }
 
-void PartyService::CreateParty() const noexcept
+bool PartyService::CreateParty() const noexcept
 {
+    if (m_inParty)
+        return false;
+
     PartyCreateRequest request;
-    m_transport.Send(request);
+    return m_transport.Send(request);
 }
 
-void PartyService::LeaveParty() const noexcept
+bool PartyService::LeaveParty() const noexcept
 {
+    if (!m_inParty)
+        return false;
+
     PartyLeaveRequest request;
-    m_transport.Send(request);
+    return m_transport.Send(request);
 }
 
-void PartyService::CreateInvite(const uint32_t aPlayerId) const noexcept
+bool PartyService::CreateInvite(const uint32_t aPlayerId) const noexcept
 {
+    if (!m_inParty || !m_isLeader || aPlayerId == 0 || aPlayerId == m_transport.GetLocalPlayerId() ||
+        !m_players.contains(aPlayerId) || std::find(m_partyMembers.begin(), m_partyMembers.end(), aPlayerId) != m_partyMembers.end())
+        return false;
+
     PartyInviteRequest request;
     request.PlayerId = aPlayerId;
-    m_transport.Send(request);
+    return m_transport.Send(request);
 }
 
-void PartyService::AcceptInvite(const uint32_t aInviterId) const noexcept
+bool PartyService::AcceptInvite(const uint32_t aInviterId) noexcept
 {
-    if (!m_invitations.contains(aInviterId))
-        return;
+    const auto invitation = m_invitations.find(aInviterId);
+    if (m_inParty || invitation == m_invitations.end() || invitation->second < m_transport.GetClock().GetCurrentTick())
+        return false;
 
     PartyAcceptInviteRequest request;
     request.InviterId = aInviterId;
-    m_transport.Send(request);
+    // Sending is asynchronous.  Keep the invitation until the server confirms
+    // the party transition (or its normal expiry) so a rejected/lost request
+    // does not destroy the only retryable client state.
+    return m_transport.Send(request);
 }
 
-void PartyService::KickPartyMember(const uint32_t aPlayerId) const noexcept
+bool PartyService::DeclineInvite(const uint32_t aInviterId) noexcept
 {
+    const auto invitation = m_invitations.find(aInviterId);
+    if (invitation == m_invitations.end())
+        return false;
+
+    m_invitations.erase(invitation);
+    return true;
+}
+
+bool PartyService::KickPartyMember(const uint32_t aPlayerId) const noexcept
+{
+    if (!m_inParty || !m_isLeader || aPlayerId == 0 || aPlayerId == m_transport.GetLocalPlayerId() ||
+        std::find(m_partyMembers.begin(), m_partyMembers.end(), aPlayerId) == m_partyMembers.end())
+        return false;
+
     PartyKickRequest kickMessage;
     kickMessage.PartyMemberPlayerId = aPlayerId;
-    m_transport.Send(kickMessage);
+    return m_transport.Send(kickMessage);
 }
 
-void PartyService::ChangePartyLeader(const uint32_t aPlayerId) const noexcept
+bool PartyService::ChangePartyLeader(const uint32_t aPlayerId) const noexcept
 {
+    if (!m_inParty || !m_isLeader || aPlayerId == 0 || aPlayerId == m_transport.GetLocalPlayerId() ||
+        std::find(m_partyMembers.begin(), m_partyMembers.end(), aPlayerId) == m_partyMembers.end())
+        return false;
+
     PartyChangeLeaderRequest changeMessage;
     changeMessage.PartyMemberPlayerId = aPlayerId;
-    m_transport.Send(changeMessage);
+    return m_transport.Send(changeMessage);
 }
 
 void PartyService::OnUpdate(const UpdateEvent& acEvent) noexcept
@@ -104,6 +138,8 @@ void PartyService::OnUpdate(const UpdateEvent& acEvent) noexcept
 void PartyService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     DestroyParty();
+    m_invitations.clear();
+    m_players.clear();
 }
 
 void PartyService::OnPlayerList(const NotifyPlayerList& acPlayerList) noexcept
@@ -171,6 +207,7 @@ void PartyService::OnPartyJoined(const NotifyPartyJoined& acPartyJoined) noexcep
     m_isLeader = acPartyJoined.IsLeader;
     m_leaderPlayerId = acPartyJoined.LeaderPlayerId;
     m_partyMembers = acPartyJoined.PlayerIds;
+    m_invitations.clear();
 
     m_world.GetDispatcher().trigger(PartyJoinedEvent(m_isLeader));
 }
@@ -188,6 +225,6 @@ void PartyService::DestroyParty() noexcept
 {
     m_inParty = false;
     m_isLeader = false;
-    m_leaderPlayerId = -1;
+    m_leaderPlayerId = 0;
     m_partyMembers.clear();
 }

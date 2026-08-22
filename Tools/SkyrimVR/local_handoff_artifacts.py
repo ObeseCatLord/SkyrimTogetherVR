@@ -12,6 +12,7 @@ import zipfile
 
 BUILD_MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+PATCHED_PLANCK_PATH = "Data/SKSE/Plugins/activeragdoll.dll"
 REQUIRED_EVIDENCE_COMMANDS = {
     "python-version",
     "xmake-version",
@@ -73,6 +74,30 @@ def _validate_build_manifest(manifest: dict[str, object], expected_revision: str
         raise ValueError("gameplay artifact does not report clean source provenance")
     if provenance.get("sourceRevision") != expected_revision:
         raise ValueError("gameplay artifact source provenance revision is inconsistent")
+    planck = manifest.get("patchedPlanckArtifact")
+    if not isinstance(planck, dict):
+        raise ValueError("gameplay artifact is missing patched PLANCK interface002 provenance")
+    if (
+        planck.get("interface") != "interface002"
+        or planck.get("name") != "activeragdoll.dll"
+        or planck.get("packagePath") != PATCHED_PLANCK_PATH
+    ):
+        raise ValueError("gameplay artifact has an invalid patched PLANCK interface002 marker")
+    planck_hash = planck.get("sha256")
+    if (
+        not isinstance(planck_hash, str)
+        or SHA256_RE.fullmatch(planck_hash) is None
+        or planck.get("forcedBuildArtifactSha256") != planck_hash
+        or planck.get("forcedBuildTarget") != "Rebuild"
+        or not isinstance(planck.get("planckCommit"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", planck["planckCommit"], re.IGNORECASE) is None
+        or not isinstance(planck.get("planckSourceTreeSha256"), str)
+        or SHA256_RE.fullmatch(planck["planckSourceTreeSha256"]) is None
+    ):
+        raise ValueError("gameplay artifact patched PLANCK forced-build provenance is malformed")
+    package_hashes = manifest.get("packageFileSha256")
+    if not isinstance(package_hashes, dict) or package_hashes.get(PATCHED_PLANCK_PATH) != planck_hash:
+        raise ValueError("gameplay artifact patched PLANCK hash is not bound to its package path")
 
 
 def validate_artifact_pair(

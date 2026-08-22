@@ -174,6 +174,20 @@ VR_PREREQUISITE_FILES = {
 
 X64_MACHINE = 0x8664
 MANIFEST_SCHEMA = "skyrim_together_vr_build_package_v2"
+PATCHED_PLANCK_ARTIFACT_NAME = "activeragdoll.dll"
+PATCHED_PLANCK_PACKAGE_PATH = "Data/SKSE/Plugins/activeragdoll.dll"
+PATCHED_PLANCK_INTERFACE = "interface002"
+PATCHED_PLANCK_PROVENANCE_SCHEMA = "stvr_planck_forced_build_v2"
+PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS = (
+    "havokArchiveSha256",
+    "havokSourceTreeSha256",
+    "sksevrArchiveSha256",
+    "sksevrSourceTreeSha256",
+)
+PATCHED_PLANCK_DEPENDENCY_COUNT_FIELDS = (
+    "havokSourceFileCount",
+    "sksevrSourceFileCount",
+)
 FIXTURE_BUILD_VERSION = "stvr-fixture-1-g00000000"
 NETWORK_VERSION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 IMAGE_DIRECTORY_ENTRY_IMPORT = 1
@@ -730,7 +744,7 @@ def normalize_manifest_relative_path(value):
 
 
 def manifest_artifact_path(package, artifact):
-    if artifact.startswith("SkyrimTogetherVR") and "Bridge." in artifact:
+    if (artifact.startswith("SkyrimTogetherVR") and "Bridge." in artifact) or artifact == PATCHED_PLANCK_ARTIFACT_NAME:
         return package / "Data" / "SKSE" / "Plugins" / artifact
     return package / artifact
 
@@ -773,9 +787,131 @@ def is_valid_network_version(value):
     )
 
 
-def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gameplay=False):
+def valid_sha256(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def valid_positive_count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def audit_patched_planck_dependency_fields(record, failures, prefix):
+    for field in PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS:
+        if not valid_sha256(record.get(field)):
+            failures.append(f"{prefix} dependency field {field} is missing or invalid")
+    for field in PATCHED_PLANCK_DEPENDENCY_COUNT_FIELDS:
+        if not valid_positive_count(record.get(field)):
+            failures.append(f"{prefix} dependency field {field} is missing or invalid")
+
+
+def audit_patched_planck_artifact(package, manifest, failures, require_interface002=False):
+    marker = manifest.get("patchedPlanckArtifact")
+    provenance = manifest.get("patchedPlanckProvenance")
+    if marker is None:
+        if require_interface002:
+            failures.append("build manifest is missing required patched PLANCK interface002 marker")
+        if provenance is not None:
+            failures.append("build manifest has patched PLANCK provenance without a patched artifact marker")
+        return
+    if not isinstance(marker, dict):
+        failures.append("build manifest patchedPlanckArtifact marker is not an object")
+        return
+    if not isinstance(provenance, dict):
+        failures.append("build manifest patchedPlanckProvenance marker is not an object")
+        provenance = None
+
+    if marker.get("interface") != PATCHED_PLANCK_INTERFACE:
+        failures.append(
+            "build manifest patched PLANCK interface marker is not interface002: "
+            f"{marker.get('interface')!r}"
+        )
+    if marker.get("name") != PATCHED_PLANCK_ARTIFACT_NAME:
+        failures.append(
+            "build manifest patched PLANCK artifact name is not activeragdoll.dll: "
+            f"{marker.get('name')!r}"
+        )
+    if marker.get("packagePath") != PATCHED_PLANCK_PACKAGE_PATH:
+        failures.append(
+            "build manifest patched PLANCK package path is not "
+            f"{PATCHED_PLANCK_PACKAGE_PATH}: {marker.get('packagePath')!r}"
+        )
+
+    expected_hash = marker.get("sha256")
+    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash):
+        failures.append("build manifest patched PLANCK SHA-256 is missing or invalid")
+        return
+
+    artifact_path = package / PATCHED_PLANCK_PACKAGE_PATH
+    check_file(package, PATCHED_PLANCK_PACKAGE_PATH, failures, require_pe=True)
+    if artifact_path.is_file() and sha256(artifact_path).lower() != expected_hash.lower():
+        failures.append("build manifest patched PLANCK SHA-256 mismatch")
+
+    planck_commit = marker.get("planckCommit")
+    if not isinstance(planck_commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", planck_commit):
+        failures.append("build manifest patched PLANCK commit is missing or invalid")
+    planck_source_tree = marker.get("planckSourceTreeSha256")
+    if not isinstance(planck_source_tree, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", planck_source_tree):
+        failures.append("build manifest patched PLANCK source-tree SHA-256 is missing or invalid")
+    audit_patched_planck_dependency_fields(marker, failures, "build manifest patched PLANCK")
+    forced_artifact_hash = marker.get("forcedBuildArtifactSha256")
+    if forced_artifact_hash != expected_hash:
+        failures.append("build manifest forced PLANCK artifact SHA-256 does not bind the packaged DLL")
+    if marker.get("forcedBuildTarget") != "Rebuild":
+        failures.append("build manifest patched PLANCK was not produced by MSBuild Rebuild")
+
+    copied_artifacts = manifest.get("copiedArtifacts")
+    if not isinstance(copied_artifacts, list) or PATCHED_PLANCK_ARTIFACT_NAME not in copied_artifacts:
+        failures.append("build manifest copiedArtifacts is missing patched PLANCK activeragdoll.dll")
+    expected_artifacts = manifest.get("expectedArtifacts")
+    if not isinstance(expected_artifacts, list) or PATCHED_PLANCK_ARTIFACT_NAME not in expected_artifacts:
+        failures.append("build manifest expectedArtifacts is missing patched PLANCK activeragdoll.dll")
+    artifact_hashes = manifest.get("artifactSha256")
+    if not isinstance(artifact_hashes, dict) or artifact_hashes.get(PATCHED_PLANCK_ARTIFACT_NAME) != expected_hash:
+        failures.append("build manifest artifactSha256 does not match patched PLANCK SHA-256")
+    package_hashes = manifest.get("packageFileSha256")
+    if not isinstance(package_hashes, dict) or package_hashes.get(PATCHED_PLANCK_PACKAGE_PATH) != expected_hash:
+        failures.append("build manifest packageFileSha256 does not match patched PLANCK SHA-256")
+
+    if provenance is None:
+        return
+    if provenance.get("schema") != PATCHED_PLANCK_PROVENANCE_SCHEMA:
+        failures.append("build manifest patched PLANCK provenance schema is missing or invalid")
+    if provenance.get("artifactName") != PATCHED_PLANCK_ARTIFACT_NAME:
+        failures.append("build manifest patched PLANCK provenance artifact name is missing or invalid")
+    if not valid_sha256(provenance.get("artifactSha256")):
+        failures.append("build manifest patched PLANCK provenance artifact SHA-256 is missing or invalid")
+    if not isinstance(provenance.get("planckCommit"), str) or not re.fullmatch(
+        r"[0-9a-fA-F]{40}", provenance["planckCommit"]
+    ):
+        failures.append("build manifest patched PLANCK provenance commit is missing or invalid")
+    if not valid_sha256(provenance.get("planckSourceTreeSha256")):
+        failures.append("build manifest patched PLANCK provenance source-tree SHA-256 is missing or invalid")
+    if provenance.get("msbuildTarget") != "Rebuild":
+        failures.append("build manifest patched PLANCK provenance was not produced by MSBuild Rebuild")
+    audit_patched_planck_dependency_fields(provenance, failures, "build manifest patched PLANCK provenance")
+
+    bound_fields = (
+        "planckCommit",
+        "planckSourceTreeSha256",
+        *PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS,
+        *PATCHED_PLANCK_DEPENDENCY_COUNT_FIELDS,
+    )
+    for field in bound_fields:
+        if marker.get(field) != provenance.get(field):
+            failures.append(f"build manifest patched PLANCK {field} does not bind forced-build provenance")
+    if expected_hash != provenance.get("artifactSha256"):
+        failures.append("build manifest patched PLANCK SHA-256 does not bind forced-build provenance")
+    if forced_artifact_hash != provenance.get("artifactSha256"):
+        failures.append("build manifest forced PLANCK artifact SHA-256 does not bind forced-build provenance")
+    if marker.get("forcedBuildTarget") != provenance.get("msbuildTarget"):
+        failures.append("build manifest patched PLANCK target does not bind forced-build provenance")
+
+
+def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gameplay=False, require_patched_planck_interface002=False):
     manifest = load_build_manifest(package, failures)
     if not manifest:
+        if require_patched_planck_interface002:
+            failures.append("build manifest is missing required patched PLANCK interface002 marker")
         return
 
     schema = manifest.get("schema")
@@ -806,6 +942,13 @@ def audit_build_manifest(package, failures, avatar_sync, dll_only=False, gamepla
         failures.append("build manifest says staged game files were not packaged")
     if manifest.get("companionPanel") is not True:
         failures.append("build manifest says companion panel helpers were not packaged")
+
+    audit_patched_planck_artifact(
+        package,
+        manifest,
+        failures,
+        require_interface002=require_patched_planck_interface002,
+    )
 
     build_version = manifest.get("buildVersion")
     if not is_valid_network_version(build_version):
@@ -980,6 +1123,7 @@ def audit_package(
     require_vrik=False,
     require_higgs=False,
     require_planck=False,
+    require_patched_planck_interface002=False,
 ):
     failures = []
 
@@ -1003,7 +1147,14 @@ def audit_package(
         relative = f"Tools/SkyrimVR/{helper}"
         if relative not in REQUIRED_STAGED_FILES:
             failures.append(f"packaged Python helper import closure is not required by package audit: {relative}")
-    audit_build_manifest(package, failures, avatar_sync, dll_only=dll_only, gameplay=gameplay)
+    audit_build_manifest(
+        package,
+        failures,
+        avatar_sync,
+        dll_only=dll_only,
+        gameplay=gameplay,
+        require_patched_planck_interface002=require_patched_planck_interface002,
+    )
     audit_cef_delay_import(package, failures, avatar_sync, dll_only=dll_only, gameplay=gameplay)
 
     ae_to_se_rows = count_csv_rows(package / "Data" / "SKSE" / "Plugins" / "SkyrimTogetherVR_AE_to_SE.csv")
@@ -1636,6 +1787,11 @@ def main():
         action="store_true",
         help="fail if the target Skyrim VR install is missing Data/SKSE/Plugins/activeragdoll.dll",
     )
+    parser.add_argument(
+        "--require-patched-planck-interface002",
+        action="store_true",
+        help="require a packaged patched PLANCK activeragdoll.dll with the manifest interface002 marker and matching hashes",
+    )
     args = parser.parse_args()
 
     if args.self_test:
@@ -1644,6 +1800,8 @@ def main():
     selected_modes = sum(1 for selected in (args.avatar_sync, args.dll_only, args.gameplay) if selected)
     if selected_modes > 1:
         parser.error("--avatar-sync, --dll-only, and --gameplay cannot be combined")
+    if args.require_patched_planck_interface002 and not args.gameplay:
+        parser.error("--require-patched-planck-interface002 requires --gameplay")
 
     root = repo_root()
     package = (root / args.package).resolve() if not args.package.is_absolute() else args.package.resolve()
@@ -1659,6 +1817,7 @@ def main():
         require_vrik=args.require_vrik,
         require_higgs=args.require_higgs,
         require_planck=args.require_planck,
+        require_patched_planck_interface002=args.require_patched_planck_interface002,
     )
 
     print(f"Built package root: {package}")

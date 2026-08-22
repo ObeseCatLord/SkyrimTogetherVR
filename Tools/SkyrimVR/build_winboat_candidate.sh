@@ -36,12 +36,23 @@ guest_report_file=""
 commonlib_bundle_file=""
 commonlib_probe_repo=""
 candidate_bundle_file=""
+planck_bundle_file=""
+planck_bundle_probe_repo=""
+planck_snapshot_ref=""
+root_snapshot_bundle_file=""
+root_snapshot_ref=""
+planck_temp_index=""
+root_temp_index=""
 guest_patch=""
 guest_payload=""
 guest_commonlib_bundle=""
 guest_commonlib_transfer_ref=""
 guest_commonlib_trusted_ref=""
 guest_candidate_bundle=""
+guest_planck_bundle=""
+guest_planck_transfer_ref=""
+guest_root_snapshot_bundle=""
+guest_root_snapshot_transfer_ref=""
 guest_result=""
 winboat_powershell=""
 winboat_build=""
@@ -57,6 +68,14 @@ candidate_build_success=false
 candidate_result_transferred=false
 linux_result_path=""
 commonlib_path="Libraries/CommonLibSSE-NG"
+planck_path="Libraries/activeragdoll"
+planck_dirty=false
+planck_base_commit="NOT_RESOLVED"
+planck_synthetic_commit="NOT_CREATED"
+planck_bundle_sha256="NOT_REQUIRED"
+root_synthetic_commit="NOT_CREATED"
+root_synthetic_tree="NOT_CREATED"
+root_snapshot_bundle_sha256="NOT_CREATED"
 commonlib_gitlink_changed=false
 commonlib_base_commit="NOT_RESOLVED"
 commonlib_target_commit="NOT_RESOLVED"
@@ -82,7 +101,7 @@ cleanup_guest_candidate() {
     if [[ -z $winboat_powershell || ! -x $winboat_powershell ]]; then
         return
     fi
-    if [[ -z $guest_patch && -z $guest_payload && -z $guest_commonlib_bundle && -z $guest_candidate_bundle && -z $guest_result && -z $winboat_build ]]; then
+    if [[ -z $guest_patch && -z $guest_payload && -z $guest_commonlib_bundle && -z $guest_candidate_bundle && -z $guest_planck_bundle && -z $guest_root_snapshot_bundle && -z $guest_result && -z $winboat_build ]]; then
         return
     fi
 
@@ -98,6 +117,11 @@ $commonLibPath = 'Libraries/CommonLibSSE-NG'
 $commonLibTransferRef = '__GUEST_COMMONLIB_TRANSFER_REF__'
 $commonLibTrustedRef = '__GUEST_COMMONLIB_TRUSTED_REF__'
 $candidateBundle = '__GUEST_CANDIDATE_BUNDLE__'
+$planckBundle = '__GUEST_PLANCK_BUNDLE__'
+$planckPath = 'Libraries/activeragdoll'
+$planckTransferRef = '__GUEST_PLANCK_TRANSFER_REF__'
+$rootSnapshotBundle = '__GUEST_ROOT_SNAPSHOT_BUNDLE__'
+$rootSnapshotTransferRef = '__GUEST_ROOT_SNAPSHOT_TRANSFER_REF__'
 $candidateTransferRef = '__GUEST_CANDIDATE_TRANSFER_REF__'
 $trustedRemoteRef = '__GUEST_TRUSTED_REMOTE_REF__'
 $result = '__GUEST_RESULT__'
@@ -124,11 +148,16 @@ if (-not [string]::IsNullOrWhiteSpace($commonLibBundle)) {
 if (-not [string]::IsNullOrWhiteSpace($candidateBundle)) {
     Remove-Item -LiteralPath $candidateBundle -Force -ErrorAction SilentlyContinue
 }
+if (-not [string]::IsNullOrWhiteSpace($planckBundle)) { Remove-Item -LiteralPath $planckBundle -Force -ErrorAction SilentlyContinue }
+if (-not [string]::IsNullOrWhiteSpace($rootSnapshotBundle)) { Remove-Item -LiteralPath $rootSnapshotBundle -Force -ErrorAction SilentlyContinue }
 if (-not [string]::IsNullOrWhiteSpace($candidateTransferRef)) {
     git -C $repo update-ref -d $candidateTransferRef 2>$null
 }
 if (-not [string]::IsNullOrWhiteSpace($trustedRemoteRef)) {
     git -C $repo update-ref -d $trustedRemoteRef 2>$null
+}
+if (-not [string]::IsNullOrWhiteSpace($rootSnapshotTransferRef)) {
+    git -C $repo update-ref -d $rootSnapshotTransferRef 2>$null
 }
 if (-not [string]::IsNullOrWhiteSpace($build)) {
     $commonLibWorktree = Join-Path $build $commonLibPath
@@ -139,6 +168,10 @@ if (-not [string]::IsNullOrWhiteSpace($build)) {
         if (-not [string]::IsNullOrWhiteSpace($commonLibTrustedRef)) {
             git -C $commonLibWorktree update-ref -d $commonLibTrustedRef 2>$null
         }
+    }
+    $planckWorktree = Join-Path $build $planckPath
+    if ((Test-Path -LiteralPath $planckWorktree) -and -not [string]::IsNullOrWhiteSpace($planckTransferRef)) {
+        git -C $planckWorktree update-ref -d $planckTransferRef 2>$null
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($result)) {
@@ -166,6 +199,10 @@ POWERSHELL
     guest_cleanup=${guest_cleanup//__GUEST_COMMONLIB_TRANSFER_REF__/$guest_commonlib_transfer_ref}
     guest_cleanup=${guest_cleanup//__GUEST_COMMONLIB_TRUSTED_REF__/$guest_commonlib_trusted_ref}
     guest_cleanup=${guest_cleanup//__GUEST_CANDIDATE_BUNDLE__/$guest_candidate_bundle}
+    guest_cleanup=${guest_cleanup//__GUEST_PLANCK_BUNDLE__/$guest_planck_bundle}
+    guest_cleanup=${guest_cleanup//__GUEST_PLANCK_TRANSFER_REF__/$guest_planck_transfer_ref}
+    guest_cleanup=${guest_cleanup//__GUEST_ROOT_SNAPSHOT_BUNDLE__/$guest_root_snapshot_bundle}
+    guest_cleanup=${guest_cleanup//__GUEST_ROOT_SNAPSHOT_TRANSFER_REF__/$guest_root_snapshot_transfer_ref}
     guest_cleanup=${guest_cleanup//__GUEST_CANDIDATE_TRANSFER_REF__/$guest_candidate_transfer_ref}
     guest_cleanup=${guest_cleanup//__GUEST_TRUSTED_REMOTE_REF__/$guest_trusted_remote_ref}
     guest_cleanup=${guest_cleanup//__GUEST_RESULT__/$guest_result}
@@ -223,6 +260,17 @@ cleanup_runtime() {
         git -C "$commonlib_path" update-ref -d "$commonlib_trusted_ref" 2>/dev/null || true
     fi
     [[ -z $candidate_bundle_file ]] || rm -f -- "$candidate_bundle_file"
+    [[ -z $planck_bundle_file ]] || rm -f -- "$planck_bundle_file"
+    [[ -z $planck_bundle_probe_repo ]] || rm -rf -- "$planck_bundle_probe_repo"
+    if [[ -n $planck_snapshot_ref ]]; then
+        git -C "$planck_path" update-ref -d "$planck_snapshot_ref" 2>/dev/null || true
+    fi
+    [[ -z $root_snapshot_bundle_file ]] || rm -f -- "$root_snapshot_bundle_file"
+    if [[ -n $root_snapshot_ref ]]; then
+        git update-ref -d "$root_snapshot_ref" 2>/dev/null || true
+    fi
+    [[ -z $planck_temp_index ]] || rm -f -- "$planck_temp_index"
+    [[ -z $root_temp_index ]] || rm -f -- "$root_temp_index"
     [[ -z $patch_file ]] || rm -f -- "$patch_file"
     [[ -z $patch_verify_file ]] || rm -f -- "$patch_verify_file"
     retain_failed_guest_report
@@ -240,6 +288,12 @@ cleanup_runtime() {
     printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
     printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
     printf 'STVR_CANDIDATE_COMMONLIB_VERIFICATION=%s\n' "$commonlib_verification_source"
+    printf 'STVR_CANDIDATE_PLANCK_BASE=%s\n' "$planck_base_commit"
+    printf 'STVR_CANDIDATE_PLANCK_SYNTHETIC_COMMIT=%s\n' "$planck_synthetic_commit"
+    printf 'STVR_CANDIDATE_PLANCK_BUNDLE_SHA256=%s\n' "$planck_bundle_sha256"
+    printf 'STVR_CANDIDATE_ROOT_SYNTHETIC_COMMIT=%s\n' "$root_synthetic_commit"
+    printf 'STVR_CANDIDATE_ROOT_SYNTHETIC_TREE=%s\n' "$root_synthetic_tree"
+    printf 'STVR_CANDIDATE_ROOT_SNAPSHOT_BUNDLE_SHA256=%s\n' "$root_snapshot_bundle_sha256"
     exit "$status"
 }
 trap cleanup_runtime EXIT
@@ -249,34 +303,122 @@ if [[ -n $(git ls-files --others --exclude-standard) ]]; then
     exit 2
 fi
 
-if ! git submodule foreach --recursive '
-    if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
-        echo "Dirty submodule: $displaypath" >&2
+while IFS=' ' read -r _ candidate_submodule_path; do
+    candidate_submodule_status=$(git -C "$candidate_submodule_path" status --porcelain=v1 --untracked-files=all)
+    if [[ -n $candidate_submodule_status ]]; then
+        if [[ $candidate_submodule_path != "$planck_path" ]]; then
+            echo "Refusing candidate build with a dirty submodule: $candidate_submodule_path" >&2
+            exit 2
+        fi
+        planck_dirty=true
+    fi
+done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
+
+# PLANCK is the sole dirty submodule accepted by this candidate path.  Its
+# complete tracked/untracked source state is converted to a local-only commit
+# and bundle below; no real branch, index, or remote is modified.
+if git submodule foreach --recursive '
+    if test "$displaypath" != "Libraries/activeragdoll" && test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+        echo "Dirty nested submodule: $displaypath" >&2
         exit 1
     fi
-'; then
-    echo "Refusing candidate build with a dirty submodule." >&2
+'; then :; else
+    echo "Refusing candidate build with an unsupported dirty nested submodule." >&2
     exit 2
 fi
 
 base_commit=$(git rev-parse --verify HEAD^{commit})
 commonlib_configured=false
+planck_configured=false
 while IFS=' ' read -r _ submodule_path; do
     if [[ $submodule_path == "$commonlib_path" ]]; then
         commonlib_configured=true
     fi
+    if [[ $submodule_path == "$planck_path" ]]; then
+        planck_configured=true
+    fi
     if ! git diff --quiet HEAD -- "$submodule_path"; then
-        if [[ $submodule_path != "$commonlib_path" ]]; then
+        if [[ $submodule_path != "$commonlib_path" && $submodule_path != "$planck_path" ]]; then
             echo "Refusing candidate build with a changed submodule pointer: $submodule_path" >&2
             exit 2
         fi
-        commonlib_gitlink_changed=true
+        if [[ $submodule_path == "$commonlib_path" ]]; then
+            commonlib_gitlink_changed=true
+        fi
     fi
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
 
 if [[ $commonlib_configured != true ]]; then
     echo "Expected CommonLib submodule is not configured: $commonlib_path" >&2
     exit 2
+fi
+if [[ $planck_configured != true ]]; then
+    echo "Expected PLANCK submodule is not configured: $planck_path" >&2
+    exit 2
+fi
+
+planck_index_commit=$(git rev-parse --verify ":$planck_path")
+planck_worktree_head=$(git -C "$planck_path" rev-parse --verify HEAD^{commit})
+if planck_base_commit=$(git rev-parse --verify "$base_commit:$planck_path" 2>/dev/null); then
+    if [[ $planck_index_commit != "$planck_base_commit" || $planck_worktree_head != "$planck_base_commit" ]]; then
+        echo "PLANCK source state does not match the project-base gitlink; only a dirty snapshot rooted at the pinned gitlink is supported." >&2
+        exit 2
+    fi
+else
+    expected_planck_addition=":000000 160000 0000000000000000000000000000000000000000 $planck_index_commit A"$'\t'"$planck_path"
+    actual_planck_addition=$(git diff --cached --raw --no-abbrev --no-renames "$base_commit" -- "$planck_path")
+    if [[ $actual_planck_addition != "$expected_planck_addition" || $planck_worktree_head != "$planck_index_commit" ]]; then
+        echo "New PLANCK submodule must be staged as a direct mode-160000 addition whose gitlink matches its checked-out HEAD." >&2
+        exit 2
+    fi
+    planck_base_commit=$planck_index_commit
+fi
+if ! git -C "$planck_path" cat-file -e "$planck_base_commit^{commit}"; then
+    echo "PLANCK pinned source commit is unavailable locally: $planck_base_commit" >&2
+    exit 2
+fi
+planck_synthetic_commit=$planck_base_commit
+if [[ $planck_dirty == true ]]; then
+    planck_temp_index=$(mktemp "${TMPDIR:-/tmp}/stvr-planck-candidate-index-${base_commit:0:8}-XXXXXX")
+    rm -f -- "$planck_temp_index"
+    GIT_INDEX_FILE=$planck_temp_index git -C "$planck_path" read-tree "$planck_base_commit"
+    GIT_INDEX_FILE=$planck_temp_index git -C "$planck_path" add -A
+    planck_synthetic_tree=$(GIT_INDEX_FILE=$planck_temp_index git -C "$planck_path" write-tree)
+    planck_synthetic_commit=$(GIT_AUTHOR_NAME='STVR Candidate Builder' GIT_AUTHOR_EMAIL='stvr-candidate@local.invalid' \
+        GIT_COMMITTER_NAME='STVR Candidate Builder' GIT_COMMITTER_EMAIL='stvr-candidate@local.invalid' \
+        git -C "$planck_path" commit-tree "$planck_synthetic_tree" -p "$planck_base_commit" -m 'STVR candidate PLANCK snapshot')
+    if [[ ! $planck_synthetic_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "Could not construct a local-only PLANCK synthetic commit." >&2
+        exit 2
+    fi
+    # The synthetic snapshot must bootstrap an empty guest repository.  Keep
+    # a temporary local ref solely to name the advertised bundle head, then
+    # remove it in the exit trap; no branch, remote, or persistent ref changes.
+    planck_snapshot_ref="refs/stvr/linux-candidate/planck-snapshot-${base_commit}"
+    if git -C "$planck_path" show-ref --verify --quiet "$planck_snapshot_ref"; then
+        echo "Refusing to reuse an existing temporary PLANCK snapshot ref: $planck_snapshot_ref" >&2
+        exit 2
+    fi
+    git -C "$planck_path" update-ref "$planck_snapshot_ref" "$planck_synthetic_commit"
+    planck_bundle_file=$(mktemp "${TMPDIR:-/tmp}/stvr-planck-candidate-${base_commit:0:8}-XXXXXX.bundle")
+    git -C "$planck_path" bundle create "$planck_bundle_file" "$planck_snapshot_ref"
+    planck_bundle_probe_repo=$(mktemp -d "${TMPDIR:-/tmp}/stvr-planck-candidate-probe-${base_commit:0:8}-XXXXXX")
+    git init --bare --quiet "$planck_bundle_probe_repo"
+    git -C "$planck_bundle_probe_repo" bundle verify "$planck_bundle_file" >/dev/null
+    bundle_head_count=$(git -C "$planck_bundle_probe_repo" bundle list-heads "$planck_bundle_file" | awk 'END { print NR }')
+    bundle_head_commit=$(git -C "$planck_bundle_probe_repo" bundle list-heads "$planck_bundle_file" | awk 'NR == 1 { print $1 }')
+    bundle_head_ref=$(git -C "$planck_bundle_probe_repo" bundle list-heads "$planck_bundle_file" | awk 'NR == 1 { print $2 }')
+    if [[ $bundle_head_count != 1 || $bundle_head_commit != "$planck_synthetic_commit" || $bundle_head_ref != "$planck_snapshot_ref" ]]; then
+        echo "PLANCK synthetic bundle must advertise exactly the local-only synthetic commit." >&2
+        exit 2
+    fi
+    git -C "$planck_bundle_probe_repo" fetch --no-tags --no-write-fetch-head "$planck_bundle_file" "$planck_snapshot_ref:refs/stvr/planck-bundle-probe"
+    if [[ $(git -C "$planck_bundle_probe_repo" rev-parse --verify refs/stvr/planck-bundle-probe^{commit}) != "$planck_synthetic_commit" || \
+          $(git -C "$planck_bundle_probe_repo" rev-parse --verify refs/stvr/planck-bundle-probe^) != "$planck_base_commit" ]]; then
+        echo "Self-contained PLANCK synthetic bundle does not retain the pinned base history." >&2
+        exit 2
+    fi
+    planck_bundle_sha256=$(sha256sum "$planck_bundle_file" | awk '{print $1}')
 fi
 
 commonlib_base_commit=$(git rev-parse --verify "$base_commit:$commonlib_path")
@@ -549,6 +691,35 @@ if [[ $(git -C "$commonlib_path" rev-parse --verify HEAD^{commit}) != "$commonli
     echo "CommonLib HEAD changed while creating the candidate patch; retry from a stable tree." >&2
     exit 2
 fi
+if [[ $planck_dirty == true ]]; then
+    planck_verify_index=$(mktemp "${TMPDIR:-/tmp}/stvr-planck-candidate-verify-index-${short_commit}-XXXXXX")
+    rm -f -- "$planck_verify_index"
+    GIT_INDEX_FILE=$planck_verify_index git -C "$planck_path" read-tree "$planck_base_commit"
+    GIT_INDEX_FILE=$planck_verify_index git -C "$planck_path" add -A
+    planck_verify_tree=$(GIT_INDEX_FILE=$planck_verify_index git -C "$planck_path" write-tree)
+    rm -f -- "$planck_verify_index"
+    if [[ $planck_verify_tree != "$planck_synthetic_tree" ]]; then
+        echo "PLANCK source changed while creating the candidate synthetic snapshot; retry from a stable tree." >&2
+        exit 2
+    fi
+fi
+
+# Root synthetic snapshot: apply the exact root delta to an isolated index,
+# pin its PLANCK gitlink to the local-only PLANCK commit, and retain the
+# resulting commit object only in the local object database/bundle.
+root_temp_index=$(mktemp "${TMPDIR:-/tmp}/stvr-root-candidate-index-${short_commit}-XXXXXX")
+rm -f -- "$root_temp_index"
+GIT_INDEX_FILE=$root_temp_index git read-tree "$base_commit"
+GIT_INDEX_FILE=$root_temp_index git apply --cached --binary --whitespace=nowarn -- "$patch_file"
+GIT_INDEX_FILE=$root_temp_index git update-index --add --cacheinfo "160000,$planck_synthetic_commit,$planck_path"
+root_synthetic_tree=$(GIT_INDEX_FILE=$root_temp_index git write-tree)
+root_synthetic_commit=$(GIT_AUTHOR_NAME='STVR Candidate Builder' GIT_AUTHOR_EMAIL='stvr-candidate@local.invalid' \
+    GIT_COMMITTER_NAME='STVR Candidate Builder' GIT_COMMITTER_EMAIL='stvr-candidate@local.invalid' \
+    git commit-tree "$root_synthetic_tree" -p "$base_commit" -m 'STVR candidate root synthetic snapshot')
+if [[ ! $root_synthetic_commit =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Could not construct the local-only root synthetic snapshot." >&2
+    exit 2
+fi
 
 if ! local_origin_main=$(git rev-parse --verify refs/remotes/origin/main^{commit}); then
     echo "Cannot derive a WinBoat-transfer ancestor: local refs/remotes/origin/main is missing." >&2
@@ -581,8 +752,26 @@ if ! git merge-base --is-ancestor "$base_commit" "$local_origin_main"; then
     candidate_bundle_sha256=$(sha256sum "$candidate_bundle_file" | awk '{print $1}')
 fi
 
-if [[ ! -s $patch_file ]]; then
-    echo "No tracked working-tree delta exists. Use the normal clean WinBoat build instead." >&2
+root_snapshot_ref="refs/stvr/linux-candidate/root-snapshot-${base_commit}"
+if git show-ref --verify --quiet "$root_snapshot_ref"; then
+    echo "Refusing to reuse an existing temporary root synthetic snapshot ref: $root_snapshot_ref" >&2
+    exit 2
+fi
+git update-ref "$root_snapshot_ref" "$root_synthetic_commit"
+root_snapshot_bundle_file=$(mktemp "${TMPDIR:-/tmp}/stvr-root-candidate-${short_commit}-XXXXXX.bundle")
+git bundle create "$root_snapshot_bundle_file" "$root_snapshot_ref" "^$candidate_common_ancestor"
+git bundle verify "$root_snapshot_bundle_file" >/dev/null
+bundle_head_count=$(git bundle list-heads "$root_snapshot_bundle_file" | awk 'END { print NR }')
+bundle_head_commit=$(git bundle list-heads "$root_snapshot_bundle_file" | awk 'NR == 1 { print $1 }')
+bundle_head_ref=$(git bundle list-heads "$root_snapshot_bundle_file" | awk 'NR == 1 { print $2 }')
+if [[ $bundle_head_count != 1 || $bundle_head_commit != "$root_synthetic_commit" || $bundle_head_ref != "$root_snapshot_ref" ]]; then
+    echo "Root synthetic snapshot bundle must advertise exactly the local-only root commit." >&2
+    exit 2
+fi
+root_snapshot_bundle_sha256=$(sha256sum "$root_snapshot_bundle_file" | awk '{print $1}')
+
+if [[ ! -s $patch_file && $planck_dirty != true ]]; then
+    echo "No tracked working-tree delta or dirty PLANCK snapshot exists. Use the normal clean WinBoat build instead." >&2
     exit 2
 fi
 patch_sha256=$(sha256sum "$patch_file" | awk '{print $1}')
@@ -604,6 +793,27 @@ for helper in "$winboat_powershell" "$winboat_ssh" "$winboat_scp"; do
     fi
 done
 
+guest_havok_archive=""
+guest_planck_dependency_root=""
+reported_havok_sha256=""
+reported_sksevr_sha256=""
+provision_output=$("$repo_root/Tools/SkyrimVR/provision_winboat_planck_dependencies.sh" \
+    --winboat-powershell "$winboat_powershell" --winboat-scp "$winboat_scp")
+while IFS='=' read -r key value; do
+    case $key in
+        STVR_GUEST_HAVOK_ARCHIVE) guest_havok_archive=$value ;;
+        STVR_GUEST_PLANCK_DEPENDENCY_ROOT) guest_planck_dependency_root=$value ;;
+        STVR_HAVOK_ARCHIVE_SHA256) reported_havok_sha256=$value ;;
+        STVR_SKSEVR_SOURCE_SHA256) reported_sksevr_sha256=$value ;;
+    esac
+done <<<"$provision_output"
+if [[ -z $guest_havok_archive || -z $guest_planck_dependency_root || \
+      $reported_havok_sha256 != 7349946401a820784fc86aa13bc667def6c409ed938865b01c8e6c3d86692555 || \
+      $reported_sksevr_sha256 != edbb4945544718054279c9f949ac689e735b13c8efcd3272b6f74e2398dd5d53 ]]; then
+    echo "PLANCK dependency provisioner did not return the pinned durable guest provenance." >&2
+    exit 2
+fi
+
 winboat_repo=${STVR_WINBOAT_REPO:-'C:\Users\obesecatlord\Documents\Codex\SkyrimTogetherVR'}
 timestamp=$(date -u +%Y%m%d%H%M%SZ)
 winboat_build="${winboat_repo}-candidate-${short_commit}-${timestamp}"
@@ -611,8 +821,12 @@ guest_result="${winboat_repo}-candidate-results\\${short_commit}-${timestamp}"
 guest_patch="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-candidate-${short_commit}-${timestamp}.patch"
 guest_payload="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-candidate-${short_commit}-${timestamp}.ps1"
 guest_trusted_remote_ref="refs/stvr/winboat-candidate/trusted-main-${short_commit}-${timestamp}"
+guest_root_snapshot_transfer_ref="refs/stvr/winboat-candidate/root-snapshot-${short_commit}-${timestamp}"
 guest_commonlib_transfer_ref="refs/stvr/winboat-candidate/commonlib-target-${short_commit}-${timestamp}"
 guest_commonlib_trusted_ref="refs/stvr/winboat-candidate/commonlib-upstream-${short_commit}-${timestamp}"
+guest_planck_transfer_ref="refs/stvr/winboat-candidate/planck-snapshot-${short_commit}-${timestamp}"
+guest_planck_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-planck-candidate-${short_commit}-${timestamp}.bundle"
+guest_root_snapshot_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-root-candidate-${short_commit}-${timestamp}.bundle"
 if [[ $candidate_bundle_required == true ]]; then
     guest_candidate_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-base-${short_commit}-${timestamp}.bundle"
     guest_candidate_transfer_ref="refs/stvr/winboat-candidate/base-${short_commit}-${timestamp}"
@@ -621,7 +835,7 @@ if [[ $commonlib_bundle_required == true ]]; then
     guest_commonlib_bundle="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-commonlib-${short_commit}-${timestamp}.bundle"
 fi
 
-for value in "$winboat_repo" "$winboat_build" "$guest_result" "$guest_patch" "$guest_payload" "$guest_commonlib_bundle" "$guest_commonlib_transfer_ref" "$guest_commonlib_trusted_ref" "$guest_candidate_bundle" "$guest_candidate_transfer_ref" "$guest_trusted_remote_ref"; do
+for value in "$winboat_repo" "$winboat_build" "$guest_result" "$guest_patch" "$guest_payload" "$guest_commonlib_bundle" "$guest_commonlib_transfer_ref" "$guest_commonlib_trusted_ref" "$guest_candidate_bundle" "$guest_candidate_transfer_ref" "$guest_trusted_remote_ref" "$guest_planck_bundle" "$guest_planck_transfer_ref" "$guest_root_snapshot_bundle" "$guest_havok_archive" "$guest_planck_dependency_root"; do
     if [[ $value == *"'"* ]]; then
         echo "WinBoat paths containing a single quote are not supported." >&2
         exit 2
@@ -638,6 +852,12 @@ printf 'STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=%s\n' "$commonlib_common_ancest
 printf 'STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=%s\n' "$commonlib_trusted_upstream_commit"
 printf 'STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=%s\n' "$commonlib_bundle_sha256"
 printf 'STVR_CANDIDATE_COMMONLIB_VERIFICATION=%s\n' "$commonlib_verification_source"
+printf 'STVR_CANDIDATE_PLANCK_BASE=%s\n' "$planck_base_commit"
+printf 'STVR_CANDIDATE_PLANCK_SYNTHETIC_COMMIT=%s\n' "$planck_synthetic_commit"
+printf 'STVR_CANDIDATE_PLANCK_BUNDLE_SHA256=%s\n' "$planck_bundle_sha256"
+printf 'STVR_CANDIDATE_ROOT_SYNTHETIC_COMMIT=%s\n' "$root_synthetic_commit"
+printf 'STVR_CANDIDATE_ROOT_SYNTHETIC_TREE=%s\n' "$root_synthetic_tree"
+printf 'STVR_CANDIDATE_ROOT_SNAPSHOT_BUNDLE_SHA256=%s\n' "$root_snapshot_bundle_sha256"
 
 read -r -d '' powershell_payload <<'POWERSHELL' || true
 $ErrorActionPreference = "Stop"
@@ -653,6 +873,19 @@ $candidateBundleSha256 = '__CANDIDATE_BUNDLE_SHA256__'
 $candidateTransferRef = '__GUEST_CANDIDATE_TRANSFER_REF__'
 $trustedRemoteRef = '__GUEST_TRUSTED_REMOTE_REF__'
 $patchSha256 = '__PATCH_SHA256__'
+$planckPath = 'Libraries/activeragdoll'
+$planckBase = '__PLANCK_BASE__'
+$planckSyntheticCommit = '__PLANCK_SYNTHETIC_COMMIT__'
+$planckBundle = '__GUEST_PLANCK_BUNDLE__'
+$planckBundleSha256 = '__PLANCK_BUNDLE_SHA256__'
+$planckBundleRef = '__PLANCK_BUNDLE_REF__'
+$planckTransferRef = '__GUEST_PLANCK_TRANSFER_REF__'
+$rootSyntheticCommit = '__ROOT_SYNTHETIC_COMMIT__'
+$rootSyntheticTree = '__ROOT_SYNTHETIC_TREE__'
+$rootSnapshotBundle = '__GUEST_ROOT_SNAPSHOT_BUNDLE__'
+$rootSnapshotBundleSha256 = '__ROOT_SNAPSHOT_BUNDLE_SHA256__'
+$rootSnapshotBundleRef = '__ROOT_SNAPSHOT_BUNDLE_REF__'
+$rootSnapshotTransferRef = '__ROOT_SNAPSHOT_TRANSFER_REF__'
 $hasCommonLibGitlink = [System.Convert]::ToBoolean('__HAS_COMMONLIB_GITLINK__')
 $hasCommonLibBundle = [System.Convert]::ToBoolean('__HAS_COMMONLIB_BUNDLE__')
 $commonLibPath = 'Libraries/CommonLibSSE-NG'
@@ -667,11 +900,14 @@ $commonLibBundleSha256 = '__COMMONLIB_BUNDLE_SHA256__'
 $commonLibTransferRef = '__GUEST_COMMONLIB_TRANSFER_REF__'
 $commonLibTrustedRef = '__GUEST_COMMONLIB_TRUSTED_REF__'
 $result = '__GUEST_RESULT__'
+$havokArchive = '__GUEST_HAVOK_ARCHIVE__'
+$planckDependencyRoot = '__GUEST_PLANCK_DEPENDENCY_ROOT__'
 $worktreeCreated = $false
 $candidateRevision = "NOT_CREATED"
 $buildSucceeded = $false
 $trustedRemoteCommit = "NOT_VERIFIED"
 $commonLibWorktree = ""
+$planckWorktree = ""
 
 function Get-CandidateProcesses {
     param([string]$Path)
@@ -816,6 +1052,26 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Candidate base is not an ancestor of the trusted WinBoat remote ref." }
     }
 
+    if (-not (Test-Path -LiteralPath $rootSnapshotBundle)) { throw "Transferred root synthetic snapshot bundle is missing." }
+    if ((Get-FileHash -LiteralPath $rootSnapshotBundle -Algorithm SHA256).Hash.ToLowerInvariant() -ne $rootSnapshotBundleSha256) {
+        throw "Transferred root synthetic snapshot bundle SHA-256 does not match Linux provenance."
+    }
+    git -C $repo bundle verify $rootSnapshotBundle
+    if ($LASTEXITCODE -ne 0) { throw "Root synthetic snapshot bundle prerequisites are not satisfied by trusted WinBoat history." }
+    $rootBundleHeads = @(git -C $repo bundle list-heads $rootSnapshotBundle)
+    if ($LASTEXITCODE -ne 0 -or $rootBundleHeads.Count -ne 1) {
+        throw "Root synthetic snapshot bundle does not advertise exactly one expected commit."
+    }
+    $rootBundleHeadParts = @($rootBundleHeads[0] -split '\s+')
+    if ($rootBundleHeadParts.Count -ne 2 -or
+        $rootBundleHeadParts[0].Trim() -ne $rootSyntheticCommit -or $rootBundleHeadParts[1].Trim() -ne $rootSnapshotBundleRef) {
+        throw "Root synthetic snapshot bundle does not advertise the exact expected commit."
+    }
+    git -C $repo fetch --no-tags --no-write-fetch-head $rootSnapshotBundle "${rootSnapshotBundleRef}:$rootSnapshotTransferRef"
+    if ($LASTEXITCODE -ne 0 -or (git -C $repo rev-parse "$rootSnapshotTransferRef^{commit}").Trim() -ne $rootSyntheticCommit) {
+        throw "Could not import the exact root synthetic snapshot commit."
+    }
+
     Remove-StaleCandidateWorktrees
     if (Test-Path -LiteralPath $build) { throw "Fresh candidate worktree already exists: $build" }
     git -C $repo worktree add --detach $build $baseCommit
@@ -907,16 +1163,30 @@ try {
     $clean = @(git status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $clean.Count -ne 0) { throw "Fresh WinBoat candidate worktree is unexpectedly dirty." }
     $submoduleState = @(git submodule status --recursive)
-    if ($LASTEXITCODE -ne 0 -or @($submoduleState | Where-Object { $_ -match '^[+\-U]' }).Count -ne 0) {
+    $unexpectedSubmoduleState = @($submoduleState | Where-Object {
+        $_ -match '^[\-U]' -or ($_ -match '^\+' -and ($planckBundleSha256 -eq 'NOT_REQUIRED' -or $_ -notmatch [regex]::Escape($planckPath)))
+    })
+    if ($LASTEXITCODE -ne 0 -or $unexpectedSubmoduleState.Count -ne 0) {
         throw "Fresh WinBoat candidate worktree has an unresolved submodule."
     }
 
+    # Establish the root delta before touching PLANCK: base HEAD may not yet
+    # contain the new gitlink or a repository at its path.
     $actualPatchSha256 = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualPatchSha256 -ne $patchSha256) { throw "Transferred candidate patch SHA-256 does not match the Linux snapshot." }
-    git apply --index --binary --whitespace=nowarn -- $patch
-    if ($LASTEXITCODE -ne 0) { throw "Could not apply the Linux candidate patch to the detached WinBoat worktree." }
-    $staged = @(git diff --cached --name-only)
-    if ($LASTEXITCODE -ne 0 -or $staged.Count -eq 0) { throw "Candidate patch did not stage any tracked changes." }
+    if ((Get-Item -LiteralPath $patch).Length -gt 0) {
+        git apply --index --binary --whitespace=nowarn -- $patch
+        if ($LASTEXITCODE -ne 0) { throw "Could not apply the Linux candidate patch to the detached WinBoat worktree." }
+        $staged = @(git diff --cached --name-only)
+        if ($LASTEXITCODE -ne 0 -or $staged.Count -eq 0) { throw "Candidate patch did not stage any tracked changes." }
+    }
+    $planckWorktree = Join-Path $build $planckPath
+    if ($planckBundleSha256 -ne 'NOT_REQUIRED') {
+        $stagedPlanckGitlink = (git rev-parse ":$planckPath").Trim()
+        if ($LASTEXITCODE -ne 0 -or $stagedPlanckGitlink -ne $planckBase) {
+            throw "Candidate patch did not stage the pinned PLANCK source gitlink before synthetic materialization."
+        }
+    }
     if ($hasCommonLibGitlink) {
         $stagedCommonLibGitlink = (git rev-parse ":$commonLibPath").Trim()
         if ($LASTEXITCODE -ne 0 -or $stagedCommonLibGitlink -ne $commonLibTarget) {
@@ -937,21 +1207,75 @@ try {
             throw "Candidate CommonLib checkout is dirty after staging the gitlink."
         }
     }
+    if ($planckBundleSha256 -ne 'NOT_REQUIRED') {
+        if ([string]::IsNullOrWhiteSpace($planckBundleRef) -or [string]::IsNullOrWhiteSpace($planckTransferRef) -or
+            -not (Test-Path -LiteralPath $planckBundle) -or
+            (Get-FileHash -LiteralPath $planckBundle -Algorithm SHA256).Hash.ToLowerInvariant() -ne $planckBundleSha256) {
+            throw "Transferred self-contained PLANCK synthetic bundle provenance is incomplete or has an unexpected SHA-256."
+        }
+        if (Test-Path -LiteralPath $planckWorktree) {
+            $existingPlanckRepository = Invoke-GitStatusProbe -Arguments @('-C', $planckWorktree, 'rev-parse', '--git-dir')
+            if ($existingPlanckRepository -ne 0) {
+                throw "PLANCK path exists after applying the root patch but is not a Git repository: $planckWorktree"
+            }
+        } else {
+            New-Item -ItemType Directory -Path $planckWorktree -Force | Out-Null
+            git -C $planckWorktree init --quiet
+            if ($LASTEXITCODE -ne 0) { throw "Could not create the local PLANCK repository for the verified synthetic bundle." }
+        }
+        git -C $planckWorktree bundle verify $planckBundle
+        if ($LASTEXITCODE -ne 0) { throw "PLANCK synthetic bundle is not self-contained for an empty guest repository." }
+        $planckHeads = @(git -C $planckWorktree bundle list-heads $planckBundle)
+        if ($LASTEXITCODE -ne 0 -or $planckHeads.Count -ne 1) {
+            throw "PLANCK synthetic bundle does not advertise exactly one required local-only commit."
+        }
+        $planckHeadParts = @($planckHeads[0] -split '\s+')
+        if ($planckHeadParts.Count -ne 2 -or $planckHeadParts[0].Trim() -ne $planckSyntheticCommit -or
+            $planckHeadParts[1].Trim() -ne $planckBundleRef) {
+            throw "PLANCK synthetic bundle does not advertise exactly the required local-only commit."
+        }
+        git -C $planckWorktree fetch --no-tags --no-write-fetch-head $planckBundle "${planckBundleRef}:$planckTransferRef"
+        if ($LASTEXITCODE -ne 0 -or (git -C $planckWorktree rev-parse "$planckTransferRef^{commit}").Trim() -ne $planckSyntheticCommit) {
+            throw "Could not import the exact verified PLANCK synthetic commit."
+        }
+        git -C $planckWorktree cat-file -e "$planckBase^{commit}"
+        if ($LASTEXITCODE -ne 0 -or (git -C $planckWorktree rev-parse "$planckSyntheticCommit^").Trim() -ne $planckBase) {
+            throw "Verified PLANCK bundle does not retain the pinned base history."
+        }
+        git -C $planckWorktree checkout --detach $planckSyntheticCommit
+        if ($LASTEXITCODE -ne 0) { throw "Could not checkout the exact PLANCK synthetic snapshot." }
+    }
     $submoduleState = @(git submodule status --recursive)
-    if ($LASTEXITCODE -ne 0 -or @($submoduleState | Where-Object { $_ -match '^[+\-U]' }).Count -ne 0) {
+    $unexpectedSubmoduleState = @($submoduleState | Where-Object {
+        $_ -match '^[\-U]' -or ($_ -match '^\+' -and ($planckBundleSha256 -eq 'NOT_REQUIRED' -or $_ -notmatch [regex]::Escape($planckPath)))
+    })
+    if ($LASTEXITCODE -ne 0 -or $unexpectedSubmoduleState.Count -ne 0) {
         throw "Candidate patch left an unresolved or mismatched submodule state."
     }
 
-    git -c user.name="STVR Candidate Builder" -c user.email="stvr-candidate@local.invalid" commit --no-gpg-sign --no-verify -m "STVR candidate build $baseCommit"
-    if ($LASTEXITCODE -ne 0) { throw "Could not create the ephemeral WinBoat candidate commit." }
+    # Build from the imported root synthetic snapshot, not a guest-created
+    # approximation.  This preserves the local PLANCK gitlink and auditable
+    # source identity without touching any real branch.
+    git checkout --detach $rootSyntheticCommit
+    if ($LASTEXITCODE -ne 0) { throw "Could not checkout the exact root synthetic snapshot." }
     $candidateRevision = (git rev-parse HEAD).Trim()
-    if ($candidateRevision -notmatch '^[0-9a-fA-F]{40}$') { throw "Candidate commit did not resolve to a full revision." }
+    if ($candidateRevision -ne $rootSyntheticCommit -or (git rev-parse HEAD^{tree}).Trim() -ne $rootSyntheticTree) {
+        throw "Candidate worktree is not at the exact imported root synthetic snapshot."
+    }
+    $rootPlanckGitlink = (git rev-parse ":$planckPath").Trim()
+    if ($LASTEXITCODE -ne 0 -or $rootPlanckGitlink -ne $planckSyntheticCommit) {
+        throw "Root synthetic snapshot does not pin the required PLANCK synthetic gitlink."
+    }
+    $finalPlanckHead = (git -C $planckWorktree rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $finalPlanckHead -ne $planckSyntheticCommit) {
+        throw "Candidate worktree PLANCK checkout does not match the root synthetic snapshot gitlink."
+    }
     $clean = @(git status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $clean.Count -ne 0) { throw "Ephemeral WinBoat candidate commit is unexpectedly dirty before the audited build." }
 
     $env:Path = "C:\Users\obesecatlord\AppData\Local\Microsoft\WinGet\Links;$env:Path"
-    & .\BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
-    if ($LASTEXITCODE -ne 0) { throw "Audited gameplay candidate build failed with exit code $LASTEXITCODE." }
+    & .\BuildCompleteSkyrimTogetherVR-Windows.ps1 -HavokArchive $havokArchive -DependencyRoot $planckDependencyRoot -Configuration Release
+    if ($LASTEXITCODE -ne 0) { throw "Complete patched-PLANCK gameplay candidate build failed with exit code $LASTEXITCODE." }
 
     $package = Join-Path $build 'artifacts\SkyrimTogetherVR\packages\gameplay'
     $evidence = Get-ChildItem -LiteralPath (Join-Path $build 'artifacts\SkyrimTogetherVR\build-evidence') -Filter 'SkyrimTogetherVR-build-evidence-gameplay-*.zip' |
@@ -979,6 +1303,12 @@ try {
         "commonLibCommonAncestor=$commonLibCommonAncestor"
         "commonLibTrustedUpstream=$commonLibTrustedUpstream"
         "commonLibBundleSha256=$commonLibBundleSha256"
+        "planckBase=$planckBase"
+        "planckSyntheticCommit=$planckSyntheticCommit"
+        "planckBundleSha256=$planckBundleSha256"
+        "rootSyntheticCommit=$rootSyntheticCommit"
+        "rootSyntheticTree=$rootSyntheticTree"
+        "rootSnapshotBundleSha256=$rootSnapshotBundleSha256"
         "buildEvidence=$($evidence.Name)"
     ) | Set-Content -LiteralPath (Join-Path $result 'STVR_CandidateProvenance.txt') -Encoding ascii
     $buildSucceeded = $true
@@ -990,6 +1320,8 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($candidateBundle)) {
         Remove-Item -LiteralPath $candidateBundle -Force -ErrorAction SilentlyContinue
     }
+    if (-not [string]::IsNullOrWhiteSpace($planckBundle)) { Remove-Item -LiteralPath $planckBundle -Force -ErrorAction SilentlyContinue }
+    if (-not [string]::IsNullOrWhiteSpace($rootSnapshotBundle)) { Remove-Item -LiteralPath $rootSnapshotBundle -Force -ErrorAction SilentlyContinue }
     if (-not $buildSucceeded -and (Test-Path -LiteralPath $result)) {
         Remove-Item -LiteralPath $result -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -1001,6 +1333,10 @@ try {
             Invoke-GitStatusProbe -Arguments @('-C', $commonLibWorktree, 'update-ref', '-d', $commonLibTrustedRef) | Out-Null
         }
     }
+    if (-not [string]::IsNullOrWhiteSpace($planckWorktree) -and (Test-Path -LiteralPath $planckWorktree) -and
+        -not [string]::IsNullOrWhiteSpace($planckTransferRef)) {
+        Invoke-GitStatusProbe -Arguments @('-C', $planckWorktree, 'update-ref', '-d', $planckTransferRef) | Out-Null
+    }
     Set-Location $repo
     if ($worktreeCreated) {
         Remove-CandidateWorktree -Path $build -FailIfActive $false
@@ -1010,6 +1346,9 @@ try {
     }
     if (-not [string]::IsNullOrWhiteSpace($trustedRemoteRef)) {
         Invoke-GitStatusProbe -Arguments @('-C', $repo, 'update-ref', '-d', $trustedRemoteRef) | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($rootSnapshotTransferRef)) {
+        Invoke-GitStatusProbe -Arguments @('-C', $repo, 'update-ref', '-d', $rootSnapshotTransferRef) | Out-Null
     }
     Invoke-GitStatusProbe -Arguments @('-C', $repo, 'worktree', 'prune') | Out-Null
     $normalizedBuildSucceeded = if ($buildSucceeded) { "true" } else { "false" }
@@ -1025,6 +1364,12 @@ try {
     "STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=$commonLibCommonAncestor"
     "STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=$commonLibTrustedUpstream"
     "STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=$commonLibBundleSha256"
+    "STVR_CANDIDATE_PLANCK_BASE=$planckBase"
+    "STVR_CANDIDATE_PLANCK_SYNTHETIC_COMMIT=$planckSyntheticCommit"
+    "STVR_CANDIDATE_PLANCK_BUNDLE_SHA256=$planckBundleSha256"
+    "STVR_CANDIDATE_ROOT_SYNTHETIC_COMMIT=$rootSyntheticCommit"
+    "STVR_CANDIDATE_ROOT_SYNTHETIC_TREE=$rootSyntheticTree"
+    "STVR_CANDIDATE_ROOT_SNAPSHOT_BUNDLE_SHA256=$rootSnapshotBundleSha256"
 }
 POWERSHELL
 
@@ -1039,6 +1384,18 @@ powershell_payload=${powershell_payload//__CANDIDATE_BUNDLE_SHA256__/$candidate_
 powershell_payload=${powershell_payload//__GUEST_CANDIDATE_TRANSFER_REF__/$guest_candidate_transfer_ref}
 powershell_payload=${powershell_payload//__GUEST_TRUSTED_REMOTE_REF__/$guest_trusted_remote_ref}
 powershell_payload=${powershell_payload//__PATCH_SHA256__/$patch_sha256}
+powershell_payload=${powershell_payload//__PLANCK_BASE__/$planck_base_commit}
+powershell_payload=${powershell_payload//__PLANCK_SYNTHETIC_COMMIT__/$planck_synthetic_commit}
+powershell_payload=${powershell_payload//__GUEST_PLANCK_BUNDLE__/$guest_planck_bundle}
+powershell_payload=${powershell_payload//__PLANCK_BUNDLE_SHA256__/$planck_bundle_sha256}
+powershell_payload=${powershell_payload//__PLANCK_BUNDLE_REF__/$planck_snapshot_ref}
+powershell_payload=${powershell_payload//__GUEST_PLANCK_TRANSFER_REF__/$guest_planck_transfer_ref}
+powershell_payload=${powershell_payload//__ROOT_SYNTHETIC_COMMIT__/$root_synthetic_commit}
+powershell_payload=${powershell_payload//__ROOT_SYNTHETIC_TREE__/$root_synthetic_tree}
+powershell_payload=${powershell_payload//__GUEST_ROOT_SNAPSHOT_BUNDLE__/$guest_root_snapshot_bundle}
+powershell_payload=${powershell_payload//__ROOT_SNAPSHOT_BUNDLE_SHA256__/$root_snapshot_bundle_sha256}
+powershell_payload=${powershell_payload//__ROOT_SNAPSHOT_BUNDLE_REF__/$root_snapshot_ref}
+powershell_payload=${powershell_payload//__ROOT_SNAPSHOT_TRANSFER_REF__/$guest_root_snapshot_transfer_ref}
 powershell_payload=${powershell_payload//__HAS_COMMONLIB_GITLINK__/$commonlib_gitlink_changed}
 powershell_payload=${powershell_payload//__HAS_COMMONLIB_BUNDLE__/$commonlib_bundle_required}
 powershell_payload=${powershell_payload//__COMMONLIB_BASE__/$commonlib_base_commit}
@@ -1052,6 +1409,8 @@ powershell_payload=${powershell_payload//__COMMONLIB_BUNDLE_SHA256__/$commonlib_
 powershell_payload=${powershell_payload//__GUEST_COMMONLIB_TRANSFER_REF__/$guest_commonlib_transfer_ref}
 powershell_payload=${powershell_payload//__GUEST_COMMONLIB_TRUSTED_REF__/$guest_commonlib_trusted_ref}
 powershell_payload=${powershell_payload//__GUEST_RESULT__/$guest_result}
+powershell_payload=${powershell_payload//__GUEST_HAVOK_ARCHIVE__/$guest_havok_archive}
+powershell_payload=${powershell_payload//__GUEST_PLANCK_DEPENDENCY_ROOT__/$guest_planck_dependency_root}
 
 payload_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.ps1")
 guest_report_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-candidate-${short_commit}-XXXXXX.log")
@@ -1063,6 +1422,10 @@ fi
 if [[ $commonlib_bundle_required == true ]]; then
     "$winboat_scp" to-guest "$commonlib_bundle_file" "$guest_commonlib_bundle"
 fi
+if [[ $planck_dirty == true ]]; then
+    "$winboat_scp" to-guest "$planck_bundle_file" "$guest_planck_bundle"
+fi
+"$winboat_scp" to-guest "$root_snapshot_bundle_file" "$guest_root_snapshot_bundle"
 "$winboat_scp" to-guest "$payload_file" "$guest_payload"
 set +e
 "$winboat_ssh" powershell.exe -NoLogo -NoProfile -NonInteractive \
@@ -1088,11 +1451,23 @@ guest_commonlib_target=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_TARGET=/ { value = 
 guest_commonlib_common_ancestor=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_COMMON_ANCESTOR=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_trusted_upstream=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_TRUSTED_UPSTREAM=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_bundle_sha256=$(awk -F= '/^STVR_CANDIDATE_COMMONLIB_BUNDLE_SHA256=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_planck_base=$(awk -F= '/^STVR_CANDIDATE_PLANCK_BASE=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_planck_synthetic_commit=$(awk -F= '/^STVR_CANDIDATE_PLANCK_SYNTHETIC_COMMIT=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_planck_bundle_sha256=$(awk -F= '/^STVR_CANDIDATE_PLANCK_BUNDLE_SHA256=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_root_synthetic_commit=$(awk -F= '/^STVR_CANDIDATE_ROOT_SYNTHETIC_COMMIT=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_root_synthetic_tree=$(awk -F= '/^STVR_CANDIDATE_ROOT_SYNTHETIC_TREE=/ { value = $2 } END { print value }' "$guest_report_file")
+guest_root_snapshot_bundle_sha256=$(awk -F= '/^STVR_CANDIDATE_ROOT_SNAPSHOT_BUNDLE_SHA256=/ { value = $2 } END { print value }' "$guest_report_file")
 guest_commonlib_base=${guest_commonlib_base//$'\r'/}
 guest_commonlib_target=${guest_commonlib_target//$'\r'/}
 guest_commonlib_common_ancestor=${guest_commonlib_common_ancestor//$'\r'/}
 guest_commonlib_trusted_upstream=${guest_commonlib_trusted_upstream//$'\r'/}
 guest_commonlib_bundle_sha256=${guest_commonlib_bundle_sha256//$'\r'/}
+guest_planck_base=${guest_planck_base//$'\r'/}
+guest_planck_synthetic_commit=${guest_planck_synthetic_commit//$'\r'/}
+guest_planck_bundle_sha256=${guest_planck_bundle_sha256//$'\r'/}
+guest_root_synthetic_commit=${guest_root_synthetic_commit//$'\r'/}
+guest_root_synthetic_tree=${guest_root_synthetic_tree//$'\r'/}
+guest_root_snapshot_bundle_sha256=${guest_root_snapshot_bundle_sha256//$'\r'/}
 if ((guest_status != 0)); then
     exit "$guest_status"
 fi
@@ -1116,6 +1491,16 @@ if [[ $commonlib_trusted_upstream_match_required == true ]]; then
     fi
 elif [[ ! $guest_commonlib_trusted_upstream =~ ^[0-9a-fA-F]{40}$ ]]; then
     echo "WinBoat candidate build did not independently verify a trusted CommonLib upstream commit." >&2
+    exit 2
+fi
+if [[ $guest_planck_base != "$planck_base_commit" || $guest_planck_synthetic_commit != "$planck_synthetic_commit" || \
+      $guest_planck_bundle_sha256 != "$planck_bundle_sha256" || $guest_root_synthetic_commit != "$root_synthetic_commit" || \
+      $guest_root_synthetic_tree != "$root_synthetic_tree" || $guest_root_snapshot_bundle_sha256 != "$root_snapshot_bundle_sha256" ]]; then
+    echo "WinBoat candidate build did not report the exact PLANCK/root synthetic snapshot provenance." >&2
+    exit 2
+fi
+if [[ $candidate_ephemeral_revision != "$root_synthetic_commit" ]]; then
+    echo "WinBoat candidate build was not performed from the imported root synthetic snapshot." >&2
     exit 2
 fi
 if [[ ! $candidate_ephemeral_revision =~ ^[0-9a-fA-F]{40}$ || $candidate_build_success != true ]]; then
@@ -1157,6 +1542,11 @@ guest_result_scp=${guest_result//\\//}
 
 if [[ ! -f $linux_result_path/result/gameplay/SkyrimTogetherVR_BuildManifest.json ]]; then
     echo "Transferred WinBoat candidate result is missing the gameplay package manifest." >&2
+    exit 2
+fi
+if ! python3 "$repo_root/Tools/SkyrimVR/audit_built_package.py" \
+    --package "$linux_result_path/result/gameplay" --gameplay --require-patched-planck-interface002; then
+    echo "Transferred WinBoat candidate package failed the patched PLANCK interface002 audit." >&2
     exit 2
 fi
 if ! find "$linux_result_path/result" -maxdepth 1 -type f -name 'SkyrimTogetherVR-build-evidence-gameplay-*.zip' -print -quit | grep -q .; then

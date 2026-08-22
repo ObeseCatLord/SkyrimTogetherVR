@@ -357,20 +357,17 @@ void RecordNativeSpeechResult(const float a_result, const bool aHandlePresent) n
     }
 }
 
-[[nodiscard]] std::uint32_t GetCurrentSubtitleTopicFormId(RE::TESObjectREFR& a_speaker) noexcept
-{
-    auto* topicManager = RE::MenuTopicManager::GetSingleton();
-    if (!topicManager || !topicManager->IsCurrentSpeaker(a_speaker.GetHandle()) ||
-        !topicManager->currentTopicInfo || !topicManager->currentTopicInfo->parentTopic)
-        return 0;
-    return topicManager->currentTopicInfo->parentTopic->GetFormID();
-}
-
 void CaptureSubtitle(RE::TESObjectREFR* a_speaker, const char* a_text) noexcept
 {
     try {
         auto* actor = a_speaker ? a_speaker->As<RE::Actor>() : nullptr;
-        if (!actor || !a_text || AvatarManager::Get().IsManagedRemoteActor(actor))
+        const auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto speakerFormId = actor ? actor->GetFormID() : 0;
+        if (!a_text || !DialogueHookPolicy::ShouldCaptureLocalNpcSpeaker(
+                           actor != nullptr, player != nullptr, actor == player,
+                           actor && AvatarManager::Get().IsManagedRemoteActor(actor),
+                           speakerFormId != 0,
+                           speakerFormId != 0 && LocalGameplayCapture::IsNpcObserved(speakerFormId)))
             return;
 
         std::size_t byteCount{};
@@ -397,7 +394,6 @@ void CaptureSubtitle(RE::TESObjectREFR* a_speaker, const char* a_text) noexcept
 
         const auto actionId = NextNonzero(g_nextSubtitleActionId);
         const auto textId = NextNonzero(g_nextSubtitleTextId);
-        const auto topicFormId = GetCurrentSubtitleTopicFormId(*a_speaker);
         std::array<EventRecord, kMaximumGameplayTextChunks> records{};
         for (std::uint16_t index = 0; index < chunkCount; ++index) {
             auto& record = records[index];
@@ -407,13 +403,15 @@ void CaptureSubtitle(RE::TESObjectREFR* a_speaker, const char* a_text) noexcept
             record.Header.Identity.ActionId = actionId;
             auto& payload = record.Payload.LocalGameplayTextChunk;
             payload.TargetHandle = kLocalPlayerHandle;
-            payload.TargetLocalFormId = actor->GetFormID();
+            payload.TargetLocalFormId = speakerFormId;
             payload.Domain = static_cast<std::uint16_t>(GameplayDomain::Dialogue);
             payload.Action = static_cast<std::uint16_t>(GameplayAction::Subtitle);
             payload.TextId = textId;
             payload.ChunkIndex = index;
             payload.ChunkCount = chunkCount;
-            payload.AuxiliaryLocalFormId = topicFormId;
+            // Skyrim's subtitle transport has no topic contract. Retaining
+            // a locally resolved topic would leak a non-portable form ID.
+            payload.AuxiliaryLocalFormId = DialogueHookPolicy::SkyrimSubtitleTopicFormId();
             const auto offset = static_cast<std::size_t>(index) * kGameplayTextBytesPerChunk;
             payload.ByteCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(kGameplayTextBytesPerChunk, byteCount - offset));
@@ -459,7 +457,8 @@ float HookSpeakSound(
     }
 
     // Install verifies and publishes this trampoline before it enables the
-    // detour. Local speech is always delegated to the engine before capture.
+    // detour. The desktop hook emits a valid local NPC voice before the
+    // engine call; no poll captures voices, so this cannot double-emit.
     const auto original = g_originalSpeakSound;
     if (!original) {
         if (!g_missingSpeakSoundTrampolineLogged.exchange(true, std::memory_order_relaxed)) {
@@ -470,15 +469,18 @@ float HookSpeakSound(
         }
         return 0.0F;
     }
-    const auto result = original(
-        a_actor, a_resourcePath, a_handle, a_arg4, a_priority, a_arg6, a_arg7, a_arg8,
-        a_arg9, a_arg10, a_arg11, a_arg12, a_arg13, a_arg14);
-    RecordNativeSpeechResult(result, a_handle != nullptr);
-    if (std::isfinite(result) && result > 0.0F && disposition.CaptureLocal && a_resourcePath) {
-        NoThrow::BestEffort([&] {
-            LocalGameplayCapture::CaptureDialogueVoice(a_actor->GetFormID(), a_resourcePath);
+    const auto result = DialogueHookPolicy::CaptureBeforeNativeIf(
+        disposition.CaptureLocal && a_resourcePath != nullptr,
+        [&]() noexcept {
+            static_cast<void>(LocalGameplayCapture::CaptureDialogueVoice(
+                a_actor->GetFormID(), a_resourcePath));
+        },
+        [&]() {
+            return original(
+                a_actor, a_resourcePath, a_handle, a_arg4, a_priority, a_arg6, a_arg7, a_arg8,
+                a_arg9, a_arg10, a_arg11, a_arg12, a_arg13, a_arg14);
         });
-    }
+    RecordNativeSpeechResult(result, a_handle != nullptr);
     return result;
     } catch (...) {
         return 0.0F;
@@ -511,9 +513,15 @@ void HookShowSubtitle(
 
     if (!g_originalShowSubtitle)
         return;
-    g_originalShowSubtitle(a_manager, a_speaker, a_text, a_forceDisplay);
-    if (disposition.CaptureLocal)
-        CaptureSubtitle(a_speaker, a_text);
+    // As on desktop, capture precedes native presentation. CaptureSubtitle
+    // independently rejects player, remote, invalid, and unobserved actors.
+    static_cast<void>(DialogueHookPolicy::CaptureBeforeNativeIf(
+        disposition.CaptureLocal,
+        [&]() noexcept { CaptureSubtitle(a_speaker, a_text); },
+        [&]() {
+            g_originalShowSubtitle(a_manager, a_speaker, a_text, a_forceDisplay);
+            return true;
+        }));
     } catch (...) {
         // The native body is never retried after a capture exception.
     }

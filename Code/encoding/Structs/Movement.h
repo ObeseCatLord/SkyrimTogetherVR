@@ -16,6 +16,8 @@ struct Movement
     bool operator==(const Movement& acRhs) const noexcept;
     bool operator!=(const Movement& acRhs) const noexcept;
 
+    [[nodiscard]] bool TryGetCanonicalDirection(float& arDirection) const noexcept;
+
     void Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept;
     void Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept;
 

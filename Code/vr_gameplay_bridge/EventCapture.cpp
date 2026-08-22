@@ -127,7 +127,8 @@ void PopulateAnimationChunk(
     const std::uint16_t a_startIndex,
     const std::uint16_t a_valueCount,
     const std::uint16_t a_totalCount,
-    const float a_direction) noexcept
+    const float a_direction, const std::uint64_t a_descriptorDigest,
+    const std::uint16_t a_directionFloatIndex) noexcept
 {
     PopulateHeader(a_record, EventKind::LocalAnimationGraphChunk);
     auto& payload = a_record.Payload.LocalAnimationGraphChunk;
@@ -140,6 +141,8 @@ void PopulateAnimationChunk(
     payload.TotalCount = a_totalCount;
     payload.ChunkFlags = AnimationGraphProtocol::FullSnapshot;
     payload.Direction = a_direction;
+    payload.DescriptorDigest = a_descriptorDigest;
+    payload.DirectionFloatIndex = a_directionFloatIndex;
 }
 
 void PublishCurrentLocalAnimationStateImpl() noexcept
@@ -170,7 +173,8 @@ void PublishCurrentLocalAnimationStateImpl() noexcept
     records.reserve(graphRecordCount);
     auto& booleanChunk = records.emplace_back();
     PopulateAnimationChunk(booleanChunk, snapshotId, AnimationGraphProtocol::ValueType::BooleanBits, 0,
-                           snapshot.BooleanCount, snapshot.BooleanCount, snapshot.Direction);
+                           snapshot.BooleanCount, snapshot.BooleanCount, snapshot.Direction,
+                           snapshot.DescriptorDigest, snapshot.DirectionFloatIndex);
     for (std::size_t index = 0; index < snapshot.BooleanCount; ++index) {
         if (snapshot.Booleans[index])
             booleanChunk.Payload.LocalAnimationGraphChunk.Values[index / 32] |= 1u << (index % 32);
@@ -178,14 +182,16 @@ void PublishCurrentLocalAnimationStateImpl() noexcept
     for (std::uint16_t start = 0; start < snapshot.FloatCount; start += AnimationGraphProtocol::kValuesPerChunk) {
         const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, snapshot.FloatCount - start));
         auto& chunk = records.emplace_back();
-        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Float, start, count, snapshot.FloatCount, snapshot.Direction);
+        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Float, start, count, snapshot.FloatCount, snapshot.Direction,
+                               snapshot.DescriptorDigest, snapshot.DirectionFloatIndex);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(snapshot.Floats[start + index]);
     }
     for (std::uint16_t start = 0; start < snapshot.IntegerCount; start += AnimationGraphProtocol::kValuesPerChunk) {
         const auto count = static_cast<std::uint16_t>(std::min<std::uint16_t>(AnimationGraphProtocol::kValuesPerChunk, snapshot.IntegerCount - start));
         auto& chunk = records.emplace_back();
-        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Integer, start, count, snapshot.IntegerCount, snapshot.Direction);
+        PopulateAnimationChunk(chunk, snapshotId, AnimationGraphProtocol::ValueType::Integer, start, count, snapshot.IntegerCount, snapshot.Direction,
+                               snapshot.DescriptorDigest, snapshot.DirectionFloatIndex);
         for (std::uint16_t index = 0; index < count; ++index)
             chunk.Payload.LocalAnimationGraphChunk.Values[index] = std::bit_cast<std::uint32_t>(snapshot.Integers[start + index]);
     }

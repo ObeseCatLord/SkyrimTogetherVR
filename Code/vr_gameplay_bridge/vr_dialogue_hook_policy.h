@@ -33,6 +33,28 @@ struct SpeakerPresentationDisposition
     bool FallbackToNative{};
 };
 
+// Native NPC dialogue is relayable only after NPC ownership has registered a
+// stable local reference. The local player has a different dialogue action
+// and must never be emitted as an NPC speaker.
+[[nodiscard]] constexpr bool ShouldCaptureLocalNpcSpeaker(
+    const bool a_hasSpeaker,
+    const bool a_hasLocalPlayer,
+    const bool a_isLocalPlayer,
+    const bool a_managedRemoteSpeaker,
+    const bool a_hasValidFormId,
+    const bool a_isObservedNpc) noexcept
+{
+    return a_hasSpeaker && a_hasLocalPlayer && !a_isLocalPlayer && !a_managedRemoteSpeaker &&
+           a_hasValidFormId && a_isObservedNpc;
+}
+
+// The Skyrim subtitle message does not consume a topic form ID. This remains
+// distinct from Fallout's topic-aware subtitle transport.
+[[nodiscard]] constexpr std::uint32_t SkyrimSubtitleTopicFormId() noexcept
+{
+    return 0;
+}
+
 // A managed remote actor owns its native dialogue presentation.  Outside an
 // explicit replay, reject the engine event before it can produce duplicate
 // audio or subtitles.  A replay may present remotely supplied dialogue, but
@@ -105,6 +127,23 @@ template <class Disable, class Remove> [[nodiscard]] bool TryDetachHook(HookAtta
     const bool a_captureReady) noexcept
 {
     return a_engineAccepted && !a_remoteReplay && a_validSelection && a_captureReady;
+}
+
+// The VR topic UI can reject, replace, or consume a copied option while its
+// native handler runs. Unlike desktop, a pre-call option is therefore not a
+// selection. Capture only after this exact verified body accepts it; the
+// polling baseline then prevents the later poll from emitting it again.
+
+template <class Capture, class Native>
+[[nodiscard]] decltype(auto) CaptureBeforeNativeIf(
+    const bool a_capture,
+    Capture&& a_captureFunction,
+    Native&& a_nativeFunction) noexcept(
+    noexcept(a_captureFunction()) && noexcept(a_nativeFunction()))
+{
+    if (a_capture)
+        a_captureFunction();
+    return a_nativeFunction();
 }
 
 [[nodiscard]] constexpr bool ShouldAdvanceDialogueBaseline(const bool a_publicationAccepted) noexcept

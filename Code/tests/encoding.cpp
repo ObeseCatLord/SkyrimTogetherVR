@@ -5,6 +5,8 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
+#include <limits>
 #include <optional>
 
 #include <glm/vec2.hpp>
@@ -17,9 +19,19 @@
 
 #include <Messages/ClientMessageFactory.h>
 #include <Messages/CharacterSpawnRequest.h>
+#include <Messages/ActivateRequest.h>
+#include <Messages/NotifyActivate.h>
 #include <Messages/NotifyEquipmentChanges.h>
 #include <Messages/NotifyOwnershipTransfer.h>
 #include <Messages/NotifySetTimeResult.h>
+#include <Messages/NotifyMountResync.h>
+#include <Messages/NotifyObjectResync.h>
+#include <Messages/NotifyQuestResync.h>
+#include <Messages/NotifyQuestUpdate.h>
+#include <Messages/RequestMountResync.h>
+#include <Messages/RequestObjectResync.h>
+#include <Messages/RequestQuestResync.h>
+#include <Messages/RequestQuestUpdate.h>
 #include <Messages/RequestEquipmentChanges.h>
 #include <Messages/RequestOwnershipClaim.h>
 #include <Messages/ServerMessageFactory.h>
@@ -37,6 +49,7 @@
 #include <Structs/VRPoseUpdate.h>
 #include <Structs/VRProjectileEvent.h>
 
+#include "../vr_common/VRAnimationGraphProtocol.h"
 #include "../vr_common/VRGameplayBridge.h"
 #include "../vr_common/VRHandoffPath.h"
 
@@ -346,6 +359,7 @@ VRHiggsState BuildHiggsState()
 {
     VRHiggsState state{};
     state.Sequence = 59;
+    state.ProducerEpoch = 7;
     state.BridgeLoaded = true;
     state.Detected = true;
     state.InterfaceAvailable = true;
@@ -836,6 +850,220 @@ TEST_CASE("Encoding factory", "[encoding.factory]")
     }
 }
 
+TEST_CASE("Revisioned canonical recovery messages round-trip and reject invalid snapshots", "[encoding.recovery]")
+{
+    {
+        Buffer buffer(256);
+        RequestMountResync request{};
+        request.RiderId = 11;
+        request.RequestId = 12;
+        request.KnownRevision = 13;
+        Buffer::Writer writer(&buffer);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<RequestMountResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->RiderId == request.RiderId);
+        CHECK(decoded->RequestId == request.RequestId);
+        CHECK(decoded->KnownRevision == request.KnownRevision);
+    }
+
+    {
+        Buffer buffer(256);
+        RequestObjectResync request{};
+        request.ServerId = 21;
+        request.RequestId = 22;
+        request.KnownRevision = 23;
+        Buffer::Writer writer(&buffer);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<RequestObjectResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->ServerId == request.ServerId);
+        CHECK(decoded->RequestId == request.RequestId);
+    }
+
+    {
+        Buffer buffer(256);
+        RequestQuestResync request{};
+        request.OwnerPlayerId = 30;
+        request.RequestId = 31;
+        request.KnownRevision = 32;
+        Buffer::Writer writer(&buffer);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<RequestQuestResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->OwnerPlayerId == request.OwnerPlayerId);
+        CHECK(decoded->RequestId == request.RequestId);
+        CHECK(decoded->KnownRevision == request.KnownRevision);
+    }
+
+    {
+        Buffer buffer(256);
+        RequestQuestUpdate request{};
+        request.OwnerPlayerId = 34;
+        request.Id = BuildGameId(1, 35);
+        request.Stage = 36;
+        request.Status = RequestQuestUpdate::StageUpdate;
+        request.ClientQuestType = 7;
+        Buffer::Writer writer(&buffer);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<RequestQuestUpdate>(std::move(message));
+        CHECK(*decoded == request);
+    }
+
+    {
+        Buffer buffer(256);
+        NotifyQuestUpdate update{};
+        update.OwnerPlayerId = 37;
+        update.CanonicalRevision = 38;
+        update.Id = BuildGameId(1, 39);
+        update.Stage = 40;
+        update.Status = NotifyQuestUpdate::StageUpdate;
+        update.ClientQuestType = 8;
+        Buffer::Writer writer(&buffer);
+        update.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<NotifyQuestUpdate>(std::move(message));
+        REQUIRE(decoded->IsValid());
+        CHECK(*decoded == update);
+    }
+
+    {
+        Buffer buffer(512);
+        NotifyMountResync response{};
+        response.RiderId = 41;
+        response.RequestId = 42;
+        response.CanonicalRevision = 43;
+        response.MountId = 44;
+        Buffer::Writer writer(&buffer);
+        response.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<NotifyMountResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->CanonicalRevision == response.CanonicalRevision);
+        CHECK(decoded->MountId == response.MountId);
+    }
+
+    {
+        Buffer buffer(1024);
+        NotifyObjectResync response{};
+        response.ServerId = 51;
+        response.RequestId = 52;
+        response.CanonicalRevision = 53;
+        response.Snapshot.ServerId = response.ServerId;
+        response.Snapshot.Id = BuildGameId(1, 54);
+        response.Snapshot.CellId = BuildGameId(1, 55);
+        response.Snapshot.HasCurrentOpenState = true;
+        response.Snapshot.CurrentOpenState = 3;
+        Buffer::Writer writer(&buffer);
+        response.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<NotifyObjectResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->Snapshot.ServerId == response.ServerId);
+        CHECK(decoded->Snapshot.CurrentOpenState == response.Snapshot.CurrentOpenState);
+    }
+
+    SECTION("activation post-open-state serialization rejects impossible optional combinations")
+    {
+        ActivateRequest accepted{};
+        accepted.Id = BuildGameId(1, 0x100);
+        accepted.CellId = BuildGameId(1, 0x101);
+        accepted.ActivatorId = 0x102;
+        accepted.PreActivationOpenState = 3;
+        accepted.HasPostActivationOpenState = true;
+        accepted.PostActivationOpenState = 2;
+        REQUIRE(accepted.IsValid());
+
+        Buffer requestBuffer(256);
+        Buffer::Writer requestWriter(&requestBuffer);
+        accepted.Serialize(requestWriter);
+        Buffer::Reader requestReader(&requestBuffer);
+        const ClientMessageFactory clientFactory;
+        auto decodedRequestMessage = clientFactory.Extract(requestReader);
+        const auto decodedRequest = CastUnique<ActivateRequest>(std::move(decodedRequestMessage));
+        REQUIRE(decodedRequest->IsDecodedValid);
+        REQUIRE(*decodedRequest == accepted);
+
+        NotifyActivate noChange{};
+        noChange.Id = accepted.Id;
+        noChange.ActivatorId = accepted.ActivatorId;
+        noChange.PreActivationOpenState = 1;
+        noChange.HasPostActivationOpenState = true;
+        noChange.PostActivationOpenState = 1;
+        REQUIRE(noChange.IsValid());
+
+        Buffer notifyBuffer(256);
+        Buffer::Writer notifyWriter(&notifyBuffer);
+        noChange.Serialize(notifyWriter);
+        Buffer::Reader notifyReader(&notifyBuffer);
+        const ServerMessageFactory serverFactory;
+        auto decodedNotifyMessage = serverFactory.Extract(notifyReader);
+        const auto decodedNotify = CastUnique<NotifyActivate>(std::move(decodedNotifyMessage));
+        REQUIRE(decodedNotify->IsDecodedValid);
+        REQUIRE(*decodedNotify == noChange);
+
+        ActivateRequest malformedPost = accepted;
+        malformedPost.PostActivationOpenState = 5;
+        REQUIRE_FALSE(malformedPost.IsValid());
+        Buffer malformedBuffer(256);
+        Buffer::Writer malformedWriter(&malformedBuffer);
+        malformedPost.Serialize(malformedWriter);
+        Buffer::Reader malformedReader(&malformedBuffer);
+        auto malformedMessage = clientFactory.Extract(malformedReader);
+        const auto malformedDecoded = CastUnique<ActivateRequest>(std::move(malformedMessage));
+        REQUIRE_FALSE(malformedDecoded->IsDecodedValid);
+
+        accepted.PostActivationOpenState = 1;
+        accepted.HasPostActivationOpenState = false;
+        REQUIRE_FALSE(accepted.IsValid());
+    }
+
+    {
+        Buffer buffer(1024);
+        NotifyQuestResync response{};
+        response.OwnerPlayerId = 61;
+        response.RequestId = 62;
+        response.CanonicalRevision = 63;
+        response.HasParty = true;
+        response.PartyId = 64;
+        response.Snapshot.Entries.push_back({BuildGameId(1, 65), 66});
+        Buffer::Writer writer(&buffer);
+        response.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<NotifyQuestResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK(decoded->OwnerPlayerId == response.OwnerPlayerId);
+        CHECK(decoded->Snapshot == response.Snapshot);
+    }
+
+    NotifyQuestResync malformed{};
+    malformed.OwnerPlayerId = 1;
+    malformed.RequestId = 2;
+    malformed.CanonicalRevision = 3;
+    malformed.PartyId = 4;
+    CHECK_FALSE(malformed.IsValid());
+}
+
 TEST_CASE("Static structures", "[encoding.static]")
 {
     GIVEN("GameId")
@@ -877,6 +1105,55 @@ TEST_CASE("Static structures", "[encoding.static]")
             REQUIRE(sendObjects == recvObjects);
         }
 
+    }
+
+    GIVEN("Vector3_NetQuantize has a defined twenty-bit boundary policy")
+    {
+        const auto maximum = Vector3_NetQuantize::kMaximumComponentMagnitude;
+        REQUIRE(Vector3_NetQuantize::IsInRange(glm::vec3{maximum, -maximum, 0.0F}));
+        REQUIRE_FALSE(Vector3_NetQuantize::IsInRange(glm::vec3{std::nextafter(maximum, std::numeric_limits<float>::infinity()), 0.0F, 0.0F}));
+        REQUIRE_FALSE(Vector3_NetQuantize::IsInRange(glm::vec3{std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}));
+
+        Vector3_NetQuantize source{};
+        source.x = std::numeric_limits<float>::max();
+        source.y = -std::numeric_limits<float>::max();
+        source.z = std::numeric_limits<float>::infinity();
+        Vector3_NetQuantize unpacked{};
+        unpacked.Unpack(source.Pack());
+
+        REQUIRE(unpacked.x == maximum);
+        REQUIRE(unpacked.y == -maximum);
+        REQUIRE(unpacked.z == 0.0F);
+
+        source.x = std::numeric_limits<float>::quiet_NaN();
+        source.y = -std::numeric_limits<float>::infinity();
+        source.z = 0.0F;
+        unpacked.Unpack(source.Pack());
+        REQUIRE(unpacked.x == 0.0F);
+        REQUIRE(unpacked.y == 0.0F);
+        REQUIRE(unpacked.z == 0.0F);
+    }
+
+    GIVEN("Vector3_NetQuantize keeps sign bits independent from odd and even magnitudes")
+    {
+        Vector3_NetQuantize source{};
+        Vector3_NetQuantize unpacked{};
+
+        source = glm::vec3{1.0F, 2.0F, -3.0F};
+        auto packed = source.Pack();
+        REQUIRE((packed & 0x7) == 0x4);
+        unpacked.Unpack(packed);
+        REQUIRE(unpacked.x == 1.0F);
+        REQUIRE(unpacked.y == 2.0F);
+        REQUIRE(unpacked.z == -3.0F);
+
+        source = glm::vec3{-4.0F, 5.0F, -6.0F};
+        packed = source.Pack();
+        REQUIRE((packed & 0x7) == 0x5);
+        unpacked.Unpack(packed);
+        REQUIRE(unpacked.x == -4.0F);
+        REQUIRE(unpacked.y == 5.0F);
+        REQUIRE(unpacked.z == -6.0F);
     }
 
     GIVEN("Vector2_NetQuantize")
@@ -1044,6 +1321,43 @@ TEST_CASE("Static structures", "[encoding.static]")
 
     GIVEN("VRHiggsState mutation replay bounds")
     {
+        THEN("a rebase baseline remains a valid empty replay window")
+        {
+            auto baseline = BuildHiggsState();
+            baseline.MutationReplayRebased = true;
+            baseline.MutationEvents = {};
+            baseline.MutationEventCount = 0;
+            baseline.MutationSequence = 0;
+
+            REQUIRE(baseline.IsMutationReplayValid());
+
+            // A same-epoch replay gap rotates the wire producer identity so
+            // the server always sees a changed epoch on an authenticated
+            // rebase marker. The rotated baseline must still be valid.
+            auto rebased = BuildHiggsState();
+            const auto originalEpoch = rebased.ProducerEpoch;
+            rebased.ProducerEpoch = originalEpoch + 1;
+            rebased.MutationReplayRebased = true;
+            rebased.MutationEvents = {};
+            rebased.MutationEventCount = 0;
+            rebased.MutationSequence = 0;
+
+            REQUIRE(rebased.IsMutationReplayValid());
+            REQUIRE(rebased.ProducerEpoch != originalEpoch);
+
+            Buffer rebaseBuffer(512);
+            Buffer::Writer rebaseWriter(&rebaseBuffer);
+            rebased.Serialize(rebaseWriter);
+            Buffer::Reader rebaseReader(&rebaseBuffer);
+            VRHiggsState rebaseReceived{};
+            rebaseReceived.Deserialize(rebaseReader);
+
+            REQUIRE(rebaseReceived.IsDecodedValid);
+            REQUIRE(rebaseReceived.ProducerEpoch == rebased.ProducerEpoch);
+            REQUIRE(rebaseReceived.MutationReplayRebased == true);
+            REQUIRE(rebaseReceived.IsMutationReplayValid());
+        }
+
         {
             auto sendObjects = BuildHiggsState();
             sendObjects.MutationEvents = {};
@@ -1122,7 +1436,9 @@ TEST_CASE("Static structures", "[encoding.static]")
         auto writeHiggsPrefix = [](Buffer::Writer& arWriter, const VRHiggsState& acState,
                                    const uint32_t aMutationSequence) {
             Serialization::WriteVarInt(arWriter, acState.Sequence);
+            Serialization::WriteVarInt(arWriter, acState.ProducerEpoch);
             Serialization::WriteVarInt(arWriter, aMutationSequence);
+            Serialization::WriteBool(arWriter, acState.MutationReplayRebased);
             Serialization::WriteBool(arWriter, acState.BridgeLoaded);
             Serialization::WriteBool(arWriter, acState.Detected);
             Serialization::WriteBool(arWriter, acState.InterfaceAvailable);
@@ -1513,7 +1829,13 @@ TEST_CASE("Static structures", "[encoding.static]")
 TEST_CASE("Movement preserves the direction float bit pattern", "[encoding.movement]")
 {
     Movement sent{};
-    sent.Direction = std::bit_cast<float>(std::uint32_t{0x80000000});
+    sent.Variables.Booleans.push_back(false);
+    sent.Variables.Floats.push_back(1.0f);
+    sent.Variables.Floats.push_back(std::bit_cast<float>(std::uint32_t{0x80000000}));
+    sent.Variables.Integers.push_back(0);
+    sent.Variables.DescriptorDigest = 1;
+    sent.Variables.DirectionFloatIndex = 1;
+    sent.Direction = sent.Variables.Floats[sent.Variables.DirectionFloatIndex];
 
     Buffer buffer(256);
     Buffer::Writer writer(&buffer);
@@ -1525,6 +1847,121 @@ TEST_CASE("Movement preserves the direction float bit pattern", "[encoding.movem
 
     REQUIRE(received.IsDecodedValid);
     REQUIRE(std::bit_cast<std::uint32_t>(received.Direction) == 0x80000000);
+    REQUIRE(std::bit_cast<std::uint32_t>(received.Direction) ==
+            std::bit_cast<std::uint32_t>(received.Variables.Floats[received.Variables.DirectionFloatIndex]));
+}
+
+TEST_CASE("Protocol-18 direction invariant accepts matching graph bits and rejects mismatches", "[encoding.movement]")
+{
+    using namespace SkyrimTogetherVR::AnimationGraphProtocol;
+
+    constexpr std::uint64_t descriptorDigest = 1;
+    constexpr std::uint16_t directionFloatIndex = 0;
+    constexpr std::uint32_t negativeZeroBits = 0x80000000;
+    const auto graphDirection = std::bit_cast<float>(negativeZeroBits);
+
+    std::uint32_t booleanValues[kValuesPerChunk]{};
+    std::uint32_t floatValues[kValuesPerChunk]{};
+    std::uint32_t integerValues[kValuesPerChunk]{};
+    floatValues[0] = negativeZeroBits;
+
+    SECTION("matching graph direction completes the snapshot")
+    {
+        SnapshotBuffer snapshot{};
+
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::BooleanBits, 0, 1, 1,
+                            graphDirection, booleanValues) == ChunkAcceptResult::Accepted);
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::Float, 0, 1, 1,
+                            graphDirection, floatValues) == ChunkAcceptResult::Accepted);
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::Integer, 0, 1, 1,
+                            graphDirection, integerValues) == ChunkAcceptResult::Complete);
+        REQUIRE(std::bit_cast<std::uint32_t>(snapshot.Direction) == negativeZeroBits);
+        REQUIRE(std::bit_cast<std::uint32_t>(snapshot.Direction) ==
+                std::bit_cast<std::uint32_t>(snapshot.Floats[snapshot.DirectionFloatIndex]));
+    }
+
+    SECTION("a signed-zero mismatch is rejected")
+    {
+        SnapshotBuffer snapshot{};
+        const auto movementDirection = 0.0f;
+
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::BooleanBits, 0, 1, 1,
+                            movementDirection, booleanValues) == ChunkAcceptResult::Accepted);
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::Float, 0, 1, 1,
+                            movementDirection, floatValues) == ChunkAcceptResult::Accepted);
+        REQUIRE(AcceptChunk(snapshot, 1, descriptorDigest, directionFloatIndex, ValueType::Integer, 0, 1, 1,
+                            movementDirection, integerValues) == ChunkAcceptResult::Malformed);
+        REQUIRE(snapshot.SnapshotId == 0);
+    }
+}
+
+TEST_CASE("Movement canonicalizes descriptor-bound direction bits", "[encoding.movement]")
+{
+    Movement sent{};
+    sent.Variables.Booleans.resize(1);
+    sent.Variables.Floats = {12.0F, std::bit_cast<float>(std::uint32_t{0x80000000})};
+    sent.Variables.Integers.resize(1);
+    sent.Variables.DescriptorDigest = 1;
+    sent.Variables.DirectionFloatIndex = 1;
+    sent.Direction = 42.0F;
+
+    float canonicalDirection{};
+    REQUIRE(sent.TryGetCanonicalDirection(canonicalDirection));
+    REQUIRE(std::bit_cast<std::uint32_t>(canonicalDirection) == 0x80000000);
+
+    Buffer buffer(256);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+
+    Movement received{};
+    Buffer::Reader reader(&buffer);
+    received.Deserialize(reader);
+
+    REQUIRE(received.IsDecodedValid);
+    REQUIRE(std::bit_cast<std::uint32_t>(received.Direction) == 0x80000000);
+}
+
+TEST_CASE("Movement preserves descriptor-bound signed zero direction", "[encoding.movement]")
+{
+    Movement positiveZero{};
+    Movement negativeZero{};
+    negativeZero.Direction = std::bit_cast<float>(std::uint32_t{0x80000000});
+    REQUIRE_FALSE(positiveZero == negativeZero);
+
+    const auto roundTripDirection = [](const std::uint32_t aDirectionBits) {
+        Movement sent{};
+        sent.Variables.Booleans.resize(1);
+        sent.Variables.Floats = {std::bit_cast<float>(aDirectionBits)};
+        sent.Variables.Integers.resize(1);
+        sent.Variables.DescriptorDigest = 1;
+        sent.Direction = std::bit_cast<float>(aDirectionBits ^ 0x80000000u);
+
+        Buffer buffer(256);
+        Buffer::Writer writer(&buffer);
+        sent.Serialize(writer);
+
+        Movement received{};
+        Buffer::Reader reader(&buffer);
+        received.Deserialize(reader);
+        REQUIRE(received.IsDecodedValid);
+        REQUIRE(std::bit_cast<std::uint32_t>(received.Direction) == aDirectionBits);
+    };
+
+    roundTripDirection(0x00000000);
+    roundTripDirection(0x80000000);
+}
+
+TEST_CASE("Movement rejects invalid descriptor-bound direction metadata", "[encoding.movement]")
+{
+    Movement movement{};
+    movement.Variables.Booleans.resize(1);
+    movement.Variables.Floats.resize(1);
+    movement.Variables.Integers.resize(1);
+    movement.Variables.DescriptorDigest = 1;
+    movement.Variables.DirectionFloatIndex = 1;
+
+    float canonicalDirection{};
+    REQUIRE_FALSE(movement.TryGetCanonicalDirection(canonicalDirection));
 }
 
 TEST_CASE("Differential structures", "[encoding.differential]")
@@ -1651,6 +2088,8 @@ TEST_CASE("Differential structures", "[encoding.differential]")
         vars.Floats.push_back(145.f);
         vars.Floats.push_back(100.f);
         vars.Floats.push_back(-1.f);
+        vars.DescriptorDigest = 1;
+        vars.DirectionFloatIndex = 1;
 
         vars.Integers.push_back(0);
         vars.Integers.push_back(12000);
@@ -2171,6 +2610,8 @@ TEST_CASE("Packets", "[encoding.packets]")
         object.CurrentCoords = GridCellCoords{4, -7};
         object.CurrentLockData.IsLocked = true;
         object.CurrentLockData.LockLevel = 50;
+        object.HasCurrentOpenState = true;
+        object.CurrentOpenState = 3;
         Inventory::Entry entry{};
         entry.BaseId = BuildGameId(1, 0xF);
         entry.Count = 25;
@@ -2202,6 +2643,10 @@ TEST_CASE("Packets", "[encoding.packets]")
         receivedResponse.DeserializeRaw(responseReader);
         REQUIRE(receivedResponse.IsDecodedValid);
         REQUIRE(sendResponse == receivedResponse);
+
+        object.HasCurrentOpenState = true;
+        object.CurrentOpenState = 0;
+        REQUIRE_FALSE(object.HasValidCurrentOpenState());
     }
 
     SECTION("AssignObjectsRequest rejects an oversized nested inventory")
@@ -2243,6 +2688,8 @@ TEST_CASE("Packets", "[encoding.packets]")
         vars.Floats.push_back(145.f);
         vars.Floats.push_back(100.f);
         vars.Floats.push_back(-1.f);
+        vars.DescriptorDigest = 1;
+        vars.DirectionFloatIndex = 1;
 
         vars.Integers.push_back(0);
         vars.Integers.push_back(12000);
@@ -2251,6 +2698,7 @@ TEST_CASE("Packets", "[encoding.packets]")
         vars.Integers.push_back(41104539);
 
         move.Variables = vars;
+        move.Direction = vars.Floats[vars.DirectionFloatIndex];
 
         Buffer buff(1000);
         Buffer::Writer writer(&buff);

@@ -22,7 +22,13 @@ agent handoff, and prints `STVR_LINUX_GAMEPLAY_PACKAGE`,
 generated WinBoat build worktrees before creating the new one, preventing each
 iteration from permanently adding several gigabytes to the VM disk. Set
 `STVR_WINBOAT_REPO`, `WINBOAT_POWERSHELL`, or `WINBOAT_SCP` only when the local
-layout differs from the defaults documented in `AGENTS.md`.
+layout differs from the defaults documented in `AGENTS.md`. Both the candidate
+and clean helper invoke `BuildCompleteSkyrimTogetherVR-Windows.ps1`. They first
+verify `STVR_HAVOK_ARCHIVE` (default
+`/home/obesecatlord/Backup/Downloads/hk2010_2_0_r1.7z`) against its pinned hash
+and provision the pinned local SKSEVR source tree into a durable private
+WinBoat dependency root. These inputs are never added to package, evidence, or
+handoff archives.
 
 Install the three-hour cleanup job with two-day normal retention on the Linux
 host with:
@@ -59,11 +65,27 @@ changed gitlink, source Git directory, upstream URL, malformed cache, or failed
 local check falls back to full network verification. This changes no
 candidate-before-commit, clean-after-push, or exact source-identity gate.
 
-On native Windows, the equivalent audited command is:
+On native Windows, the equivalent complete audited command is:
 
-```bat
-BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\BuildCompleteSkyrimTogetherVR-Windows.ps1 `
+  -HavokArchive "D:\archives\hk2010_2_0_r1.7z" `
+  -DependencyRoot "D:\SkyrimTogetherVR-planck-dependencies" `
+  -SKSEVRArchive "D:\archives\sksevr_2_00_12.7z" `
+  -SevenZipPath "C:\Program Files\7-Zip\7z.exe" `
+  -Configuration Release
 ```
+
+The Havok SDK is never downloaded, committed, or packaged. The wrapper verifies
+the caller-supplied archive, freshly extracts the complete Havok build-input
+tree and complete SKSEVR build tree into private external roots, hashes every
+file in both canonical trees, and records each tree digest/count plus both
+archive hashes in forced-build provenance and the package manifest. It builds
+the project fork's `activeragdoll.dll`, passes that exact artifact to the normal
+gameplay build, and runs the strict `--require-patched-planck-interface002`
+package audit. A package produced by the ordinary gameplay command can run
+without PLANCK networking, but must not be presented as the complete
+PLANCK-capable build.
 
 Caprica is discovered from an explicit `-PapyrusCompiler`, `CAPRICA`, `PATH`,
 `C:\Tools\Caprica\Caprica.exe`, or the repository-adjacent `_refs` locations.
@@ -179,8 +201,11 @@ This is the opt-in staged gameplay build. It enables the VR observation relays
 and the CommonLib-owned remote-avatar lifecycle, retained-identity root/spatial
 movement, and named humanoid animation graph snapshot slice. It does not
 instantiate the legacy desktop mutation services; inventory, combat, magic,
-equipment, skeleton, HIGGS, PLANCK, and FBT mutation remain disabled. Exact
-animation action replay is also still gated on Skyrim VR ABI proof. The
+equipment, skeleton, HIGGS, and FBT mutation remain disabled. The optional
+PLANCK `interface002` physics relay is not part of this base profile: it is
+advertised only after the exact local interface002 feature set is operational
+and both endpoints negotiate `PlanckPhysicsInterface002`. Exact animation action
+replay is also still gated on Skyrim VR ABI proof. The
 unvalidated flat-Skyrim hook batch and flat D3D overlay remain disabled.
 
 To build and immediately audit the produced package in one Windows command, use:
@@ -290,7 +315,7 @@ artifacts\SkyrimTogetherVR\packages\dll-only
 
 Packaging is strict for requested targets. If a requested target builds but its expected artifact is not copied, for example `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`, the script fails instead of producing a partial package.
 
-The current xmake graph is VR-only. It defines `SkyrimTogetherVRClient` as a static client library linked into `SkyrimVRImmersiveLauncher`; the normal Skyrim SE `SkyrimTogetherClient` and `SkyrimImmersiveLauncher` targets are intentionally absent. The launcher target uses the VR target config and produces the `SkyrimTogetherVR` launch artifact; `SkyrimTogetherVRVrikBridge` produces the SKSEVR bridge DLL for VRIK IK handoff; `SkyrimTogetherVRHiggsBridge` produces the SKSEVR bridge DLL for observation-only HIGGS state/callback handoff; `SkyrimTogetherVRPlanckBridge` produces the SKSEVR bridge DLL for observation-only PLANCK API heartbeat/build-number handoff with hit polling disabled; `ImmersiveElf` produces `EarlyLoad.dll`; `TPProcess` produces the companion UI process.
+The current xmake graph is VR-only. It defines `SkyrimTogetherVRClient` as a static client library linked into `SkyrimVRImmersiveLauncher`; the normal Skyrim SE `SkyrimTogetherClient` and `SkyrimImmersiveLauncher` targets are intentionally absent. The launcher target uses the VR target config and produces the `SkyrimTogetherVR` launch artifact; `SkyrimTogetherVRVrikBridge` produces the SKSEVR bridge DLL for VRIK IK handoff; `SkyrimTogetherVRHiggsBridge` owns bounded HIGGS callback/snapshot handoff; `SkyrimTogetherVRPlanckBridge` adapts the patched PLANCK interface 002 to a fixed POD client boundary; `ImmersiveElf` produces `EarlyLoad.dll`; `TPProcess` produces the companion UI process.
 
 For VRIK/HIGGS remote-avatar validation, the graph also exposes `SkyrimTogetherVRClientAvatarSync` and `SkyrimVRImmersiveLauncherAvatarSync`. These are not in the default package target list. They build `SkyrimTogetherVRAvatarSync.exe` with staged connection-only mode still enabled, `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_SYNC=1`, and `TP_SKYRIM_VR_ENABLE_REMOTE_AVATAR_ACTOR_TARGETS=1`, so remote player HMD/hand pose and VRIK API packets can be checked against spawned remote actor scene nodes during two-client testing without bringing up the full gameplay service set.
 
@@ -472,7 +497,7 @@ python3 Tools/SkyrimVR/audit_vr_readiness.py --skyrim-vr "/path/to/SkyrimVR" --g
 python3 Tools/SkyrimVR/install_built_package.py --skyrim-vr "/path/to/SkyrimVR" --gameplay --install
 ```
 
-In `--gameplay` mode, the package audit requires `SkyrimTogetherVRGameplay.exe`, the VRIK/HIGGS/PLANCK/tick bridge DLLs, `EarlyLoad.dll`, and `TPProcess.exe`. It rejects stale default and avatar-sync launcher executables, and the runtime evidence collector validates the package manifest with `gameplayAudit=1`.
+In `--gameplay` mode, the package audit requires `SkyrimTogetherVRGameplay.exe`, the VRIK/HIGGS/PLANCK/tick bridge DLLs, `EarlyLoad.dll`, and `TPProcess.exe`. It rejects stale default and avatar-sync launcher executables, and the runtime evidence collector validates the package manifest with `gameplayAudit=1`. Add `--require-patched-planck-interface002` for the complete package; that gate also requires the patched `activeragdoll.dll`, package path and matching hashes, a forced `Rebuild` provenance record, and matching Havok/SKSEVR archive hashes plus full dependency-tree digests/counts.
 
 When testing the mandatory VRIK/HIGGS avatar lane, HIGGS compatibility, or PLANCK compatibility on the target install, add `--require-vrik`, `--require-higgs`, or `--require-planck` so the audit fails before launch if those SKSEVR plugins are not installed. PLANCK is installed as `Data\SKSE\Plugins\activeragdoll.dll`; the SkyrimTogetherVR package also installs `Data\SKSE\Plugins\SkyrimTogetherVRPlanckBridge.dll`, which writes `SkyrimTogetherVR.planck`. The post-run runtime audit's `--require-vrik` check requires both VRIK detection and the VRIK bridge API lane, and the default runtime checklist now requires `SkyrimTogetherVR.compatibility` to show HIGGS/PLANCK observation-only policy plus unvalidated-hook suppression state and `SkyrimTogetherVR.planck` to show PLANCK bridge loaded/sequence/epoch state, interface state, disabled current-hit polling, and disabled last-hit-data probe state when PLANCK is installed.
 

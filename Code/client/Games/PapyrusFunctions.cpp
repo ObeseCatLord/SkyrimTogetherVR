@@ -365,16 +365,14 @@ void AppendPlanckSummary(std::string& aOut)
     aOut += GetValue(values, "bridge.sequence");
     aOut += " api=";
     aOut += GetValue(values, "planck.interfaceAvailable");
-    aOut += " build=";
-    aOut += GetValue(values, "planck.buildNumber");
-    aOut += " hit=";
-    aOut += GetValue(values, "planck.currentHitEventAvailable");
-    aOut += " hitRead=";
-    aOut += GetValue(values, "planck.currentHitEventObservationOnly");
-    aOut += " lastHitProbe=";
-    aOut += GetValue(values, "planck.lastHitDataProbeEnabled");
-    aOut += " policy=";
-    aOut += GetValue(values, "planck.policy");
+    aOut += " rev=";
+    aOut += GetValue(values, "planck.interfaceRevision");
+    aOut += " features=";
+    aOut += GetValue(values, "planck.features");
+    aOut += "/";
+    aOut += GetValue(values, "planck.interface002RequiredFeatures");
+    aOut += " replay=";
+    aOut += GetValue(values, "planck.remotePhysicsReplay");
 }
 
 void AppendPlanckTelemetry(std::string& aOut)
@@ -396,26 +394,20 @@ void AppendPlanckTelemetry(std::string& aOut)
     aOut += GetValue(values, "planck.detected");
     aOut += " request=";
     aOut += GetValue(values, "planck.interfaceRequestAttempted");
+    aOut += "/";
+    aOut += GetValue(values, "planck.interfaceRequestCount");
     aOut += " api=";
     aOut += GetValue(values, "planck.interfaceAvailable");
-    aOut += " build=";
-    aOut += GetValue(values, "planck.buildNumber");
-    aOut += "\ncurrentHitAddress=";
-    aOut += GetValue(values, "planck.currentHitEventAddress");
-    aOut += " currentHit=";
-    aOut += GetValue(values, "planck.currentHitEventAvailable");
-    aOut += " currentHitObservationOnly=";
-    aOut += GetValue(values, "planck.currentHitEventObservationOnly");
-    aOut += " lastHitData=";
-    aOut += GetValue(values, "planck.lastHitDataAvailable");
-    aOut += " lastHitProbe=";
-    aOut += GetValue(values, "planck.lastHitDataProbeEnabled");
-    aOut += "\nlastHitDataReason=";
-    aOut += GetValue(values, "planck.lastHitDataReason");
-    aOut += "\nlastHitDataBoundary=";
-    aOut += GetValue(values, "planck.lastHitDataBoundary");
-    aOut += " policy=";
-    aOut += GetValue(values, "planck.policy");
+    aOut += " rev=";
+    aOut += GetValue(values, "planck.interfaceRevision");
+    aOut += "\nfeatures=";
+    aOut += GetValue(values, "planck.features");
+    aOut += " required=";
+    aOut += GetValue(values, "planck.interface002RequiredFeatures");
+    aOut += "\ndamageAuthority=";
+    aOut += GetValue(values, "planck.damageAuthority");
+    aOut += " replay=";
+    aOut += GetValue(values, "planck.remotePhysicsReplay");
 }
 
 void AppendAvatarSummary(std::string& aOut)

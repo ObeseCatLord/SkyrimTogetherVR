@@ -34,8 +34,80 @@
 
 #include <Structs/AnimationGraphDescriptorManager.h>
 #include <Structs/AnimationVariables.h>
+#include <ModCompat/BehaviorVarsMap.h>
+#include <vr_common/VRAnimationGraphProtocol.h>
+
+#include <algorithm>
+#include <bit>
+#include <string_view>
+#include <vector>
 
 extern const AnimationGraphDescriptor* BehaviorVarPatch(BSAnimationGraphManager* pManager, Actor* pActor);
+
+namespace
+{
+class AnimationManagerRelease final
+{
+public:
+    explicit AnimationManagerRelease(BSAnimationGraphManager* a_manager) noexcept : m_manager(a_manager) {}
+    ~AnimationManagerRelease()
+    {
+        if (m_manager)
+            m_manager->Release();
+    }
+
+    AnimationManagerRelease(const AnimationManagerRelease&) = delete;
+    AnimationManagerRelease& operator=(const AnimationManagerRelease&) = delete;
+
+private:
+    BSAnimationGraphManager* m_manager;
+};
+
+[[nodiscard]] bool GetAnimationDescriptorContract(const AnimationGraphDescriptor& a_descriptor,
+                                                   const std::uint64_t a_hash,
+                                                   std::uint64_t& ar_digest,
+                                                   std::uint16_t& ar_directionIndex)
+{
+    const auto& behaviorVars = BehaviorVarsMap::getInstance();
+    std::vector<TiltedPhoques::String> booleanNames;
+    std::vector<TiltedPhoques::String> floatNames;
+    std::vector<TiltedPhoques::String> integerNames;
+    const auto appendNames = [&behaviorVars, a_hash](const auto& a_indices, auto& ar_names) {
+        ar_names.reserve(a_indices.size());
+        for (const auto index : a_indices) {
+            auto name = behaviorVars.find(a_hash, index);
+            if (name.empty())
+                return false;
+            ar_names.push_back(std::move(name));
+        }
+        return true;
+    };
+    if (!appendNames(a_descriptor.BooleanLookUpTable, booleanNames) ||
+        !appendNames(a_descriptor.FloatLookupTable, floatNames) ||
+        !appendNames(a_descriptor.IntegerLookupTable, integerNames))
+        return false;
+    const auto makeViews = [](const auto& a_names) {
+        std::vector<std::string_view> result;
+        result.reserve(a_names.size());
+        for (const auto& name : a_names)
+            result.emplace_back(name.data(), name.size());
+        return result;
+    };
+    const auto booleanViews = makeViews(booleanNames);
+    const auto floatViews = makeViews(floatNames);
+    const auto integerViews = makeViews(integerNames);
+    const auto direction = std::find(floatViews.begin(), floatViews.end(), "Direction");
+    if (direction == floatViews.end())
+        return false;
+    ar_directionIndex = static_cast<std::uint16_t>(direction - floatViews.begin());
+    if (!SkyrimTogetherVR::AnimationGraphProtocol::IsValidDescriptorContract(
+            booleanViews.size(), floatViews.size(), integerViews.size(), 1, ar_directionIndex))
+        return false;
+    ar_digest = SkyrimTogetherVR::AnimationGraphProtocol::ComputeDescriptorDigest(
+        booleanViews, floatViews, integerViews, ar_directionIndex);
+    return ar_digest != 0;
+}
+}
 
 TP_THIS_FUNCTION(TActivate, bool, TESObjectREFR, TESObjectREFR* apActivator, uint8_t aUnk1, TESBoundObject* apObjectToGet, int32_t aCount, char aDefaultProcessing);
 TP_THIS_FUNCTION(TAddInventoryItem, void, TESObjectREFR, TESBoundObject* apItem, ExtraDataList* apExtraData, int32_t aCount, TESObjectREFR* apOldOwner);
@@ -146,9 +218,11 @@ using TiltedPhoques::Serialization;
 
 void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const noexcept
 {
+    aVariables = {};
     BSAnimationGraphManager* pManager = nullptr;
     if (animationGraphHolder.GetBSAnimationGraph(&pManager))
     {
+        const AnimationManagerRelease release{pManager};
         BSScopedLock<BSRecursiveLock> _{pManager->lock};
 
         if (pManager->animationGraphIndex < pManager->animationGraphs.size)
@@ -194,6 +268,56 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             if (!pVariableSet)
                 return;
 
+            if (!std::all_of(pDescriptor->BooleanLookUpTable.begin(), pDescriptor->BooleanLookUpTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }) ||
+                !std::all_of(pDescriptor->FloatLookupTable.begin(), pDescriptor->FloatLookupTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }) ||
+                !std::all_of(pDescriptor->IntegerLookupTable.begin(), pDescriptor->IntegerLookupTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }))
+                return;
+
+            const auto& behaviorVars = BehaviorVarsMap::getInstance();
+            std::vector<TiltedPhoques::String> booleanNames;
+            std::vector<TiltedPhoques::String> floatNames;
+            std::vector<TiltedPhoques::String> integerNames;
+            booleanNames.reserve(pDescriptor->BooleanLookUpTable.size());
+            floatNames.reserve(pDescriptor->FloatLookupTable.size());
+            integerNames.reserve(pDescriptor->IntegerLookupTable.size());
+            const auto appendNames = [&behaviorVars, hash = pExtendedActor->GraphDescriptorHash](
+                                         const auto& a_indices, auto& ar_names) {
+                for (const auto index : a_indices) {
+                    auto name = behaviorVars.find(hash, index);
+                    if (name.empty())
+                        return false;
+                    ar_names.push_back(std::move(name));
+                }
+                return true;
+            };
+            if (!appendNames(pDescriptor->BooleanLookUpTable, booleanNames) ||
+                !appendNames(pDescriptor->FloatLookupTable, floatNames) ||
+                !appendNames(pDescriptor->IntegerLookupTable, integerNames))
+                return;
+            const auto makeViews = [](const auto& a_names) {
+                std::vector<std::string_view> result;
+                result.reserve(a_names.size());
+                for (const auto& name : a_names)
+                    result.emplace_back(name.data(), name.size());
+                return result;
+            };
+            const auto booleanViews = makeViews(booleanNames);
+            const auto floatViews = makeViews(floatNames);
+            const auto integerViews = makeViews(integerNames);
+            const auto direction = std::find(floatViews.begin(), floatViews.end(), "Direction");
+            if (direction == floatViews.end())
+                return;
+            const auto directionIndex = static_cast<std::uint16_t>(direction - floatViews.begin());
+            if (!SkyrimTogetherVR::AnimationGraphProtocol::IsValidDescriptorContract(
+                    booleanViews.size(), floatViews.size(), integerViews.size(), 1, directionIndex))
+                return;
+            aVariables.DescriptorDigest = SkyrimTogetherVR::AnimationGraphProtocol::ComputeDescriptorDigest(
+                booleanViews, floatViews, integerViews, directionIndex);
+            aVariables.DirectionFloatIndex = directionIndex;
+
             aVariables.Booleans.assign(pDescriptor->BooleanLookUpTable.size(), false);
             aVariables.Floats.assign(pDescriptor->FloatLookupTable.size(), 0.f);
             aVariables.Integers.assign(pDescriptor->IntegerLookupTable.size(), 0);
@@ -210,18 +334,16 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             {
                 const auto idx = pDescriptor->FloatLookupTable[i];
 
-                aVariables.Floats[i] = *reinterpret_cast<float*>(&pVariableSet->data[idx]);
+                aVariables.Floats[i] = std::bit_cast<float>(pVariableSet->data[idx]);
             }
 
             for (size_t i = 0; i < pDescriptor->IntegerLookupTable.size(); ++i)
             {
                 const auto idx = pDescriptor->IntegerLookupTable[i];
 
-                aVariables.Integers[i] = *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]);
+                aVariables.Integers[i] = std::bit_cast<std::uint32_t>(pVariableSet->data[idx]);
             }
         }
-
-        pManager->Release();
     }
 }
 
@@ -230,6 +352,7 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
     BSAnimationGraphManager* pManager = nullptr;
     if (animationGraphHolder.GetBSAnimationGraph(&pManager))
     {
+        const AnimationManagerRelease release{pManager};
         BSScopedLock<BSRecursiveLock> _{pManager->lock};
 
         if (pManager->animationGraphIndex < pManager->animationGraphs.size)
@@ -264,32 +387,45 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
             if (!pVariableSet)
                 return;
 
+            std::uint64_t descriptorDigest{};
+            std::uint16_t directionFloatIndex{};
+            if (!GetAnimationDescriptorContract(*pDescriptor, pExtendedActor->GraphDescriptorHash,
+                                                descriptorDigest, directionFloatIndex) ||
+                aVariables.DescriptorDigest != descriptorDigest ||
+                aVariables.DirectionFloatIndex != directionFloatIndex ||
+                aVariables.Booleans.size() != pDescriptor->BooleanLookUpTable.size() ||
+                aVariables.Floats.size() != pDescriptor->FloatLookupTable.size() ||
+                aVariables.Integers.size() != pDescriptor->IntegerLookupTable.size() ||
+                !std::all_of(pDescriptor->BooleanLookUpTable.begin(), pDescriptor->BooleanLookUpTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }) ||
+                !std::all_of(pDescriptor->FloatLookupTable.begin(), pDescriptor->FloatLookupTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }) ||
+                !std::all_of(pDescriptor->IntegerLookupTable.begin(), pDescriptor->IntegerLookupTable.end(),
+                             [pVariableSet](const auto a_index) { return a_index < pVariableSet->size; }))
+                return;
+
             for (size_t i = 0; i < pDescriptor->BooleanLookUpTable.size(); ++i)
             {
                 const auto idx = pDescriptor->BooleanLookUpTable[i];
 
-                if (pVariableSet->size > idx)
-                {
-                    pVariableSet->data[idx] = aVariables.Booleans.size() > i ? aVariables.Booleans[i] : false;
-                }
+                pVariableSet->data[idx] = aVariables.Booleans[i];
             }
 
             for (size_t i = 0; i < pDescriptor->FloatLookupTable.size(); ++i)
             {
                 const auto idx = pDescriptor->FloatLookupTable[i];
 
-                *reinterpret_cast<float*>(&pVariableSet->data[idx]) = aVariables.Floats.size() > i ? aVariables.Floats[i] : 0.f;
+                pVariableSet->data[idx] = std::bit_cast<std::uint32_t>(aVariables.Floats[i]);
             }
 
             for (size_t i = 0; i < pDescriptor->IntegerLookupTable.size(); ++i)
             {
                 const auto idx = pDescriptor->IntegerLookupTable[i];
 
-                *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]) = aVariables.Integers.size() > i ? aVariables.Integers[i] : 0;
+                pVariableSet->data[idx] = aVariables.Integers[i];
             }
         }
 
-        pManager->Release();
     }
 }
 

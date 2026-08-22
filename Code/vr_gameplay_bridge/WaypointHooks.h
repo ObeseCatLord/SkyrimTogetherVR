@@ -87,4 +87,16 @@ inline constexpr std::uint32_t kHorseEnterAnimationEventId = 20;
     return a_animationEventId == kHorseEnterAnimationEventId && a_validMount &&
            (!a_baselineCaptured || !a_matchesBaseline);
 }
+
+// The first unmounted observation establishes a baseline. Once a mount state
+// has been captured, every transition is durable, including the zero-valued
+// dismount sentinel consumed by GameplayAction::Mount.
+[[nodiscard]] constexpr bool ShouldPublishObservedMount(
+    const std::uint32_t a_mountFormId,
+    const bool a_baselineCaptured,
+    const std::uint32_t a_baselineMountFormId) noexcept
+{
+    return (a_mountFormId != 0 && !a_baselineCaptured) ||
+           (a_baselineCaptured && a_mountFormId != a_baselineMountFormId);
+}
 } // namespace SkyrimTogetherVR::GameplayAdapter::MountCapturePolicy

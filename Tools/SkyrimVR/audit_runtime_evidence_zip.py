@@ -819,6 +819,35 @@ def require_check_pass(
         failures.append(f"{label} checklist did not pass: {check.get('detail', '<missing detail>')}")
 
 
+def validate_planck_handoff(values: dict[str, str], failures: list[str]) -> None:
+    """Validate the optional PLANCK bridge's stable interface002 handoff fields."""
+    required_features = collect_runtime_evidence.get_int(values, "planck.interface002RequiredFeatures")
+    features = collect_runtime_evidence.get_int(values, "planck.features")
+    errors: list[str] = []
+    if "planck.features" not in values:
+        errors.append("features is missing")
+    if values.get("planck.interfaceRevision") != "2":
+        errors.append("interfaceRevision must be 2")
+    if required_features == 0:
+        errors.append("requiredFeatures must be a nonzero bitmask")
+    if values.get("planck.damageAuthority") != "none_remote_physics_only":
+        errors.append("damageAuthority must be none_remote_physics_only")
+    if values.get("planck.remotePhysicsReplay") != "data_only_interface002":
+        errors.append("remotePhysicsReplay must be data_only_interface002")
+
+    planck_present = collect_runtime_evidence.get_bool(values, "planck.detected")
+    if planck_present:
+        if not collect_runtime_evidence.get_bool(values, "planck.interfaceAvailable"):
+            errors.append("detected PLANCK must expose interface002")
+        if (features & required_features) != required_features:
+            errors.append("features do not satisfy requiredFeatures")
+    elif features != 0:
+        errors.append("PLANCK-absent handoff must not advertise feature bits")
+
+    if errors:
+        failures.append("invalid optional PLANCK interface002 handoff: " + "; ".join(errors))
+
+
 def require_manifest_requested_checks(
     manifest: dict[str, object],
     checks_by_id: dict[str, dict[str, object]],
@@ -987,6 +1016,13 @@ def audit_archive(
                 continue
             if entry not in names:
                 failures.append(f"missing archive entry: {entry}")
+
+        planck_entry = f"handoff/{collect_runtime_evidence.vr_handoff.READOUT_FILES['planck']}"
+        if planck_entry in names:
+            validate_planck_handoff(
+                collect_runtime_evidence.vr_handoff.parse_key_value_bytes(zf.read(planck_entry)),
+                failures,
+            )
 
         manifest = load_json(zf, "manifest.json", failures) if "manifest.json" in names else {}
         gameplay_snapshot = load_gameplay_snapshot(zf, failures)
@@ -1357,7 +1393,7 @@ def command_self_test() -> int:
             "status",
             "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
             "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=17\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=20\n"
             "serverInstanceNonce=99\ngamePath={}\n".format(game),
         )
         write(
@@ -1516,7 +1552,7 @@ def command_self_test() -> int:
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
             "posePolicy=observation_only\n"
-            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=unsupported_no_remote_physical_replay\n",
+            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=optional_negotiated_interface002_not_core_readiness\n",
         )
         write(
             "higgs",
@@ -1539,14 +1575,11 @@ def command_self_test() -> int:
             "planck.detected=1\n"
             "planck.interfaceRequestAttempted=1\n"
             "planck.interfaceAvailable=1\n"
-            "planck.buildNumber=8\n"
-            "planck.currentHitEventAvailable=1\n"
-            "planck.currentHitEventObservationOnly=1\n"
-            "planck.lastHitDataAvailable=0\n"
-            "planck.lastHitDataProbeEnabled=0\n"
-            "planck.lastHitDataReason=not_polled_nontrivial_return_boundary\n"
-            "planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi\n"
-            "planck.policy=observation_only\n",
+            "planck.interfaceRevision=2\n"
+            "planck.features=0xf\n"
+            "planck.interface002RequiredFeatures=0xf\n"
+            "planck.damageAuthority=none_remote_physics_only\n"
+            "planck.remotePhysicsReplay=data_only_interface002\n",
         )
         write(
             "higgsnet",

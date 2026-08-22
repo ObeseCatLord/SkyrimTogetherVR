@@ -61,8 +61,10 @@ private:
     std::filesystem::path m_bridgeStatusPath;
     std::filesystem::path m_networkStatusPath;
     TiltedPhoques::Map<uint32_t, VRHiggsState> m_remoteStates{};
+    TiltedPhoques::Map<uint32_t, uint64_t> m_remoteProducerEpochs{};
     TiltedPhoques::Map<uint32_t, double> m_remoteStateAges{};
     VRHiggsState m_lastLocalState{};
+    std::uint64_t m_networkProducerEpoch{0};
     std::array<VRHiggsEventSnapshot, kMaximumHiggsMutationEvents> m_mutationReplayWindow{};
     std::size_t m_mutationReplayEventCount{0};
     std::uint32_t m_lastCapturedMutationSequence{0};
@@ -71,6 +73,7 @@ private:
     std::uint32_t m_mutationReplayFloorSequence{0};
     bool m_hasCapturedMutationSequence{false};
     bool m_hasMutationReplayFloor{false};
+    bool m_mutationReplayRebasePending{false};
     bool m_hasLocalState{false};
     bool m_wasOnline{false};
     bool m_bridgeReadInitialized{false};

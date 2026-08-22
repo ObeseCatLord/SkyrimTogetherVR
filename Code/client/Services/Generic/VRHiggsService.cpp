@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -24,7 +25,9 @@
 
 namespace
 {
-constexpr double kHiggsSendInterval = 0.25;
+// Held-object replay needs the same 20 Hz sampling cadence as the bridge
+// readout. Mutation edges remain independently ordered and deduplicated.
+constexpr double kHiggsSendInterval = 1.0 / 20.0;
 constexpr double kHiggsBridgeReadInterval = 1.0 / 20.0;
 constexpr double kHiggsStatusWriteInterval = 0.25;
 constexpr double kRemoteHiggsStaleSeconds = 10.0;
@@ -172,6 +175,12 @@ uint32_t ParseUInt32(const std::string* apValue, uint32_t aDefault = 0) noexcept
 {
     uint32_t value{};
     return TryParseUInt32(apValue, value) ? value : aDefault;
+}
+
+uint64_t ParseUInt64(const std::string* apValue, uint64_t aDefault = 0) noexcept
+{
+    uint64_t value{};
+    return TryParseUInt64(apValue, value) ? value : aDefault;
 }
 
 float ParseFloat(const std::string* apValue, float aDefault = 0.0f) noexcept
@@ -441,23 +450,40 @@ void ParseHandState(World& aWorld, const KeyValueMap& acValues, const std::strin
     aHand.Disabled = GetBool(acValues, acPrefix + ".disabled");
     aHand.WeaponCollisionDisabled = GetBool(acValues, acPrefix + ".weaponCollisionDisabled");
     aHand.GrabbedObject = ToServerId(aWorld, GetUInt32(acValues, acPrefix + ".grabbedObjectFormId"));
+    const auto* nodeName = FindValue(acValues, acPrefix + ".grabbedNodeName");
+    if (!nodeName || nodeName->size() >= aHand.GrabbedNodeName.size() ||
+        std::any_of(nodeName->begin(), nodeName->end(), [](const char character) noexcept {
+            return character == '\0' || character == '\r' || character == '\n';
+        })) {
+        aHand.Valid = false;
+        return;
+    }
+    std::copy(nodeName->begin(), nodeName->end(), aHand.GrabbedNodeName.begin());
+    aHand.GrabbedNodeNameLength = static_cast<uint8_t>(nodeName->size());
     ParseFingers(acValues, acPrefix, aHand.Fingers);
     ParseTransform(acValues, acPrefix, aHand.GrabTransform);
 }
 
 bool IsMutationEvent(const VRHiggsEventSnapshot::Kind aKind) noexcept
 {
-    // HIGGS callbacks own transient pull/grab/drop replay. Stash and consume
-    // change durable inventory and therefore remain exclusively on the
-    // canonical inventory transaction path.
+    // Terminal stash/consume edges release remote visual/lease state only.
+    // Canonical inventory remains the sole durable mutation authority.
     return aKind == VRHiggsEventSnapshot::Kind::kPulled ||
            aKind == VRHiggsEventSnapshot::Kind::kGrabbed ||
-           aKind == VRHiggsEventSnapshot::Kind::kDropped;
+           aKind == VRHiggsEventSnapshot::Kind::kDropped ||
+           aKind == VRHiggsEventSnapshot::Kind::kStashed ||
+           aKind == VRHiggsEventSnapshot::Kind::kConsumed;
 }
 
 bool IsNewerSequence(uint32_t aCandidate, uint32_t aCurrent) noexcept
 {
     return static_cast<int32_t>(aCandidate - aCurrent) > 0;
+}
+
+std::uint32_t NextNonZeroSequence(const std::uint32_t aCurrent) noexcept
+{
+    const auto next = aCurrent + 1;
+    return next != 0 ? next : 1;
 }
 
 bool ParseMutationEvents(World& aWorld, const KeyValueMap& acValues, VRHiggsState& arState) noexcept
@@ -478,12 +504,20 @@ bool ParseMutationEvents(World& aWorld, const KeyValueMap& acValues, VRHiggsStat
         const auto* pHand = FindValue(acValues, prefix + ".hand");
         event.IsLeft = pHand && *pHand == "left";
         event.ObjectId = ToServerId(aWorld, GetUInt32(acValues, prefix + ".formId"));
+        event.InventoryBaseForm = ToServerId(aWorld, GetUInt32(acValues, prefix + ".inventoryBaseFormId"));
         event.Mass = GetFloat(acValues, prefix + ".mass");
         event.SeparatingVelocity = GetFloat(acValues, prefix + ".separatingVelocity");
+        ParseTransform(acValues, prefix, event.GrabTransform);
+        const auto* nodeName = FindValue(acValues, prefix + ".grabbedNodeName");
+        if (!nodeName || nodeName->size() >= event.GrabbedNodeName.size() ||
+            std::any_of(nodeName->begin(), nodeName->end(), [](const char character) noexcept {
+                return character == '\0' || character == '\r' || character == '\n';
+            }))
+            return false;
+        std::copy(nodeName->begin(), nodeName->end(), event.GrabbedNodeName.begin());
+        event.GrabbedNodeNameLength = static_cast<uint8_t>(nodeName->size());
 
         // Collisions and two-handing callbacks remain snapshot telemetry.
-        // Stash/consume are inventory-authoritative. Only transient physical
-        // object mutations enter the reliable replay window.
         if (!IsMutationEvent(event.EventKind))
             continue;
         if (event.Sequence == 0 || (hasPreviousMutationSequence &&
@@ -525,7 +559,10 @@ bool HasCoherentHiggsGrabTransform(const KeyValueMap& acValues, const std::strin
     if (!GetBool(acValues, transformPrefix + ".valid"))
         return true;
 
+    glm::vec3 translate{};
     return HasStrictVector3(acValues, transformPrefix + ".translate") &&
+           TryParseVector3(FindValue(acValues, transformPrefix + ".translate"), translate) &&
+           Vector3_NetQuantize::IsInRange(translate) &&
            HasStrictVector3(acValues, transformPrefix + ".axisX") &&
            HasStrictVector3(acValues, transformPrefix + ".axisY") &&
            HasStrictVector3(acValues, transformPrefix + ".axisZ") &&
@@ -546,6 +583,7 @@ bool HasCoherentHiggsHandState(const KeyValueMap& acValues, const std::string& a
            HasStrictBool(acValues, acPrefix + ".disabled") &&
            HasStrictBool(acValues, acPrefix + ".weaponCollisionDisabled") &&
            HasStrictUInt32(acValues, acPrefix + ".grabbedObjectFormId") &&
+           FindValue(acValues, acPrefix + ".grabbedNodeName") != nullptr &&
            HasCoherentHiggsFingerState(acValues, acPrefix) &&
            HasCoherentHiggsGrabTransform(acValues, acPrefix);
 }
@@ -568,8 +606,11 @@ bool HasCoherentHiggsEventState(const KeyValueMap& acValues) noexcept
             !HasStrictBool(acValues, prefix + ".hasHand") || !pHand ||
             (*pHand != "left" && *pHand != "right") ||
             !HasStrictUInt32(acValues, prefix + ".formId") ||
+            !HasStrictUInt32(acValues, prefix + ".inventoryBaseFormId") ||
             !HasStrictFloat(acValues, prefix + ".mass") ||
-            !HasStrictFloat(acValues, prefix + ".separatingVelocity"))
+            !HasStrictFloat(acValues, prefix + ".separatingVelocity") ||
+            !HasCoherentHiggsGrabTransform(acValues, prefix) ||
+            !FindValue(acValues, prefix + ".grabbedNodeName"))
             return false;
     }
     return true;
@@ -784,10 +825,14 @@ void VRHiggsService::OnVRHiggsState(const NotifyVRHiggsState& acMessage) noexcep
         return;
 
     const auto existingIt = m_remoteStates.find(acMessage.PlayerId);
-    if (existingIt != m_remoteStates.end() && !IsNewerSequence(acMessage.State.Sequence, existingIt->second.Sequence))
+    const auto epochIt = m_remoteProducerEpochs.find(acMessage.PlayerId);
+    if (existingIt != m_remoteStates.end() && epochIt != m_remoteProducerEpochs.end() &&
+        epochIt->second == acMessage.State.ProducerEpoch &&
+        !IsNewerSequence(acMessage.State.Sequence, existingIt->second.Sequence))
         return;
 
     m_remoteStates[acMessage.PlayerId] = acMessage.State;
+    m_remoteProducerEpochs[acMessage.PlayerId] = acMessage.State.ProducerEpoch;
     m_remoteStateAges[acMessage.PlayerId] = 0.0;
     m_statusDirty = true;
 }
@@ -796,6 +841,7 @@ void VRHiggsService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
 {
     const auto stateCount = m_remoteStates.erase(acMessage.PlayerId);
     const auto ageCount = m_remoteStateAges.erase(acMessage.PlayerId);
+    m_remoteProducerEpochs.erase(acMessage.PlayerId);
     if (stateCount || ageCount)
         m_statusDirty = true;
 }
@@ -810,6 +856,7 @@ void VRHiggsService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     {
         m_remoteStates.clear();
         m_remoteStateAges.clear();
+        m_remoteProducerEpochs.clear();
         m_statusDirty = true;
     }
 }
@@ -822,6 +869,7 @@ void VRHiggsService::PruneRemoteStates(double aDelta) noexcept
         {
             m_remoteStates.clear();
             m_remoteStateAges.clear();
+            m_remoteProducerEpochs.clear();
             m_statusDirty = true;
         }
         return;
@@ -842,6 +890,7 @@ void VRHiggsService::PruneRemoteStates(double aDelta) noexcept
     {
         m_remoteStateAges.erase(playerId);
         m_remoteStates.erase(playerId);
+        m_remoteProducerEpochs.erase(playerId);
         m_statusDirty = true;
     }
 }
@@ -879,6 +928,7 @@ bool VRHiggsService::CaptureLocalHiggsState(VRHiggsState& aState) noexcept
     const std::string bridgeEpoch = *pBridgeEpoch;
 
     aState.Sequence = bridgeSequence;
+    aState.ProducerEpoch = ParseUInt64(FindValue(values, "bridge.epoch"));
     aState.BridgeLoaded = GetBool(values, "bridge.loaded");
     aState.Detected = GetBool(values, "higgs.detected");
     aState.InterfaceAvailable = GetBool(values, "higgs.interfaceAvailable");
@@ -910,17 +960,18 @@ void VRHiggsService::MergeMutationReplayWindow(
     VRHiggsState& arState, const std::string& acBridgeEpoch, const bool aOnline) noexcept
 {
     const bool epochChanged = !m_bridgeEpoch.empty() && m_bridgeEpoch != acBridgeEpoch;
+    bool rebase = epochChanged;
     if (epochChanged)
     {
         m_mutationReplayWindow = {};
         m_mutationReplayEventCount = 0;
         m_lastCapturedMutationSequence = 0;
         m_hasCapturedMutationSequence = false;
-        // A bridge epoch is an explicit producer reset. It starts a fresh
-        // online stream, while an offline epoch is immediately rebased below.
+        // A bridge epoch is a producer reset, never a sequence continuation.
         m_mutationReplayFloorEpoch.clear();
         m_mutationReplayFloorSequence = 0;
         m_hasMutationReplayFloor = false;
+        m_mutationReplayRebasePending = true;
     }
     m_bridgeEpoch = acBridgeEpoch;
 
@@ -933,6 +984,45 @@ void VRHiggsService::MergeMutationReplayWindow(
         arState.MutationEvents = {};
         arState.MutationEventCount = 0;
         arState.MutationSequence = 0;
+        return;
+    }
+
+    if (m_hasCapturedMutationSequence) {
+        const auto firstNew = std::find_if(arState.MutationEvents.begin(),
+                                           arState.MutationEvents.begin() + eventCount,
+                                           [this](const VRHiggsEventSnapshot& event) noexcept {
+                                               return IsNewerSequence(event.Sequence, m_lastCapturedMutationSequence);
+                                           });
+        if (firstNew != arState.MutationEvents.begin() + eventCount &&
+            firstNew->Sequence != NextNonZeroSequence(m_lastCapturedMutationSequence))
+            rebase = true;
+    }
+    std::uint32_t previousNewSequence = m_lastCapturedMutationSequence;
+    bool havePreviousNewSequence = m_hasCapturedMutationSequence;
+    for (std::size_t index = 0; index < eventCount; ++index) {
+        const auto sequence = arState.MutationEvents[index].Sequence;
+        if (!IsNewerSequence(sequence, m_lastCapturedMutationSequence))
+            continue;
+        if (havePreviousNewSequence && sequence != NextNonZeroSequence(previousNewSequence))
+            rebase = true;
+        previousNewSequence = sequence;
+        havePreviousNewSequence = true;
+    }
+
+    if (rebase)
+    {
+        const auto floorSequence = eventCount != 0 ? arState.MutationEvents[eventCount - 1].Sequence : 0;
+        RebaseMutationReplayFloor(acBridgeEpoch, floorSequence);
+        arState.MutationEvents = {};
+        arState.MutationEventCount = 0;
+        arState.MutationSequence = 0;
+        m_mutationReplayRebasePending = true;
+        arState.MutationReplayRebased = true;
+        static std::uint32_t s_rebaseLogCount{};
+        if (s_rebaseLogCount != std::numeric_limits<std::uint32_t>::max())
+            ++s_rebaseLogCount;
+        if (s_rebaseLogCount == 1 || s_rebaseLogCount % 32 == 0)
+            spdlog::warn("VR HIGGS replay rebased {} time(s) after producer epoch/window gap", s_rebaseLogCount);
         return;
     }
 
@@ -972,6 +1062,25 @@ void VRHiggsService::MergeMutationReplayWindow(
     arState.MutationEvents = m_mutationReplayWindow;
     arState.MutationEventCount = static_cast<uint8_t>(m_mutationReplayEventCount);
     arState.MutationSequence = m_hasCapturedMutationSequence ? m_lastCapturedMutationSequence : 0;
+
+    // A rebase is a baseline-only transaction. Keep emitting its marker until
+    // the transport accepts it, never letting newer retained mutations turn
+    // that baseline into a partial replay.
+    if (m_mutationReplayRebasePending)
+    {
+        arState.MutationEvents = {};
+        arState.MutationEventCount = 0;
+        arState.MutationSequence = 0;
+        // The relay identifies a rebase by a producer identity change. Keep the
+        // authenticated bridge epoch for replay floors, but rotate the wire
+        // producer on every history reset so even same-epoch gaps are admitted.
+        if (m_networkProducerEpoch == 0 || m_networkProducerEpoch == arState.ProducerEpoch)
+        {
+            ++m_networkProducerEpoch;
+            arState.ProducerEpoch = m_networkProducerEpoch;
+        }
+        arState.MutationReplayRebased = true;
+    }
 }
 
 void VRHiggsService::RebaseMutationReplayFloor(
@@ -1008,7 +1117,11 @@ void VRHiggsService::SendHiggsState() noexcept
 
     RequestVRHiggsState request{};
     request.State = m_lastLocalState;
-    m_transport.Send(request);
+    if (m_transport.Send(request) && request.State.MutationReplayRebased)
+    {
+        m_mutationReplayRebasePending = false;
+        m_lastLocalState.MutationReplayRebased = false;
+    }
 }
 
 void VRHiggsService::WriteHiggsNetworkStatusFile() noexcept

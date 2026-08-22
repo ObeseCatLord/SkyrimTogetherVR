@@ -2,6 +2,7 @@
 
 #include "AvatarManager.h"
 #include "CalendarHooks.h"
+#include "HiggsSpatialReplayPolicy.h"
 #include "QuestDialogueManager.h"
 #include "WeatherNativeAccess.h"
 
@@ -18,6 +19,8 @@ namespace
 constexpr float kMaximumCalendarTimeScale = 1000.0f;
 constexpr float kMaximumPoseRadians = 6.28318530717958647692f;
 constexpr float kMaximumCalibrationValue = 10000.0f;
+constexpr std::size_t kMaximumPendingHiggsSpatialReplays = 32;
+namespace HiggsPolicy = SkyrimTogetherVR::HiggsSpatialReplayPolicy;
 
 struct ServerSettingsState
 {
@@ -35,6 +38,17 @@ struct ServerSettingsState
 ServerSettingsState g_serverSettings{};
 std::atomic<bool> g_pvpEnabledSnapshot{};
 bool g_weatherOverrideActive{};
+
+struct HiggsSpatialReplay
+{
+    RE::NiPointer<RE::Actor> Actor{};
+    RE::NiPointer<RE::TESObjectREFR> Object{};
+    RE::NiPointer<RE::NiAVObject> ActorRoot{};
+    HiggsPolicy::Transaction Transaction{};
+    bool BindingActive{};
+};
+
+std::array<HiggsSpatialReplay, kMaximumPendingHiggsSpatialReplays> g_higgsSpatialReplays{};
 
 [[nodiscard]] RE::Setting* GreetDistanceSetting() noexcept
 {
@@ -60,6 +74,206 @@ bool g_weatherOverrideActive{};
 {
     return std::isfinite(a_payload.ScalarA) && std::isfinite(a_payload.ScalarB) &&
            std::isfinite(a_payload.ScalarC) && std::isfinite(a_payload.ScalarD);
+}
+
+[[nodiscard]] HiggsPolicy::Transform ToHiggsPolicyTransform(const RE::NiTransform& acTransform) noexcept
+{
+    HiggsPolicy::Transform result{};
+    result.Translate = {acTransform.translate.x, acTransform.translate.y, acTransform.translate.z};
+    for (std::size_t row = 0; row < result.Rotate.Rows.size(); ++row)
+        result.Rotate.Rows[row] = {acTransform.rotate.entry[row][0], acTransform.rotate.entry[row][1],
+                                   acTransform.rotate.entry[row][2]};
+    result.Scale = acTransform.scale;
+    return result;
+}
+
+[[nodiscard]] RE::NiTransform ToNiTransform(const HiggsPolicy::Transform& acTransform) noexcept
+{
+    RE::NiTransform result{};
+    result.translate = {acTransform.Translate.X, acTransform.Translate.Y, acTransform.Translate.Z};
+    for (std::size_t row = 0; row < acTransform.Rotate.Rows.size(); ++row) {
+        result.rotate.entry[row][0] = acTransform.Rotate.Rows[row].X;
+        result.rotate.entry[row][1] = acTransform.Rotate.Rows[row].Y;
+        result.rotate.entry[row][2] = acTransform.Rotate.Rows[row].Z;
+    }
+    result.scale = acTransform.Scale;
+    return result;
+}
+
+[[nodiscard]] bool IsSafeTransform(const RE::NiTransform& acTransform) noexcept
+{
+    return HiggsPolicy::IsSafeTransform(ToHiggsPolicyTransform(acTransform));
+}
+
+void ClearHiggsSpatialReplay(const RE::TESObjectREFR& ac_object) noexcept
+{
+    for (auto& replay : g_higgsSpatialReplays) {
+        if ((replay.Transaction.Active || replay.BindingActive) && replay.Object.get() == std::addressof(ac_object)) {
+            HiggsPolicy::ClearForDrop(replay.Transaction);
+            TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+            replay = {};
+        }
+    }
+}
+
+void ClearHiggsSpatialReplaysForActor(const RE::Actor& ac_actor) noexcept
+{
+    for (auto& replay : g_higgsSpatialReplays) {
+        if ((replay.Transaction.Active || replay.BindingActive) && replay.Actor.get() == std::addressof(ac_actor))
+        {
+            if (replay.Object)
+                TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+            replay = {};
+        }
+    }
+}
+
+[[nodiscard]] HiggsSpatialReplay* FindHiggsSpatialReplay(const RE::TESObjectREFR& ac_object,
+                                                           const std::uint32_t a_sequence,
+                                                           const bool a_isLeft) noexcept
+{
+    const auto existing = std::find_if(
+        g_higgsSpatialReplays.begin(), g_higgsSpatialReplays.end(),
+        [&ac_object, a_sequence, a_isLeft](const HiggsSpatialReplay& ac_replay) noexcept {
+            return ac_replay.Transaction.Active && ac_replay.Object.get() == std::addressof(ac_object) &&
+                   ac_replay.Transaction.Sequence == a_sequence && ac_replay.Transaction.IsLeft == a_isLeft;
+        });
+    return existing != g_higgsSpatialReplays.end() ? std::addressof(*existing) : nullptr;
+}
+
+[[nodiscard]] CommandStatus ApplyCompletedHiggsSpatialReplay(HiggsSpatialReplay& ar_replay) noexcept
+{
+    const auto clear = [&ar_replay](const CommandStatus a_status) noexcept { ar_replay = {}; return a_status; };
+    if (!ar_replay.Actor || !ar_replay.Object || !HiggsPolicy::IsSafeTransform(ar_replay.Transaction.Relative) ||
+        ar_replay.Actor->IsInRagdollState() || !AvatarManager::Get().IsManagedRemotePlayerActor(ar_replay.Actor.get()))
+        return clear(CommandStatus::Inactive);
+
+    RE::NiPointer<RE::NiAVObject> actorRoot{ar_replay.Actor->Get3D()};
+    RE::NiPointer<RE::NiAVObject> objectRoot{ar_replay.Object->Get3D()};
+    const auto* const objectRootOwner = objectRoot ? objectRoot->GetUserData() : nullptr;
+    if (!actorRoot || actorRoot.get() != ar_replay.ActorRoot.get() || !objectRoot ||
+        (objectRootOwner != nullptr && objectRootOwner != ar_replay.Object.get()))
+        return clear(CommandStatus::Inactive);
+
+    RE::NiPointer<RE::NiAVObject> hand;
+    hand.reset(actorRoot->GetObjectByName(
+        RE::BSFixedString(ar_replay.Transaction.IsLeft ? "NPC L Hand [LHnd]" : "NPC R Hand [RHnd]")));
+    if (!hand || !IsSafeTransform(hand->world))
+        return clear(CommandStatus::Inactive);
+
+    RE::NiPointer<RE::NiAVObject> grabbedNode = objectRoot;
+    if (ar_replay.Transaction.NodeNameLength != 0) {
+        grabbedNode.reset(objectRoot->GetObjectByName(RE::BSFixedString(ar_replay.Transaction.NodeName.data())));
+        if (!grabbedNode)
+            return clear(CommandStatus::Inactive);
+    }
+    if (!IsSafeTransform(grabbedNode->world) || !IsSafeTransform(objectRoot->world))
+        return clear(CommandStatus::EngineRejected);
+
+    const auto desiredGrabbedNodeWorld = HiggsPolicy::ComposeHandRelative(
+        ToHiggsPolicyTransform(hand->world), ar_replay.Transaction.Relative);
+    const auto desiredObjectRootWorld = HiggsPolicy::SolveObjectRootWorld(
+        ToHiggsPolicyTransform(grabbedNode->world), ToHiggsPolicyTransform(objectRoot->world),
+        desiredGrabbedNodeWorld);
+    auto rootWorld = ToNiTransform(desiredObjectRootWorld);
+    if (!IsSafeTransform(rootWorld) ||
+        !ar_replay.Object->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, true))
+        return clear(CommandStatus::EngineRejected);
+
+    RE::NiPoint3 angles{};
+    // False means the Euler representation is non-unique at gimbal lock; the
+    // function still supplies a valid canonical angle triplet.
+    TP_UNUSED(rootWorld.rotate.ToEulerAnglesXYZ(angles));
+    if (!std::isfinite(angles.x) || !std::isfinite(angles.y) || !std::isfinite(angles.z))
+        return clear(CommandStatus::EngineRejected);
+
+    // HIGGS reports the hand-to-grabbed-node transform. Move the reference
+    // root so the named node reaches that transform; never rewrite an
+    // internal mesh node, which would deform the model without moving Havok.
+    ar_replay.Object->SetPosition(rootWorld.translate);
+    ar_replay.Object->SetAngle(angles);
+    ar_replay.Transaction.Active = false;
+    ar_replay.BindingActive = true;
+    return CommandStatus::Success;
+}
+
+[[nodiscard]] CommandStatus BeginHiggsSpatialReplay(const RE::NiPointer<RE::Actor>& ac_actor,
+                                                      RE::TESObjectREFR& ar_object,
+                                                      const GameplayActionPayload& ac_payload) noexcept
+{
+    if (!ac_actor || !HiggsPolicy::IsSpatialBegin(ac_payload.ActionFlags) || ac_payload.ValueA == 0)
+        return CommandStatus::Malformed;
+    const auto sequence = static_cast<std::uint32_t>(ac_payload.ValueA);
+    const bool isLeft = (ac_payload.ActionFlags & HiggsPolicy::kLeftHand) != 0;
+    auto available = std::find_if(g_higgsSpatialReplays.begin(), g_higgsSpatialReplays.end(),
+                                  [&ar_object, &ac_actor, isLeft](const HiggsSpatialReplay& replay) noexcept {
+                                      return replay.BindingActive && replay.Object.get() == std::addressof(ar_object) &&
+                                             replay.Actor.get() == ac_actor.get() && replay.Transaction.IsLeft == isLeft;
+                                  });
+    if (available == g_higgsSpatialReplays.end())
+        available = std::find_if(g_higgsSpatialReplays.begin(), g_higgsSpatialReplays.end(),
+                                  [](const HiggsSpatialReplay& ac_replay) noexcept {
+                                      return !ac_replay.Transaction.Active && !ac_replay.BindingActive;
+                                  });
+    if (available == g_higgsSpatialReplays.end()) {
+        available = g_higgsSpatialReplays.begin();
+        if (available->Object)
+            TP_UNUSED(available->Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+    }
+    *available = {};
+    available->Actor = ac_actor;
+    available->Object = std::addressof(ar_object);
+    available->ActorRoot.reset(ac_actor->Get3D());
+    if (!available->ActorRoot || !AvatarManager::Get().IsManagedRemotePlayerActor(ac_actor.get()))
+    {
+        *available = {};
+        return CommandStatus::Inactive;
+    }
+    if (ac_payload.ValueB < 0 || ac_payload.ValueB > static_cast<std::int32_t>(HiggsPolicy::kMaximumNodeBytes))
+        return CommandStatus::Malformed;
+    HiggsPolicy::Begin(available->Transaction, sequence, isLeft, static_cast<std::uint8_t>(ac_payload.ValueB));
+    return CommandStatus::Success;
+}
+
+[[nodiscard]] CommandStatus AppendHiggsSpatialNode(RE::TESObjectREFR& ar_object,
+                                                     const GameplayActionPayload& ac_payload) noexcept
+{
+    if (!HiggsPolicy::IsSpatialNode(ac_payload.ActionFlags) || ac_payload.ValueA == 0 ||
+        ac_payload.ScalarA != 0.0F || ac_payload.ScalarB != 0.0F || ac_payload.ScalarC != 0.0F ||
+        ac_payload.ScalarD != 0.0F)
+        return CommandStatus::Malformed;
+    auto* replay = FindHiggsSpatialReplay(ar_object, static_cast<std::uint32_t>(ac_payload.ValueA),
+                                          (ac_payload.ActionFlags & HiggsPolicy::kLeftHand) != 0);
+    if (!replay)
+        return CommandStatus::StaleEntity;
+    std::array<char, HiggsPolicy::kNodeBytesPerChunk> bytes{};
+    std::memcpy(bytes.data(), &ac_payload.LocalFormIdB, sizeof(ac_payload.LocalFormIdB));
+    std::memcpy(bytes.data() + sizeof(ac_payload.LocalFormIdB), &ac_payload.LocalFormIdC, sizeof(ac_payload.LocalFormIdC));
+    std::memcpy(bytes.data() + sizeof(ac_payload.LocalFormIdB) + sizeof(ac_payload.LocalFormIdC), &ac_payload.LocalFormIdD, sizeof(ac_payload.LocalFormIdD));
+    std::memcpy(bytes.data() + sizeof(ac_payload.LocalFormIdB) + sizeof(ac_payload.LocalFormIdC) + sizeof(ac_payload.LocalFormIdD), &ac_payload.ValueB, sizeof(ac_payload.ValueB));
+    return HiggsPolicy::AppendNode(replay->Transaction, static_cast<std::uint32_t>(ac_payload.ValueA),
+                                   (ac_payload.ActionFlags & HiggsPolicy::kLeftHand) != 0,
+                                   HiggsPolicy::ChunkIndex(ac_payload.ActionFlags), bytes) ?
+               CommandStatus::Success : CommandStatus::StaleEntity;
+}
+
+[[nodiscard]] CommandStatus AppendHiggsSpatialChunk(RE::TESObjectREFR& ar_object,
+                                                      const GameplayActionPayload& ac_payload) noexcept
+{
+    if (!HiggsPolicy::IsSpatialChunk(ac_payload.ActionFlags) || ac_payload.ValueA == 0)
+        return CommandStatus::Malformed;
+    const auto index = HiggsPolicy::ChunkIndex(ac_payload.ActionFlags);
+    auto* replay = FindHiggsSpatialReplay(ar_object, static_cast<std::uint32_t>(ac_payload.ValueA),
+                                          (ac_payload.ActionFlags & HiggsPolicy::kLeftHand) != 0);
+    if (!replay)
+        return CommandStatus::StaleEntity;
+    const HiggsPolicy::Chunk chunk{{ac_payload.ScalarA, ac_payload.ScalarB, ac_payload.ScalarC, ac_payload.ScalarD}};
+    const auto append = HiggsPolicy::Append(replay->Transaction, static_cast<std::uint32_t>(ac_payload.ValueA),
+                                            (ac_payload.ActionFlags & HiggsPolicy::kLeftHand) != 0, index, chunk);
+    if (append == HiggsPolicy::AppendResult::Rejected)
+        return CommandStatus::StaleEntity;
+    return append == HiggsPolicy::AppendResult::Complete ? ApplyCompletedHiggsSpatialReplay(*replay) :
+                                                            CommandStatus::Success;
 }
 
 [[nodiscard]] bool HasOnlyZeroUnusedFields(const GameplayActionPayload& a_payload) noexcept
@@ -348,10 +562,14 @@ template <class T>
 [[nodiscard]] CommandStatus ApplyHiggsInteraction(const CommandRecord& a_command) noexcept
 {
     const auto& payload = a_command.Payload.ApplyGameplayAction;
-    if (payload.LocalFormIdA == 0 || payload.LocalFormIdD != 0 ||
-        std::abs(payload.ScalarA) > 1000000.0f || std::abs(payload.ScalarB) > 1000000.0f ||
-        std::abs(payload.ScalarC) > 1000000.0f || payload.ScalarD != 0.0f ||
-        (payload.ActionFlags & ~0x13u) != 0)
+    const bool spatialNodeRecord = (payload.ActionFlags & HiggsPolicy::kSpatialNode) != 0;
+    const bool spatialRebase = (payload.ActionFlags & HiggsPolicy::kSpatialRebase) != 0;
+    if ((!spatialRebase && payload.LocalFormIdA == 0) || (!spatialNodeRecord && !spatialRebase && payload.LocalFormIdD != 0) ||
+        std::abs(payload.ScalarA) > HiggsPolicy::kMaximumTransformMagnitude ||
+        std::abs(payload.ScalarB) > HiggsPolicy::kMaximumTransformMagnitude ||
+        std::abs(payload.ScalarC) > HiggsPolicy::kMaximumTransformMagnitude ||
+        std::abs(payload.ScalarD) > HiggsPolicy::kMaximumTransformMagnitude ||
+        !HiggsPolicy::HasOnlyKnownFlags(payload.ActionFlags))
         return CommandStatus::Malformed;
 
     RE::NiPointer<RE::Actor> actor;
@@ -359,36 +577,75 @@ template <class T>
     if (status != CommandStatus::Success)
         return status;
 
+    if (spatialRebase) {
+        if (payload.ActionFlags != HiggsPolicy::kSpatialRebase || payload.LocalFormIdA != 0 ||
+            payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.LocalFormIdD != 0 ||
+            payload.ValueA != 0 || payload.ValueB != 0 || payload.ScalarA != 0.0F || payload.ScalarB != 0.0F ||
+            payload.ScalarC != 0.0F || payload.ScalarD != 0.0F)
+            return CommandStatus::Malformed;
+        ClearHiggsSpatialReplaysForActor(*actor);
+        return CommandStatus::Success;
+    }
+
     auto* object = LookupLocalForm<RE::TESObjectREFR>(payload.LocalFormIdA);
     if (!object)
         return CommandStatus::MissingForm;
+    // PLANCK exclusively owns actor physics. HIGGS may only replay ordinary
+    // object references, even if an invalid or malicious relay packet
+    // resolves successfully to an actor locally.
+    if (object->As<RE::Actor>())
+        return CommandStatus::Unsupported;
 
-    if (payload.LocalFormIdB != 0 && !LookupLocalForm<RE::TESObjectCELL>(payload.LocalFormIdB))
+    if (!spatialNodeRecord && payload.LocalFormIdB != 0 && !LookupLocalForm<RE::TESObjectCELL>(payload.LocalFormIdB))
         return CommandStatus::MissingCell;
-    if (payload.LocalFormIdC != 0 && !LookupLocalForm<RE::TESWorldSpace>(payload.LocalFormIdC))
+    if (!spatialNodeRecord && payload.LocalFormIdC != 0 && !LookupLocalForm<RE::TESWorldSpace>(payload.LocalFormIdC))
         return CommandStatus::MissingForm;
 
     const auto action = static_cast<GameplayAction>(payload.Action);
+    const bool spatialBegin = (payload.ActionFlags & HiggsPolicy::kSpatialBegin) != 0;
+    const bool spatialChunk = (payload.ActionFlags & HiggsPolicy::kSpatialChunk) != 0;
+    const bool spatialNode = (payload.ActionFlags & HiggsPolicy::kSpatialNode) != 0;
+    if (spatialBegin || spatialChunk || spatialNode) {
+        if (static_cast<int>(spatialBegin) + static_cast<int>(spatialChunk) + static_cast<int>(spatialNode) != 1)
+            return CommandStatus::Malformed;
+        if (spatialBegin) {
+            if (action != GameplayAction::HiggsGrab && action != GameplayAction::HiggsPull)
+                return CommandStatus::Malformed;
+            return BeginHiggsSpatialReplay(actor, *object, payload);
+        }
+        if (spatialNode)
+            return AppendHiggsSpatialNode(*object, payload);
+        if (action != GameplayAction::HiggsPull || (payload.ActionFlags & HiggsPolicy::kSpatialBegin) != 0)
+            return CommandStatus::Malformed;
+        return AppendHiggsSpatialChunk(*object, payload);
+    }
+
+    if (payload.ScalarD != 0.0F || payload.ValueB != 0)
+        return CommandStatus::Malformed;
     const bool hasPosition = payload.LocalFormIdB != 0 || payload.LocalFormIdC != 0 || payload.ValueA != 0 ||
                              payload.ScalarC != 0.0f;
     switch (action) {
     case GameplayAction::HiggsGrab:
     case GameplayAction::HiggsPull:
-        object->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, true);
+        if (!object->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, true))
+            return CommandStatus::EngineRejected;
         if (hasPosition)
             object->SetPosition(payload.ScalarA, payload.ScalarB, payload.ScalarC);
         return CommandStatus::Success;
     case GameplayAction::HiggsDrop:
         if (hasPosition)
             object->SetPosition(payload.ScalarA, payload.ScalarB, payload.ScalarC);
-        object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true);
-        return CommandStatus::Success;
+        ClearHiggsSpatialReplay(*object);
+        return object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true) ?
+                   CommandStatus::Success :
+                   CommandStatus::EngineRejected;
     case GameplayAction::HiggsStash:
     case GameplayAction::HiggsConsume:
         // These events describe how HIGGS initiated an inventory change. The
         // canonical inventory delta owns durable world/inventory mutation;
         // disabling the reference here races that path and can persist a false
         // disabled state in the receiver's save.
+        ClearHiggsSpatialReplay(*object);
         return CommandStatus::Success;
     default:
         return CommandStatus::Malformed;
@@ -397,12 +654,12 @@ template <class T>
 
 [[nodiscard]] CommandStatus RejectPlanckInteraction(const CommandRecord& a_command) noexcept
 {
-    const auto& payload = a_command.Payload.ApplyGameplayAction;
-    RE::NiPointer<RE::Actor> actor;
-    const auto status = ResolveRemoteActor(a_command, actor);
-    if (status != CommandStatus::Success)
-        return status;
-    return payload.LocalFormIdA != 0 ? CommandStatus::Unsupported : CommandStatus::Malformed;
+    // PLANCK interface002 replay is intentionally outside this CommonLib
+    // command path.  It crosses only the bounded POD bridge, so no gameplay
+    // command can accidentally turn a remote physical observation into a
+    // direct RE/Havok or HIGGS hand operation.
+    TP_UNUSED(a_command);
+    return CommandStatus::Unsupported;
 }
 } // namespace
 
@@ -471,6 +728,14 @@ bool VRInteractionManager::IsPvpEnabled() noexcept
 void VRInteractionManager::ProcessPeriodic() noexcept
 {
     try {
+        for (auto& replay : g_higgsSpatialReplays) {
+            if (!replay.BindingActive)
+                continue;
+            replay.Transaction.Active = true;
+            const auto status = ApplyCompletedHiggsSpatialReplay(replay);
+            if (status != CommandStatus::Success)
+                replay = {};
+        }
         if (!g_serverSettings.Active)
             return;
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -493,6 +758,11 @@ void VRInteractionManager::Reset() noexcept
 {
     CalendarHooks::ResetAuthoritativeTick();
     g_pvpEnabledSnapshot.store(false, std::memory_order_release);
+    for (auto& replay : g_higgsSpatialReplays) {
+        if ((replay.Transaction.Active || replay.BindingActive) && replay.Object)
+            TP_UNUSED(replay.Object->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true));
+    }
+    g_higgsSpatialReplays = {};
     try {
         if (g_serverSettings.Active) {
             if (auto* player = RE::PlayerCharacter::GetSingleton())

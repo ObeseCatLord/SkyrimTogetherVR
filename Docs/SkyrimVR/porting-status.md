@@ -2,21 +2,28 @@
 
 This repository is a VR-targeted working copy of TiltedEvolution/Skyrim Together.
 
-## 2026-08-18 Current Release Authority
+## 2026-08-19 Current Release Authority
 
 The release remains a **connection/bootstrap alpha**. It is not gameplay-ready
 and must not be described as a gameplay alpha, beta, or parity release until
 matching two-client gameplay evidence exists.
 
 The current worktree is an unbuilt source candidate. It moves the gameplay
-target to protocol revision 17, mapping ABI 23, and bridge capability revision 34,
+target to protocol revision 21, mapping ABI 24, and bridge capability revision 34,
 identity-authorizes attacker-originated NPC health deltas and rejects replayed
 action nonces, separates them from owner health state, and assigns stable
 server event IDs to repeated edge mutations,
 adds fail-closed native readiness and quest-target validation, makes save/load
 rehydration finite, and replaces static/legacy readiness claims with one
 aggregate runtime snapshot. These are source-inspection claims only: they have
-no build, runtime, or repair-complete credit yet.
+no build, runtime, or repair-complete credit yet. Revision 19 hardens HIGGS
+producer epochs, mutation-window rebases, terminal-reference capture, and
+bounded node identities. Revision 20 adds an optional negotiated PLANCK
+interface-002 physical relay backed by a patched PLANCK 0.8.0 fork; canonical
+actor-value replication remains the only damage authority. Revision 21 makes
+ordinary quest updates owner/revision-authenticated and canonical quest recovery
+owner-scoped. The patched PLANCK DLL and protocol-21 client/server have not
+been built or runtime-proven.
 
 Commit `0fd7a319` passed the disposable WinBoat candidate and clean detached
 WinBoat gameplay builds. Its 503-file package, build evidence, and private

@@ -21,6 +21,7 @@
 #include <Structs/VRAppearance.h>
 #include <Structs/VREquipmentUpdate.h>
 #include <Structs/VRHiggsState.h>
+#include <Structs/VRPlanckPhysicsEvent.h>
 
 struct DisconnectedEvent;
 struct NotifyActorMaxValueChanges;
@@ -33,6 +34,7 @@ struct NotifyEquipmentChanges;
 struct NotifyFactionsChanges;
 struct NotifyInventoryChanges;
 struct NotifyMount;
+struct NotifyMountResync;
 struct NotifyRemoveSpell;
 struct NotifyRemoveCharacter;
 struct NotifyPlayerLeft;
@@ -46,6 +48,7 @@ struct NotifyVRCombatHitEvent;
 struct NotifyVREquipmentUpdate;
 struct NotifyVRGrabEvent;
 struct NotifyVRHiggsState;
+struct NotifyVRPlanckPhysicsEvent;
 struct NotifyVRAppearance;
 struct NotifyVRMagicEffectEvent;
 struct NotifyVRPoseUpdate;
@@ -167,6 +170,22 @@ enum class Disposition : std::uint8_t
 {
     return !aAdmitted && aIsAdmissionHead &&
            HasCumulativeAdmissionTimedOut(aAdmissionAge, aTimeout);
+}
+
+// A canonical mount revision becomes committed only after the native action
+// has succeeded for the same rider/entity generation that staged it.
+[[nodiscard]] constexpr bool CanCommitCanonicalMountCompletion(
+    const bool aNativeSuccess, const bool aCurrentGeneration,
+    const std::uint64_t aCanonicalRevision) noexcept
+{
+    return aNativeSuccess && aCurrentGeneration && aCanonicalRevision != 0;
+}
+
+[[nodiscard]] constexpr bool MustRefreshCanonicalMountRecovery(
+    const bool aNativeSuccess, const bool aCurrentGeneration,
+    const bool aSuperseded) noexcept
+{
+    return !aSuperseded && (!aNativeSuccess || !aCurrentGeneration);
 }
 
 [[nodiscard]] constexpr bool IsDuplicateAdmissionIdentity(
@@ -319,6 +338,7 @@ private:
 
     struct HiggsEventLedger
     {
+        std::uint64_t ProducerEpoch{0};
         std::uint32_t LastAdmittedMutationSequence{0};
         std::uint32_t LastSkippedMutationSequence{0};
         std::uint32_t LastTerminalMutationSequence{0};
@@ -333,7 +353,9 @@ private:
     struct PendingHiggsMutation
     {
         VRHiggsEventSnapshot Event{};
+        VRHiggsGrabTransform GrabTransform{};
         bool TwoHanding{false};
+        bool HasGrabTransform{false};
         double ResolutionElapsed{0.0};
         std::uint8_t ResolutionAttempts{0};
     };
@@ -439,8 +461,37 @@ private:
     {
         std::uint32_t MountServerId{};
         AcceptanceToken Acceptance{};
+        std::uint64_t CanonicalRevision{};
         std::uint8_t Attempts{};
         double RetryElapsed{};
+    };
+
+    struct MountWorkTracking
+    {
+        std::uint32_t RiderServerId{};
+        std::uint64_t CanonicalRevision{};
+        std::uint64_t Generation{};
+        SkyrimTogetherVR::GameplayBridge::BridgeIdentity EntityIdentity{};
+        bool Superseded{};
+    };
+
+    struct PendingMountResync
+    {
+        std::uint64_t KnownRevision{};
+        std::uint64_t ApplyingRevision{};
+        std::uint64_t ServerInstanceNonce{};
+        std::uint64_t ConnectionGeneration{};
+        std::uint64_t LifecycleEpoch{};
+        double RetryElapsed{};
+        double ApplyRetryElapsed{};
+        std::uint32_t RequestId{};
+        std::uint32_t CanonicalMountId{};
+        std::uint8_t Attempts{};
+        std::uint8_t ExhaustedRounds{};
+        std::uint8_t ApplyAttempts{};
+        bool RequestSent{};
+        bool Applying{};
+        bool NativePending{};
     };
 
     struct MagicActorReference
@@ -630,6 +681,7 @@ private:
     void OnDeath(const NotifyDeathStateChange& acMessage) noexcept;
     void OnRespawn(const NotifyRespawn& acMessage) noexcept;
     void OnMount(const NotifyMount& acMessage) noexcept;
+    void OnMountResync(const NotifyMountResync& acMessage) noexcept;
     void OnProjectile(const NotifyProjectileLaunch& acMessage) noexcept;
     void OnSpawnData(const NotifySpawnData& acMessage) noexcept;
     void OnSpellCast(const NotifySpellCast& acMessage) noexcept;
@@ -643,11 +695,19 @@ private:
     void OnVrProjectile(const NotifyVRProjectileEvent& acMessage) noexcept;
     void OnVrPose(const NotifyVRPoseUpdate& acMessage) noexcept;
     void OnVrHiggs(const NotifyVRHiggsState& acMessage) noexcept;
+    void OnVrPlanckPhysics(const NotifyVRPlanckPhysicsEvent& acMessage) noexcept;
     void OnVrAppearance(const NotifyVRAppearance& acMessage) noexcept;
     void OnVrGrab(const NotifyVRGrabEvent& acMessage) noexcept;
     void OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept;
     void OnPlayerLevel(const NotifyPlayerLevel& acMessage) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
+    void DrainLocalPlanckPhysics() noexcept;
+    void RebaseLocalPlanckEvents(std::uint64_t aLifecycleGeneration) noexcept;
+    void RetryRemotePlanckPhysics(double aDeltaSeconds) noexcept;
+    void RetryRemotePlanckSessionClears(double aDeltaSeconds) noexcept;
+    void ClearRemotePlanckSession(std::uint32_t aPlayerId, std::uint64_t aProducerEpoch) noexcept;
+    void PurgeRemotePlanckSender(std::uint32_t aPlayerId) noexcept;
+    void ClearAllRemotePlanckState() noexcept;
     void OnGameplayResult(const SkyrimTogetherVR::RemoteGameplayBridgeResultEvent& acEvent) noexcept;
     void OnLocalGameplay(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) noexcept;
 
@@ -666,6 +726,10 @@ private:
     [[nodiscard]] HiggsEventLedger* GetHiggsEventLedger(std::uint32_t aPlayerId) noexcept;
     [[nodiscard]] bool EnqueueHiggsMutationTail(std::uint32_t aPlayerId,
                                                  const VRHiggsState& acState) noexcept;
+    [[nodiscard]] bool EnqueueHiggsHeldTransform(std::uint32_t aPlayerId,
+                                                  const VRHiggsState& acState) noexcept;
+    void CancelPendingHiggsObservationWork(std::uint32_t aPlayerId) noexcept;
+    void RebaseHiggsProducer(std::uint32_t aPlayerId, std::uint64_t aProducerEpoch) noexcept;
     void TrySubmitNextHiggsMutation(std::uint32_t aPlayerId,
                                     double aResolutionDelta = 0.0) noexcept;
     void CommitHiggsMutationAdmission(const PendingGameplayWork& acWork) noexcept;
@@ -677,7 +741,8 @@ private:
     [[nodiscard]] bool QueueReliableForServer(const AcceptanceToken& acAcceptance, std::uint32_t aServerId,
                                               SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                               SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
-                                              const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload) noexcept;
+                                              const SkyrimTogetherVR::GameplayBridge::GameplayActionPayload& acPayload,
+                                              std::uint64_t* apWorkId = nullptr) noexcept;
     [[nodiscard]] bool QueueReliableForPlayer(const AcceptanceToken& acAcceptance, std::uint32_t aPlayerId,
                                               SkyrimTogetherVR::GameplayBridge::GameplayDomain aDomain,
                                               SkyrimTogetherVR::GameplayBridge::GameplayAction aAction,
@@ -752,7 +817,18 @@ private:
                                                         const AcceptanceToken& acAcceptance) noexcept;
     [[nodiscard]] bool TryResolveMagicActor(std::uint32_t aServerId, MagicActorReference& arReference) const noexcept;
     [[nodiscard]] bool TryApplyMount(std::uint32_t aRiderServerId, std::uint32_t aMountServerId,
-                                     const AcceptanceToken& acAcceptance) noexcept;
+                                     const AcceptanceToken& acAcceptance,
+                                     std::uint64_t aCanonicalRevision = 0) noexcept;
+    void SupersedeMountWork(std::uint32_t aRiderServerId) noexcept;
+    void ResolveMountWork(std::uint64_t aWorkId, bool aNativeSuccess) noexcept;
+    void RequestMountSnapshotResync(std::uint32_t aRiderServerId) noexcept;
+    [[nodiscard]] bool SendMountResyncRequest(std::uint32_t aRiderServerId,
+                                              PendingMountResync& arPending) noexcept;
+    void RetryMountResyncs(double aDelta) noexcept;
+    [[nodiscard]] bool IsCurrentMountResync(const PendingMountResync& acPending) const noexcept;
+    void CompleteMountResync(std::uint32_t aRiderServerId, std::uint64_t aRevision) noexcept;
+    void ResetMountCanonicalRecovery() noexcept;
+    void RecordMountResyncDiagnostic(const char* apReason) noexcept;
     [[nodiscard]] bool HasExactActorActionCapability() const noexcept;
     [[nodiscard]] bool IsCurrentActorActionRecord(const SkyrimTogetherVR::LocalGameplayBridgeEvent& acEvent) const noexcept;
     [[nodiscard]] LocalActorActionTransaction* GetOrCreateLocalActorAction(std::uint64_t aActionId) noexcept;
@@ -818,10 +894,102 @@ private:
     std::unordered_map<std::uint64_t, PendingAppearanceApplication> m_pendingAppearanceApplications{};
     std::unordered_map<std::uint64_t, AppearanceActionTracking> m_appearanceActionOwners{};
     std::unordered_map<std::uint32_t, PendingMount> m_pendingMounts{};
+    std::unordered_map<std::uint32_t, PendingMountResync> m_pendingMountResyncs{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_lastMountSnapshotRevisionByRider{};
+    std::unordered_map<std::uint64_t, MountWorkTracking> m_mountWork{};
+    std::unordered_map<std::uint32_t, std::uint64_t> m_mountWorkGenerationByRider{};
     std::unordered_map<std::uint32_t, SkyrimTogetherVR::ActorReplicationRecovery::SpawnRecoveryState>
         m_resyncAttempts{};
     std::unordered_map<std::uint32_t, DomainLedgers> m_ledgers{};
     std::unordered_map<std::uint32_t, HiggsEventLedger> m_higgsEventLedgers{};
+    struct PlanckEventLedger
+    {
+        std::uint64_t ServerInstanceNonce{0};
+        std::uint64_t ConnectionGeneration{0};
+        std::uint64_t ProducerEpoch{0};
+        std::uint64_t LastEventId{0};
+        bool HasEpoch{false};
+        bool HasEvent{false};
+    };
+
+    struct PendingRemotePlanckEvent
+    {
+        VRPlanckPhysicsEvent Event{};
+        std::uint64_t ServerInstanceNonce{0};
+        std::uint64_t ConnectionGeneration{0};
+        double RetryElapsedSeconds{0.0};
+        double TotalElapsedSeconds{0.0};
+        std::uint8_t Attempts{0};
+    };
+
+    struct PlanckRemoteSessionKey
+    {
+        std::uint64_t ServerInstanceNonce{0};
+        std::uint64_t ConnectionGeneration{0};
+        std::uint32_t PlayerId{0};
+        std::uint64_t ProducerEpoch{0};
+
+        [[nodiscard]] bool operator==(const PlanckRemoteSessionKey& acRhs) const noexcept
+        {
+            return ServerInstanceNonce == acRhs.ServerInstanceNonce &&
+                   ConnectionGeneration == acRhs.ConnectionGeneration &&
+                   PlayerId == acRhs.PlayerId && ProducerEpoch == acRhs.ProducerEpoch;
+        }
+    };
+
+    struct PlanckRemoteSessionKeyHash
+    {
+        [[nodiscard]] std::size_t operator()(const PlanckRemoteSessionKey& acKey) const noexcept;
+    };
+
+    struct PendingRemotePlanckClear
+    {
+        PlanckRemoteSessionKey Key{};
+        std::uint64_t Token{0};
+        std::uint64_t EventId{0};
+        double RetryElapsedSeconds{0.0};
+    };
+
+    struct PendingLocalPlanckEvent
+    {
+        VRPlanckPhysicsEvent Event{};
+        std::uint64_t LifecycleGeneration{0};
+    };
+
+    enum class PlanckRemoteSubmitResult : std::uint8_t
+    {
+        Applied,
+        Retry,
+        Terminal,
+    };
+
+    [[nodiscard]] PlanckRemoteSubmitResult SubmitRemotePlanckEvent(
+        std::uint32_t aPlayerId, const VRPlanckPhysicsEvent& acEvent) noexcept;
+    void CommitRemotePlanckEvent(std::uint32_t aPlayerId,
+                                 const VRPlanckPhysicsEvent& acEvent) noexcept;
+    void EnqueueRemotePlanckRetry(std::uint32_t aPlayerId,
+                                  const VRPlanckPhysicsEvent& acEvent) noexcept;
+    [[nodiscard]] bool MakePlanckRemoteSessionKey(std::uint32_t aPlayerId,
+                                                   std::uint64_t aProducerEpoch,
+                                                   PlanckRemoteSessionKey& arKey) const noexcept;
+    [[nodiscard]] std::uint64_t GetOrAllocatePlanckRemoteSessionToken(
+        const PlanckRemoteSessionKey& acKey) noexcept;
+    void RequestRemotePlanckClear(const PlanckRemoteSessionKey& acKey) noexcept;
+    [[nodiscard]] bool HasPendingRemotePlanckClear(const PlanckRemoteSessionKey& acKey) const noexcept;
+    [[nodiscard]] bool HasPendingRemotePlanckReplacementClear(const PlanckRemoteSessionKey& acKey) const noexcept;
+    void EnterPlanckAdmissionFailClosed() noexcept;
+    void PruneCompletedPlanckCancellationKeys() noexcept;
+    void RefreshPlanckWireProducerIdentity(std::uint64_t aServerInstanceNonce,
+                                           std::uint64_t aConnectionGeneration,
+                                           std::uint64_t aLifecycleGeneration) noexcept;
+
+    std::unordered_map<std::uint32_t, PlanckEventLedger> m_planckEventLedgers{};
+    std::deque<PendingLocalPlanckEvent> m_pendingLocalPlanckEvents{};
+    std::unordered_map<std::uint32_t, std::deque<PendingRemotePlanckEvent>> m_pendingRemotePlanckEvents{};
+    std::unordered_map<PlanckRemoteSessionKey, std::uint64_t, PlanckRemoteSessionKeyHash>
+        m_planckRemoteSessionTokens{};
+    std::unordered_set<PlanckRemoteSessionKey, PlanckRemoteSessionKeyHash> m_cancelledPlanckRemoteSessions{};
+    std::deque<PendingRemotePlanckClear> m_pendingRemotePlanckClears{};
     std::unordered_map<std::uint32_t, std::deque<PendingHiggsMutation>> m_pendingHiggsMutations{};
     std::unordered_set<SemanticTombstone, SemanticTombstoneHash> m_semanticTombstones{};
     std::vector<PendingGameplayWork> m_pendingGameplayWork{};
@@ -851,7 +1019,28 @@ private:
     std::uint32_t m_nextAppearanceTransactionSequence{1};
     std::uint64_t m_nextGameplayWorkId{1};
     std::uint64_t m_nextAdmissionOrder{1};
+    std::uint64_t m_nextPlanckClearEventId{1};
+    std::uint64_t m_nextPlanckRemoteSessionToken{1};
+    std::uint64_t m_nextPlanckWireProducerEpoch{1};
+    std::uint64_t m_planckLocalLifecycleGeneration{0};
+    std::uint64_t m_planckWireProducerEpoch{0};
+    std::uint64_t m_planckWireProducerServerNonce{0};
+    std::uint64_t m_planckWireProducerConnectionGeneration{0};
+    std::uint64_t m_planckLocalQueueOverflowCount{0};
+    std::uint64_t m_planckLocalRejectedCount{0};
+    std::uint64_t m_planckRemoteRejectedCount{0};
+    std::uint64_t m_planckRemoteUnavailableCount{0};
+    std::uint64_t m_planckRemoteDeferredCount{0};
+    std::uint64_t m_planckRemoteRetryOverflowCount{0};
+    std::uint64_t m_planckRemoteRetryExpiredCount{0};
+    std::uint64_t m_planckRemoteOrderQuarantineCount{0};
+    std::uint64_t m_planckCancellationCapacityCount{0};
+    bool m_planckAdmissionFailClosed{false};
     std::uint32_t m_nextCanonicalResyncRequestId{1};
+    std::uint32_t m_nextMountResyncRequestId{1};
+    std::uint32_t m_mountResyncDiagnosticCount{};
+    std::uint64_t m_observedServerInstanceNonce{};
+    std::uint64_t m_observedConnectionGeneration{};
     std::uint64_t m_semanticTombstoneRebaseEpoch{0};
     double m_semanticTombstoneRebaseElapsed{0.0};
     bool m_replayAfterLifecycleBoundary{false};
@@ -870,6 +1059,7 @@ private:
     entt::scoped_connection m_deathConnection;
     entt::scoped_connection m_respawnConnection;
     entt::scoped_connection m_mountConnection;
+    entt::scoped_connection m_mountResyncConnection;
     entt::scoped_connection m_projectileConnection;
     entt::scoped_connection m_spawnDataConnection;
     entt::scoped_connection m_spellCastConnection;
@@ -883,6 +1073,7 @@ private:
     entt::scoped_connection m_vrProjectileConnection;
     entt::scoped_connection m_vrPoseConnection;
     entt::scoped_connection m_vrHiggsConnection;
+    entt::scoped_connection m_vrPlanckPhysicsConnection;
     entt::scoped_connection m_vrAppearanceConnection;
     entt::scoped_connection m_vrGrabConnection;
     entt::scoped_connection m_playerLeftConnection;

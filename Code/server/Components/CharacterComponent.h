@@ -8,6 +8,8 @@
 #include <Structs/Factions.h>
 #include <Structs/VRAppearance.h>
 
+#include <cstdint>
+
 struct CharacterComponent
 {
     enum
@@ -88,4 +90,6 @@ struct CharacterComponent
     uint16_t Flags{};
     int32_t PlayerId{};
     bool HasVRAppearance{};
+    // Authoritative durable relationship for a rider. Zero means unmounted.
+    std::uint32_t MountServerId{};
 };

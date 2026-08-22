@@ -6,16 +6,32 @@ void ActivateRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const
     CellId.Serialize(aWriter);
     Serialization::WriteVarInt(aWriter, ActivatorId);
     aWriter.WriteBits(PreActivationOpenState, 8);
+    Serialization::WriteBool(aWriter, HasPostActivationOpenState);
+    aWriter.WriteBits(PostActivationOpenState, 8);
 }
 
 void ActivateRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
 {
+    IsDecodedValid = true;
     ClientMessage::DeserializeRaw(aReader);
 
     Id.Deserialize(aReader);
     CellId.Deserialize(aReader);
     ActivatorId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     uint64_t preActivationOpenState = 0;
-    aReader.ReadBits(preActivationOpenState, 8);
+    if (!aReader.ReadBits(preActivationOpenState, 8))
+    {
+        IsDecodedValid = false;
+        return;
+    }
     PreActivationOpenState = preActivationOpenState & 0xFF;
+    HasPostActivationOpenState = Serialization::ReadBool(aReader);
+    uint64_t postActivationOpenState{};
+    if (!aReader.ReadBits(postActivationOpenState, 8))
+    {
+        IsDecodedValid = false;
+        return;
+    }
+    PostActivationOpenState = postActivationOpenState & 0xFF;
+    IsDecodedValid = IsValid();
 }

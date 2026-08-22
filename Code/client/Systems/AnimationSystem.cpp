@@ -150,6 +150,14 @@ void AnimationSystem::Serialize(World& aWorld, ClientReferencesMoveRequest& aMov
         movement.Direction = pMiddleProcess->GetDirectionData();
     }
 
+    float canonicalDirection{};
+    if (!movement.TryGetCanonicalDirection(canonicalDirection))
+    {
+        aMovementSnapshot.Updates.erase(localComponent.Id);
+        return;
+    }
+    movement.Direction = canonicalDirection;
+
     for (auto& entry : animationComponent.Actions)
     {
         update.ActionEvents.push_back(entry);

@@ -20,6 +20,7 @@
 #include <Messages/NotifyInventoryChanges.h>
 #include <Messages/NotifyHealthChangeBroadcast.h>
 #include <Messages/NotifyMount.h>
+#include <Messages/NotifyMountResync.h>
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyPlayerLevel.h>
 #include <Messages/NotifyProjectileLaunch.h>
@@ -32,11 +33,14 @@
 #include <Messages/NotifyVREquipmentUpdate.h>
 #include <Messages/NotifyVRGrabEvent.h>
 #include <Messages/NotifyVRHiggsState.h>
+#include <Messages/NotifyVRPlanckPhysicsEvent.h>
+#include <Messages/RequestVRPlanckPhysicsEvent.h>
 #include <Messages/NotifyVRAppearance.h>
 #include <Messages/NotifyVRMagicEffectEvent.h>
 #include <Messages/NotifyVRPoseUpdate.h>
 #include <Messages/NotifyVRProjectileEvent.h>
 #include <Messages/RequestActorResync.h>
+#include <Messages/RequestMountResync.h>
 #include <Structs/VRInteractionValidation.h>
 #include <Messages/ServerReferencesMoveRequest.h>
 #include <Services/TransportService.h>
@@ -46,6 +50,8 @@
 #include <World.h>
 #include <VRCanonicalEntityIdentity.h>
 #include <VRGameplayBridge.h>
+#include <vr_common/VRPlanckPhysicsBridge.h>
+#include <vr_gameplay_bridge/HiggsSpatialReplayPolicy.h>
 
 #include <algorithm>
 #include <bit>
@@ -68,6 +74,10 @@ constexpr std::uint32_t kFlagBool1 = 1u << 1;
 constexpr std::uint32_t kFlagBool2 = 1u << 2;
 constexpr std::uint32_t kFlagBool3 = 1u << 3;
 constexpr std::uint32_t kFlagLeftHand = 1u << 4;
+// A held-object transform needs thirteen scalar lanes. It is carried as one
+// control record followed by four ordered HIGGS transform chunks; this keeps
+// the shared bridge ABI fixed while making replay atomic at the receiver.
+namespace HiggsPolicy = SkyrimTogetherVR::HiggsSpatialReplayPolicy;
 constexpr std::uint32_t kFlagNodeShift = 8;
 // Original MagicService replays AddTarget using CASTING_SOURCE_COUNT so the
 // engine does not treat the remote effect as a local hand/other cast.
@@ -76,6 +86,17 @@ constexpr std::uint32_t kActorValueCount = 164;
 constexpr std::uint32_t kHealthActorValue = 24;
 constexpr std::uint32_t kDragonSoulsActorValue = 133;
 constexpr std::size_t kMaximumPendingMagicEffects = 32;
+constexpr std::size_t kMaximumPendingLocalPlanckEvents = 64;
+constexpr std::size_t kMaximumPlanckEventsPerUpdate = 16;
+constexpr std::size_t kMaximumPendingRemotePlanckEventsPerPlayer = 16;
+constexpr std::size_t kMaximumRemotePlanckRetriesPerUpdate = 16;
+constexpr std::size_t kMaximumPlanckRemoteSessionTokens = 256;
+constexpr std::size_t kMaximumPendingRemotePlanckClears = 256;
+static_assert(kMaximumPendingRemotePlanckClears >= kMaximumPlanckRemoteSessionTokens,
+              "Every admitted PLANCK token must have fail-closed clear retention capacity");
+constexpr std::uint8_t kMaximumRemotePlanckRetryAttempts = 20;
+constexpr double kRemotePlanckRetryDelaySeconds = 0.25;
+constexpr double kMaximumRemotePlanckRetrySeconds = 5.0;
 constexpr std::uint8_t kMaximumPendingMagicEffectAttempts = 8;
 constexpr double kMagicActorRetryDelaySeconds = 0.25;
 constexpr std::size_t kMaximumPendingGameplayWork = 192;
@@ -275,9 +296,53 @@ template <class... Ts> [[nodiscard]] std::uint64_t Signature(const Ts... aValues
     return acId ? aWorld.GetModSystem().GetGameId(acId) : 0;
 }
 
+[[nodiscard]] bool ToServer(World& aWorld, const std::uint32_t aFormId, GameId& arId) noexcept
+{
+    return aFormId != 0 && aWorld.GetModSystem().GetServerModId(aFormId, arId) && static_cast<bool>(arId);
+}
+
+struct PlanckBridgeFunctions
+{
+    SkyrimTogetherVR::PlanckBridge::GetCapabilitiesFn GetCapabilities{};
+    SkyrimTogetherVR::PlanckBridge::DequeueLocalEventFn Dequeue{};
+    SkyrimTogetherVR::PlanckBridge::SubmitRemoteEventFn Submit{};
+    SkyrimTogetherVR::PlanckBridge::ClearRemoteSessionFn Clear{};
+    SkyrimTogetherVR::PlanckBridge::DiscardLocalEventsFn DiscardLocalEvents{};
+};
+
+[[nodiscard]] bool GetPlanckBridgeFunctions(PlanckBridgeFunctions& arFunctions,
+                                             SkyrimTogetherVR::PlanckBridge::Capabilities& arCapabilities) noexcept
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+    const auto module = GetModuleHandleW(L"SkyrimTogetherVRPlanckBridge.dll");
+    if (!module)
+        return false;
+
+    arFunctions.GetCapabilities = reinterpret_cast<GetCapabilitiesFn>(
+        GetProcAddress(module, kGetCapabilitiesExport));
+    arFunctions.Dequeue = reinterpret_cast<DequeueLocalEventFn>(
+        GetProcAddress(module, kDequeueLocalEventExport));
+    arFunctions.Submit = reinterpret_cast<SubmitRemoteEventFn>(
+        GetProcAddress(module, kSubmitRemoteEventExport));
+    arFunctions.Clear = reinterpret_cast<ClearRemoteSessionFn>(
+        GetProcAddress(module, kClearRemoteSessionExport));
+    arFunctions.DiscardLocalEvents = reinterpret_cast<DiscardLocalEventsFn>(
+        GetProcAddress(module, kDiscardLocalEventsExport));
+    arCapabilities = {};
+    return arFunctions.GetCapabilities && arFunctions.Dequeue && arFunctions.Submit && arFunctions.Clear &&
+           arFunctions.DiscardLocalEvents &&
+           arFunctions.GetCapabilities(&arCapabilities) == Result::Accepted &&
+           IsCompatibleCapabilities(arCapabilities);
+}
+
 [[nodiscard]] bool IsRemotePlayer(const TransportService& acTransport, const std::uint32_t aPlayerId) noexcept
 {
     return aPlayerId != 0 && aPlayerId != acTransport.GetLocalPlayerId();
+}
+
+[[nodiscard]] bool IsPowerOfTwo(const std::uint64_t aValue) noexcept
+{
+    return aValue != 0 && (aValue & (aValue - 1)) == 0;
 }
 
 [[nodiscard]] bool IsHiggsMutationEvent(const VRHiggsEventSnapshot::Kind aKind) noexcept
@@ -301,6 +366,101 @@ template <class... Ts> [[nodiscard]] std::uint64_t Signature(const Ts... aValues
     case VRHiggsEventSnapshot::Kind::kConsumed: return GameplayBridge::GameplayAction::HiggsConsume;
     default: return {};
     }
+}
+
+[[nodiscard]] HiggsPolicy::Transform ToHiggsPolicyTransform(const VRHiggsGrabTransform& acTransform) noexcept
+{
+    HiggsPolicy::Transform transform{};
+    transform.Translate = {acTransform.Translate.x, acTransform.Translate.y, acTransform.Translate.z};
+    transform.Rotate.Rows[0] = {acTransform.AxisX.x, acTransform.AxisX.y, acTransform.AxisX.z};
+    transform.Rotate.Rows[1] = {acTransform.AxisY.x, acTransform.AxisY.y, acTransform.AxisY.z};
+    transform.Rotate.Rows[2] = {acTransform.AxisZ.x, acTransform.AxisZ.y, acTransform.AxisZ.z};
+    transform.Scale = acTransform.Scale;
+    return transform;
+}
+
+[[nodiscard]] bool IsUsableHiggsGrabTransform(const VRHiggsGrabTransform& acTransform) noexcept
+{
+    return acTransform.Valid && HiggsPolicy::IsSafeTransform(ToHiggsPolicyTransform(acTransform));
+}
+
+[[nodiscard]] const VRHiggsHandState* FindHeldHiggsHand(
+    const VRHiggsState& acState, const VRHiggsEventSnapshot& acEvent) noexcept
+{
+    if (!acEvent.HasHand ||
+        (acEvent.EventKind != VRHiggsEventSnapshot::Kind::kPulled &&
+         acEvent.EventKind != VRHiggsEventSnapshot::Kind::kGrabbed))
+        return nullptr;
+
+    const auto& hand = acEvent.IsLeft ? acState.Left : acState.Right;
+    return hand.Valid && hand.HoldingObject && hand.GrabbedObject == acEvent.ObjectId &&
+                   IsUsableHiggsGrabTransform(hand.GrabTransform) ?
+               &hand :
+               nullptr;
+}
+
+void AppendHiggsSpatialReplay(
+    std::vector<GameplayBridge::GameplayAction>& arActions,
+    std::vector<GameplayBridge::GameplayActionPayload>& arPayloads,
+    const GameplayBridge::GameplayAction aAction,
+    GameplayBridge::GameplayActionPayload aControl,
+    const std::uint32_t aSequence,
+    const VRHiggsGrabTransform& acTransform,
+    const std::array<char, VRHiggsHandState::kMaximumGrabbedNodeNameBytes>& acNodeName = {},
+    const std::uint8_t aNodeNameLength = 0)
+{
+    aControl.ValueA = static_cast<std::int32_t>(aSequence);
+    aControl.ValueB = aNodeNameLength;
+    aControl.ActionFlags |= HiggsPolicy::kSpatialBegin;
+    arActions.push_back(aAction);
+    arPayloads.push_back(aControl);
+
+    for (std::size_t index = 0; index < (aNodeNameLength + HiggsPolicy::kNodeBytesPerChunk - 1) /
+                                            HiggsPolicy::kNodeBytesPerChunk; ++index) {
+        auto node = aControl;
+        node.LocalFormIdB = 0;
+        node.LocalFormIdC = 0;
+        node.LocalFormIdD = 0;
+        node.ScalarA = node.ScalarB = node.ScalarC = node.ScalarD = 0.0F;
+        std::array<char, HiggsPolicy::kNodeBytesPerChunk> bytes{};
+        const auto offset = index * bytes.size();
+        const auto count = std::min<std::size_t>(bytes.size(), aNodeNameLength - offset);
+        std::memcpy(bytes.data(), acNodeName.data() + offset, count);
+        std::memcpy(&node.LocalFormIdB, bytes.data(), sizeof(node.LocalFormIdB));
+        std::memcpy(&node.LocalFormIdC, bytes.data() + sizeof(node.LocalFormIdB), sizeof(node.LocalFormIdC));
+        std::memcpy(&node.LocalFormIdD, bytes.data() + sizeof(node.LocalFormIdB) + sizeof(node.LocalFormIdC), sizeof(node.LocalFormIdD));
+        std::memcpy(&node.ValueB, bytes.data() + sizeof(node.LocalFormIdB) + sizeof(node.LocalFormIdC) + sizeof(node.LocalFormIdD), sizeof(node.ValueB));
+        node.ActionFlags = (aControl.ActionFlags & (kFlagBool0 | kFlagBool1 | kFlagLeftHand)) |
+                           HiggsPolicy::kSpatialNode |
+                           (static_cast<std::uint32_t>(index) << HiggsPolicy::kChunkIndexShift);
+        arActions.push_back(GameplayBridge::GameplayAction::HiggsPull);
+        arPayloads.push_back(node);
+    }
+
+    const auto chunks = HiggsPolicy::MakeChunks(ToHiggsPolicyTransform(acTransform));
+    for (std::size_t index = 0; index < chunks.size(); ++index) {
+        auto chunk = aControl;
+        chunk.ScalarA = chunks[index].Lanes[0];
+        chunk.ScalarB = chunks[index].Lanes[1];
+        chunk.ScalarC = chunks[index].Lanes[2];
+        chunk.ScalarD = chunks[index].Lanes[3];
+        chunk.ActionFlags = (aControl.ActionFlags & (kFlagBool0 | kFlagBool1 | kFlagLeftHand)) |
+                            HiggsPolicy::kSpatialChunk |
+                            (static_cast<std::uint32_t>(index) << HiggsPolicy::kChunkIndexShift);
+        arActions.push_back(GameplayBridge::GameplayAction::HiggsPull);
+        arPayloads.push_back(chunk);
+    }
+}
+
+[[nodiscard]] std::uint64_t HiggsTransformSignature(const VRHiggsGrabTransform& acTransform) noexcept
+{
+    return Signature(FloatBits(acTransform.Translate.x), FloatBits(acTransform.Translate.y),
+                     FloatBits(acTransform.Translate.z), FloatBits(acTransform.AxisX.x),
+                     FloatBits(acTransform.AxisX.y), FloatBits(acTransform.AxisX.z),
+                     FloatBits(acTransform.AxisY.x), FloatBits(acTransform.AxisY.y),
+                     FloatBits(acTransform.AxisY.z), FloatBits(acTransform.AxisZ.x),
+                     FloatBits(acTransform.AxisZ.y), FloatBits(acTransform.AxisZ.z),
+                     FloatBits(acTransform.Scale));
 }
 
 void RememberBoundedServerId(std::unordered_set<std::uint32_t>& arIds, const std::uint32_t aServerId) noexcept
@@ -335,6 +495,7 @@ VRActorReplicationService::VRActorReplicationService(
     m_deathConnection = aDispatcher.sink<NotifyDeathStateChange>().connect<&VRActorReplicationService::OnDeath>(this);
     m_respawnConnection = aDispatcher.sink<NotifyRespawn>().connect<&VRActorReplicationService::OnRespawn>(this);
     m_mountConnection = aDispatcher.sink<NotifyMount>().connect<&VRActorReplicationService::OnMount>(this);
+    m_mountResyncConnection = aDispatcher.sink<NotifyMountResync>().connect<&VRActorReplicationService::OnMountResync>(this);
     m_projectileConnection = aDispatcher.sink<NotifyProjectileLaunch>().connect<&VRActorReplicationService::OnProjectile>(this);
     m_spawnDataConnection = aDispatcher.sink<NotifySpawnData>().connect<&VRActorReplicationService::OnSpawnData>(this);
     m_spellCastConnection = aDispatcher.sink<NotifySpellCast>().connect<&VRActorReplicationService::OnSpellCast>(this);
@@ -348,6 +509,7 @@ VRActorReplicationService::VRActorReplicationService(
     m_vrProjectileConnection = aDispatcher.sink<NotifyVRProjectileEvent>().connect<&VRActorReplicationService::OnVrProjectile>(this);
     m_vrPoseConnection = aDispatcher.sink<NotifyVRPoseUpdate>().connect<&VRActorReplicationService::OnVrPose>(this);
     m_vrHiggsConnection = aDispatcher.sink<NotifyVRHiggsState>().connect<&VRActorReplicationService::OnVrHiggs>(this);
+    m_vrPlanckPhysicsConnection = aDispatcher.sink<NotifyVRPlanckPhysicsEvent>().connect<&VRActorReplicationService::OnVrPlanckPhysics>(this);
     m_vrAppearanceConnection = aDispatcher.sink<NotifyVRAppearance>().connect<&VRActorReplicationService::OnVrAppearance>(this);
     m_vrGrabConnection = aDispatcher.sink<NotifyVRGrabEvent>().connect<&VRActorReplicationService::OnVrGrab>(this);
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&VRActorReplicationService::OnPlayerLeft>(this);
@@ -530,8 +692,20 @@ bool VRActorReplicationService::EnqueueHiggsMutationTail(
     std::deque<PendingHiggsMutation> replacement;
     if (queued != m_pendingHiggsMutations.end())
         replacement = queued->second;
-    for (std::size_t index = firstUnseen; index < acState.MutationEventCount; ++index)
-        replacement.push_back({acState.MutationEvents[index], acState.TwoHanding});
+    for (std::size_t index = firstUnseen; index < acState.MutationEventCount; ++index) {
+        const auto& event = acState.MutationEvents[index];
+        PendingHiggsMutation pending{};
+        pending.Event = event;
+        pending.TwoHanding = acState.TwoHanding;
+        if (IsUsableHiggsGrabTransform(event.GrabTransform)) {
+            pending.GrabTransform = event.GrabTransform;
+            pending.HasGrabTransform = true;
+        } else if (const auto* hand = FindHeldHiggsHand(acState, event)) {
+            pending.GrabTransform = hand->GrabTransform;
+            pending.HasGrabTransform = true;
+        }
+        replacement.push_back(std::move(pending));
+    }
 
     const auto [queue, inserted] = m_pendingHiggsMutations.try_emplace(aPlayerId);
     TP_UNUSED(inserted);
@@ -545,10 +719,102 @@ catch (...)
     return false;
 }
 
+bool VRActorReplicationService::EnqueueHiggsHeldTransform(
+    const std::uint32_t aPlayerId, const VRHiggsState& acState) noexcept
+{
+    if (aPlayerId == 0 || acState.Sequence == 0 || !acState.IsDecodedValid)
+        return false;
+
+    if (std::any_of(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+                    [aPlayerId](const PendingGameplayWork& acWork) noexcept {
+                        return acWork.TargetIsPlayer && acWork.PlayerId == aPlayerId &&
+                               acWork.Domain == GameplayBridge::GameplayDomain::Higgs &&
+                               acWork.Acceptance.Channel == 1;
+                    }))
+        return true;
+
+    std::vector<GameplayBridge::GameplayAction> actions;
+    std::vector<GameplayBridge::GameplayActionPayload> payloads;
+    std::uint64_t signature = Signature(acState.TwoHanding);
+    const auto append = [&](const VRHiggsHandState& acHand, const bool aIsLeft) {
+        if (!acHand.Valid || !acHand.HoldingObject || !acHand.GrabbedObject ||
+            !IsUsableHiggsGrabTransform(acHand.GrabTransform))
+            return true;
+
+        const auto object = ToLocal(m_world, acHand.GrabbedObject);
+        if (object == 0)
+            return false;
+
+        auto payload = Payload();
+        payload.LocalFormIdA = object;
+        payload.ActionFlags = kFlagBool0 | (aIsLeft ? kFlagLeftHand : 0) |
+                              (acState.TwoHanding ? kFlagBool1 : 0);
+        AppendHiggsSpatialReplay(actions, payloads, GameplayBridge::GameplayAction::HiggsGrab,
+                                 payload, acState.Sequence, acHand.GrabTransform, acHand.GrabbedNodeName,
+                                 acHand.GrabbedNodeNameLength);
+        signature = Mix(signature, Signature(object, aIsLeft, HiggsTransformSignature(acHand.GrabTransform)));
+        return true;
+    };
+
+    const bool rightHandIsSameTwoHandedObject = acState.TwoHanding && acState.Left.HoldingObject &&
+                                                acState.Right.HoldingObject &&
+                                                acState.Left.GrabbedObject == acState.Right.GrabbedObject;
+    if (!append(acState.Left, true) || (!rightHandIsSameTwoHandedObject && !append(acState.Right, false)) ||
+        actions.empty())
+        return false;
+
+    // Channel one is the observation stream. Mutation edges retain channel
+    // zero, so a sampled held transform cannot consume or resurrect a release.
+    const auto acceptance = PrepareAccept(aPlayerId, GameplayBridge::GameplayDomain::Higgs,
+                                          acState.Sequence, signature, 1);
+    if (!acceptance.Valid)
+        return false;
+    return QueueReliableBatchForPlayer(acceptance, aPlayerId, GameplayBridge::GameplayDomain::Higgs,
+                                       std::move(actions), std::move(payloads));
+}
+
+void VRActorReplicationService::CancelPendingHiggsObservationWork(const std::uint32_t aPlayerId) noexcept
+{
+    std::vector<std::uint64_t> workIds;
+    for (const auto& work : m_pendingGameplayWork) {
+        if (work.TargetIsPlayer && work.PlayerId == aPlayerId &&
+            work.Domain == GameplayBridge::GameplayDomain::Higgs && work.Acceptance.Channel == 1)
+            workIds.push_back(work.WorkId);
+    }
+    for (const auto workId : workIds)
+        ForgetReliableGameplayWork(workId);
+}
+
 bool VRActorReplicationService::IsHiggsMutationWork(const PendingGameplayWork& acWork) noexcept
 {
     return acWork.TargetIsPlayer && acWork.Domain == GameplayBridge::GameplayDomain::Higgs &&
            acWork.HiggsMutationSequence != 0;
+}
+
+void VRActorReplicationService::RebaseHiggsProducer(
+    const std::uint32_t aPlayerId, const std::uint64_t aProducerEpoch) noexcept
+{
+    std::vector<std::uint64_t> workIds;
+    for (const auto& work : m_pendingGameplayWork) {
+        if (work.TargetIsPlayer && work.PlayerId == aPlayerId && work.Domain == GameplayBridge::GameplayDomain::Higgs)
+            workIds.push_back(work.WorkId);
+    }
+    for (const auto workId : workIds)
+        ForgetReliableGameplayWork(workId);
+    m_pendingHiggsMutations.erase(aPlayerId);
+    auto& ledger = m_higgsEventLedgers[aPlayerId];
+    ledger = {};
+    ledger.ProducerEpoch = aProducerEpoch;
+    constexpr std::size_t kDomainStride = 18;
+    const auto domain = static_cast<std::size_t>(GameplayBridge::GameplayDomain::Higgs);
+    if (domain < kDomainStride) {
+        auto& ledgers = m_ledgers[aPlayerId];
+        ledgers[domain] = {};
+        ledgers[domain + kDomainStride] = {};
+    }
+    std::erase_if(m_semanticTombstones, [aPlayerId](const SemanticTombstone& tombstone) noexcept {
+        return tombstone.PlayerId == aPlayerId && tombstone.Domain == GameplayBridge::GameplayDomain::Higgs;
+    });
 }
 
 bool VRActorReplicationService::HasPendingHiggsMutationWork(const std::uint32_t aPlayerId) const noexcept
@@ -619,8 +885,21 @@ void VRActorReplicationService::TrySubmitNextHiggsMutation(const std::uint32_t a
     PendingGameplayWork work{};
     work.PlayerId = aPlayerId;
     work.Domain = GameplayBridge::GameplayDomain::Higgs;
-    work.Actions = {HiggsActionForEvent(event.EventKind)};
-    work.Payloads = {payload};
+    if (mutation.HasGrabTransform) {
+        const auto action = HiggsActionForEvent(event.EventKind);
+        const auto spatialAction = action == GameplayBridge::GameplayAction::HiggsPull ||
+                                           action == GameplayBridge::GameplayAction::HiggsGrab ? action :
+                                           GameplayBridge::GameplayAction::HiggsGrab;
+        AppendHiggsSpatialReplay(work.Actions, work.Payloads, spatialAction, payload, event.Sequence,
+                                 mutation.GrabTransform, event.GrabbedNodeName, event.GrabbedNodeNameLength);
+        if (spatialAction != action) {
+            work.Actions.push_back(action);
+            work.Payloads.push_back(payload);
+        }
+    } else {
+        work.Actions = {HiggsActionForEvent(event.EventKind)};
+        work.Payloads = {payload};
+    }
     work.Acceptance = acceptance;
     work.TargetIsPlayer = true;
     work.HiggsMutationSequence = event.Sequence;
@@ -698,9 +977,26 @@ void VRActorReplicationService::RequestSemanticTombstoneRebase() noexcept
 bool VRActorReplicationService::QueueReliableForServer(
     const AcceptanceToken& acAcceptance, const std::uint32_t aServerId,
     const GameplayBridge::GameplayDomain aDomain, const GameplayBridge::GameplayAction aAction,
-    const GameplayBridge::GameplayActionPayload& acPayload) noexcept
+    const GameplayBridge::GameplayActionPayload& acPayload, std::uint64_t* const apWorkId) noexcept
 {
-    return QueueReliableBatchForServer(acAcceptance, aServerId, aDomain, {aAction}, {acPayload});
+    PendingGameplayWork work{};
+    work.ServerId = aServerId;
+    work.Domain = aDomain;
+    work.Actions = {aAction};
+    work.Payloads = {acPayload};
+    work.Acceptance = acAcceptance;
+    if (!QueueReliableGameplayWork(std::move(work)))
+        return false;
+    if (apWorkId) {
+        const auto queued = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+            [this, &acAcceptance](const PendingGameplayWork& acWork) noexcept {
+                return IsSameAcceptance(acWork.Acceptance, acAcceptance);
+            });
+        if (queued == m_pendingGameplayWork.end())
+            return false;
+        *apWorkId = queued->WorkId;
+    }
+    return true;
 }
 
 bool VRActorReplicationService::QueueReliableForPlayer(
@@ -1080,6 +1376,11 @@ void VRActorReplicationService::ForgetReliableGameplayWork(const std::uint64_t a
 
 void VRActorReplicationService::RetireReliableGameplayWork(const std::uint64_t aWorkId) noexcept
 {
+    // Mount recovery is committed only by the successful native result.  Any
+    // other retirement path (failure, timeout, malformed result, or lost
+    // result ownership) rotates canonical recovery instead of replaying the
+    // already-admitted command.
+    ResolveMountWork(aWorkId, false);
     const auto work = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
         [aWorkId](const PendingGameplayWork& acWork) noexcept { return acWork.WorkId == aWorkId; });
     if (work == m_pendingGameplayWork.end())
@@ -1751,7 +2052,8 @@ bool VRActorReplicationService::IsCurrentActorActionRecord(
                payload.ActorLocalFormId != 0 && payload.Reserved0 == 0 &&
                payload.SnapshotId == header.Identity.ActionId &&
                payload.DescriptorVersion == SkyrimTogetherVR::AnimationGraphProtocol::kDescriptorVersion &&
-               payload.Reserved1 == 0 &&
+               payload.Reserved1 == 0 && payload.DescriptorDigest != 0 &&
+               payload.DirectionFloatIndex < SkyrimTogetherVR::AnimationGraphProtocol::kMaximumFloatCount &&
                payload.ChunkFlags == SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot && IsFinite(payload.Direction) &&
                SkyrimTogetherVR::AnimationGraphProtocol::IsValidChunk(type, payload.StartIndex, payload.ValueCount,
                                                                         payload.TotalCount) &&
@@ -1845,6 +2147,8 @@ bool VRActorReplicationService::BuildLocalActorAction(
     action.EventName = TiltedPhoques::String{text.data(), separator};
     action.TargetEventName = TiltedPhoques::String{
         text.data() + separator + 1, text.size() - separator - 1};
+    action.Variables.DescriptorDigest = acTransaction.Snapshot.DescriptorDigest;
+    action.Variables.DirectionFloatIndex = acTransaction.Snapshot.DirectionFloatIndex;
     action.Variables.Booleans.resize(acTransaction.Snapshot.BooleanCount);
     action.Variables.Floats.resize(acTransaction.Snapshot.FloatCount);
     action.Variables.Integers.resize(acTransaction.Snapshot.IntegerCount);
@@ -1946,17 +2250,14 @@ bool VRActorReplicationService::HasHumanoidActorActionVariables(const ActionEven
 {
     const std::string_view eventName{acAction.EventName.c_str(), acAction.EventName.size()};
     const std::string_view targetEventName{acAction.TargetEventName.c_str(), acAction.TargetEventName.size()};
-    const auto* shape = SkyrimTogetherVR::AnimationGraphProtocol::FindKnownShape(
-        acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
-        acAction.Variables.Integers.size());
     return acAction.ActionId && (acAction.Type & ~0x7u) == 0 &&
            eventName.size() <= kMaximumActorActionStringBytes &&
            targetEventName.size() <= kMaximumActorActionStringBytes &&
            eventName.find('\0') == std::string_view::npos && targetEventName.find('\0') == std::string_view::npos &&
-           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::BooleanBits, acAction.Variables.Booleans.size()) &&
-           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::Float, acAction.Variables.Floats.size()) &&
-           SkyrimTogetherVR::AnimationGraphProtocol::IsValidCount(SkyrimTogetherVR::AnimationGraphProtocol::ValueType::Integer, acAction.Variables.Integers.size()) &&
-           shape && shape->DirectionFloatIndex < acAction.Variables.Floats.size() &&
+           SkyrimTogetherVR::AnimationGraphProtocol::IsValidDescriptorContract(
+               acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
+               acAction.Variables.Integers.size(), acAction.Variables.DescriptorDigest,
+               acAction.Variables.DirectionFloatIndex) &&
            std::all_of(acAction.Variables.Floats.begin(), acAction.Variables.Floats.end(),
                        [](const float aValue) noexcept { return IsFinite(aValue); });
 }
@@ -1986,12 +2287,7 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
     if (IsKnownRemoteActorAction(aServerId, acAction))
         return true;
 
-    const auto* shape = SkyrimTogetherVR::AnimationGraphProtocol::FindKnownShape(
-        acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
-        acAction.Variables.Integers.size());
-    if (!shape || shape->DirectionFloatIndex >= acAction.Variables.Floats.size())
-        return false;
-    const auto direction = acAction.Variables.Floats[shape->DirectionFloatIndex];
+    const auto direction = acAction.Variables.Floats[acAction.Variables.DirectionFloatIndex];
 
     const auto actionForm = ToLocal(m_world, acAction.ActionId);
     const auto targetForm = ToLocal(m_world, acAction.TargetId);
@@ -2027,6 +2323,8 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
         payload.TotalCount = static_cast<std::uint16_t>(acValues.size());
         payload.ChunkFlags = SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot;
         payload.Direction = direction;
+        payload.DescriptorDigest = acAction.Variables.DescriptorDigest;
+        payload.DirectionFloatIndex = acAction.Variables.DirectionFloatIndex;
         for (std::uint16_t index = 0; index < aCount; ++index)
             payload.Values[index] = std::bit_cast<std::uint32_t>(acValues[aStart + index]);
         return true;
@@ -2045,6 +2343,8 @@ bool VRActorReplicationService::SubmitRemoteActorAction(const std::uint32_t aSer
     booleanPayload.TotalCount = booleanPayload.ValueCount;
     booleanPayload.ChunkFlags = SkyrimTogetherVR::AnimationGraphProtocol::FullSnapshot;
     booleanPayload.Direction = direction;
+    booleanPayload.DescriptorDigest = acAction.Variables.DescriptorDigest;
+    booleanPayload.DirectionFloatIndex = acAction.Variables.DirectionFloatIndex;
     for (std::size_t index = 0; index < acAction.Variables.Booleans.size(); ++index) {
         if (acAction.Variables.Booleans[index])
             booleanPayload.Values[index / 32] |= 1u << (index % 32);
@@ -2229,6 +2529,15 @@ void VRActorReplicationService::ForgetPlayer(const std::uint32_t aPlayerId) noex
             m_lastActorSnapshotRevisionByServer.erase(serverId);
             m_pendingActorSnapshotResyncs.erase(serverId);
             m_pendingEquipmentSnapshotResyncs.erase(serverId);
+            m_pendingMounts.erase(serverId);
+            std::erase_if(m_pendingMounts, [serverId](const auto& acEntry) noexcept {
+                return acEntry.second.MountServerId == serverId;
+            });
+            m_pendingMountResyncs.erase(serverId);
+            m_lastMountSnapshotRevisionByRider.erase(serverId);
+            std::erase_if(m_pendingMountResyncs, [serverId](const auto& acEntry) noexcept {
+                return acEntry.second.CanonicalMountId == serverId;
+            });
             ForgetEquipmentApplication(serverId);
             ForgetInventoryTransactions(serverId);
             ForgetSpawnActionIds(serverId);
@@ -2306,6 +2615,11 @@ void VRActorReplicationService::ForgetServer(const std::uint32_t aServerId) noex
     m_pendingMounts.erase(aServerId);
     std::erase_if(m_pendingMounts, [aServerId](const auto& acEntry) {
         return acEntry.second.MountServerId == aServerId;
+    });
+    m_pendingMountResyncs.erase(aServerId);
+    m_lastMountSnapshotRevisionByRider.erase(aServerId);
+    std::erase_if(m_pendingMountResyncs, [aServerId](const auto& acEntry) noexcept {
+        return acEntry.second.CanonicalMountId == aServerId;
     });
     std::erase_if(m_localActorActions, [this, aServerId](const auto& acEntry) noexcept {
         const auto& transaction = acEntry.second;
@@ -2629,10 +2943,33 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
 {
     const auto lifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
     const auto reliableDelta = std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0 ? acEvent.Delta : 0.0;
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    RefreshPlanckWireProducerIdentity(serverInstanceNonce, connectionGeneration, lifecycleEpoch);
+    RetryRemotePlanckSessionClears(reliableDelta);
+    if (serverInstanceNonce == 0 || connectionGeneration == 0) {
+        if (m_observedServerInstanceNonce != 0 || m_observedConnectionGeneration != 0)
+            ResetMountCanonicalRecovery();
+        m_observedServerInstanceNonce = 0;
+        m_observedConnectionGeneration = 0;
+    } else {
+        if ((m_observedServerInstanceNonce != 0 && m_observedServerInstanceNonce != serverInstanceNonce) ||
+            (m_observedConnectionGeneration != 0 && m_observedConnectionGeneration != connectionGeneration))
+            ResetMountCanonicalRecovery();
+        m_observedServerInstanceNonce = serverInstanceNonce;
+        m_observedConnectionGeneration = connectionGeneration;
+    }
     if (lifecycleEpoch == 0 && m_observedLifecycleEpoch != 0)
     {
+        // Receiver replay ownership is authenticated by the server nonce and
+        // connection generation, not by a local gameplay reset.  Only local
+        // capture is fenced here; retained remote high-water marks prevent a
+        // delayed same-epoch packet from being replayed after the reset.
+        RebaseLocalPlanckEvents(0);
+        PruneCompletedPlanckCancellationKeys();
         m_pendingSpawns.clear();
         m_pendingMounts.clear();
+        ResetMountCanonicalRecovery();
         m_pendingMagicEffects.clear();
         m_pendingSpellCasts.clear();
         m_pendingGameplayWork.clear();
@@ -2672,6 +3009,8 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
     }
     if (lifecycleEpoch != 0 && m_observedLifecycleEpoch != 0 && lifecycleEpoch != m_observedLifecycleEpoch)
     {
+        RebaseLocalPlanckEvents(lifecycleEpoch);
+        PruneCompletedPlanckCancellationKeys();
         m_ledgers.clear();
         m_lastEquipmentTransactionByServer.clear();
         m_lastActorSnapshotRevisionByServer.clear();
@@ -2688,6 +3027,7 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
         m_appliedAppearanceSequences.clear();
         m_failedAppearanceSequences.clear();
         m_pendingMounts.clear();
+        ResetMountCanonicalRecovery();
         m_pendingMagicEffects.clear();
         m_pendingSpellCasts.clear();
         m_pendingGameplayWork.clear();
@@ -2744,6 +3084,7 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
     };
     retryCanonicalResyncs(m_pendingActorSnapshotResyncs, RequestActorResync::kActorSnapshot);
     retryCanonicalResyncs(m_pendingEquipmentSnapshotResyncs, RequestActorResync::kEquipmentSnapshot);
+    RetryMountResyncs(reliableDelta);
     if (m_semanticTombstoneRebaseRequested) {
         if (m_semanticTombstoneRebaseEpoch == 0 && lifecycleEpoch != 0)
             m_semanticTombstoneRebaseEpoch = lifecycleEpoch;
@@ -2776,6 +3117,8 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
                 discarded);
     }
 
+    RetryRemotePlanckPhysics(reliableDelta);
+    DrainLocalPlanckPhysics();
     m_localServerId = m_avatars.GetLocalServerId();
     for (std::size_t index = 0; index < m_pendingGameplayWork.size();) {
         const auto workId = m_pendingGameplayWork[index].WorkId;
@@ -3078,11 +3421,16 @@ void VRActorReplicationService::OnUpdate(const UpdateEvent& acEvent) noexcept tr
             continue;
         }
         it->second.RetryElapsed = 0.0;
-        if (TryApplyMount(it->first, it->second.MountServerId, it->second.Acceptance) ||
-            ++it->second.Attempts >= kMaximumPendingMagicEffectAttempts)
+        if (TryApplyMount(it->first, it->second.MountServerId, it->second.Acceptance)) {
             it = m_pendingMounts.erase(it);
-        else
+        } else if (++it->second.Attempts >= kMaximumPendingMagicEffectAttempts) {
+            const auto riderId = it->first;
+            it = m_pendingMounts.erase(it);
+            RecordMountResyncDiagnostic("normal mount application retry budget exhausted");
+            RequestMountSnapshotResync(riderId);
+        } else {
             ++it;
+        }
     }
 }
 catch (...)
@@ -3728,11 +4076,21 @@ void VRActorReplicationService::OnRespawn(const NotifyRespawn& acMessage) noexce
 
 void VRActorReplicationService::OnMount(const NotifyMount& acMessage) noexcept
 {
+    // An ordinary notification observed after a recovery request is the newest
+    // authoritative state available to this client. Retire the recovery even
+    // when its snapshot is awaiting native admission; otherwise that older
+    // snapshot could overwrite a later mount or dismount transition.
+    SupersedeMountWork(acMessage.RiderId);
+    m_pendingMountResyncs.erase(acMessage.RiderId);
+
+    // MountId zero is an explicit authoritative dismount. It supersedes any
+    // deferred mount attempt for this rider before native admission.
+    if (RevisionedCanonicalRecoveryPolicy::IsAuthoritativeDismount(acMessage.MountId))
+        m_pendingMounts.erase(acMessage.RiderId);
+
     const auto acceptance = PrepareAccept(acMessage.RiderId, GameplayBridge::GameplayDomain::ActorState, 0,
                                           Signature(acMessage.RiderId, acMessage.MountId));
     if (!acceptance.Valid)
-        return;
-    if (acMessage.MountId == 0)
         return;
     if (TryApplyMount(acMessage.RiderId, acMessage.MountId, acceptance)) {
         m_pendingMounts.erase(acMessage.RiderId);
@@ -3740,22 +4098,303 @@ void VRActorReplicationService::OnMount(const NotifyMount& acMessage) noexcept
     }
     constexpr std::size_t kMaximumPendingMounts = 64;
     if (m_pendingMounts.contains(acMessage.RiderId) || m_pendingMounts.size() < kMaximumPendingMounts)
-        m_pendingMounts[acMessage.RiderId] = {acMessage.MountId, acceptance, 0, 0.0};
+        m_pendingMounts[acMessage.RiderId] = {acMessage.MountId, acceptance, 0, 0, 0.0};
+    else
+        RequestMountSnapshotResync(acMessage.RiderId);
+}
+
+bool VRActorReplicationService::IsCurrentMountResync(const PendingMountResync& acPending) const noexcept
+{
+    return acPending.ServerInstanceNonce != 0 && acPending.ConnectionGeneration != 0 &&
+           acPending.LifecycleEpoch != 0 && m_transport.IsOnline() &&
+           m_transport.GetServerInstanceNonce() == acPending.ServerInstanceNonce &&
+           m_transport.GetConnectionGeneration() == acPending.ConnectionGeneration &&
+           SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch() == acPending.LifecycleEpoch;
+}
+
+void VRActorReplicationService::RecordMountResyncDiagnostic(const char* const apReason) noexcept
+{
+    if (m_mountResyncDiagnosticCount != (std::numeric_limits<std::uint32_t>::max)())
+        ++m_mountResyncDiagnosticCount;
+    const auto count = m_mountResyncDiagnosticCount;
+    if (count != 0 && (count & (count - 1)) == 0)
+        spdlog::warn("VR mount canonical recovery: {} (aggregate count {})", apReason, count);
+}
+
+void VRActorReplicationService::ResetMountCanonicalRecovery() noexcept
+{
+    m_pendingMountResyncs.clear();
+    m_lastMountSnapshotRevisionByRider.clear();
+    m_mountWork.clear();
+    m_mountWorkGenerationByRider.clear();
+    m_nextMountResyncRequestId = 1;
+    m_mountResyncDiagnosticCount = 0;
+}
+
+bool VRActorReplicationService::SendMountResyncRequest(
+    const std::uint32_t aRiderServerId, PendingMountResync& arPending) noexcept
+{
+    if (aRiderServerId == 0 || arPending.RequestId == 0 || !IsCurrentMountResync(arPending) ||
+        m_transport.IsGameplayCleanupRequired() ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return false;
+
+    RequestMountResync request{};
+    request.RiderId = aRiderServerId;
+    request.RequestId = arPending.RequestId;
+    request.KnownRevision = arPending.KnownRevision;
+    if (!m_transport.Send(request))
+        return false;
+
+    ++arPending.Attempts;
+    arPending.RetryElapsed = 0.0;
+    arPending.RequestSent = true;
+    return true;
+}
+
+void VRActorReplicationService::RequestMountSnapshotResync(const std::uint32_t aRiderServerId) noexcept
+{
+    if (aRiderServerId == 0 || m_pendingMountResyncs.contains(aRiderServerId) ||
+        m_pendingMountResyncs.size() >= kMaximumPendingCanonicalResyncs ||
+        !SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return;
+
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    const auto lifecycleEpoch = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (!m_transport.IsOnline() || serverInstanceNonce == 0 || connectionGeneration == 0 || lifecycleEpoch == 0)
+        return;
+
+    auto& pending = m_pendingMountResyncs[aRiderServerId];
+    pending.RequestId = RevisionedCanonicalRecoveryPolicy::NextNonZeroRequestId(m_nextMountResyncRequestId);
+    pending.ServerInstanceNonce = serverInstanceNonce;
+    pending.ConnectionGeneration = connectionGeneration;
+    pending.LifecycleEpoch = lifecycleEpoch;
+    if (const auto known = m_lastMountSnapshotRevisionByRider.find(aRiderServerId);
+        known != m_lastMountSnapshotRevisionByRider.end())
+        pending.KnownRevision = known->second;
+    TP_UNUSED(SendMountResyncRequest(aRiderServerId, pending));
+}
+
+void VRActorReplicationService::CompleteMountResync(
+    const std::uint32_t aRiderServerId, const std::uint64_t aRevision) noexcept
+{
+    if (aRiderServerId == 0 || aRevision == 0)
+        return;
+    m_lastMountSnapshotRevisionByRider.insert_or_assign(aRiderServerId, aRevision);
+    m_pendingMountResyncs.erase(aRiderServerId);
+    m_pendingMounts.erase(aRiderServerId);
+}
+
+void VRActorReplicationService::OnMountResync(const NotifyMountResync& acMessage) noexcept
+{
+    if (!acMessage.IsDecodedValid || !acMessage.IsValid())
+        return;
+    const auto pending = m_pendingMountResyncs.find(acMessage.RiderId);
+    if (pending == m_pendingMountResyncs.end() || pending->second.Applying || !pending->second.RequestSent ||
+        !IsCurrentMountResync(pending->second))
+        return;
+    const auto committed = m_lastMountSnapshotRevisionByRider.find(acMessage.RiderId);
+    const auto committedRevision = committed != m_lastMountSnapshotRevisionByRider.end() ? committed->second : 0;
+    if (!RevisionedCanonicalRecoveryPolicy::CanAcceptCanonicalResponse(
+            pending->second.RequestId, acMessage.RequestId, pending->second.KnownRevision,
+            committedRevision, acMessage.CanonicalRevision) ||
+        !m_spawnEntityIdentities.contains(acMessage.RiderId))
+        return;
+
+    const auto acceptance = PrepareAccept(
+        acMessage.RiderId, GameplayBridge::GameplayDomain::ActorState, 0,
+        Signature(acMessage.RiderId, acMessage.MountId, acMessage.CanonicalRevision));
+    if (!acceptance.Valid)
+        return;
+
+    // Retire normal retries and fence any already-admitted predecessor before
+    // the canonical action is staged.  Queue admission is not completion.
+    SupersedeMountWork(acMessage.RiderId);
+    m_pendingMounts.erase(acMessage.RiderId);
+    auto& recovery = pending->second;
+    recovery.Applying = true;
+    recovery.ApplyingRevision = acMessage.CanonicalRevision;
+    recovery.CanonicalMountId = acMessage.MountId;
+    recovery.ApplyAttempts = 0;
+    recovery.ApplyRetryElapsed = 0.0;
+    recovery.NativePending = TryApplyMount(
+        acMessage.RiderId, acMessage.MountId, acceptance, acMessage.CanonicalRevision);
+    if (!recovery.NativePending) {
+        recovery.Applying = false;
+        recovery.ApplyingRevision = 0;
+        recovery.CanonicalMountId = 0;
+        recovery.RequestId = RevisionedCanonicalRecoveryPolicy::NextNonZeroRequestId(m_nextMountResyncRequestId);
+        recovery.Attempts = 0;
+        recovery.RequestSent = false;
+        RecordMountResyncDiagnostic("canonical mount bridge admission unavailable; requesting newer recovery");
+        TP_UNUSED(SendMountResyncRequest(acMessage.RiderId, recovery));
+    }
+}
+
+void VRActorReplicationService::RetryMountResyncs(const double aDelta) noexcept
+{
+    if (!std::isfinite(aDelta) || aDelta < 0.0)
+        return;
+
+    const auto delta = std::min(aDelta, kCanonicalResyncRetrySeconds);
+    for (auto pending = m_pendingMountResyncs.begin(); pending != m_pendingMountResyncs.end();) {
+        auto& recovery = pending->second;
+        const auto riderId = pending->first;
+        if (!IsCurrentMountResync(recovery)) {
+            pending = m_pendingMountResyncs.erase(pending);
+            continue;
+        }
+        if (recovery.Applying) {
+            if (recovery.NativePending) {
+                ++pending;
+                continue;
+            }
+            recovery.ApplyRetryElapsed += delta;
+            if (recovery.ApplyRetryElapsed < kMagicActorRetryDelaySeconds) {
+                ++pending;
+                continue;
+            }
+            recovery.ApplyRetryElapsed = 0.0;
+            const auto acceptance = PrepareAccept(
+                riderId, GameplayBridge::GameplayDomain::ActorState, 0,
+                Signature(riderId, recovery.CanonicalMountId, recovery.ApplyingRevision));
+            if (acceptance.Valid && TryApplyMount(
+                    riderId, recovery.CanonicalMountId, acceptance, recovery.ApplyingRevision)) {
+                recovery.NativePending = true;
+                ++pending;
+                continue;
+            }
+            recovery.Applying = false;
+            recovery.ApplyingRevision = 0;
+            recovery.CanonicalMountId = 0;
+            recovery.ApplyAttempts = 0;
+            recovery.NativePending = false;
+            recovery.RequestId = RevisionedCanonicalRecoveryPolicy::NextNonZeroRequestId(m_nextMountResyncRequestId);
+            recovery.Attempts = 0;
+            recovery.RequestSent = false;
+            recovery.RetryElapsed = 0.0;
+            RecordMountResyncDiagnostic("canonical mount bridge admission unavailable; requesting newer recovery");
+            TP_UNUSED(SendMountResyncRequest(riderId, recovery));
+            ++pending;
+            continue;
+        }
+
+        recovery.RetryElapsed += delta;
+        const auto retryDelay = kCanonicalResyncRetrySeconds *
+            ActorReplicationRecovery::CanonicalResyncBackoffMultiplier(recovery.ExhaustedRounds);
+        if (recovery.RetryElapsed < retryDelay) {
+            ++pending;
+            continue;
+        }
+        if (ActorReplicationRecovery::ShouldRotateCanonicalResyncRequest(
+                recovery.Attempts, kMaximumCanonicalResyncAttempts)) {
+            if (recovery.ExhaustedRounds < (std::numeric_limits<std::uint8_t>::max)())
+                ++recovery.ExhaustedRounds;
+            if (ActorReplicationRecovery::ShouldLogCanonicalResyncExhaustion(recovery.ExhaustedRounds))
+                RecordMountResyncDiagnostic("canonical mount request round exhausted; rotating request ID");
+            recovery.RequestId = RevisionedCanonicalRecoveryPolicy::NextNonZeroRequestId(m_nextMountResyncRequestId);
+            recovery.Attempts = 0;
+            recovery.RetryElapsed = 0.0;
+            recovery.RequestSent = false;
+            ++pending;
+            continue;
+        }
+        if (!SendMountResyncRequest(riderId, recovery))
+            recovery.RetryElapsed = 0.0;
+        ++pending;
+    }
 }
 
 bool VRActorReplicationService::TryApplyMount(
     const std::uint32_t aRiderServerId, const std::uint32_t aMountServerId,
-    const AcceptanceToken& acAcceptance) noexcept
+    const AcceptanceToken& acAcceptance, const std::uint64_t aCanonicalRevision) noexcept
 {
-    if (aRiderServerId == 0 || aMountServerId == 0)
+    if (aRiderServerId == 0)
         return false;
-    const auto mountHandle = m_avatars.GetRemoteAvatarHandleForServerId(aMountServerId);
-    if (mountHandle.Value == 0)
+    const auto entity = m_spawnEntityIdentities.find(aRiderServerId);
+    if (entity == m_spawnEntityIdentities.end() || entity->second.EntityGeneration == 0 ||
+        m_mountWork.size() >= kMaximumPendingCanonicalResyncs)
         return false;
     auto payload = Payload();
-    payload.SecondaryHandle = mountHandle;
-    return QueueReliableForServer(acAcceptance, aRiderServerId, GameplayBridge::GameplayDomain::ActorState,
-                                  GameplayBridge::GameplayAction::Mount, payload);
+    if (aMountServerId != 0) {
+        const auto mountHandle = m_avatars.GetRemoteAvatarHandleForServerId(aMountServerId);
+        if (mountHandle.Value == 0)
+            return false;
+        payload.SecondaryHandle = mountHandle;
+    }
+    std::uint64_t workId{};
+    if (!QueueReliableForServer(acAcceptance, aRiderServerId, GameplayBridge::GameplayDomain::ActorState,
+                                GameplayBridge::GameplayAction::Mount, payload, &workId) || workId == 0)
+        return false;
+    auto& generation = m_mountWorkGenerationByRider[aRiderServerId];
+    if (generation == 0)
+        generation = 1;
+    m_mountWork.insert_or_assign(workId, MountWorkTracking{
+        aRiderServerId, aCanonicalRevision, generation, entity->second, false});
+    return true;
+}
+
+void VRActorReplicationService::SupersedeMountWork(const std::uint32_t aRiderServerId) noexcept
+{
+    if (aRiderServerId == 0)
+        return;
+    auto& generation = m_mountWorkGenerationByRider[aRiderServerId];
+    if (generation == (std::numeric_limits<std::uint64_t>::max)())
+        generation = 1;
+    else
+        ++generation;
+
+    std::vector<std::uint64_t> cancel;
+    for (auto& [workId, tracking] : m_mountWork) {
+        if (tracking.RiderServerId != aRiderServerId)
+            continue;
+        const auto work = std::find_if(m_pendingGameplayWork.begin(), m_pendingGameplayWork.end(),
+            [workId](const PendingGameplayWork& acWork) noexcept { return acWork.WorkId == workId; });
+        if (work != m_pendingGameplayWork.end() && !work->Admitted)
+            cancel.push_back(workId);
+        else
+            tracking.Superseded = true;
+    }
+    for (const auto workId : cancel) {
+        m_mountWork.erase(workId);
+        ForgetReliableGameplayWork(workId);
+    }
+}
+
+void VRActorReplicationService::ResolveMountWork(const std::uint64_t aWorkId,
+                                                 const bool aNativeSuccess) noexcept
+{
+    const auto tracked = m_mountWork.find(aWorkId);
+    if (tracked == m_mountWork.end())
+        return;
+    const auto tracking = tracked->second;
+    m_mountWork.erase(tracked);
+
+    const auto generation = m_mountWorkGenerationByRider.find(tracking.RiderServerId);
+    const auto entity = m_spawnEntityIdentities.find(tracking.RiderServerId);
+    const bool current = !tracking.Superseded && generation != m_mountWorkGenerationByRider.end() &&
+                         generation->second == tracking.Generation && entity != m_spawnEntityIdentities.end() &&
+                         ActorReplicationRecovery::IsSameSpawnEntityIdentity(entity->second, tracking.EntityIdentity);
+    if (ActorReplicationRecovery::CanCommitCanonicalMountCompletion(
+            aNativeSuccess, current, tracking.CanonicalRevision)) {
+        CompleteMountResync(tracking.RiderServerId, tracking.CanonicalRevision);
+        return;
+    }
+
+    if (ActorReplicationRecovery::MustRefreshCanonicalMountRecovery(
+            aNativeSuccess, current, tracking.Superseded)) {
+        // A failure, missing result, or capacity loss is never evidence that
+        // the old snapshot may be replayed.  Rotate to a newer canonical
+        // request instead.
+        m_pendingMountResyncs.erase(tracking.RiderServerId);
+        RecordMountResyncDiagnostic("native mount completion did not match current canonical work");
+        RequestMountSnapshotResync(tracking.RiderServerId);
+    }
 }
 
 void VRActorReplicationService::OnProjectile(const NotifyProjectileLaunch& acMessage) noexcept
@@ -4146,12 +4785,25 @@ void VRActorReplicationService::OnVrPose(const NotifyVRPoseUpdate& acMessage) no
 void VRActorReplicationService::OnVrHiggs(const NotifyVRHiggsState& acMessage) noexcept
 {
     const auto& state = acMessage.State;
-    // Revision 14 carries no producer epoch. Transport/session lifecycle
-    // cleanup resets these ledgers; a bridge-only sequence reset remains
-    // intentionally fail-closed as stale replay.
-    if (!IsRemotePlayer(m_transport, acMessage.PlayerId) ||
-        state.MutationEventCount == 0 || !state.IsMutationReplayValid())
+    if (!IsRemotePlayer(m_transport, acMessage.PlayerId) || state.Sequence == 0 ||
+        state.ProducerEpoch == 0 || !state.IsDecodedValid || !state.IsMutationReplayValid())
         return;
+
+    const auto existingLedger = m_higgsEventLedgers.find(acMessage.PlayerId);
+    if (state.MutationReplayRebased || existingLedger == m_higgsEventLedgers.end() ||
+        existingLedger->second.ProducerEpoch != state.ProducerEpoch)
+    {
+        RebaseHiggsProducer(acMessage.PlayerId, state.ProducerEpoch);
+        // The receiver side clears all HIGGS held bindings by submitting a
+        // terminal root-neutral rebase before applying the full hand snapshot.
+        auto payload = Payload();
+        payload.ActionFlags = HiggsPolicy::kSpatialRebase;
+        const auto acceptance = PrepareAccept(acMessage.PlayerId, GameplayBridge::GameplayDomain::Higgs,
+                                              0, Signature(state.ProducerEpoch, state.Sequence), 1);
+        if (acceptance.Valid)
+            TP_UNUSED(QueueReliableForPlayer(acceptance, acMessage.PlayerId, GameplayBridge::GameplayDomain::Higgs,
+                                              GameplayBridge::GameplayAction::HiggsDrop, payload));
+    }
 
     for (std::size_t index = 0; index < state.MutationEventCount; ++index)
     {
@@ -4163,10 +4815,810 @@ void VRActorReplicationService::OnVrHiggs(const NotifyVRHiggsState& acMessage) n
             return;
     }
 
-    if (!EnqueueHiggsMutationTail(acMessage.PlayerId, state))
+    // A full observation supersedes every retry from the prior sample. This
+    // also guarantees that a terminal drop/stash/consume cannot be followed
+    // by a delayed held-transform replay from an older snapshot.
+    CancelPendingHiggsObservationWork(acMessage.PlayerId);
+
+    if (state.MutationEventCount != 0) {
+        if (!EnqueueHiggsMutationTail(acMessage.PlayerId, state))
+            return;
+        TrySubmitNextHiggsMutation(acMessage.PlayerId);
+    }
+
+    TP_UNUSED(EnqueueHiggsHeldTransform(acMessage.PlayerId, state));
+}
+
+void VRActorReplicationService::RebaseLocalPlanckEvents(const std::uint64_t aLifecycleGeneration) noexcept
+{
+    // The retry queue contains serialized events whose former producer
+    // generation is no longer admissible. Drop it before asking PLANCK to
+    // discard its side of the boundary.
+    m_pendingLocalPlanckEvents.clear();
+    m_planckLocalLifecycleGeneration = 0;
+
+    PlanckBridgeFunctions functions{};
+    SkyrimTogetherVR::PlanckBridge::Capabilities capabilities{};
+    if (!GetPlanckBridgeFunctions(functions, capabilities))
+        return;
+    if (functions.DiscardLocalEvents(aLifecycleGeneration) == SkyrimTogetherVR::PlanckBridge::Result::Accepted)
+        m_planckLocalLifecycleGeneration = aLifecycleGeneration;
+}
+
+void VRActorReplicationService::PruneCompletedPlanckCancellationKeys() noexcept
+{
+    m_cancelledPlanckRemoteSessions.clear();
+    if (m_pendingRemotePlanckClears.empty())
+        m_planckAdmissionFailClosed = false;
+}
+
+void VRActorReplicationService::RefreshPlanckWireProducerIdentity(
+    const std::uint64_t aServerInstanceNonce, const std::uint64_t aConnectionGeneration,
+    const std::uint64_t aLifecycleGeneration) noexcept
+{
+    if (!SkyrimTogetherVR::PlanckBridge::ShouldResetWireProducerIdentity(
+            m_planckWireProducerServerNonce, m_planckWireProducerConnectionGeneration,
+            aServerInstanceNonce, aConnectionGeneration))
         return;
 
-    TrySubmitNextHiggsMutation(acMessage.PlayerId);
+    if (m_planckWireProducerServerNonce != 0 && m_planckWireProducerConnectionGeneration != 0)
+        ClearAllRemotePlanckState();
+    RebaseLocalPlanckEvents(aLifecycleGeneration);
+    PruneCompletedPlanckCancellationKeys();
+
+    m_planckWireProducerServerNonce = aServerInstanceNonce;
+    m_planckWireProducerConnectionGeneration = aConnectionGeneration;
+    m_planckWireProducerEpoch = 0;
+    if (aServerInstanceNonce == 0 || aConnectionGeneration == 0)
+        return;
+
+    auto producerEpoch = m_nextPlanckWireProducerEpoch++;
+    if (producerEpoch == 0)
+        producerEpoch = m_nextPlanckWireProducerEpoch++;
+    m_planckWireProducerEpoch = producerEpoch;
+}
+
+void VRActorReplicationService::EnterPlanckAdmissionFailClosed() noexcept
+{
+    if (m_planckAdmissionFailClosed)
+        return;
+    m_planckAdmissionFailClosed = true;
+    ++m_planckCancellationCapacityCount;
+    if (IsPowerOfTwo(m_planckCancellationCapacityCount))
+    {
+        spdlog::error(
+            "PLANCK cancellation capacity exhausted {} times; event admission is fail-closed until a clean boundary",
+            m_planckCancellationCapacityCount);
+    }
+
+    m_pendingLocalPlanckEvents.clear();
+    m_planckLocalLifecycleGeneration = 0;
+    m_pendingRemotePlanckEvents.clear();
+
+    PlanckBridgeFunctions functions{};
+    SkyrimTogetherVR::PlanckBridge::Capabilities capabilities{};
+    if (GetPlanckBridgeFunctions(functions, capabilities))
+        TP_UNUSED(functions.DiscardLocalEvents(SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch()));
+
+    std::vector<PlanckRemoteSessionKey> activeSessions;
+    activeSessions.reserve(m_planckRemoteSessionTokens.size());
+    for (const auto& [key, token] : m_planckRemoteSessionTokens)
+    {
+        TP_UNUSED(token);
+        activeSessions.push_back(key);
+    }
+    for (const auto& key : activeSessions)
+        RequestRemotePlanckClear(key);
+}
+
+void VRActorReplicationService::DrainLocalPlanckPhysics() noexcept
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+    const auto lifecycleGeneration = SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch();
+    if (m_planckLocalLifecycleGeneration != lifecycleGeneration)
+    {
+        RebaseLocalPlanckEvents(lifecycleGeneration);
+        if (m_planckLocalLifecycleGeneration != lifecycleGeneration || lifecycleGeneration == 0)
+            return;
+    }
+    if (!CanTransmitLifecycleFencedEvent(
+            m_planckAdmissionFailClosed, m_planckLocalLifecycleGeneration,
+            lifecycleGeneration, m_planckWireProducerEpoch))
+        return;
+
+    if (!SkyrimTogether::Protocol::HasCapability(
+            m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::PlanckPhysicsInterface002))
+        return;
+
+    PlanckBridgeFunctions functions{};
+    Capabilities capabilities{};
+    if (!GetPlanckBridgeFunctions(functions, capabilities))
+        return;
+
+    const auto trySend = [this](const VRPlanckPhysicsEvent& acEvent) noexcept {
+        RequestVRPlanckPhysicsEvent request{};
+        request.Event = acEvent;
+        return m_transport.Send(request);
+    };
+    const auto canTransmitNow = [this, lifecycleGeneration]() noexcept {
+        return SkyrimTogetherVR::PlanckBridge::CanTransmitLifecycleFencedEvent(
+                   m_planckAdmissionFailClosed, m_planckLocalLifecycleGeneration,
+                   SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch(), m_planckWireProducerEpoch) &&
+               m_planckLocalLifecycleGeneration == lifecycleGeneration &&
+               m_transport.GetServerInstanceNonce() == m_planckWireProducerServerNonce &&
+               m_transport.GetConnectionGeneration() == m_planckWireProducerConnectionGeneration;
+    };
+
+    std::size_t sent = 0;
+    while (sent < kMaximumPlanckEventsPerUpdate && !m_pendingLocalPlanckEvents.empty())
+    {
+        const auto& pending = m_pendingLocalPlanckEvents.front();
+        if (pending.LifecycleGeneration != lifecycleGeneration || !canTransmitNow())
+        {
+            RebaseLocalPlanckEvents(SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch());
+            return;
+        }
+        if (!trySend(pending.Event))
+            return;
+        m_pendingLocalPlanckEvents.pop_front();
+        ++sent;
+    }
+
+    // The lifecycle generation is only the local discard fence above. The
+    // wire producer remains stable for the authenticated transport identity,
+    // so recoverable gameplay-bridge retirement cannot fork server ordering.
+    const auto producerEpoch = m_planckWireProducerEpoch;
+
+    const auto rejectLocal = [this]() noexcept {
+        ++m_planckLocalRejectedCount;
+        if (IsPowerOfTwo(m_planckLocalRejectedCount))
+        {
+            spdlog::warn("PLANCK local physics discarded {} invalid bridge events", m_planckLocalRejectedCount);
+        }
+    };
+
+    std::size_t dequeued = 0;
+    while (sent < kMaximumPlanckEventsPerUpdate && dequeued < kMaximumPlanckEventsPerUpdate)
+    {
+        LocalEvent local{};
+        const auto result = functions.Dequeue(&local);
+        ++dequeued;
+        if (result == Result::Empty || result == Result::Unavailable)
+            return;
+        if (result != Result::Accepted || local.Size != sizeof(LocalEvent) || local.TargetFormId == 0 ||
+            local.EventId == 0 || local.Reserved[0] != 0 || local.Reserved[1] != 0 || local.Reserved[2] != 0)
+        {
+            rejectLocal();
+            continue;
+        }
+
+        const auto terminator = std::find(std::begin(local.NodeName), std::end(local.NodeName), '\0');
+        if (terminator == std::end(local.NodeName))
+        {
+            rejectLocal();
+            continue;
+        }
+        if (!std::all_of(std::begin(local.NodeName), terminator, [](const char aCharacter) noexcept {
+                const auto character = static_cast<unsigned char>(aCharacter);
+                return character >= 0x20 && character != 0x7F;
+            }))
+        {
+            rejectLocal();
+            continue;
+        }
+
+        GameId target{};
+        if (!ToServer(m_world, local.TargetFormId, target))
+        {
+            rejectLocal();
+            continue;
+        }
+
+        VRPlanckPhysicsEvent event{};
+        event.ProducerEpoch = producerEpoch;
+        event.EventId = local.EventId;
+        event.TargetActorId = target;
+        switch (local.Kind)
+        {
+        case EventKind::HitImpulse:
+            // Bit zero establishes an actor target. The remaining defined bits
+            // describe the local hand/contact only; the wire event has no
+            // equivalent field, so validate and intentionally do not relay it.
+            if ((local.Flags & ~0x1Fu) != 0 || (local.Flags & 1u) == 0 ||
+                terminator == std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = VRPlanckPhysicsEvent::Kind::HitImpulse;
+            event.Position = {local.Position.X, local.Position.Y, local.Position.Z};
+            event.Velocity = {local.Velocity.X, local.Velocity.Y, local.Velocity.Z};
+            event.ImpulseMultiplier = local.ImpulseMultiplier;
+            event.NodeNameLength = static_cast<std::uint8_t>(terminator - std::begin(local.NodeName));
+            std::memcpy(event.NodeName.data(), local.NodeName, event.NodeNameLength);
+            break;
+        case EventKind::RagdollEnter:
+            if (local.Flags != 0 || terminator != std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = VRPlanckPhysicsEvent::Kind::RagdollEnter;
+            event.SourcePosition = {local.SourcePosition.X, local.SourcePosition.Y, local.SourcePosition.Z};
+            break;
+        case EventKind::RagdollExit:
+            if (local.Flags != 0 || terminator != std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = VRPlanckPhysicsEvent::Kind::RagdollExit;
+            break;
+        case EventKind::GripBegin:
+            if (local.Flags != 0 || terminator == std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = VRPlanckPhysicsEvent::Kind::GripBegin;
+            event.NodeNameLength = static_cast<std::uint8_t>(terminator - std::begin(local.NodeName));
+            std::memcpy(event.NodeName.data(), local.NodeName, event.NodeNameLength);
+            [[fallthrough]];
+        case EventKind::GripUpdate:
+            // PLANCK supplies the held node on every local grip sample. The
+            // wire schema makes it canonical only on Begin, so validate it
+            // here and omit it from updates.
+            if (local.Flags != 0 || terminator == std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = local.Kind == EventKind::GripBegin ? VRPlanckPhysicsEvent::Kind::GripBegin :
+                                                                  VRPlanckPhysicsEvent::Kind::GripUpdate;
+            event.GripId = local.GripId;
+            event.Position = {local.Position.X, local.Position.Y, local.Position.Z};
+            event.LinearVelocity = {local.LinearVelocity.X, local.LinearVelocity.Y, local.LinearVelocity.Z};
+            event.AngularVelocity = {local.AngularVelocity.X, local.AngularVelocity.Y, local.AngularVelocity.Z};
+            event.WorldRotation = {local.Rotation.X, local.Rotation.Y, local.Rotation.Z, local.Rotation.W};
+            event.TtlSeconds = local.TtlSeconds;
+            break;
+        case EventKind::GripEnd:
+            if (local.Flags != 0 || terminator != std::begin(local.NodeName))
+            {
+                rejectLocal();
+                continue;
+            }
+            event.EventKind = VRPlanckPhysicsEvent::Kind::GripEnd;
+            event.GripId = local.GripId;
+            break;
+        default:
+            rejectLocal();
+            continue;
+        }
+
+        if (!event.IsValid())
+        {
+            rejectLocal();
+            continue;
+        }
+
+        if (!canTransmitNow())
+        {
+            RebaseLocalPlanckEvents(SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch());
+            return;
+        }
+
+        if (trySend(event))
+        {
+            ++sent;
+            continue;
+        }
+
+        if (m_pendingLocalPlanckEvents.size() >= kMaximumPendingLocalPlanckEvents)
+        {
+            ++m_planckLocalQueueOverflowCount;
+            if (IsPowerOfTwo(m_planckLocalQueueOverflowCount))
+            {
+                spdlog::warn(
+                    "PLANCK local physics retry queue overflowed; dropped {} dequeued events",
+                    m_planckLocalQueueOverflowCount);
+            }
+            return;
+        }
+
+        m_pendingLocalPlanckEvents.push_back({event, lifecycleGeneration});
+        return;
+    }
+}
+
+void VRActorReplicationService::ClearRemotePlanckSession(const std::uint32_t aPlayerId,
+                                                          const std::uint64_t aProducerEpoch) noexcept
+{
+    if (aPlayerId == 0 || aProducerEpoch == 0)
+        return;
+
+    std::vector<PlanckRemoteSessionKey> matchingSessions;
+    matchingSessions.reserve(m_planckRemoteSessionTokens.size());
+    for (const auto& [key, token] : m_planckRemoteSessionTokens)
+    {
+        TP_UNUSED(token);
+        if (key.PlayerId == aPlayerId && key.ProducerEpoch == aProducerEpoch)
+            matchingSessions.push_back(key);
+    }
+    for (const auto& key : matchingSessions)
+        RequestRemotePlanckClear(key);
+}
+
+std::size_t VRActorReplicationService::PlanckRemoteSessionKeyHash::operator()(
+    const PlanckRemoteSessionKey& acKey) const noexcept
+{
+    const auto mix = [](std::size_t aSeed, const std::uint64_t aValue) noexcept {
+        return aSeed ^ (static_cast<std::size_t>(aValue) + 0x9e3779b97f4a7c15ULL + (aSeed << 6) + (aSeed >> 2));
+    };
+    auto hash = mix(0, acKey.ServerInstanceNonce);
+    hash = mix(hash, acKey.ConnectionGeneration);
+    hash = mix(hash, acKey.PlayerId);
+    return mix(hash, acKey.ProducerEpoch);
+}
+
+bool VRActorReplicationService::MakePlanckRemoteSessionKey(
+    const std::uint32_t aPlayerId, const std::uint64_t aProducerEpoch,
+    PlanckRemoteSessionKey& arKey) const noexcept
+{
+    arKey = {
+        m_transport.GetServerInstanceNonce(),
+        m_transport.GetConnectionGeneration(),
+        aPlayerId,
+        aProducerEpoch,
+    };
+    return arKey.ServerInstanceNonce != 0 && arKey.ConnectionGeneration != 0 &&
+           arKey.PlayerId != 0 && arKey.ProducerEpoch != 0;
+}
+
+std::uint64_t VRActorReplicationService::GetOrAllocatePlanckRemoteSessionToken(
+    const PlanckRemoteSessionKey& acKey) noexcept
+{
+    if (const auto existing = m_planckRemoteSessionTokens.find(acKey);
+        existing != m_planckRemoteSessionTokens.end())
+        return existing->second;
+
+    if (m_planckAdmissionFailClosed ||
+        m_planckRemoteSessionTokens.size() >= kMaximumPlanckRemoteSessionTokens)
+    {
+        EnterPlanckAdmissionFailClosed();
+        return 0;
+    }
+
+    auto token = m_nextPlanckRemoteSessionToken++;
+    if (token == 0)
+        token = m_nextPlanckRemoteSessionToken++;
+    if (token == 0)
+        return 0;
+    m_planckRemoteSessionTokens.emplace(acKey, token);
+    return token;
+}
+
+bool VRActorReplicationService::HasPendingRemotePlanckClear(const PlanckRemoteSessionKey& acKey) const noexcept
+{
+    return std::any_of(m_pendingRemotePlanckClears.begin(), m_pendingRemotePlanckClears.end(),
+        [&acKey](const PendingRemotePlanckClear& acPending) noexcept {
+            return acPending.Key == acKey;
+        });
+}
+
+bool VRActorReplicationService::HasPendingRemotePlanckReplacementClear(
+    const PlanckRemoteSessionKey& acKey) const noexcept
+{
+    return std::any_of(m_pendingRemotePlanckClears.begin(), m_pendingRemotePlanckClears.end(),
+        [&acKey](const PendingRemotePlanckClear& acPending) noexcept {
+            const auto& key = acPending.Key;
+            return key.ServerInstanceNonce == acKey.ServerInstanceNonce &&
+                   key.ConnectionGeneration == acKey.ConnectionGeneration &&
+                   key.PlayerId == acKey.PlayerId && !(key == acKey);
+        });
+}
+
+void VRActorReplicationService::RequestRemotePlanckClear(const PlanckRemoteSessionKey& acKey) noexcept
+{
+    if (m_cancelledPlanckRemoteSessions.contains(acKey) || HasPendingRemotePlanckClear(acKey))
+        return;
+
+    const auto token = GetOrAllocatePlanckRemoteSessionToken(acKey);
+    if (token == 0)
+        return;
+
+    auto eventId = m_nextPlanckClearEventId++;
+    if (eventId == 0)
+        eventId = m_nextPlanckClearEventId++;
+    PlanckBridgeFunctions functions{};
+    SkyrimTogetherVR::PlanckBridge::Capabilities capabilities{};
+    if (GetPlanckBridgeFunctions(functions, capabilities) &&
+        functions.Clear(token, eventId) == SkyrimTogetherVR::PlanckBridge::Result::Accepted)
+    {
+        const bool cancellationCapacityReached =
+            !m_cancelledPlanckRemoteSessions.contains(acKey) &&
+            m_cancelledPlanckRemoteSessions.size() >= kMaximumPlanckRemoteSessionTokens;
+        if (!cancellationCapacityReached)
+            m_cancelledPlanckRemoteSessions.insert(acKey);
+        m_planckRemoteSessionTokens.erase(acKey);
+        if (cancellationCapacityReached)
+            EnterPlanckAdmissionFailClosed();
+        return;
+    }
+    if (!SkyrimTogetherVR::PlanckBridge::CanRetainPendingClear(
+            m_pendingRemotePlanckClears.size(), kMaximumPendingRemotePlanckClears))
+    {
+        // Active tokens and retained clears share the same bound. Reaching it
+        // means every slot is already represented by an uncleared token; stop
+        // all admission and keep those retries rather than evicting one.
+        EnterPlanckAdmissionFailClosed();
+        return;
+    }
+    m_pendingRemotePlanckClears.push_back({acKey, token, eventId});
+}
+
+void VRActorReplicationService::RetryRemotePlanckSessionClears(const double aDeltaSeconds) noexcept
+{
+    std::size_t retries = 0;
+    for (auto it = m_pendingRemotePlanckClears.begin();
+         it != m_pendingRemotePlanckClears.end() && retries < kMaximumRemotePlanckRetriesPerUpdate;)
+    {
+        it->RetryElapsedSeconds += aDeltaSeconds;
+        if (it->RetryElapsedSeconds < kRemotePlanckRetryDelaySeconds)
+        {
+            ++it;
+            continue;
+        }
+        it->RetryElapsedSeconds = 0.0;
+        ++retries;
+
+        PlanckBridgeFunctions functions{};
+        SkyrimTogetherVR::PlanckBridge::Capabilities capabilities{};
+        if (!GetPlanckBridgeFunctions(functions, capabilities) ||
+            functions.Clear(it->Token, it->EventId) != SkyrimTogetherVR::PlanckBridge::Result::Accepted)
+        {
+            ++it;
+            continue;
+        }
+        const auto completedKey = it->Key;
+        const bool cancellationCapacityReached =
+            !m_cancelledPlanckRemoteSessions.contains(completedKey) &&
+            m_cancelledPlanckRemoteSessions.size() >= kMaximumPlanckRemoteSessionTokens;
+        if (!cancellationCapacityReached)
+            m_cancelledPlanckRemoteSessions.insert(completedKey);
+        m_planckRemoteSessionTokens.erase(completedKey);
+        it = m_pendingRemotePlanckClears.erase(it);
+        if (cancellationCapacityReached)
+        {
+            EnterPlanckAdmissionFailClosed();
+            return;
+        }
+    }
+}
+
+void VRActorReplicationService::CommitRemotePlanckEvent(
+    const std::uint32_t aPlayerId, const VRPlanckPhysicsEvent& acEvent) noexcept
+{
+    auto& ledger = m_planckEventLedgers[aPlayerId];
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    if (!ledger.HasEpoch || ledger.ServerInstanceNonce != serverInstanceNonce ||
+        ledger.ConnectionGeneration != connectionGeneration || ledger.ProducerEpoch != acEvent.ProducerEpoch)
+        ledger = {};
+
+    ledger.ServerInstanceNonce = serverInstanceNonce;
+    ledger.ConnectionGeneration = connectionGeneration;
+    ledger.ProducerEpoch = acEvent.ProducerEpoch;
+    ledger.LastEventId = acEvent.EventId;
+    ledger.HasEpoch = true;
+    ledger.HasEvent = true;
+}
+
+VRActorReplicationService::PlanckRemoteSubmitResult VRActorReplicationService::SubmitRemotePlanckEvent(
+    const std::uint32_t aPlayerId, const VRPlanckPhysicsEvent& acEvent) noexcept
+{
+    using namespace SkyrimTogetherVR::PlanckBridge;
+
+    if (m_planckAdmissionFailClosed)
+        return PlanckRemoteSubmitResult::Terminal;
+
+    const auto defer = [this]() noexcept {
+        ++m_planckRemoteDeferredCount;
+        if (IsPowerOfTwo(m_planckRemoteDeferredCount))
+        {
+            spdlog::warn(
+                "PLANCK remote physics deferred {} receiver events for bounded retry",
+                m_planckRemoteDeferredCount);
+        }
+    };
+
+    const auto target = ToLocal(m_world, acEvent.TargetActorId);
+    if (target == 0)
+    {
+        defer();
+        return PlanckRemoteSubmitResult::Retry;
+    }
+
+    PlanckRemoteSessionKey sessionKey{};
+    const auto replacementClearPending = MakePlanckRemoteSessionKey(aPlayerId, acEvent.ProducerEpoch, sessionKey) &&
+                                         HasPendingRemotePlanckReplacementClear(sessionKey);
+    if (!MakePlanckRemoteSessionKey(aPlayerId, acEvent.ProducerEpoch, sessionKey) ||
+        HasPendingRemotePlanckClear(sessionKey) || replacementClearPending ||
+        !CanAdmitReplacementProducer(replacementClearPending, sessionKey.ServerInstanceNonce,
+                                     sessionKey.ConnectionGeneration, sessionKey.PlayerId, sessionKey.ProducerEpoch))
+    {
+        defer();
+        return PlanckRemoteSubmitResult::Retry;
+    }
+    if (m_cancelledPlanckRemoteSessions.contains(sessionKey))
+        return PlanckRemoteSubmitResult::Terminal;
+    const auto sessionToken = GetOrAllocatePlanckRemoteSessionToken(sessionKey);
+    if (sessionToken == 0)
+        return PlanckRemoteSubmitResult::Terminal;
+
+    PlanckBridgeFunctions functions{};
+    Capabilities capabilities{};
+    if (!GetPlanckBridgeFunctions(functions, capabilities))
+    {
+        defer();
+        return PlanckRemoteSubmitResult::Retry;
+    }
+
+    RemoteEvent remote{};
+    remote.Kind = static_cast<EventKind>(acEvent.EventKind);
+    remote.SourceSession = sessionToken;
+    remote.EventId = acEvent.EventId;
+    remote.GripId = acEvent.GripId;
+    remote.TargetFormId = target;
+    remote.NodeNameLength = acEvent.NodeNameLength;
+    std::memcpy(remote.NodeName, acEvent.NodeName.data(), acEvent.NodeNameLength);
+    remote.NodeName[acEvent.NodeNameLength] = '\0';
+    remote.Position = {acEvent.Position.x, acEvent.Position.y, acEvent.Position.z};
+    remote.Velocity = {acEvent.Velocity.x, acEvent.Velocity.y, acEvent.Velocity.z};
+    remote.SourcePosition = {acEvent.SourcePosition.x, acEvent.SourcePosition.y, acEvent.SourcePosition.z};
+    remote.LinearVelocity = {acEvent.LinearVelocity.x, acEvent.LinearVelocity.y, acEvent.LinearVelocity.z};
+    remote.AngularVelocity = {acEvent.AngularVelocity.x, acEvent.AngularVelocity.y, acEvent.AngularVelocity.z};
+    remote.Rotation = {acEvent.WorldRotation.x, acEvent.WorldRotation.y, acEvent.WorldRotation.z, acEvent.WorldRotation.w};
+    remote.ImpulseMultiplier = acEvent.ImpulseMultiplier;
+    remote.TtlSeconds = acEvent.TtlSeconds;
+
+    const auto result = functions.Submit(&remote);
+    if (result == Result::Accepted)
+        return PlanckRemoteSubmitResult::Applied;
+    if (result == Result::Busy)
+    {
+        defer();
+        return PlanckRemoteSubmitResult::Retry;
+    }
+
+    if (result == Result::Rejected)
+    {
+        ++m_planckRemoteRejectedCount;
+        if (IsPowerOfTwo(m_planckRemoteRejectedCount))
+            spdlog::warn("PLANCK remote physics rejected {} terminal receiver events", m_planckRemoteRejectedCount);
+        return PlanckRemoteSubmitResult::Terminal;
+    }
+
+    if (result == Result::Unavailable)
+        ++m_planckRemoteUnavailableCount;
+    defer();
+    return PlanckRemoteSubmitResult::Retry;
+}
+
+void VRActorReplicationService::EnqueueRemotePlanckRetry(
+    const std::uint32_t aPlayerId, const VRPlanckPhysicsEvent& acEvent) noexcept
+{
+    auto& queue = m_pendingRemotePlanckEvents[aPlayerId];
+    if (!queue.empty())
+    {
+        const auto lastPendingEventId = queue.back().Event.EventId;
+        if (!SkyrimTogether::PlanckPhysicsPolicy::ShouldAppendRemoteRetry(
+                true, lastPendingEventId, acEvent.EventId))
+        {
+            if (acEvent.EventId != lastPendingEventId)
+            {
+                ++m_planckRemoteOrderQuarantineCount;
+                if (IsPowerOfTwo(m_planckRemoteOrderQuarantineCount))
+                {
+                    spdlog::warn(
+                        "PLANCK remote physics quarantined {} out-of-order receiver events",
+                        m_planckRemoteOrderQuarantineCount);
+                }
+            }
+            return;
+        }
+    }
+
+    if (queue.size() >= kMaximumPendingRemotePlanckEventsPerPlayer)
+    {
+        ++m_planckRemoteRetryOverflowCount;
+        if (IsPowerOfTwo(m_planckRemoteRetryOverflowCount))
+        {
+            spdlog::warn(
+                "PLANCK remote physics retry queue overflowed {} times; clearing the affected remote session",
+                m_planckRemoteRetryOverflowCount);
+        }
+        const auto producerEpoch = queue.front().Event.ProducerEpoch;
+        m_pendingRemotePlanckEvents.erase(aPlayerId);
+        CommitRemotePlanckEvent(aPlayerId, acEvent);
+        ClearRemotePlanckSession(aPlayerId, producerEpoch);
+        return;
+    }
+
+    PendingRemotePlanckEvent pending{};
+    pending.Event = acEvent;
+    pending.ServerInstanceNonce = m_transport.GetServerInstanceNonce();
+    pending.ConnectionGeneration = m_transport.GetConnectionGeneration();
+    pending.Attempts = 1;
+    queue.push_back(std::move(pending));
+}
+
+void VRActorReplicationService::PurgeRemotePlanckSender(const std::uint32_t aPlayerId) noexcept
+{
+    m_planckEventLedgers.erase(aPlayerId);
+    m_pendingRemotePlanckEvents.erase(aPlayerId);
+
+    std::vector<PlanckRemoteSessionKey> activeSessions;
+    activeSessions.reserve(m_planckRemoteSessionTokens.size());
+    for (const auto& [key, token] : m_planckRemoteSessionTokens)
+    {
+        TP_UNUSED(token);
+        if (key.PlayerId == aPlayerId)
+            activeSessions.push_back(key);
+    }
+    for (const auto& key : activeSessions)
+        RequestRemotePlanckClear(key);
+}
+
+void VRActorReplicationService::ClearAllRemotePlanckState() noexcept
+{
+    std::vector<PlanckRemoteSessionKey> activeSessions;
+    activeSessions.reserve(m_planckRemoteSessionTokens.size());
+    for (const auto& [key, token] : m_planckRemoteSessionTokens)
+    {
+        TP_UNUSED(token);
+        activeSessions.push_back(key);
+    }
+
+    m_planckEventLedgers.clear();
+    m_pendingRemotePlanckEvents.clear();
+    for (const auto& key : activeSessions)
+        RequestRemotePlanckClear(key);
+}
+
+void VRActorReplicationService::RetryRemotePlanckPhysics(const double aDeltaSeconds) noexcept
+{
+    const auto serverInstanceNonce = m_transport.GetServerInstanceNonce();
+    const auto connectionGeneration = m_transport.GetConnectionGeneration();
+    std::vector<std::uint32_t> stalePlayers;
+    for (auto& [playerId, queue] : m_pendingRemotePlanckEvents)
+    {
+        for (auto& pending : queue)
+        {
+            pending.TotalElapsedSeconds += aDeltaSeconds;
+            pending.RetryElapsedSeconds += aDeltaSeconds;
+            if (pending.ServerInstanceNonce != serverInstanceNonce ||
+                pending.ConnectionGeneration != connectionGeneration)
+            {
+                stalePlayers.push_back(playerId);
+                break;
+            }
+        }
+    }
+    for (const auto playerId : stalePlayers)
+        PurgeRemotePlanckSender(playerId);
+
+    std::size_t retries = 0;
+    for (auto iterator = m_pendingRemotePlanckEvents.begin();
+         iterator != m_pendingRemotePlanckEvents.end() && retries < kMaximumRemotePlanckRetriesPerUpdate;)
+    {
+        const auto playerId = iterator->first;
+        auto& queue = iterator->second;
+        if (queue.empty())
+        {
+            iterator = m_pendingRemotePlanckEvents.erase(iterator);
+            continue;
+        }
+
+        auto& pending = queue.front();
+        if (SkyrimTogether::PlanckPhysicsPolicy::IsRemoteRetryExpired(
+                pending.Attempts, kMaximumRemotePlanckRetryAttempts,
+                pending.TotalElapsedSeconds, kMaximumRemotePlanckRetrySeconds))
+        {
+            ++m_planckRemoteRetryExpiredCount;
+            if (IsPowerOfTwo(m_planckRemoteRetryExpiredCount))
+            {
+                spdlog::warn(
+                    "PLANCK remote physics expired {} bounded receiver retries; clearing affected remote sessions",
+                    m_planckRemoteRetryExpiredCount);
+            }
+            const auto expiredEvent = pending.Event;
+            queue.pop_front();
+            CommitRemotePlanckEvent(playerId, expiredEvent);
+            ClearRemotePlanckSession(playerId, expiredEvent.ProducerEpoch);
+            ++retries;
+            // A capacity transition can clear the whole retry map while
+            // issuing this non-droppable clear, so restart next update.
+            return;
+        }
+
+        if (pending.RetryElapsedSeconds < kRemotePlanckRetryDelaySeconds)
+        {
+            ++iterator;
+            continue;
+        }
+
+        pending.RetryElapsedSeconds = 0.0;
+        ++pending.Attempts;
+        const auto result = SubmitRemotePlanckEvent(playerId, pending.Event);
+        ++retries;
+        if (result == PlanckRemoteSubmitResult::Retry)
+        {
+            ++iterator;
+            continue;
+        }
+
+        CommitRemotePlanckEvent(playerId, pending.Event);
+        queue.pop_front();
+    }
+}
+
+void VRActorReplicationService::OnVrPlanckPhysics(const NotifyVRPlanckPhysicsEvent& acMessage) noexcept
+{
+    const auto& event = acMessage.Event;
+    if (!IsRemotePlayer(m_transport, acMessage.PlayerId) || !event.IsValid() ||
+        !SkyrimTogether::Protocol::HasCapability(m_transport.GetNegotiatedGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::PlanckPhysicsInterface002))
+        return;
+
+    const auto existingLedger = m_planckEventLedgers.find(acMessage.PlayerId);
+    const auto existingQueue = m_pendingRemotePlanckEvents.find(acMessage.PlayerId);
+    if (existingLedger != m_planckEventLedgers.end() && existingLedger->second.HasEpoch &&
+        existingLedger->second.ServerInstanceNonce == m_transport.GetServerInstanceNonce() &&
+        existingLedger->second.ConnectionGeneration == m_transport.GetConnectionGeneration() &&
+        event.ProducerEpoch < existingLedger->second.ProducerEpoch)
+    {
+        // Producer epochs are monotonically allocated for one authenticated
+        // connection.  A delayed packet from the retired epoch must not
+        // rebase its replay cursor back to an older producer.
+        return;
+    }
+    if (existingQueue != m_pendingRemotePlanckEvents.end() && !existingQueue->second.empty() &&
+        event.ProducerEpoch < existingQueue->second.front().Event.ProducerEpoch)
+        return;
+    const auto ledgerEpochChanged = existingLedger != m_planckEventLedgers.end() &&
+        existingLedger->second.HasEpoch &&
+        (existingLedger->second.ServerInstanceNonce != m_transport.GetServerInstanceNonce() ||
+         existingLedger->second.ConnectionGeneration != m_transport.GetConnectionGeneration() ||
+         existingLedger->second.ProducerEpoch != event.ProducerEpoch);
+    const auto queueEpochChanged = existingQueue != m_pendingRemotePlanckEvents.end() &&
+        !existingQueue->second.empty() && existingQueue->second.front().Event.ProducerEpoch != event.ProducerEpoch;
+    if (ledgerEpochChanged || queueEpochChanged)
+        PurgeRemotePlanckSender(acMessage.PlayerId);
+
+    if (const auto ledger = m_planckEventLedgers.find(acMessage.PlayerId);
+        ledger != m_planckEventLedgers.end() && ledger->second.HasEvent &&
+        event.EventId <= ledger->second.LastEventId)
+    {
+        return;
+    }
+
+    if (const auto pending = m_pendingRemotePlanckEvents.find(acMessage.PlayerId);
+        pending != m_pendingRemotePlanckEvents.end() && !pending->second.empty())
+    {
+        EnqueueRemotePlanckRetry(acMessage.PlayerId, event);
+        return;
+    }
+
+    const auto result = SubmitRemotePlanckEvent(acMessage.PlayerId, event);
+    if (result == PlanckRemoteSubmitResult::Retry)
+    {
+        EnqueueRemotePlanckRetry(acMessage.PlayerId, event);
+        return;
+    }
+
+    CommitRemotePlanckEvent(acMessage.PlayerId, event);
 }
 
 void VRActorReplicationService::OnVrAppearance(const NotifyVRAppearance& acMessage) noexcept
@@ -4508,6 +5960,7 @@ void VRActorReplicationService::OnVrGrab(const NotifyVRGrabEvent& acMessage) noe
 
 void VRActorReplicationService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
 {
+    PurgeRemotePlanckSender(acMessage.PlayerId);
     m_latestAppearances.erase(acMessage.PlayerId);
     ForgetPlayer(acMessage.PlayerId);
 }
@@ -4531,12 +5984,19 @@ void VRActorReplicationService::OnPlayerLevel(const NotifyPlayerLevel& acMessage
 void VRActorReplicationService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     TP_UNUSED(acEvent);
+    ClearAllRemotePlanckState();
+    RebaseLocalPlanckEvents(0);
+    PruneCompletedPlanckCancellationKeys();
+    m_planckWireProducerEpoch = 0;
+    m_planckWireProducerServerNonce = 0;
+    m_planckWireProducerConnectionGeneration = 0;
     m_serverPlayers.clear();
     m_pendingSpawns.clear();
     m_spawnSnapshots.clear();
     m_spawnEntityIdentities.clear();
     m_latestAppearances.clear();
     m_pendingMounts.clear();
+    ResetMountCanonicalRecovery();
     m_resyncAttempts.clear();
     m_ledgers.clear();
     m_lastEquipmentTransactionByServer.clear();
@@ -4568,6 +6028,8 @@ void VRActorReplicationService::OnDisconnected(const DisconnectedEvent& acEvent)
     m_recordingSpawnServerId = 0;
     m_localServerId = 0;
     m_observedLifecycleEpoch = 0;
+    m_observedServerInstanceNonce = 0;
+    m_observedConnectionGeneration = 0;
     m_replayAfterLifecycleBoundary = false;
     m_semanticTombstoneRebaseRequested = false;
     m_semanticTombstoneRebaseEpoch = 0;
@@ -4617,8 +6079,10 @@ void VRActorReplicationService::OnGameplayResult(
             m_gameplayResultOwners.erase(gameplay);
             ++work->NextResultIndex;
             work->ResultWaitElapsed = 0.0;
-            if (work->NextResultIndex == work->Actions.size())
+            if (work->NextResultIndex == work->Actions.size()) {
+                ResolveMountWork(owner.WorkId, true);
                 RetireReliableGameplayWork(owner.WorkId);
+            }
             return;
         }
 
@@ -4973,7 +6437,8 @@ void VRActorReplicationService::OnLocalGameplay(
         transaction->TargetHandle = payload.TargetHandle;
         transaction->ActorLocalFormId = payload.ActorLocalFormId;
         const auto accepted = SkyrimTogetherVR::AnimationGraphProtocol::AcceptChunk(
-            transaction->Snapshot, payload.SnapshotId, type, payload.StartIndex, payload.ValueCount,
+            transaction->Snapshot, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
+            type, payload.StartIndex, payload.ValueCount,
             payload.TotalCount, payload.Direction, payload.Values);
         if (accepted == SkyrimTogetherVR::AnimationGraphProtocol::ChunkAcceptResult::Malformed ||
             accepted == SkyrimTogetherVR::AnimationGraphProtocol::ChunkAcceptResult::Stale)

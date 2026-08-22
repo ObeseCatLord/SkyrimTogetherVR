@@ -12,11 +12,13 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <vr_common/VRHandoffPath.h>
 #include <vr_common/VRTickBridge.h>
 
 #include "HiggsMutationDedup.h"
+#include "HiggsNodeName.h"
 
 using PluginHandle = std::uint32_t;
 
@@ -29,6 +31,10 @@ static constexpr std::uint32_t kHiggsMessageGetInterface = 0xF9279A57;
 static constexpr std::uintptr_t kTesFormFormIdOffset = 0x14;
 static constexpr std::size_t kMaxRecentEvents = 32;
 static constexpr std::uint64_t kHandoffPublishIntervalMs = 50;
+// GetGrabbedNodeName was appended to IHiggsInterface001 in HIGGS v1.10.5.
+// Calling that vtable slot on an older interface is ABI-unsafe.
+static constexpr unsigned int kHiggsBuildWithGrabbedNodeName = 1100500;
+static constexpr std::size_t kMaximumGrabbedNodeNameBytes = 48;
 
 struct PluginInfo
 {
@@ -92,6 +98,26 @@ struct BSFixedString
 {
     const char* data;
 };
+
+static_assert(sizeof(float) == 4);
+static_assert(sizeof(void*) == 8);
+
+static_assert(std::is_standard_layout_v<NiPoint3> && std::is_trivially_copyable_v<NiPoint3>);
+static_assert(sizeof(NiPoint3) == 0xC && alignof(NiPoint3) == alignof(float));
+static_assert(offsetof(NiPoint3, x) == 0x0 && offsetof(NiPoint3, y) == 0x4 && offsetof(NiPoint3, z) == 0x8);
+
+static_assert(std::is_standard_layout_v<NiMatrix3> && std::is_trivially_copyable_v<NiMatrix3>);
+static_assert(sizeof(NiMatrix3) == 0x24 && alignof(NiMatrix3) == alignof(float));
+static_assert(offsetof(NiMatrix3, entries) == 0x0);
+
+static_assert(std::is_standard_layout_v<NiTransform> && std::is_trivially_copyable_v<NiTransform>);
+static_assert(sizeof(NiTransform) == 0x34 && alignof(NiTransform) == alignof(float));
+static_assert(offsetof(NiTransform, rotate) == 0x0 && offsetof(NiTransform, translate) == 0x24 &&
+              offsetof(NiTransform, scale) == 0x30);
+
+static_assert(std::is_standard_layout_v<BSFixedString> && std::is_trivially_copyable_v<BSFixedString>);
+static_assert(sizeof(BSFixedString) == sizeof(const char*) && alignof(BSFixedString) == alignof(const char*));
+static_assert(offsetof(BSFixedString, data) == 0x0);
 
 namespace HiggsPluginAPI
 {
@@ -166,6 +192,64 @@ struct IHiggsInterface001
 };
 }
 
+using HiggsInterface001 = HiggsPluginAPI::IHiggsInterface001;
+
+static_assert(std::is_same_v<HiggsInterface001::PulledCallback, void (*)(bool, TESObjectREFR*)>);
+static_assert(std::is_same_v<HiggsInterface001::GrabbedCallback, void (*)(bool, TESObjectREFR*)>);
+static_assert(std::is_same_v<HiggsInterface001::DroppedCallback, void (*)(bool, TESObjectREFR*)>);
+static_assert(std::is_same_v<HiggsInterface001::StashedCallback, void (*)(bool, TESForm*)>);
+static_assert(std::is_same_v<HiggsInterface001::ConsumedCallback, void (*)(bool, TESForm*)>);
+static_assert(std::is_same_v<HiggsInterface001::CollisionCallback, void (*)(bool, float, float)>);
+static_assert(std::is_same_v<HiggsInterface001::StartTwoHandingCallback, void (*)()>);
+static_assert(std::is_same_v<HiggsInterface001::StopTwoHandingCallback, void (*)()>);
+static_assert(std::is_same_v<HiggsInterface001::CollisionFilterComparisonCallback,
+                             HiggsInterface001::CollisionFilterComparisonResult (*)(void*, std::uint32_t, std::uint32_t)>);
+static_assert(std::is_same_v<HiggsInterface001::PrePhysicsStepCallback, void (*)(void*)>);
+static_assert(std::is_same_v<HiggsInterface001::NoArgCallback, void (*)()>);
+static_assert(sizeof(HiggsInterface001::CollisionFilterComparisonResult) == sizeof(std::uint8_t));
+
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetBuildNumber), unsigned int (HiggsInterface001::*)()>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPulledCallback), void (HiggsInterface001::*)(HiggsInterface001::PulledCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddGrabbedCallback), void (HiggsInterface001::*)(HiggsInterface001::GrabbedCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddDroppedCallback), void (HiggsInterface001::*)(HiggsInterface001::DroppedCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddStashedCallback), void (HiggsInterface001::*)(HiggsInterface001::StashedCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddConsumedCallback), void (HiggsInterface001::*)(HiggsInterface001::ConsumedCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddCollisionCallback), void (HiggsInterface001::*)(HiggsInterface001::CollisionCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GrabObject), void (HiggsInterface001::*)(TESObjectREFR*, bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetGrabbedObject), TESObjectREFR* (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::IsHandInGrabbableState), bool (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::DisableHand), void (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::EnableHand), void (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::IsDisabled), bool (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::DisableWeaponCollision), void (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::EnableWeaponCollision), void (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::IsWeaponCollisionDisabled), bool (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::IsTwoHanding), bool (HiggsInterface001::*)()>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddStartTwoHandingCallback), void (HiggsInterface001::*)(HiggsInterface001::StartTwoHandingCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddStopTwoHandingCallback), void (HiggsInterface001::*)(HiggsInterface001::StopTwoHandingCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::CanGrabObject), bool (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddCollisionFilterComparisonCallback), void (HiggsInterface001::*)(HiggsInterface001::CollisionFilterComparisonCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPrePhysicsStepCallback), void (HiggsInterface001::*)(HiggsInterface001::PrePhysicsStepCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetHiggsLayerBitfield), std::uint64_t (HiggsInterface001::*)()>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::SetHiggsLayerBitfield), void (HiggsInterface001::*)(std::uint64_t)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetHandRigidBody), NiObject* (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetWeaponRigidBody), NiObject* (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetGrabbedRigidBody), NiObject* (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::ForceWeaponCollisionEnabled), void (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::IsHoldingObject), bool (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetFingerValues), void (HiggsInterface001::*)(bool, float*)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPreVrikPreHiggsCallback), void (HiggsInterface001::*)(HiggsInterface001::NoArgCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPreVrikPostHiggsCallback), void (HiggsInterface001::*)(HiggsInterface001::NoArgCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPostVrikPreHiggsCallback), void (HiggsInterface001::*)(HiggsInterface001::NoArgCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::AddPostVrikPostHiggsCallback), void (HiggsInterface001::*)(HiggsInterface001::NoArgCallback)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::Deprecated1), bool (HiggsInterface001::*)(const std::string_view&, double&)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::Deprecated2), bool (HiggsInterface001::*)(const std::string&, double)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetGrabTransform), NiTransform (HiggsInterface001::*)(bool)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::SetGrabTransform), void (HiggsInterface001::*)(bool, const NiTransform&)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetSettingDouble), bool (HiggsInterface001::*)(const char*, double&)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::SetSettingDouble), bool (HiggsInterface001::*)(const char*, double)>);
+static_assert(std::is_same_v<decltype(&HiggsInterface001::GetGrabbedNodeName), BSFixedString (HiggsInterface001::*)(bool)>);
+
 namespace
 {
 struct HiggsMessage
@@ -176,13 +260,20 @@ struct HiggsMessage
 struct HiggsEvent
 {
     std::uint32_t Sequence{};
+    SkyrimTogetherVR::HiggsBridge::MutationKind Kind{};
     const char* Type{};
     bool IsLeft{};
     bool HasHand{};
     std::uintptr_t ObjectAddress{};
     std::uint32_t FormId{};
+    std::uint32_t InventoryBaseFormId{};
     float Mass{};
     float SeparatingVelocity{};
+    bool GrabTransformValid{};
+    bool GrabDetailsPending{};
+    NiTransform GrabTransform{};
+    char GrabbedNodeName[kMaximumGrabbedNodeNameBytes]{};
+    std::uint8_t GrabbedNodeNameLength{};
 };
 
 struct HiggsHandSnapshot
@@ -198,6 +289,8 @@ struct HiggsHandSnapshot
     float Fingers[5]{};
     bool GrabTransformValid{};
     NiTransform GrabTransform{};
+    char GrabbedNodeName[kMaximumGrabbedNodeNameBytes]{};
+    std::uint8_t GrabbedNodeNameLength{};
 };
 
 struct HiggsSnapshot
@@ -211,10 +304,11 @@ struct HiggsSnapshot
 
 PluginHandle g_pluginHandle = kPluginHandleInvalid;
 SKSEMessagingInterface* g_messaging = nullptr;
+std::atomic_bool g_failureReported{false};
 std::atomic<HiggsPluginAPI::IHiggsInterface001*> g_higgs{nullptr};
 std::atomic_bool g_callbacksRegistered{false};
 std::atomic_bool g_snapshotAvailable{false};
-std::atomic_uint32_t g_eventSequence{0};
+std::atomic_uint32_t g_mutationSequence{0};
 std::atomic_uint32_t g_snapshotSequence{0};
 std::atomic_uint32_t g_bridgeSequence{0};
 std::atomic_uint64_t g_bridgeEpoch{0};
@@ -225,12 +319,21 @@ std::atomic_uint64_t g_bodyCaptureSuccessCount{0};
 std::atomic_uint32_t g_bodyCaptureLastResult{static_cast<std::uint32_t>(SkyrimTogetherVR::TickBridge::DispatchResult::Inactive)};
 std::atomic_bool g_endpointFaulted{false};
 std::atomic_uint32_t g_deduplicatedMutationEvents{0};
+std::atomic_uint64_t g_collisionEventCount{0};
+std::atomic_uint64_t g_twoHandTransitionCount{0};
 std::mutex g_eventLock;
 std::deque<HiggsEvent> g_recentEvents;
 SkyrimTogetherVR::HiggsBridge::MutationDeduplicator g_mutationDeduplicator;
 std::mutex g_snapshotLock;
 HiggsSnapshot g_latestSnapshot;
 std::atomic<SkyrimTogetherVR::TickBridge::Endpoint*> g_endpoint{nullptr};
+
+void ReportBridgeFailureOnce(const char* apMessage) noexcept
+{
+    bool expected = false;
+    if (g_failureReported.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        OutputDebugStringA(apMessage);
+}
 
 std::uint32_t NextNonZeroSequence(std::atomic_uint32_t& arSequence) noexcept
 {
@@ -453,15 +556,6 @@ std::uint32_t ReadFormId(const void* apForm) noexcept
     return *reinterpret_cast<const std::uint32_t*>(pBytes + kTesFormFormIdOffset);
 }
 
-void PushEvent(HiggsEvent aEvent)
-{
-    std::lock_guard lock(g_eventLock);
-    aEvent.Sequence = NextNonZeroSequence(g_eventSequence);
-    g_recentEvents.push_back(aEvent);
-    while (g_recentEvents.size() > kMaxRecentEvents)
-        g_recentEvents.pop_front();
-}
-
 const char* ToEventType(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind) noexcept
 {
     using MutationKind = SkyrimTogetherVR::HiggsBridge::MutationKind;
@@ -476,10 +570,23 @@ const char* ToEventType(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind)
     return "unknown";
 }
 
-void PushMutationEvent(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind,
-                       const bool aIsLeft, const void* apForm)
+void CaptureGrabbedNodeName(HiggsPluginAPI::IHiggsInterface001* apHiggs, const bool aIsLeft,
+                            const unsigned int aBuildNumber, char (&arName)[kMaximumGrabbedNodeNameBytes],
+                            std::uint8_t& arLength) noexcept
 {
-    const auto formId = ReadFormId(apForm);
+    arName[0] = '\0';
+    arLength = 0;
+    if (!apHiggs || aBuildNumber < kHiggsBuildWithGrabbedNodeName)
+        return;
+    const auto name = apHiggs->GetGrabbedNodeName(aIsLeft);
+    SkyrimTogetherVR::HiggsBridge::CopyLineSafeNodeName(name.data, arName, arLength);
+}
+
+void PushMutationEvent(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind,
+                       const bool aIsLeft, const TESObjectREFR* apReference,
+                       const TESForm* apInventoryBaseForm = nullptr)
+{
+    const auto formId = ReadFormId(apReference);
     const auto now = static_cast<std::uint64_t>(GetTickCount64());
     std::lock_guard lock(g_eventLock);
     if (!g_mutationDeduplicator.Accept(aKind, aIsLeft, formId, now)) {
@@ -488,12 +595,32 @@ void PushMutationEvent(const SkyrimTogetherVR::HiggsBridge::MutationKind aKind,
     }
 
     HiggsEvent event{};
-    event.Sequence = NextNonZeroSequence(g_eventSequence);
+    event.Sequence = NextNonZeroSequence(g_mutationSequence);
+    event.Kind = aKind;
     event.Type = ToEventType(aKind);
     event.IsLeft = aIsLeft;
     event.HasHand = true;
-    event.ObjectAddress = ToAddress(apForm);
+    event.ObjectAddress = ToAddress(apReference);
     event.FormId = formId;
+    event.InventoryBaseFormId = ReadFormId(apInventoryBaseForm);
+    if (auto* const pHiggs = g_higgs.load(std::memory_order_acquire); pHiggs &&
+        (aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Pulled ||
+         aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Grabbed ||
+         aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Dropped ||
+         aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Stashed ||
+         aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Consumed))
+    {
+        // Terminal callbacks run before activation destroys their reference.
+        // Grabbed details are completed from the post-HIGGS snapshot because
+        // HIGGS invokes that callback before transitioning the hand to held.
+        event.GrabTransformValid = pHiggs->IsHoldingObject(aIsLeft);
+        if (event.GrabTransformValid)
+            event.GrabTransform = pHiggs->GetGrabTransform(aIsLeft);
+        CaptureGrabbedNodeName(pHiggs, aIsLeft, pHiggs->GetBuildNumber(), event.GrabbedNodeName,
+                               event.GrabbedNodeNameLength);
+    }
+    event.GrabDetailsPending = aKind == SkyrimTogetherVR::HiggsBridge::MutationKind::Grabbed &&
+                               !event.GrabTransformValid;
     g_recentEvents.push_back(event);
     while (g_recentEvents.size() > kMaxRecentEvents)
         g_recentEvents.pop_front();
@@ -516,40 +643,45 @@ void OnDropped(bool aIsLeft, TESObjectREFR* apReference)
 
 void OnStashed(bool aIsLeft, TESForm* apForm)
 {
-    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Stashed, aIsLeft, apForm);
+    auto* const pHiggs = g_higgs.load(std::memory_order_acquire);
+    // HIGGS promises this callback is before activation; apForm is only base
+    // inventory metadata, never the object identity used for lease release.
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Stashed, aIsLeft,
+                      pHiggs ? pHiggs->GetGrabbedObject(aIsLeft) : nullptr, apForm);
 }
 
 void OnConsumed(bool aIsLeft, TESForm* apForm)
 {
-    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Consumed, aIsLeft, apForm);
+    auto* const pHiggs = g_higgs.load(std::memory_order_acquire);
+    PushMutationEvent(SkyrimTogetherVR::HiggsBridge::MutationKind::Consumed, aIsLeft,
+                      pHiggs ? pHiggs->GetGrabbedObject(aIsLeft) : nullptr, apForm);
 }
 
 void OnCollision(bool aIsLeft, float aMass, float aSeparatingVelocity)
 {
-    HiggsEvent event{};
-    event.Type = "collision";
-    event.IsLeft = aIsLeft;
-    event.HasHand = true;
-    event.Mass = aMass;
-    event.SeparatingVelocity = aSeparatingVelocity;
-    PushEvent(event);
+    (void)aIsLeft;
+    (void)aMass;
+    (void)aSeparatingVelocity;
+    // HIGGS does not identify the collision target or node, so this callback
+    // cannot produce a deterministic remote physics mutation. Keep aggregate
+    // diagnostics without allowing collision bursts to evict grab/drop edges.
+    g_collisionEventCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void OnStartTwoHanding()
 {
-    HiggsEvent event{};
-    event.Type = "startTwoHanding";
-    PushEvent(event);
+    // Two-handing is represented by the full hand snapshot. The transition is
+    // telemetry only and must not consume the reliable mutation sequence.
+    g_twoHandTransitionCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void OnStopTwoHanding()
 {
-    HiggsEvent event{};
-    event.Type = "stopTwoHanding";
-    PushEvent(event);
+    g_twoHandTransitionCount.fetch_add(1, std::memory_order_relaxed);
 }
 
-HiggsHandSnapshot CaptureHandSnapshot(HiggsPluginAPI::IHiggsInterface001* apHiggs, bool aIsLeft)
+HiggsHandSnapshot CaptureHandSnapshot(HiggsPluginAPI::IHiggsInterface001* apHiggs, bool aIsLeft,
+                                      const unsigned int aBuildNumber)
 {
     HiggsHandSnapshot hand{};
     if (!apHiggs)
@@ -570,9 +702,38 @@ HiggsHandSnapshot CaptureHandSnapshot(HiggsPluginAPI::IHiggsInterface001* apHigg
 
     hand.GrabTransformValid = holding;
     if (holding)
+    {
         hand.GrabTransform = apHiggs->GetGrabTransform(aIsLeft);
+        CaptureGrabbedNodeName(apHiggs, aIsLeft, aBuildNumber, hand.GrabbedNodeName, hand.GrabbedNodeNameLength);
+    }
 
     return hand;
+}
+
+void CompleteGrabbedEventsFromSnapshot(const HiggsSnapshot& acSnapshot)
+{
+    std::lock_guard lock(g_eventLock);
+    for (auto& event : g_recentEvents)
+    {
+        if (!event.GrabDetailsPending)
+            continue;
+        event.GrabDetailsPending = false;
+
+        if (event.ObjectAddress == 0)
+            continue;
+
+        const auto& hand = event.IsLeft ? acSnapshot.Left : acSnapshot.Right;
+        if (!hand.Valid || !hand.HoldingObject || !hand.GrabTransformValid ||
+            hand.GrabbedObjectAddress != event.ObjectAddress ||
+            hand.GrabbedNodeNameLength >= kMaximumGrabbedNodeNameBytes)
+            continue;
+
+        event.GrabTransformValid = true;
+        event.GrabTransform = hand.GrabTransform;
+        event.GrabbedNodeNameLength = hand.GrabbedNodeNameLength;
+        for (std::size_t index = 0; index <= event.GrabbedNodeNameLength; ++index)
+            event.GrabbedNodeName[index] = hand.GrabbedNodeName[index];
+    }
 }
 
 void CaptureHiggsSnapshot()
@@ -585,13 +746,14 @@ void CaptureHiggsSnapshot()
     snapshot.Sequence = NextNonZeroSequence(g_snapshotSequence);
     snapshot.BuildNumber = pHiggs->GetBuildNumber();
     snapshot.TwoHanding = pHiggs->IsTwoHanding();
-    snapshot.Left = CaptureHandSnapshot(pHiggs, true);
-    snapshot.Right = CaptureHandSnapshot(pHiggs, false);
+    snapshot.Left = CaptureHandSnapshot(pHiggs, true, snapshot.BuildNumber);
+    snapshot.Right = CaptureHandSnapshot(pHiggs, false, snapshot.BuildNumber);
 
     {
         std::lock_guard lock(g_snapshotLock);
         g_latestSnapshot = snapshot;
     }
+    CompleteGrabbedEventsFromSnapshot(snapshot);
     g_snapshotAvailable.store(true, std::memory_order_release);
 }
 
@@ -682,6 +844,7 @@ void WriteHandState(std::ofstream& aFile, const char* apPrefix, const HiggsHandS
     aFile << apPrefix << ".weaponCollisionDisabled=" << (apHand->WeaponCollisionDisabled ? "1" : "0") << "\n";
     aFile << apPrefix << ".grabbedObjectAddress=" << apHand->GrabbedObjectAddress << "\n";
     aFile << apPrefix << ".grabbedObjectFormId=" << apHand->GrabbedObjectFormId << "\n";
+    aFile << apPrefix << ".grabbedNodeName=" << std::string_view(apHand->GrabbedNodeName, apHand->GrabbedNodeNameLength) << "\n";
     WriteFingerValues(aFile, apPrefix, *apHand);
 
     aFile << apPrefix << ".grabTransform.valid=" << (apHand->GrabTransformValid ? "1" : "0") << "\n";
@@ -725,9 +888,12 @@ void WriteBridgeFile(const std::uint32_t aSequence)
             file << "higgs.detected=" << (IsHiggsInstalled() || pHiggs ? "1" : "0") << "\n";
             file << "higgs.interfaceAvailable=" << (pHiggs ? "1" : "0") << "\n";
             file << "higgs.callbacksRegistered=" << (g_callbacksRegistered.load(std::memory_order_acquire) ? "1" : "0") << "\n";
-            file << "higgs.eventSequence=" << g_eventSequence.load(std::memory_order_acquire) << "\n";
+            file << "higgs.eventSequence=" << g_mutationSequence.load(std::memory_order_acquire) << "\n";
+            file << "higgs.mutationSequence=" << g_mutationSequence.load(std::memory_order_acquire) << "\n";
             file << "higgs.mutationProducer=higgsCallbacks\n";
             file << "higgs.deduplicatedMutationEvents=" << g_deduplicatedMutationEvents.load(std::memory_order_relaxed) << "\n";
+            file << "higgs.collisionEventCount=" << g_collisionEventCount.load(std::memory_order_relaxed) << "\n";
+            file << "higgs.twoHandTransitionCount=" << g_twoHandTransitionCount.load(std::memory_order_relaxed) << "\n";
             file << "higgs.snapshotAvailable=" << (snapshotAvailable ? "1" : "0") << "\n";
             file << "higgs.snapshotSequence=" << snapshot.Sequence << "\n";
             file << "bodyCapture.endpointFaulted=" << (g_endpointFaulted.load(std::memory_order_acquire) ? "1" : "0") << "\n";
@@ -762,8 +928,13 @@ void WriteBridgeFile(const std::uint32_t aSequence)
                 file << prefix << ".hand=" << (event.IsLeft ? "left" : "right") << "\n";
                 file << prefix << ".objectAddress=" << event.ObjectAddress << "\n";
                 file << prefix << ".formId=" << event.FormId << "\n";
+                file << prefix << ".inventoryBaseFormId=" << event.InventoryBaseFormId << "\n";
                 file << prefix << ".mass=" << event.Mass << "\n";
                 file << prefix << ".separatingVelocity=" << event.SeparatingVelocity << "\n";
+                file << prefix << ".grabTransform.valid=" << (event.GrabTransformValid ? "1" : "0") << "\n";
+                if (event.GrabTransformValid)
+                    WriteTransform(file, (prefix + ".grabTransform").c_str(), event.GrabTransform);
+                file << prefix << ".grabbedNodeName=" << std::string_view(event.GrabbedNodeName, event.GrabbedNodeNameLength) << "\n";
                 ++index;
             }
         });
@@ -840,7 +1011,9 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
     if (apMessage->type == kSkseMessagePostLoad || apMessage->type == kSkseMessagePostPostLoad)
     {
         MapEndpoint();
-        RequestHiggsInterface();
+        const auto apiAvailable = RequestHiggsInterface();
+        if (apMessage->type == kSkseMessagePostPostLoad && !apiAvailable)
+            ReportBridgeFailureOnce("SkyrimTogetherVR HIGGS optional API unavailable; integration disabled.\n");
         StartHandoff();
     }
 }
@@ -855,7 +1028,19 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSk
     apInfo->name = "SkyrimTogetherVRHiggsBridge";
     apInfo->version = 1;
 
-    g_pluginHandle = apSkse->GetPluginHandle ? apSkse->GetPluginHandle() : kPluginHandleInvalid;
+    if (!apSkse->GetPluginHandle)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR HIGGS bridge disabled: invalid SKSE plugin handle.\n");
+        return false;
+    }
+
+    g_pluginHandle = apSkse->GetPluginHandle();
+    if (g_pluginHandle == kPluginHandleInvalid)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR HIGGS bridge disabled: invalid SKSE plugin handle.\n");
+        return false;
+    }
+
     return true;
 }
 
@@ -864,12 +1049,21 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
     if (!apSkse || !apSkse->QueryInterface)
         return false;
 
-    g_messaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
-    if (!g_messaging || !g_messaging->RegisterListener)
+    auto* const pMessaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
+    if (g_pluginHandle == kPluginHandleInvalid || !pMessaging || !pMessaging->RegisterListener)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR HIGGS bridge disabled: SKSE listener registration unavailable.\n");
         return false;
+    }
+
+    if (!pMessaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage)))
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR HIGGS bridge disabled: SKSE listener registration failed.\n");
+        return false;
+    }
 
     MapEndpoint();
-    g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
+    g_messaging = pMessaging;
     StartHandoff();
     return true;
 }

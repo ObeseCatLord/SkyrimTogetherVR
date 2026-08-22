@@ -66,6 +66,10 @@ enum ClientOpcode : unsigned char
     kRequestVRAppearance,
     kClientActorActionRequest,
     kRequestActorResync,
+    kRequestMountResync,
+    kRequestObjectResync,
+    kRequestQuestResync,
+    kRequestVRPlanckPhysicsEvent,
     kClientOpcodeMax
 };
 
@@ -138,5 +142,9 @@ enum ServerOpcode : unsigned char
     kNotifyVRHiggsState,
     kNotifyVRAppearance,
     kNotifyActorResync,
+    kNotifyMountResync,
+    kNotifyObjectResync,
+    kNotifyQuestResync,
+    kNotifyVRPlanckPhysicsEvent,
     kServerOpcodeMax
 };

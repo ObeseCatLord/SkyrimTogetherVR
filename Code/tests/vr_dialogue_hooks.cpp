@@ -5,13 +5,16 @@
 namespace
 {
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::CanEnableSpeakSoundHook;
+using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::CaptureBeforeNativeIf;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::DecideSpeakerEvent;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::DecideSpeakerPresentation;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::HookAttachment;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::IsPinnedPlayDialogueOptionTarget;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::ShouldAdvanceDialogueBaseline;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::ShouldCaptureExactDialogueChoice;
+using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::ShouldCaptureLocalNpcSpeaker;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::ShouldPublishPolledDialogue;
+using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::SkyrimSubtitleTopicFormId;
 using SkyrimTogetherVR::GameplayAdapter::DialogueHookPolicy::TryDetachHook;
 } // namespace
 
@@ -71,6 +74,57 @@ TEST_CASE("Dialogue presentation policy suppresses only when managed relay is av
         REQUIRE(disposition.SuppressManagedRemote == test.SuppressesManagedRemote);
         REQUIRE(disposition.FallbackToNative == test.FallsBackToNative);
     }
+}
+
+TEST_CASE("Dialogue capture admits only observed local non-player speakers")
+{
+    struct Case
+    {
+        bool HasSpeaker;
+        bool HasLocalPlayer;
+        bool IsLocalPlayer;
+        bool ManagedRemoteSpeaker;
+        bool HasValidFormId;
+        bool IsObservedNpc;
+        bool Captures;
+    };
+    constexpr std::array cases{
+        Case{true, true, false, false, true, true, true},
+        Case{false, true, false, false, true, true, false},
+        Case{true, false, false, false, true, true, false},
+        Case{true, true, true, false, true, true, false},
+        Case{true, true, false, true, true, true, false},
+        Case{true, true, false, false, false, true, false},
+        Case{true, true, false, false, true, false, false},
+    };
+
+    for (const auto& test : cases) {
+        REQUIRE(ShouldCaptureLocalNpcSpeaker(
+                    test.HasSpeaker, test.HasLocalPlayer, test.IsLocalPlayer, test.ManagedRemoteSpeaker,
+                    test.HasValidFormId, test.IsObservedNpc) == test.Captures);
+    }
+}
+
+TEST_CASE("Skyrim subtitle transport omits the topic form ID")
+{
+    REQUIRE(SkyrimSubtitleTopicFormId() == 0);
+}
+
+TEST_CASE("Dialogue voice capture precedes native playback without a second emission")
+{
+    std::array<int, 2> trace{};
+    std::size_t next{};
+    const auto nativeResult = CaptureBeforeNativeIf(
+        true,
+        [&] { trace[next++] = 1; },
+        [&] {
+            trace[next++] = 2;
+            return 42;
+        });
+
+    REQUIRE(nativeResult == 42);
+    REQUIRE(next == 2);
+    REQUIRE(trace == std::array{1, 2});
 }
 
 TEST_CASE("Dialogue hook detach preserves an enabled trampoline when disable fails")
@@ -134,7 +188,7 @@ TEST_CASE("Dialogue choice hook remains pinned to the verified VR body")
     REQUIRE(kPlayDialogueOptionVrPrologue == expectedPrologue);
 }
 
-TEST_CASE("Exact dialogue choice capture admits only accepted local selections in a ready session")
+TEST_CASE("Exact dialogue choice capture waits for VR native acceptance")
 {
     REQUIRE(ShouldCaptureExactDialogueChoice(true, false, true, true));
     REQUIRE_FALSE(ShouldCaptureExactDialogueChoice(false, false, true, true));

@@ -1,6 +1,6 @@
 #include <catch2/catch.hpp>
 
-#include <Services/DeferredNativeParityClose.h>
+#include <Services/DeferredNativeGameplayCoreClose.h>
 #include <Services/VRRehydrationState.h>
 #include <Structs/VRHiggsRelayState.h>
 
@@ -45,16 +45,16 @@ TEST_CASE("VR rehydration profiles have explicit terminal paths", "[skyrim-vr][l
 
 TEST_CASE("deferred native-parity closes are bound to one authenticated session", "[skyrim-vr][lifecycle]")
 {
-    constexpr DeferredNativeParityCloseToken token{
+    constexpr DeferredNativeGameplayCoreCloseToken token{
         0x10,
         0x20,
     };
 
-    CHECK(IsCurrentDeferredNativeParityClose(token, true, 0x10, 0x20));
-    CHECK_FALSE(IsCurrentDeferredNativeParityClose(token, false, 0x10, 0x20));
-    CHECK_FALSE(IsCurrentDeferredNativeParityClose(token, true, 0x11, 0x20));
-    CHECK_FALSE(IsCurrentDeferredNativeParityClose(token, true, 0x10, 0x21));
-    CHECK_FALSE(IsCurrentDeferredNativeParityClose({}, true, 0x10, 0x20));
+    CHECK(IsCurrentDeferredNativeGameplayCoreClose(token, true, 0x10, 0x20));
+    CHECK_FALSE(IsCurrentDeferredNativeGameplayCoreClose(token, false, 0x10, 0x20));
+    CHECK_FALSE(IsCurrentDeferredNativeGameplayCoreClose(token, true, 0x11, 0x20));
+    CHECK_FALSE(IsCurrentDeferredNativeGameplayCoreClose(token, true, 0x10, 0x21));
+    CHECK_FALSE(IsCurrentDeferredNativeGameplayCoreClose({}, true, 0x10, 0x20));
 }
 
 TEST_CASE("HIGGS relay negotiation requires an operational bridge snapshot", "[skyrim-vr][lifecycle]")

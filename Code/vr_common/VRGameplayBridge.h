@@ -19,7 +19,7 @@ namespace SkyrimTogetherVR::GameplayBridge
 // game types, or variable-sized data.
 inline constexpr wchar_t kMappingHandleEnvironment[] = L"STVR_GAMEPLAY_BRIDGE_HANDLE";
 inline constexpr std::uint32_t kMappingMagic = 0x42564753; // SGVB
-inline constexpr std::uint16_t kMappingAbiVersion = 23;
+inline constexpr std::uint16_t kMappingAbiVersion = 24;
 inline constexpr std::uint32_t kCapabilityRevision = 34;
 // SkyrimVR.exe reports file version 1.4.15.0, which is also the version used
 // by the VR Address Library filename and CommonLib's executable detection.
@@ -179,8 +179,9 @@ inline constexpr CapabilityMask kInitialCapabilities =
 // Admission to a gameplay session is fail-closed on this contract. Optional
 // integrations (HIGGS and PLANCK) are deliberately excluded; every capability
 // below is implemented by the native bridge and is required for desktop
-// gameplay parity in Skyrim VR.
-inline constexpr CapabilityMask kMandatoryNativeParityCapabilities =
+// canonical gameplay-core routing in Skyrim VR. This does not claim desktop UI,
+// optional embodiment, or runtime-verified gameplay parity.
+inline constexpr CapabilityMask kMandatoryNativeGameplayCoreCapabilities =
     static_cast<CapabilityMask>(Capability::Lifecycle) |
     static_cast<CapabilityMask>(Capability::LocalPlayerDiscovery) |
     static_cast<CapabilityMask>(Capability::LocalPlayerSnapshot) |
@@ -792,7 +793,10 @@ struct AnimationGraphChunkPayload
     std::uint32_t ChunkFlags;
     float Direction;
     std::uint32_t Values[AnimationGraphProtocol::kValuesPerChunk];
-    std::uint8_t ReservedTail[16];
+    std::uint32_t Reserved2;
+    std::uint64_t DescriptorDigest;
+    std::uint16_t DirectionFloatIndex;
+    std::uint8_t ReservedTail[6];
 };
 
 enum class RemoteAnimationGraphState : std::uint32_t
@@ -934,7 +938,9 @@ struct ActorActionGraphChunkPayload
 {
     AdapterHandle TargetHandle;
     std::uint32_t ActorLocalFormId;
-    std::uint32_t Reserved0;
+    std::uint16_t DirectionFloatIndex;
+    std::uint16_t Reserved0;
+    std::uint64_t DescriptorDigest;
     std::uint64_t SnapshotId;
     std::uint16_t DescriptorVersion;
     std::uint16_t ValueType;
@@ -1802,8 +1808,8 @@ static_assert(offsetof(ActorActionPayload, ActorLocalFormId) == 0x08);
 static_assert(offsetof(ActorActionPayload, State1) == 0x18);
 static_assert(offsetof(ActorActionPayload, SnapshotId) == 0x28);
 static_assert(offsetof(ActorActionPayload, TextId) == 0x30);
-static_assert(offsetof(ActorActionGraphChunkPayload, SnapshotId) == 0x10);
-static_assert(offsetof(ActorActionGraphChunkPayload, Values) == 0x2C);
+static_assert(offsetof(ActorActionGraphChunkPayload, SnapshotId) == 0x18);
+static_assert(offsetof(ActorActionGraphChunkPayload, Values) == 0x34);
 static_assert(offsetof(ApplyProjectileLaunchPayload, TargetHandle) == 0x00);
 static_assert(offsetof(ApplyProjectileLaunchPayload, LocalProjectileBaseFormId) == 0x08);
 static_assert(offsetof(ApplyProjectileLaunchPayload, LocalParentCellFormId) == 0x18);

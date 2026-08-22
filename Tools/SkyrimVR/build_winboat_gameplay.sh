@@ -132,6 +132,27 @@ if [[ ! -x $winboat_scp ]]; then
     exit 2
 fi
 
+guest_havok_archive=""
+guest_planck_dependency_root=""
+reported_havok_sha256=""
+reported_sksevr_sha256=""
+provision_output=$("$repo_root/Tools/SkyrimVR/provision_winboat_planck_dependencies.sh" \
+    --winboat-powershell "$winboat_powershell" --winboat-scp "$winboat_scp")
+while IFS='=' read -r key value; do
+    case $key in
+        STVR_GUEST_HAVOK_ARCHIVE) guest_havok_archive=$value ;;
+        STVR_GUEST_PLANCK_DEPENDENCY_ROOT) guest_planck_dependency_root=$value ;;
+        STVR_HAVOK_ARCHIVE_SHA256) reported_havok_sha256=$value ;;
+        STVR_SKSEVR_SOURCE_SHA256) reported_sksevr_sha256=$value ;;
+    esac
+done <<<"$provision_output"
+if [[ -z $guest_havok_archive || -z $guest_planck_dependency_root || \
+      $reported_havok_sha256 != 7349946401a820784fc86aa13bc667def6c409ed938865b01c8e6c3d86692555 || \
+      $reported_sksevr_sha256 != edbb4945544718054279c9f949ac689e735b13c8efcd3272b6f74e2398dd5d53 ]]; then
+    echo "PLANCK dependency provisioner did not return the pinned durable guest provenance." >&2
+    exit 2
+fi
+
 "$repo_root/Tools/SkyrimVR/cleanup_build_storage.sh" \
     --apply --max-age-days 0 --skip-local-artifacts --local-build-output --temp-artifacts
 
@@ -140,7 +161,7 @@ timestamp=$(date -u +%Y%m%d%H%M%SZ)
 winboat_build="${winboat_repo}-build-${short_commit}-${timestamp}"
 winboat_result="${winboat_repo}-build-results\\${short_commit}-${timestamp}"
 
-for value in "$winboat_repo" "$winboat_build" "$winboat_result"; do
+for value in "$winboat_repo" "$winboat_build" "$winboat_result" "$guest_havok_archive" "$guest_planck_dependency_root"; do
     if [[ $value == *"'"* ]]; then
         echo "WinBoat paths containing a single quote are not supported." >&2
         exit 2
@@ -153,6 +174,8 @@ $repo = '__WINBOAT_REPO__'
 $build = '__WINBOAT_BUILD__'
 $result = '__WINBOAT_RESULT__'
 $commit = '__COMMIT__'
+$havokArchive = '__GUEST_HAVOK_ARCHIVE__'
+$planckDependencyRoot = '__GUEST_PLANCK_DEPENDENCY_ROOT__'
 $worktreeCreated = $false
 
 try {
@@ -177,8 +200,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw "Fresh WinBoat worktree is unexpectedly dirty." }
 
     $env:Path = "C:\Users\obesecatlord\AppData\Local\Microsoft\WinGet\Links;$env:Path"
-    & .\BuildAuditCollectSkyrimTogetherVR-Windows.bat --gameplay
-    if ($LASTEXITCODE -ne 0) { throw "Audited gameplay build failed with exit code $LASTEXITCODE." }
+    & .\BuildCompleteSkyrimTogetherVR-Windows.ps1 -HavokArchive $havokArchive -DependencyRoot $planckDependencyRoot -Configuration Release
+    if ($LASTEXITCODE -ne 0) { throw "Complete patched-PLANCK gameplay build failed with exit code $LASTEXITCODE." }
 
     $package = Join-Path $build 'artifacts\SkyrimTogetherVR\packages\gameplay'
     $evidence = Get-ChildItem -LiteralPath (Join-Path $build 'artifacts\SkyrimTogetherVR\build-evidence') -Filter 'SkyrimTogetherVR-build-evidence-gameplay-*.zip' |
@@ -214,6 +237,8 @@ powershell_payload=${powershell_payload//__WINBOAT_REPO__/$winboat_repo}
 powershell_payload=${powershell_payload//__WINBOAT_BUILD__/$winboat_build}
 powershell_payload=${powershell_payload//__WINBOAT_RESULT__/$winboat_result}
 powershell_payload=${powershell_payload//__COMMIT__/$commit}
+powershell_payload=${powershell_payload//__GUEST_HAVOK_ARCHIVE__/$guest_havok_archive}
+powershell_payload=${powershell_payload//__GUEST_PLANCK_DEPENDENCY_ROOT__/$guest_planck_dependency_root}
 
 payload_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-build-${short_commit}-${timestamp}-XXXXXX.ps1")
 guest_payload="C:/Users/obesecatlord/AppData/Local/Temp/stvr-winboat-build-${short_commit}-${timestamp}.ps1"

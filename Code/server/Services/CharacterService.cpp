@@ -23,6 +23,8 @@
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/NotifyActorResync.h>
 #include <Messages/RequestActorResync.h>
+#include <Messages/NotifyMountResync.h>
+#include <Messages/RequestMountResync.h>
 #include <Messages/RequestFactionsChanges.h>
 #include <Messages/NotifyFactionsChanges.h>
 #include <Messages/NotifyRemoveCharacter.h>
@@ -47,6 +49,7 @@
 #include <Structs/MovementOrdering.h>
 #include <Structs/GameplayCapabilities.h>
 #include <Services/VRAppearanceRelayService.h>
+#include <Services/RevisionedRecoveryPolicy.h>
 #include <vr_common/VRAnimationGraphProtocol.h>
 #include <vr_common/VRAssignmentLimits.h>
 #include <vr_common/VRGameplayBridge.h>
@@ -54,7 +57,9 @@
 #include <Setting.h>
 
 #include <atomic>
+#include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 namespace
 {
@@ -132,6 +137,9 @@ void SwapAnimationVariables(AnimationVariables& aLeft, AnimationVariables& aRigh
     aLeft.Booleans.swap(aRight.Booleans);
     aLeft.Integers.swap(aRight.Integers);
     aLeft.Floats.swap(aRight.Floats);
+    using std::swap;
+    swap(aLeft.DescriptorDigest, aRight.DescriptorDigest);
+    swap(aLeft.DirectionFloatIndex, aRight.DirectionFloatIndex);
     const bool decodedValid = aLeft.IsDecodedValid;
     aLeft.IsDecodedValid = aRight.IsDecodedValid;
     aRight.IsDecodedValid = decodedValid;
@@ -393,9 +401,10 @@ void CommitActorData(ActorValuesComponent* apActorValuesComponent,
                acAction.TargetEventName.end() &&
            ((acAction.Variables.Booleans.empty() && acAction.Variables.Floats.empty() &&
              acAction.Variables.Integers.empty()) ||
-            (SkyrimTogetherVR::AnimationGraphProtocol::IsKnownShape(
+            (SkyrimTogetherVR::AnimationGraphProtocol::IsValidDescriptorContract(
                  acAction.Variables.Booleans.size(), acAction.Variables.Floats.size(),
-                 acAction.Variables.Integers.size()))) &&
+                 acAction.Variables.Integers.size(), acAction.Variables.DescriptorDigest,
+                 acAction.Variables.DirectionFloatIndex))) &&
            std::all_of(acAction.Variables.Floats.begin(), acAction.Variables.Floats.end(),
                        [](const float aValue) noexcept { return std::isfinite(aValue); });
 }
@@ -447,6 +456,7 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
     , m_dialogueConnection(aDispatcher.sink<PacketEvent<DialogueRequest>>().connect<&CharacterService::OnDialogueRequest>(this))
     , m_subtitleConnection(aDispatcher.sink<PacketEvent<SubtitleRequest>>().connect<&CharacterService::OnSubtitleRequest>(this))
     , m_actorResyncConnection(aDispatcher.sink<PacketEvent<RequestActorResync>>().connect<&CharacterService::OnActorResyncRequest>(this))
+    , m_mountResyncConnection(aDispatcher.sink<PacketEvent<RequestMountResync>>().connect<&CharacterService::OnMountResyncRequest>(this))
 {
 }
 
@@ -469,6 +479,30 @@ std::uint64_t CharacterService::NextActorSnapshotRevision(
         return 0;
     ++it->second;
     return it->second;
+}
+
+std::uint64_t CharacterService::NextMountSnapshotRevision(
+    const std::uint32_t aServerId, const std::uint64_t aKnownRevision) noexcept
+{
+    if (aServerId == 0)
+        return 0;
+    try
+    {
+        auto it = m_mountSnapshotRevisions.find(aServerId);
+        if (it == m_mountSnapshotRevisions.end())
+        {
+            if (m_mountSnapshotRevisions.size() >= kMaximumActorSnapshotRevisions)
+                return 0;
+            it = m_mountSnapshotRevisions.emplace(aServerId, 0).first;
+        }
+        if (!SkyrimTogether::RevisionedRecovery::CanIssueSnapshot(it->second, aKnownRevision))
+            return 0;
+        return ++it->second;
+    }
+    catch (...)
+    {
+        return 0;
+    }
 }
 
 void CharacterService::OnActorResyncRequest(
@@ -951,6 +985,11 @@ void CharacterService::OnCharacterRemoveEvent(const CharacterRemoveEvent& acEven
     {
         m_pendingOwnershipGrants.erase(acEvent.ServerId);
         m_actorSnapshotRevisions.erase(acEvent.ServerId);
+        m_mountSnapshotRevisions.erase(acEvent.ServerId);
+        auto characterView = m_world.view<CharacterComponent>();
+        for (const auto other : characterView)
+            if (characterView.get<CharacterComponent>(other).MountServerId == acEvent.ServerId)
+                characterView.get<CharacterComponent>(other).MountServerId = 0;
         const auto entity = static_cast<entt::entity>(acEvent.ServerId);
         if (!m_world.valid(entity) || !m_world.all_of<OwnerComponent>(entity))
             return;
@@ -1111,6 +1150,11 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
 
         auto& update = entry.second;
         auto& movement = update.UpdatedMovement;
+        float canonicalDirection{};
+        if (!movement.IsDecodedValid || !movement.Variables.IsDecodedValid ||
+            !movement.TryGetCanonicalDirection(canonicalDirection) ||
+            std::bit_cast<std::uint32_t>(movement.Direction) != std::bit_cast<std::uint32_t>(canonicalDirection))
+            continue;
 
         AnimationVariables variables = movement.Variables;
         ActionEvent currentAction = animationComponent.CurrentAction;
@@ -1171,9 +1215,10 @@ void CharacterService::OnActorActionRequest(const PacketEvent<ClientActorActionR
         action.EventName.size() > 127 || action.TargetEventName.size() > 127 ||
         std::find(action.EventName.begin(), action.EventName.end(), '\0') != action.EventName.end() ||
         std::find(action.TargetEventName.begin(), action.TargetEventName.end(), '\0') != action.TargetEventName.end() ||
-        !SkyrimTogetherVR::AnimationGraphProtocol::IsKnownShape(
+        !SkyrimTogetherVR::AnimationGraphProtocol::IsValidDescriptorContract(
             action.Variables.Booleans.size(), action.Variables.Floats.size(),
-            action.Variables.Integers.size()) ||
+            action.Variables.Integers.size(), action.Variables.DescriptorDigest,
+            action.Variables.DirectionFloatIndex) ||
         !std::all_of(action.Variables.Floats.begin(), action.Variables.Floats.end(),
                      [](const float a_value) { return std::isfinite(a_value); }))
         return;
@@ -1235,34 +1280,78 @@ catch (...)
     LogCharacterServiceFailure("faction request");
 }
 
-void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept try
+void CharacterService::OnMountRequest(const PacketEvent<MountRequest>& acMessage) noexcept try
 {
     auto& message = acMessage.Packet;
 
     const auto rider = static_cast<entt::entity>(message.RiderId);
-    const auto mount = static_cast<entt::entity>(message.MountId);
-    if (!acMessage.pPlayer || message.RiderId == 0 || message.MountId == 0 || rider == mount ||
-        !m_world.valid(rider) || !m_world.valid(mount) ||
-        !m_world.all_of<CharacterComponent, OwnerComponent>(rider) ||
-        !m_world.all_of<CharacterComponent, OwnerComponent>(mount) ||
-        !m_world.all_of<CellIdComponent>(rider) || !m_world.all_of<CellIdComponent>(mount) ||
-        m_world.get<OwnerComponent>(rider).GetOwner() != acMessage.pPlayer ||
-        m_world.get<OwnerComponent>(mount).GetOwner() != acMessage.pPlayer ||
-        !m_world.get<CharacterComponent>(mount).IsMount() ||
-        !m_world.get<CellIdComponent>(rider).IsInRange(m_world.get<CellIdComponent>(mount), false))
+    if (!acMessage.pPlayer || message.RiderId == 0 || !m_world.valid(rider) ||
+        !m_world.all_of<CharacterComponent, OwnerComponent, CellIdComponent>(rider) ||
+        m_world.get<OwnerComponent>(rider).GetOwner() != acMessage.pPlayer)
         return;
+
+    const auto mount = static_cast<entt::entity>(message.MountId);
+    if (message.MountId != 0 &&
+        (rider == mount || !m_world.valid(mount) ||
+         !m_world.all_of<CharacterComponent, OwnerComponent, CellIdComponent>(mount) ||
+         m_world.get<OwnerComponent>(mount).GetOwner() != acMessage.pPlayer ||
+         !m_world.get<CharacterComponent>(mount).IsMount() ||
+         !m_world.get<CellIdComponent>(rider).IsInRange(m_world.get<CellIdComponent>(mount), false)))
+        return;
+
+    if (message.MountId != 0) {
+        auto characterView = m_world.view<CharacterComponent>();
+        for (const auto other : characterView)
+            if (other != rider && characterView.get<CharacterComponent>(other).MountServerId == message.MountId)
+                characterView.get<CharacterComponent>(other).MountServerId = 0;
+    }
+    m_world.get<CharacterComponent>(rider).MountServerId = message.MountId;
 
     NotifyMount notify;
     notify.RiderId = message.RiderId;
     notify.MountId = message.MountId;
 
-    const entt::entity cEntity = static_cast<entt::entity>(message.MountId);
-    if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
+    const auto fanoutEntity = message.MountId != 0 ? mount : rider;
+    if (!GameServer::Get()->SendToPlayersInRange(notify, fanoutEntity, acMessage.GetSender()))
         spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
 catch (...)
 {
     LogCharacterServiceFailure("mount fanout");
+}
+
+void CharacterService::OnMountResyncRequest(
+    const PacketEvent<RequestMountResync>& acMessage) noexcept try
+{
+    const auto& request = acMessage.Packet;
+    if (!acMessage.pPlayer || !request.IsDecodedValid || !request.IsValid() ||
+        !SkyrimTogether::Protocol::IsVrGameplayClient(acMessage.pPlayer->GetGameplayCapabilities()) ||
+        !SkyrimTogether::Protocol::HasCapability(
+            acMessage.pPlayer->GetGameplayCapabilities(),
+            SkyrimTogether::Protocol::GameplayCapability::RevisionedCanonicalRecovery))
+        return;
+
+    const auto rider = static_cast<entt::entity>(request.RiderId);
+    if (!m_world.valid(rider) || !m_world.all_of<CharacterComponent, CellIdComponent>(rider))
+        return;
+    const auto& character = m_world.get<CharacterComponent>(rider);
+    const auto& cell = m_world.get<CellIdComponent>(rider);
+    if (!acMessage.pPlayer->GetCellComponent().IsInRange(cell, character.IsDragon()))
+        return;
+    const auto revision = NextMountSnapshotRevision(request.RiderId, request.KnownRevision);
+    if (revision == 0)
+        return;
+
+    NotifyMountResync response{};
+    response.RiderId = request.RiderId;
+    response.RequestId = request.RequestId;
+    response.CanonicalRevision = revision;
+    response.MountId = character.MountServerId;
+    acMessage.pPlayer->Send(response);
+}
+catch (...)
+{
+    LogCharacterServiceFailure("mount resynchronization");
 }
 
 void CharacterService::OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept try

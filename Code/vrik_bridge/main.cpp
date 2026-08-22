@@ -116,6 +116,7 @@ struct VrikSnapshot
 
 PluginHandle g_pluginHandle = kPluginHandleInvalid;
 SKSEMessagingInterface* g_messaging = nullptr;
+std::atomic_bool g_failureReported{false};
 std::atomic<vrikPluginApi::IVrikInterface001*> g_vrik{nullptr};
 std::atomic_bool g_handoffActive{false};
 std::atomic_bool g_snapshotAvailable{false};
@@ -126,6 +127,13 @@ std::atomic_uint64_t g_nextHandoffWriteTick{0};
 std::atomic_flag g_handoffWriteInProgress = ATOMIC_FLAG_INIT;
 std::mutex g_snapshotLock;
 VrikSnapshot g_latestSnapshot;
+
+void ReportBridgeFailureOnce(const char* apMessage) noexcept
+{
+    bool expected = false;
+    if (g_failureReported.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        OutputDebugStringA(apMessage);
+}
 
 std::filesystem::path GetHandoffPath()
 {
@@ -360,7 +368,8 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
 
     if (apMessage->type == kSkseMessagePostPostLoad)
     {
-        RequestVrikInterface();
+        if (!RequestVrikInterface())
+            ReportBridgeFailureOnce("SkyrimTogetherVR VRIK optional API unavailable; integration disabled.\n");
         StartHandoff();
     }
 }
@@ -389,7 +398,19 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(const SKSEInterface* apSk
     apInfo->name = "SkyrimTogetherVRVrikBridge";
     apInfo->version = 1;
 
-    g_pluginHandle = apSkse->GetPluginHandle ? apSkse->GetPluginHandle() : kPluginHandleInvalid;
+    if (!apSkse->GetPluginHandle)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR VRIK bridge disabled: invalid SKSE plugin handle.\n");
+        return false;
+    }
+
+    g_pluginHandle = apSkse->GetPluginHandle();
+    if (g_pluginHandle == kPluginHandleInvalid)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR VRIK bridge disabled: invalid SKSE plugin handle.\n");
+        return false;
+    }
+
     return true;
 }
 
@@ -398,11 +419,20 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
     if (!apSkse || !apSkse->QueryInterface)
         return false;
 
-    g_messaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
-    if (!g_messaging || !g_messaging->RegisterListener)
+    auto* const pMessaging = static_cast<SKSEMessagingInterface*>(apSkse->QueryInterface(kInterfaceMessaging));
+    if (g_pluginHandle == kPluginHandleInvalid || !pMessaging || !pMessaging->RegisterListener)
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR VRIK bridge disabled: SKSE listener registration unavailable.\n");
         return false;
+    }
 
-    g_messaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage));
+    if (!pMessaging->RegisterListener(g_pluginHandle, "SKSE", reinterpret_cast<void*>(OnSkseMessage)))
+    {
+        ReportBridgeFailureOnce("SkyrimTogetherVR VRIK bridge disabled: SKSE listener registration failed.\n");
+        return false;
+    }
+
+    g_messaging = pMessaging;
     StartHandoff();
     return true;
 }

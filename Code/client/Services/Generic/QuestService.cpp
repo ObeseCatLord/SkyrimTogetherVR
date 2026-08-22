@@ -93,7 +93,12 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
                 auto& modSys = m_world.GetModSystem();
                 if (modSys.GetServerModId(formId, Id))
                 {
+                    const auto ownerPlayerId = m_world.GetTransport().GetLocalPlayerId();
+                    if (ownerPlayerId == 0)
+                        return;
+
                     RequestQuestUpdate update;
+                    update.OwnerPlayerId = ownerPlayerId;
                     update.Id = Id;
                     update.Stage = stageId;
                     update.Status = stopped ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started;
@@ -147,7 +152,12 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
                 auto& modSys = m_world.GetModSystem();
                 if (modSys.GetServerModId(formId, Id))
                 {
+                    const auto ownerPlayerId = m_world.GetTransport().GetLocalPlayerId();
+                    if (ownerPlayerId == 0)
+                        return;
+
                     RequestQuestUpdate update;
+                    update.OwnerPlayerId = ownerPlayerId;
                     update.Id = Id;
                     update.Stage = stageId;
                     update.Status = RequestQuestUpdate::StageUpdate;

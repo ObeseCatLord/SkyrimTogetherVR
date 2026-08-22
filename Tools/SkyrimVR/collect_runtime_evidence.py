@@ -1233,7 +1233,7 @@ def build_runtime_checklist(
         and not get_bool(compat, "ready")
         and compat.get("readinessSource") == "SkyrimTogetherVR.gameplay"
         and compat.get("higgsPolicy") == "direct_optional_external_bridge"
-        and compat.get("planckPolicy") == "unsupported_no_remote_physical_replay"
+        and compat.get("planckPolicy") == "optional_negotiated_interface002_not_core_readiness"
         and (not (physics_compat_installed and unvalidated_hooks_compiled) or unvalidated_hooks_suppressed)
     )
     add_check(
@@ -1275,40 +1275,45 @@ def build_runtime_checklist(
             higgs.get("higgs.interfaceAvailable", "<missing>"),
         ),
     )
-    planck_required_by_compat = get_bool(compat, "planck.installed") or get_bool(compat, "planck.loaded")
+    planck_present = (
+        get_bool(compat, "planck.installed")
+        or get_bool(compat, "planck.loaded")
+        or get_bool(planck, "planck.detected")
+    )
+    planck_features = get_int(planck, "planck.features")
+    planck_required_features = get_int(planck, "planck.interface002RequiredFeatures")
     planck_bridge_available = (
         get_bool(planck, "bridge.loaded")
         and get_int(planck, "bridge.sequence") > 0
         and get_bool(planck, "planck.interfaceRequestAttempted")
-        and planck.get("planck.policy") == "observation_only"
-        and get_bool(planck, "planck.currentHitEventObservationOnly")
-        and planck.get("planck.lastHitDataAvailable") == "0"
-        and planck.get("planck.lastHitDataProbeEnabled") == "0"
-        and planck.get("planck.lastHitDataReason") == "not_polled_nontrivial_return_boundary"
-        and planck.get("planck.lastHitDataBoundary") == "disabled_unvalidated_by_value_abi"
+        and get_bool(planck, "planck.interfaceAvailable")
+        and get_int(planck, "planck.interfaceRevision") == 2
+        and planck_required_features != 0
+        and (planck_features & planck_required_features) == planck_required_features
+        and planck.get("planck.damageAuthority") == "none_remote_physics_only"
+        and planck.get("planck.remotePhysicsReplay") == "data_only_interface002"
     )
-    planck_api_available = get_bool(planck, "planck.interfaceAvailable")
-    add_check(
+    add_conditional_check(
         checks,
         "planck_bridge",
         "12",
-        "PLANCK bridge compatibility",
-        planck_bridge_available and (not planck_required_by_compat or planck_api_available),
-        "bridge.loaded={} bridge.sequence={} detected={} request={} interfaceAvailable={} build={} currentHit={} currentHitObservationOnly={} lastHitData={} lastHitProbe={} lastHitBoundary={} policy={} planckRequired={}".format(
+        "optional negotiated PLANCK interface002 bridge",
+        planck_bridge_available,
+        "bridge.loaded={} bridge.sequence={} detected={} request={} interfaceAvailable={} interfaceRevision={} features={} requiredFeatures={} damageAuthority={} remotePhysicsReplay={} planckPresent={}".format(
             planck.get("bridge.loaded", "<missing>"),
             planck.get("bridge.sequence", "<missing>"),
             planck.get("planck.detected", "<missing>"),
             planck.get("planck.interfaceRequestAttempted", "<missing>"),
             planck.get("planck.interfaceAvailable", "<missing>"),
-            planck.get("planck.buildNumber", "<missing>"),
-            planck.get("planck.currentHitEventAvailable", "<missing>"),
-            planck.get("planck.currentHitEventObservationOnly", "<missing>"),
-            planck.get("planck.lastHitDataAvailable", "<missing>"),
-            planck.get("planck.lastHitDataProbeEnabled", "<missing>"),
-            planck.get("planck.lastHitDataBoundary", "<missing>"),
-            planck.get("planck.policy", "<missing>"),
-            int(planck_required_by_compat),
+            planck.get("planck.interfaceRevision", "<missing>"),
+            planck.get("planck.features", "<missing>"),
+            planck.get("planck.interface002RequiredFeatures", "<missing>"),
+            planck.get("planck.damageAuthority", "<missing>"),
+            planck.get("planck.remotePhysicsReplay", "<missing>"),
+            int(planck_present),
         ),
+        required=planck_present,
+        not_required_detail="PLANCK is absent; interface002 physics replay is optional and not core readiness",
     )
     higgs_relay_available = (
         get_bool(higgsnet, "ready")
@@ -1950,7 +1955,7 @@ def collect(args: argparse.Namespace) -> pathlib.Path:
             if args.gameplay_bootstrap:
                 required = name in GAMEPLAY_BOOTSTRAP_REQUIRED_READOUTS
             else:
-                required = name != "avatar" or local_avatar_evidence
+                required = name != "planck" and (name != "avatar" or local_avatar_evidence)
             archive_name = f"handoff/{file_name}"
             if name in readout_snapshots:
                 add_snapshot(
@@ -2235,7 +2240,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "status",
             "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
             "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=17\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=20\n"
             "serverInstanceNonce=99\ngamePath={}\n".format(game),
         )
         write(
@@ -2394,7 +2399,7 @@ def command_self_test(_: argparse.Namespace) -> int:
             "discoveryPolicy=observation_only\n"
             "playerCellPolicy=network_only\n"
             "posePolicy=observation_only\n"
-            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=unsupported_no_remote_physical_replay\n",
+            "higgsPolicy=direct_optional_external_bridge\nplanckPolicy=optional_negotiated_interface002_not_core_readiness\n",
         )
         write(
             "higgs",
@@ -2417,14 +2422,11 @@ def command_self_test(_: argparse.Namespace) -> int:
             "planck.detected=1\n"
             "planck.interfaceRequestAttempted=1\n"
             "planck.interfaceAvailable=1\n"
-            "planck.buildNumber=8\n"
-            "planck.currentHitEventAvailable=1\n"
-            "planck.currentHitEventObservationOnly=1\n"
-            "planck.lastHitDataAvailable=0\n"
-            "planck.lastHitDataProbeEnabled=0\n"
-            "planck.lastHitDataReason=not_polled_nontrivial_return_boundary\n"
-            "planck.lastHitDataBoundary=disabled_unvalidated_by_value_abi\n"
-            "planck.policy=observation_only\n",
+            "planck.interfaceRevision=2\n"
+            "planck.features=0xf\n"
+            "planck.interface002RequiredFeatures=0xf\n"
+            "planck.damageAuthority=none_remote_physics_only\n"
+            "planck.remotePhysicsReplay=data_only_interface002\n",
         )
         write(
             "higgsnet",
@@ -2628,7 +2630,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "higgsRelayPolicy": "observation_only",
                 "saveLoadPolicy": "observation_only",
                 "higgsPolicy": "observation_only",
-                "planckPolicy": "observation_only",
+                "planckPolicy": "optional_negotiated_interface002_not_core_readiness",
             },
             "pose": {
                 "localPoseAvailable": "1",
@@ -2712,14 +2714,11 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "planck.detected": "1",
                 "planck.interfaceRequestAttempted": "1",
                 "planck.interfaceAvailable": "1",
-                "planck.buildNumber": "8",
-                "planck.currentHitEventAvailable": "0",
-                "planck.currentHitEventObservationOnly": "1",
-                "planck.lastHitDataAvailable": "0",
-                "planck.lastHitDataProbeEnabled": "0",
-                "planck.lastHitDataReason": "not_polled_nontrivial_return_boundary",
-                "planck.lastHitDataBoundary": "disabled_unvalidated_by_value_abi",
-                "planck.policy": "observation_only",
+                "planck.interfaceRevision": "2",
+                "planck.features": "0xf",
+                "planck.interface002RequiredFeatures": "0xf",
+                "planck.damageAuthority": "none_remote_physics_only",
+                "planck.remotePhysicsReplay": "data_only_interface002",
             },
             "saveload": {
                 "ready": "1",

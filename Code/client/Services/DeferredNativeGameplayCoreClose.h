@@ -5,14 +5,14 @@
 // A deferred close may only affect the authenticated transport instance that
 // observed the fault. Server nonce plus connection generation is the
 // protocol-level identity that survives the event-dispatch boundary.
-struct DeferredNativeParityCloseToken
+struct DeferredNativeGameplayCoreCloseToken
 {
     std::uint64_t ServerInstanceNonce{};
     std::uint64_t ConnectionGeneration{};
 };
 
-[[nodiscard]] constexpr bool IsCurrentDeferredNativeParityClose(
-    const DeferredNativeParityCloseToken& acToken,
+[[nodiscard]] constexpr bool IsCurrentDeferredNativeGameplayCoreClose(
+    const DeferredNativeGameplayCoreCloseToken& acToken,
     const bool aConnected,
     const std::uint64_t aServerInstanceNonce,
     const std::uint64_t aConnectionGeneration) noexcept

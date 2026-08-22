@@ -9,7 +9,7 @@ namespace SkyrimTogether::Protocol
 // Revision 14 replaces the retained single HIGGS event with a bounded ordered
 // mutation batch, keeping mutation delivery independent from HIGGS telemetry.
 // Revision 15 separates VR client identity from optional direct relays and
-// makes the mandatory native gameplay-parity contract explicit at admission.
+// makes the mandatory native gameplay-core contract explicit at admission.
 // Revision 16 identity-authorizes attacker-originated health deltas against an
 // owned attacker entity and rejects duplicate action nonces. This is replay
 // resistance and sender authority, not proof that a compromised client
@@ -19,10 +19,20 @@ namespace SkyrimTogether::Protocol
 // actor and final-equipment resynchronization requests. Receivers deduplicate
 // one retransmitted edge by event identity rather than equal payload bytes,
 // and terminal recovery is no longer dependent on an unsolicited update.
+// Revision 18 binds animation-variable arrays to their ordered descriptor list
+// with a digest and carries the verified direction-float index. Receivers reject
+// mismatched graph layouts instead of applying values to unrelated variables.
 // Exact matching prevents older endpoints from decoding the changed layout.
 // Additive negotiated capability bits do not change this revision because
 // endpoints already intersect the advertised masks.
-inline constexpr std::uint32_t kGameplayProtocolRevision = 17;
+// Revision 19 adds HIGGS producer epochs, explicit mutation-window rebases,
+// captured terminal references, and bounded grabbed-node identities.
+// Revision 20 adds the optional PLANCK interface002 physics relay. It is not
+// part of the base gameplay profile and is advertised only after the exact
+// required local interface002 feature set has been proven operational.
+// Revision 21 makes ordinary quest updates owner/revision-authenticated and
+// makes canonical quest recovery owner-scoped.
+inline constexpr std::uint32_t kGameplayProtocolRevision = 21;
 
 enum class GameplayCapability : std::uint64_t
 {
@@ -53,15 +63,93 @@ enum class GameplayCapability : std::uint64_t
     ExactAnimationActions = 1ull << 22,
     InventoryStackTransactions = 1ull << 23,
     VrClient = 1ull << 24,
-    NativeGameplayParity = 1ull << 25,
+    // Canonical native gameplay capture/apply and ownership are operational.
+    // This is a network-routing contract; it does not advertise desktop UI,
+    // input, administration UX, or optional VR embodiment extensions.
+    NativeGameplayCore = 1ull << 25,
     VrGameplayClient = 1ull << 26,
     // The canonical transaction-id equipment protocol carries the complete
     // final worn state plus left/right spells and shout selection.
     FinalEquipmentTransactions = 1ull << 27,
     CanonicalStateResync = 1ull << 28,
+    // Revisioned server-authored mount, object, and owner-scoped quest
+    // snapshots. Deliberately not advertised by a client until it can apply
+    // every snapshot and reject late request IDs/revisions.
+    RevisionedCanonicalRecovery = 1ull << 29,
+    PlanckPhysicsInterface002 = 1ull << 30,
 };
 
 using GameplayCapabilityMask = std::uint64_t;
+
+// Small wire-policy helpers shared by the revisioned canonical recovery
+// lanes. A canonical response must advance both the revision supplied with
+// its request and the revision already committed locally. Request IDs are
+// intentionally nonzero because zero remains an invalid wire sentinel.
+namespace RevisionedCanonicalRecoveryPolicy
+{
+[[nodiscard]] constexpr std::uint32_t NextNonZeroRequestId(std::uint32_t& arNextRequestId) noexcept
+{
+    auto requestId = arNextRequestId++;
+    if (arNextRequestId == 0)
+        arNextRequestId = 1;
+    if (requestId == 0) {
+        requestId = arNextRequestId++;
+        if (arNextRequestId == 0)
+            arNextRequestId = 1;
+    }
+    return requestId;
+}
+
+[[nodiscard]] constexpr bool CanAcceptCanonicalResponse(
+    const std::uint32_t aExpectedRequestId, const std::uint32_t aResponseRequestId,
+    const std::uint64_t aKnownRevision, const std::uint64_t aCommittedRevision,
+    const std::uint64_t aCanonicalRevision) noexcept
+{
+    return aExpectedRequestId != 0 && aExpectedRequestId == aResponseRequestId &&
+           aCanonicalRevision > aKnownRevision && aCanonicalRevision > aCommittedRevision;
+}
+
+[[nodiscard]] constexpr bool IsAuthoritativeDismount(const std::uint32_t aMountId) noexcept
+{
+    return aMountId == 0;
+}
+
+[[nodiscard]] constexpr bool ShouldRetryMountApplication(
+    const std::uint8_t aFailedAttempts, const std::uint8_t aMaximumAttempts) noexcept
+{
+    return aMaximumAttempts != 0 && aFailedAttempts < aMaximumAttempts;
+}
+
+// Quest recovery is keyed by the party member whose log is canonical, not by
+// the peer that happened to request recovery after a remote native failure.
+[[nodiscard]] constexpr bool CanAuthorizeQuestOwner(
+    const std::uint32_t aRequesterPlayerId, const std::uint32_t aOwnerPlayerId,
+    const std::uint32_t aRequesterPartyId, const std::uint32_t aOwnerPartyId) noexcept
+{
+    return aRequesterPlayerId != 0 && aOwnerPlayerId != 0 && aRequesterPartyId != 0 &&
+           aRequesterPartyId == aOwnerPartyId;
+}
+
+[[nodiscard]] constexpr bool DoesQuestUpdateSupersedeSnapshot(
+    const std::uint32_t aSnapshotOwnerPlayerId, const std::uint64_t aSnapshotRevision,
+    const std::uint32_t aUpdateOwnerPlayerId, const std::uint64_t aUpdateRevision) noexcept
+{
+    return aSnapshotOwnerPlayerId != 0 && aSnapshotOwnerPlayerId == aUpdateOwnerPlayerId &&
+           aUpdateRevision > aSnapshotRevision;
+}
+
+[[nodiscard]] constexpr bool CanCommitQuestSnapshot(
+    const std::uint32_t aExpectedOwnerPlayerId, const std::uint32_t aResponseOwnerPlayerId,
+    const std::uint32_t aExpectedRequestId, const std::uint32_t aResponseRequestId,
+    const std::uint64_t aKnownRevision, const std::uint64_t aCommittedRevision,
+    const std::uint64_t aObservedRevision, const std::uint64_t aResponseRevision) noexcept
+{
+    return aExpectedOwnerPlayerId != 0 && aExpectedOwnerPlayerId == aResponseOwnerPlayerId &&
+           aExpectedRequestId != 0 && aExpectedRequestId == aResponseRequestId &&
+           aResponseRevision > aKnownRevision && aResponseRevision > aCommittedRevision &&
+           aResponseRevision >= aObservedRevision;
+}
+} // namespace RevisionedCanonicalRecoveryPolicy
 
 [[nodiscard]] constexpr GameplayCapabilityMask ToMask(GameplayCapability aCapability) noexcept
 {
@@ -89,6 +177,7 @@ inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
     ToMask(GameplayCapability::VRProjectileRelay) |
     ToMask(GameplayCapability::VRGrabRelay) |
     ToMask(GameplayCapability::VRHiggsRelay) |
+    ToMask(GameplayCapability::PlanckPhysicsInterface002) |
     ToMask(GameplayCapability::VRAppearanceRelay);
 
 // Direct packets are optional VR extensions. Only handlers that perform a
@@ -99,6 +188,7 @@ inline constexpr GameplayCapabilityMask kVRRelayCapabilities =
 inline constexpr GameplayCapabilityMask kFunctionalVRRelayCapabilities =
     ToMask(GameplayCapability::VRPoseRelay) |
     ToMask(GameplayCapability::VRHiggsRelay) |
+    ToMask(GameplayCapability::PlanckPhysicsInterface002) |
     ToMask(GameplayCapability::VRAppearanceRelay);
 
 // NPC ownership is negotiated separately from the remote-avatar relay.  A VR
@@ -140,10 +230,12 @@ inline constexpr GameplayCapabilityMask kVRAvatarSyncProfileCapabilities =
     kVRConnectionOnlyProfileCapabilities | kRemoteAvatarCoreCapabilities;
 inline constexpr GameplayCapabilityMask kVRGameplayProfileCapabilities =
     kVRAvatarSyncProfileCapabilities | kVRNpcOwnershipCapabilities |
-    ToMask(GameplayCapability::NativeGameplayParity) |
+    kVRExactAnimationActionCapabilities |
+    ToMask(GameplayCapability::NativeGameplayCore) |
     ToMask(GameplayCapability::VrGameplayClient) |
     ToMask(GameplayCapability::FinalEquipmentTransactions) |
-    ToMask(GameplayCapability::CanonicalStateResync);
+    ToMask(GameplayCapability::CanonicalStateResync) |
+    ToMask(GameplayCapability::RevisionedCanonicalRecovery);
 
 [[nodiscard]] constexpr GameplayCapabilityMask BuildVRProductionCapabilities(
     const VRProductionProfile aProfile,
@@ -158,7 +250,10 @@ inline constexpr GameplayCapabilityMask kVRGameplayProfileCapabilities =
     capabilities |= aOperationalDirectRelayCapabilities & kFunctionalVRRelayCapabilities;
     if (aSupportsExactAnimationActions)
         capabilities |= kVRExactAnimationActionCapabilities;
-    if (aProfile == VRProductionProfile::Gameplay)
+    // A gameplay-capable client without exact action replay must remain in the
+    // explicitly degraded AvatarSync profile. Do not advertise the gameplay
+    // tuple unless the native bridge proved this required capability.
+    if (aProfile == VRProductionProfile::Gameplay && aSupportsExactAnimationActions)
         capabilities |= kVRGameplayProfileCapabilities & ~kVRAvatarSyncProfileCapabilities;
     return capabilities;
 }
@@ -166,17 +261,19 @@ inline constexpr GameplayCapabilityMask kVRGameplayProfileCapabilities =
 inline constexpr GameplayCapabilityMask kServerCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
     kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
-    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::NativeGameplayCore) |
     ToMask(GameplayCapability::VrGameplayClient) |
     ToMask(GameplayCapability::FinalEquipmentTransactions) |
-    ToMask(GameplayCapability::CanonicalStateResync);
+    ToMask(GameplayCapability::CanonicalStateResync) |
+    ToMask(GameplayCapability::RevisionedCanonicalRecovery);
 inline constexpr GameplayCapabilityMask kClientCapabilities =
     kCoreCapabilities | kRemoteAvatarCapabilities | kVRNpcOwnershipCapabilities |
     kVRExactAnimationActionCapabilities | ToMask(GameplayCapability::VrClient) |
-    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::NativeGameplayCore) |
     ToMask(GameplayCapability::VrGameplayClient) |
     ToMask(GameplayCapability::FinalEquipmentTransactions) |
-    ToMask(GameplayCapability::CanonicalStateResync);
+    ToMask(GameplayCapability::CanonicalStateResync) |
+    ToMask(GameplayCapability::RevisionedCanonicalRecovery);
 
 [[nodiscard]] constexpr bool IsVrClient(const GameplayCapabilityMask aMask) noexcept
 {
@@ -188,17 +285,18 @@ inline constexpr GameplayCapabilityMask kClientCapabilities =
     return IsVrClient(aMask) && HasCapability(aMask, GameplayCapability::VrGameplayClient);
 }
 
-[[nodiscard]] constexpr bool HasNativeGameplayParity(const GameplayCapabilityMask aMask) noexcept
+[[nodiscard]] constexpr bool HasNativeGameplayCore(const GameplayCapabilityMask aMask) noexcept
 {
-    return HasCapability(aMask, GameplayCapability::NativeGameplayParity);
+    return HasCapability(aMask, GameplayCapability::NativeGameplayCore);
 }
 
 inline constexpr GameplayCapabilityMask kVRIdentityRequiredCapabilities =
     kVRRelayCapabilities | kVRNpcOwnershipCapabilities |
-    ToMask(GameplayCapability::NativeGameplayParity) |
+    ToMask(GameplayCapability::NativeGameplayCore) |
     ToMask(GameplayCapability::VrGameplayClient) |
     ToMask(GameplayCapability::FinalEquipmentTransactions) |
-    ToMask(GameplayCapability::CanonicalStateResync);
+    ToMask(GameplayCapability::CanonicalStateResync) |
+    ToMask(GameplayCapability::RevisionedCanonicalRecovery);
 
 [[nodiscard]] constexpr bool HasVrGameplayIntent(const GameplayCapabilityMask aMask) noexcept
 {
@@ -238,10 +336,11 @@ inline constexpr GameplayCapabilityMask kVRIdentityRequiredCapabilities =
     if (HasVrGameplayIntent(aMask))
         return HasCompleteVRGameplayContract(aMask);
 
-    return !HasNativeGameplayParity(aMask) && !HasVRNpcOwnershipContract(aMask) &&
+    return !HasNativeGameplayCore(aMask) && !HasVRNpcOwnershipContract(aMask) &&
            (aMask & kVRNpcOwnershipCapabilities) == 0 &&
            !HasCapability(aMask, GameplayCapability::FinalEquipmentTransactions) &&
-           !HasCapability(aMask, GameplayCapability::CanonicalStateResync);
+           !HasCapability(aMask, GameplayCapability::CanonicalStateResync) &&
+           !HasCapability(aMask, GameplayCapability::RevisionedCanonicalRecovery);
 }
 
 // Assignment rejection uses ServerId 0 as an explicit wire sentinel. Only VR

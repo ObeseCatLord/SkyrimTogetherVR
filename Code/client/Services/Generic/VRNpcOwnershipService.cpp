@@ -103,6 +103,8 @@ constexpr double kPendingObservationLifetime = 5.0;
                                          const AnimationGraphProtocol::SnapshotBuffer& acRight) noexcept
 {
     if (std::bit_cast<std::uint32_t>(acLeft.Direction) != std::bit_cast<std::uint32_t>(acRight.Direction) ||
+        acLeft.DescriptorDigest != acRight.DescriptorDigest ||
+        acLeft.DirectionFloatIndex != acRight.DirectionFloatIndex ||
         acLeft.BooleanCount != acRight.BooleanCount || acLeft.FloatCount != acRight.FloatCount ||
         acLeft.IntegerCount != acRight.IntegerCount)
         return false;
@@ -576,6 +578,7 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
             if (payload.TargetHandle.Value != 0 || payload.ActorLocalFormId == 0 || payload.Reserved0 != 0 ||
                 payload.SnapshotId != record.Header.Identity.ActionId ||
                 payload.DescriptorVersion != AnimationGraphProtocol::kDescriptorVersion || payload.Reserved1 != 0 ||
+                payload.DescriptorDigest == 0 || payload.DirectionFloatIndex >= AnimationGraphProtocol::kMaximumFloatCount ||
                 payload.ChunkFlags != AnimationGraphProtocol::FullSnapshot || !IsFinite(payload.Direction) ||
                 !IsZero(payload.ReservedTail, sizeof(payload.ReservedTail)))
                 return;
@@ -597,7 +600,8 @@ void VRNpcOwnershipService::OnLocalGameplay(const SkyrimTogetherVR::LocalGamepla
             }
 
             const auto accepted = AnimationGraphProtocol::AcceptChunk(
-                partial.Data.Animation, payload.SnapshotId, type, payload.StartIndex, payload.ValueCount,
+                partial.Data.Animation, payload.SnapshotId, payload.DescriptorDigest, payload.DirectionFloatIndex,
+                type, payload.StartIndex, payload.ValueCount,
                 payload.TotalCount, payload.Direction, payload.Values);
             if (accepted == AnimationGraphProtocol::ChunkAcceptResult::Malformed ||
                 accepted == AnimationGraphProtocol::ChunkAcceptResult::Stale) {
@@ -1656,6 +1660,8 @@ void VRNpcOwnershipService::ReplicateOwnedSnapshot(OwnedNpc& arOwned, const Snap
         if (acSnapshot.HasAnimationGraph) {
             movement.Direction = acSnapshot.Animation.Direction;
             auto& variables = movement.Variables;
+            variables.DescriptorDigest = acSnapshot.Animation.DescriptorDigest;
+            variables.DirectionFloatIndex = acSnapshot.Animation.DirectionFloatIndex;
             variables.Booleans.resize(acSnapshot.Animation.BooleanCount);
             variables.Floats.resize(acSnapshot.Animation.FloatCount);
             variables.Integers.resize(acSnapshot.Animation.IntegerCount);

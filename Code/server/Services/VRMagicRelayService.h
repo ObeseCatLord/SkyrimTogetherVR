@@ -29,6 +29,7 @@ private:
 
     World& m_world;
     TiltedPhoques::Map<uint32_t, PlayerMagicRelayState> m_playerMagicRelayState{};
+    uint64_t m_noRoutableCharacterCount{0};
     entt::scoped_connection m_vrMagicEffectEventConnection;
     entt::scoped_connection m_playerLeaveConnection;
 };

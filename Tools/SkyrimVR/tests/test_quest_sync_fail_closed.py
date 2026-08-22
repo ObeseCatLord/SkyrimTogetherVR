@@ -10,6 +10,11 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 BRIDGE = ROOT / "Code" / "vr_gameplay_bridge"
 PROTOCOL = ROOT / "Code" / "vr_common" / "VRGameplayBridge.h"
+WORLD_REPLICATION = ROOT / "Code" / "client" / "Services" / "Generic" / "VRWorldReplicationService.cpp"
+SERVER_QUEST_SERVICE = ROOT / "Code" / "server" / "Services" / "QuestService.cpp"
+CAPABILITIES = ROOT / "Code" / "encoding" / "Structs" / "GameplayCapabilities.h"
+VR_LOCAL_GAMEPLAY = ROOT / "Code" / "client" / "Services" / "Generic" / "VRLocalGameplayService.cpp"
+LEGACY_QUEST_SERVICE = ROOT / "Code" / "client" / "Services" / "Generic" / "QuestService.cpp"
 
 
 class QuestSynchronizationNativeTests(unittest.TestCase):
@@ -51,7 +56,7 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
         self.assertIn("Capability::LocalEventSinks", initial)
         self.assertIn("Capability::LocalCaptureSinks", initial)
 
-        mandatory = protocol.split("inline constexpr CapabilityMask kMandatoryNativeParityCapabilities =", 1)[1].split(
+        mandatory = protocol.split("inline constexpr CapabilityMask kMandatoryNativeGameplayCoreCapabilities =", 1)[1].split(
             "constexpr bool HasCapability", 1
         )[0]
         self.assertIn("Capability::LocalCaptureSinks", mandatory)
@@ -105,6 +110,55 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
         self.assertNotIn("g_animationSinkRegistered = false", no_player)
         self.assertNotIn("g_animationSinkPlayer = nullptr", no_player)
         self.assertIn("PublishQuestReconciliation", capture)
+
+    def test_owner_scoped_recovery_uses_the_originating_party_member(self) -> None:
+        server = SERVER_QUEST_SERVICE.read_text(encoding="utf-8")
+        client = WORLD_REPLICATION.read_text(encoding="utf-8")
+        capabilities = CAPABILITIES.read_text(encoding="utf-8")
+
+        resync_handler = server.split("void QuestService::OnQuestResyncRequest", 1)[1].split(
+            "void QuestService::OnQuestChanges", 1
+        )[0]
+        self.assertIn("GetById(request.OwnerPlayerId)", resync_handler)
+        self.assertIn("CanAuthorizeQuestOwner", resync_handler)
+        self.assertIn("owner->GetQuestLogComponent().QuestContent", resync_handler)
+        self.assertIn("response.OwnerPlayerId = owner->GetId()", resync_handler)
+
+        updates = server.split("void QuestService::OnQuestChanges", 1)[1]
+        self.assertIn("message.OwnerPlayerId != 0 && message.OwnerPlayerId != pPlayer->GetId()", updates)
+        self.assertIn("notify.OwnerPlayerId = pPlayer->GetId()", updates)
+        self.assertIn("notify.CanonicalRevision = revision", updates)
+
+        self.assertIn("RequestQuestResync(acMessage.OwnerPlayerId)", client)
+        self.assertIn("acMessage.OwnerPlayerId, acMessage.Id", client)
+        self.assertIn("CanonicalOwnerPlayerId", client)
+        self.assertIn("RequestQuestResync(acPending.CanonicalOwnerPlayerId)", client)
+        self.assertIn("DoesQuestUpdateSupersedeSnapshot", client)
+        self.assertIn("IsQuestRecoveryCurrent", client)
+        self.assertIn("CanCommitQuestSnapshot", client)
+
+        self.assertIn("CanAuthorizeQuestOwner", capabilities)
+        self.assertIn("DoesQuestUpdateSupersedeSnapshot", capabilities)
+        self.assertIn("CanCommitQuestSnapshot", capabilities)
+
+    def test_every_local_quest_update_uses_the_authenticated_player_owner(self) -> None:
+        vr_source = VR_LOCAL_GAMEPLAY.read_text(encoding="utf-8")
+        vr_quest_path = vr_source.split("case GameplayBridge::GameplayAction::SetQuestState:", 1)[1].split(
+            "default:", 1
+        )[0]
+        self.assertIn("const auto ownerPlayerId = m_transport.GetLocalPlayerId();", vr_quest_path)
+        self.assertIn("if (ownerPlayerId == 0)\n            return;", vr_quest_path)
+        self.assertIn("request.OwnerPlayerId = ownerPlayerId;", vr_quest_path)
+
+        legacy_source = LEGACY_QUEST_SERVICE.read_text(encoding="utf-8")
+        producers = legacy_source.split("void QuestService::OnQuestUpdate", 1)[0]
+        self.assertEqual(producers.count("RequestQuestUpdate update;"), 2)
+        self.assertEqual(
+            producers.count("const auto ownerPlayerId = m_world.GetTransport().GetLocalPlayerId();"),
+            2,
+        )
+        self.assertEqual(producers.count("if (ownerPlayerId == 0)\n                        return;"), 2)
+        self.assertEqual(producers.count("update.OwnerPlayerId = ownerPlayerId;"), 2)
 
 
 if __name__ == "__main__":

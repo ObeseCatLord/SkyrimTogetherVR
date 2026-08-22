@@ -1,10 +1,14 @@
 #include <Services/VRGrabRelayService.h>
+#include <Services/VRRelayLogPolicy.h>
 
 #include <cstddef>
+#include <algorithm>
 #include <utility>
 
 #include <GameServer.h>
+#include <World.h>
 #include <Game/Player.h>
+#include <Components.h>
 #include <Events/PlayerLeaveEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Messages/NotifyVRGrabEvent.h>
@@ -28,6 +32,25 @@ bool IsNewerSequence(uint32_t aCandidate, uint32_t aCurrent) noexcept
 bool HasGrabObject(const VRGrabEvent& acGrab) noexcept
 {
     return static_cast<bool>(acGrab.ObjectId);
+}
+
+bool IsLeaseAcquisitionInSenderRange(World& arWorld, const Player& acPlayer, const GameId& acObjectId) noexcept
+{
+    const auto character = acPlayer.GetCharacter();
+    if (!character || !arWorld.valid(*character) ||
+        !arWorld.all_of<CharacterComponent, CellIdComponent>(*character))
+        return false;
+    const auto objects = arWorld.view<FormIdComponent, ObjectComponent, CellIdComponent>();
+    const auto object = std::find_if(objects.begin(), objects.end(), [&objects, &acObjectId](const entt::entity entity) {
+        return objects.get<FormIdComponent>(entity).Id == acObjectId;
+    });
+    if (object == objects.end())
+        return false;
+    const auto& senderCell = acPlayer.GetCellComponent();
+    const auto& characterCell = arWorld.get<CellIdComponent>(*character);
+    const auto& objectCell = objects.get<CellIdComponent>(*object);
+    return senderCell.IsInRange(characterCell, false) && senderCell.IsInRange(objectCell, false) &&
+           characterCell.IsInRange(objectCell, false);
 }
 
 bool IsLeaseExpired(const VRObjectAuthority::Lease& acLease, uint64_t aTick) noexcept
@@ -142,6 +165,20 @@ bool VRObjectAuthority::TryApplyOperation(Batch& arBatch, const Operation& acOpe
     }
 }
 
+void VRObjectAuthority::ReleasePlayer(Batch& arBatch, const uint32_t aPlayerId) noexcept
+{
+    if (!arBatch.Prepared || aPlayerId == 0)
+        return;
+    auto it = arBatch.Leases.begin();
+    while (it != arBatch.Leases.end())
+    {
+        if (it->second.OwnerPlayerId == aPlayerId)
+            it = arBatch.Leases.erase(it);
+        else
+            ++it;
+    }
+}
+
 bool VRObjectAuthority::CommitBatch(Batch&& arBatch) noexcept
 {
     if (!arBatch.Prepared)
@@ -204,8 +241,6 @@ VRGrabRelayService::~VRGrabRelayService() noexcept
 
 void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& acMessage) noexcept try
 {
-    TP_UNUSED(m_world);
-
     if (!acMessage.pPlayer)
     {
         static bool s_loggedMissingPlayer = false;
@@ -228,7 +263,7 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
                                     existingState->second : emptyState;
     RelayDecision decision{};
     VRObjectAuthority::Batch authorityBatch{};
-    if (!PrepareRelayDecision(previousState, playerId, acMessage.Packet, decision, authorityBatch))
+    if (!PrepareRelayDecision(previousState, *acMessage.pPlayer, playerId, acMessage.Packet, decision, authorityBatch))
         return;
 
     NotifyVRGrabEvent notify{};
@@ -241,7 +276,9 @@ void VRGrabRelayService::OnVRGrabEvent(const PacketEvent<RequestVRGrabEvent>& ac
             SkyrimTogether::Protocol::ToMask(SkyrimTogether::Protocol::GameplayCapability::VRGrabRelay),
             acMessage.pPlayer))
     {
-        spdlog::warn("VR relay dropped because sender has no routable character");
+        if (VRRelayLogPolicy::RecordNoRoutableCharacter(m_noRoutableCharacterCount))
+            spdlog::warn("VR grab relay dropped because sender has no routable character (aggregate count: {})",
+                         m_noRoutableCharacterCount);
         return;
     }
 
@@ -273,7 +310,7 @@ void VRGrabRelayService::OnUpdate(const UpdateEvent&) noexcept
 }
 
 bool VRGrabRelayService::PrepareRelayDecision(
-    const PlayerGrabRelayState& acPrevious, const uint32_t aPlayerId,
+    const PlayerGrabRelayState& acPrevious, const Player& acPlayer, const uint32_t aPlayerId,
     const RequestVRGrabEvent& acRequest, RelayDecision& arDecision,
     VRObjectAuthority::Batch& arAuthorityBatch) const noexcept
 {
@@ -285,6 +322,8 @@ bool VRGrabRelayService::PrepareRelayDecision(
         return false;
 
     const auto now = GameServer::Get()->GetTick();
+    if (grab.Grabbed && !IsLeaseAcquisitionInSenderRange(m_world, acPlayer, grab.ObjectId))
+        return false;
     const VRObjectAuthority::Operation operation{
         grab.ObjectId, grab.Grabbed ? VRObjectAuthority::OperationKind::AcquireOrRenew :
                                      VRObjectAuthority::OperationKind::Release};

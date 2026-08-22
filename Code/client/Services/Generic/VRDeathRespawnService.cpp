@@ -23,6 +23,7 @@
 #include <vector>
 
 namespace GameplayBridge = SkyrimTogetherVR::GameplayBridge;
+namespace GoldReconciliation = SkyrimTogetherVR::RespawnGoldReconciliation;
 
 namespace
 {
@@ -111,14 +112,27 @@ void VRDeathRespawnService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acM
     if (!m_transport.IsOnline() || acMessage.GoldLost <= 0)
         return;
 
-    if (m_pendingGoldLoss != 0 || m_goldActionId != 0)
+    if (m_goldTerminalRetirementRequested || m_goldWork.HasPendingLoss())
     {
-        spdlog::warn("Ignoring overlapping VR respawn gold notification while {} gold remains", m_pendingGoldLoss);
+        spdlog::warn("Ignoring overlapping VR respawn gold notification while {} gold remains",
+                     m_goldWork.RemainingGold);
         return;
     }
-    m_pendingGoldLoss = acMessage.GoldLost;
+
+    if (!GoldReconciliation::Begin(m_goldWork, GetGoldSessionScope(), acMessage.GoldLost))
+    {
+        // NotifyPlayerRespawn is emitted only after the server has committed
+        // the inventory mutation.  A client that cannot bind it to a live
+        // bridge session must leave the multiplayer session instead of
+        // pretending that its local inventory remains authoritative.
+        spdlog::error("VR respawn gold notification arrived without a valid bridge session; retiring the connection");
+        m_transport.Close();
+        return;
+    }
+
     m_totalGoldLoss = acMessage.GoldLost;
-    m_goldAttempts = 0;
+    m_goldRetryRemaining = 0.0;
+    m_goldResultElapsed = 0.0;
     SubmitGoldLoss();
 }
 
@@ -160,44 +174,55 @@ void VRDeathRespawnService::OnGameplayResult(
         return;
     }
 
-    if (record.Header.Identity.ActionId != m_goldActionId ||
-        domain != GameplayBridge::GameplayDomain::Inventory ||
+    if (domain != GameplayBridge::GameplayDomain::Inventory ||
         action != GameplayBridge::GameplayAction::InventoryDelta ||
         result.TargetHandle.Value != GameplayBridge::kLocalPlayerHandle.Value)
         return;
 
-    m_goldActionId = 0;
+    const GoldReconciliation::SessionScope resultScope{
+        record.Header.Identity.ServerInstanceNonce,
+        record.Header.Identity.ConnectionGeneration,
+        record.Header.Identity.LifecycleEpoch,
+    };
+    const auto resultKind = status == GameplayBridge::CommandStatus::Success ?
+        GoldReconciliation::ResultKind::Success :
+        (IsRetryable(status) ? GoldReconciliation::ResultKind::RetryableFailure :
+                               GoldReconciliation::ResultKind::TerminalFailure);
+    const auto resolution = GoldReconciliation::ResolveResult(
+        m_goldWork, resultScope, record.Header.Identity.ActionId, resultKind);
+    if (resolution.Next == GoldReconciliation::Disposition::Ignored)
+        return;
+
     m_goldResultElapsed = 0.0;
-    if (status == GameplayBridge::CommandStatus::Success)
-    {
-        m_pendingGoldLoss -= m_pendingGoldChunk;
-        m_pendingGoldChunk = 0;
-        m_goldAttempts = 0;
-        if (m_pendingGoldLoss > 0)
-            m_goldRetryRemaining = kCommandRetryDelay;
-        else
-        {
-            SubmitHudMessage(fmt::format("You died and lost {} gold.", m_totalGoldLoss));
-            m_totalGoldLoss = 0;
-        }
-    }
-    else
-    {
+    switch (resolution.Next) {
+    case GoldReconciliation::Disposition::Retry:
         m_localGameplay.CancelGoldInventoryDeltaSuppression();
-        m_pendingGoldChunk = 0;
-        if (IsRetryable(status) && m_goldAttempts < kMaximumCommandAttempts)
-            m_goldRetryRemaining = kCommandRetryDelay;
-        else
-        {
-            spdlog::error("VR respawn gold application failed with bridge status {} after {} attempt(s)",
-                          result.Status, m_goldAttempts);
-            m_pendingGoldLoss = 0;
-            m_totalGoldLoss = 0;
-        }
+        m_goldRetryRemaining = resolution.RetryDelaySeconds;
+        spdlog::debug("VR respawn gold bridge status {} will retry after {:.2f}s (attempt {}/{})", result.Status,
+                      resolution.RetryDelaySeconds, m_goldWork.Attempts, GoldReconciliation::kMaximumAttempts);
+        return;
+    case GoldReconciliation::Disposition::SubmitNextChunk:
+        // The successful native mutation may publish its local inventory
+        // capture after the result record.  Keep its one-shot suppression
+        // armed until VRLocalGameplayService consumes or expires it.
+        m_goldRetryRemaining = resolution.RetryDelaySeconds;
+        return;
+    case GoldReconciliation::Disposition::Completed:
+        SubmitHudMessage(fmt::format("You died and lost {} gold.", m_totalGoldLoss));
+        m_totalGoldLoss = 0;
+        return;
+    case GoldReconciliation::Disposition::RetireSession:
+        m_localGameplay.CancelGoldInventoryDeltaSuppression();
+        ForceGoldLossSessionRetirement("the bridge returned a terminal inventory result");
+        return;
+    case GoldReconciliation::Disposition::Ignored:
+        return;
     }
 }
 catch (...)
 {
+    if (m_goldWork.HasPendingLoss())
+        ForceGoldLossSessionRetirement("processing its bridge result threw an exception");
 }
 
 void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
@@ -207,6 +232,15 @@ void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
         CancelRespawnTimer();
         return;
     }
+
+    if (m_goldWork.HasPendingLoss() && !m_goldTerminalRetirementRequested && !IsGoldWorkCurrent())
+    {
+        ForceGoldLossSessionRetirement("the bridge session changed before the committed loss reconciled");
+        return;
+    }
+
+    if (m_goldTerminalRetirementRequested)
+        return;
 
     if (std::isfinite(acEvent.Delta) && acEvent.Delta > 0.0) {
         if (m_respawnActionId != 0) {
@@ -219,17 +253,17 @@ void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
                 m_deathObserved = false;
             }
         }
-        if (m_goldActionId != 0) {
+        if (m_goldWork.ActionId != 0) {
             m_goldResultElapsed += acEvent.Delta;
             if (m_goldResultElapsed >= kCommandResultTimeout) {
-                spdlog::error("VR respawn gold result timed out; suppressing ambiguous replay");
-                m_goldActionId = 0;
+                const auto actionId = m_goldWork.ActionId;
+                const auto resolution = GoldReconciliation::ResolveResult(
+                    m_goldWork, m_goldWork.Scope, actionId, GoldReconciliation::ResultKind::TimedOut);
                 m_goldResultElapsed = 0.0;
                 m_localGameplay.CancelGoldInventoryDeltaSuppression();
-                m_pendingGoldChunk = 0;
-                m_pendingGoldLoss = 0;
-                m_totalGoldLoss = 0;
-                m_goldRetryRemaining = 0.0;
+                if (resolution.Next == GoldReconciliation::Disposition::RetireSession)
+                    ForceGoldLossSessionRetirement("the native inventory result timed out and replay is ambiguous");
+                return;
             }
         }
     }
@@ -247,7 +281,7 @@ void VRDeathRespawnService::OnUpdate(const UpdateEvent& acEvent) noexcept
         if (m_goldRetryRemaining <= 0.0 && !m_localGameplay.HasGoldInventoryDeltaSuppression())
             SubmitGoldLoss();
         else if (m_goldRetryRemaining <= 0.0)
-            m_goldRetryRemaining = kCommandRetryDelay;
+            m_goldRetryRemaining = GoldReconciliation::kInitialRetryDelaySeconds;
     }
 
     if (m_hudRetryRemaining > 0.0)
@@ -320,21 +354,50 @@ void VRDeathRespawnService::ResetSessionState() noexcept
     m_sessionServerId = 0;
     m_sessionLifecycleEpoch = 0;
     m_respawnActionId = 0;
-    m_goldActionId = 0;
     m_goldRetryRemaining = 0.0;
     m_goldResultElapsed = 0.0;
     m_respawnResultElapsed = 0.0;
     m_hudRetryRemaining = 0.0;
-    m_pendingGoldLoss = 0;
     m_totalGoldLoss = 0;
-    m_pendingGoldChunk = 0;
     m_respawnAttempts = 0;
-    m_goldAttempts = 0;
     m_hudAttempts = 0;
     m_serverRespawnPending = false;
+    m_goldTerminalRetirementRequested = false;
+    m_goldWork = {};
     m_nextHudTextId = 1;
     m_pendingHudMessage.clear();
     m_localGameplay.CancelGoldInventoryDeltaSuppression();
+}
+
+GoldReconciliation::SessionScope VRDeathRespawnService::GetGoldSessionScope() const noexcept
+{
+    return {
+        m_transport.GetServerInstanceNonce(),
+        m_transport.GetConnectionGeneration(),
+        SkyrimTogetherVR::GameplayBridgeClient::GetLifecycleEpoch(),
+    };
+}
+
+bool VRDeathRespawnService::IsGoldWorkCurrent() const noexcept
+{
+    return m_transport.IsOnline() && GoldReconciliation::IsSame(m_goldWork.Scope, GetGoldSessionScope());
+}
+
+void VRDeathRespawnService::ForceGoldLossSessionRetirement(const std::string_view acReason) noexcept
+{
+    if (m_goldTerminalRetirementRequested)
+        return;
+
+    m_goldTerminalRetirementRequested = true;
+    m_goldRetryRemaining = 0.0;
+    m_goldResultElapsed = 0.0;
+    m_localGameplay.CancelGoldInventoryDeltaSuppression();
+    spdlog::error(
+        "VR respawn gold reconciliation cannot prove {} gold was applied locally ({}); retiring the multiplayer session",
+        m_goldWork.RemainingGold, acReason);
+
+    TP_UNUSED(m_transport.RetireGameplaySession(GameplayBridge::EpochRetireReason::LifecycleReset));
+    m_transport.Close();
 }
 
 void VRDeathRespawnService::SubmitServerRespawnRequest() noexcept
@@ -386,46 +449,66 @@ void VRDeathRespawnService::SubmitRespawn() noexcept
 
 void VRDeathRespawnService::SubmitGoldLoss() noexcept
 {
-    if (m_pendingGoldLoss <= 0 || m_goldActionId != 0 || !m_transport.IsOnline())
+    if (!m_goldWork.HasPendingLoss() || m_goldWork.Terminal || m_goldTerminalRetirementRequested ||
+        m_goldWork.ActionId != 0 || !m_transport.IsOnline())
         return;
+
+    if (!IsGoldWorkCurrent())
+    {
+        ForceGoldLossSessionRetirement("the bridge scope changed before the local gold command was submitted");
+        return;
+    }
+
     m_goldRetryRemaining = 0.0;
-    m_pendingGoldChunk = std::min(m_pendingGoldLoss, kMaximumGoldLoss);
+    const auto chunk = std::min(m_goldWork.RemainingGold, kMaximumGoldLoss);
+    if (!GoldReconciliation::BeginAttempt(m_goldWork, chunk))
+    {
+        m_goldWork.Terminal = true;
+        ForceGoldLossSessionRetirement("the local gold command could not enter a valid retry state");
+        return;
+    }
+
+    const auto resolveSubmissionFailure = [this](const std::string_view aReason) noexcept {
+        const auto resolution = GoldReconciliation::ResolveSubmissionFailure(m_goldWork);
+        if (resolution.Next == GoldReconciliation::Disposition::Retry)
+        {
+            m_goldRetryRemaining = resolution.RetryDelaySeconds;
+            spdlog::debug("VR respawn gold command will retry after {:.2f}s (attempt {}/{})",
+                          resolution.RetryDelaySeconds, m_goldWork.Attempts, GoldReconciliation::kMaximumAttempts);
+            return;
+        }
+
+        ForceGoldLossSessionRetirement(aReason);
+    };
+
     GameplayBridge::CommandRecord command{};
     if (!m_avatars.BuildLocalGameplayCommand(
             GameplayBridge::GameplayDomain::Inventory, GameplayBridge::GameplayAction::InventoryDelta, command))
     {
-        m_pendingGoldChunk = 0;
-        if (++m_goldAttempts < kMaximumCommandAttempts)
-            m_goldRetryRemaining = kCommandRetryDelay;
-        else
-        {
-            spdlog::error("Unable to build VR respawn gold command after {} attempt(s)", m_goldAttempts);
-            m_pendingGoldLoss = 0;
-            m_totalGoldLoss = 0;
-        }
+        resolveSubmissionFailure("the bridge inventory command could not be built");
         return;
     }
 
     command.Payload.ApplyGameplayAction.LocalFormIdA = kGoldFormId;
-    command.Payload.ApplyGameplayAction.ValueA = -m_pendingGoldChunk;
-    m_localGameplay.ArmGoldInventoryDeltaSuppression(-m_pendingGoldChunk);
+    command.Payload.ApplyGameplayAction.ValueA = -chunk;
+    m_localGameplay.ArmGoldInventoryDeltaSuppression(-chunk);
     if (!SkyrimTogetherVR::GameplayBridgeClient::TrySubmitCommand(command))
     {
         m_localGameplay.CancelGoldInventoryDeltaSuppression();
-        m_pendingGoldChunk = 0;
-        if (++m_goldAttempts < kMaximumCommandAttempts)
-            m_goldRetryRemaining = kCommandRetryDelay;
-        else
-        {
-            spdlog::error("Unable to enqueue VR respawn gold application after {} attempt(s)", m_goldAttempts);
-            m_pendingGoldLoss = 0;
-            m_totalGoldLoss = 0;
-        }
+        resolveSubmissionFailure("the bridge inventory command could not be queued");
         return;
     }
-    m_goldActionId = command.Header.Identity.ActionId;
+
+    if (!GoldReconciliation::BindAction(m_goldWork, command.Header.Identity.ActionId))
+    {
+        // The command reached the bridge but cannot be correlated safely.
+        // Retire rather than replay an application that may already be live.
+        m_goldWork.Terminal = true;
+        ForceGoldLossSessionRetirement("the queued bridge inventory command had no trackable action identity");
+        return;
+    }
+
     m_goldResultElapsed = 0.0;
-    ++m_goldAttempts;
 }
 
 void VRDeathRespawnService::SubmitHudMessage(const std::string_view acMessage) noexcept try

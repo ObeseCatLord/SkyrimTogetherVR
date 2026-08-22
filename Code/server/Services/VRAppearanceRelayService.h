@@ -38,6 +38,7 @@ private:
 
     World& m_world;
     TiltedPhoques::Map<std::uint32_t, VRAppearance> m_latestAppearance{};
+    std::uint64_t m_noRoutableCharacterCount{0};
     entt::scoped_connection m_vrAppearanceConnection;
     entt::scoped_connection m_playerJoinConnection;
     entt::scoped_connection m_playerLeaveConnection;
