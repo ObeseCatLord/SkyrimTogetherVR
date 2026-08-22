@@ -473,26 +473,36 @@ $planckDependencyRoot = '__GUEST_PLANCK_DEPENDENCY_ROOT__'
 $resultRecord = '__GUEST_RESULT_RECORD__'
 $worktreeCreated = $false
 
+function Invoke-Native {
+    param([scriptblock]$Command, [string]$FailureMessage)
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 wraps ordinary native stderr (including Git
+        # progress) as non-terminating NativeCommandError records.
+        $ErrorActionPreference = 'Continue'
+        & $Command
+        $nativeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($nativeExitCode -ne 0) { throw "$FailureMessage (exit $nativeExitCode)." }
+}
+
 try {
-    git -C $repo fetch --force --tags origin main
-    if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main in the WinBoat checkout." }
-    git -C $repo cat-file -e "$commit`^{commit}"
-    if ($LASTEXITCODE -ne 0) { throw "Commit $commit is unavailable in the WinBoat checkout." }
+    Invoke-Native { git -C $repo fetch --force --tags origin main } 'Could not fetch origin/main in the WinBoat checkout'
+    Invoke-Native { git -C $repo cat-file -e "$commit`^{commit}" } "Commit $commit is unavailable in the WinBoat checkout"
     if (Test-Path -LiteralPath $build) { throw "Fresh build worktree already exists: $build" }
     if (Test-Path -LiteralPath $result) { throw "Fresh build result directory already exists: $result" }
 
-    git -C $repo worktree add --detach $build $commit
-    if ($LASTEXITCODE -ne 0) { throw "Could not create detached WinBoat worktree." }
+    Invoke-Native { git -C $repo worktree add --detach $build $commit } 'Could not create detached WinBoat worktree'
     $worktreeCreated = $true
 
     Set-Location $build
-    git submodule sync --recursive
-    if ($LASTEXITCODE -ne 0) { throw "Could not synchronize submodule URLs." }
-    git submodule update --init --recursive --checkout
-    if ($LASTEXITCODE -ne 0) { throw "Could not initialize pinned submodules." }
+    Invoke-Native { git submodule sync --recursive } 'Could not synchronize submodule URLs'
+    Invoke-Native { git submodule update --init --recursive --checkout } 'Could not initialize pinned submodules'
 
-    $dirty = @(git status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw "Fresh WinBoat worktree is unexpectedly dirty." }
+    $dirty = @(Invoke-Native { git status --porcelain=v1 --untracked-files=all } 'Could not inspect the fresh WinBoat worktree')
+    if ($dirty.Count -ne 0) { throw "Fresh WinBoat worktree is unexpectedly dirty." }
 
     $env:Path = "C:\Users\obesecatlord\AppData\Local\Microsoft\WinGet\Links;$env:Path"
     & .\BuildCompleteSkyrimTogetherVR-Windows.ps1 -HavokArchive $havokArchive -DependencyRoot $planckDependencyRoot -Configuration Release
