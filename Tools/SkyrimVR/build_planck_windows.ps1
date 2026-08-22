@@ -237,7 +237,7 @@ if ($SkyrimVRPath) {
 $artifact = Join-Path $projectDirectory "x64\$Configuration\activeragdoll.dll"
 $provenancePath = "$artifact.stvr-planck-provenance.json"
 $git = Get-Command git -ErrorAction Stop
-$planckCommit = (& $git.Source -C $planckSourceRoot rev-parse --verify HEAD^{commit}).Trim()
+$planckCommit = (& $git.Source -C $planckSourceRoot rev-parse --verify 'HEAD^{commit}').Trim()
 if ($LASTEXITCODE -ne 0 -or $planckCommit -notmatch '^[0-9a-fA-F]{40}$') {
     throw "Could not resolve the exact PLANCK source commit: $planckSourceRoot"
 }
@@ -275,7 +275,7 @@ if ($builtArtifact.LastWriteTimeUtc -gt [DateTime]::UtcNow.AddMinutes(5)) {
     throw "Forced PLANCK rebuild produced a future-dated artifact: $artifact"
 }
 
-if ((& $git.Source -C $planckSourceRoot rev-parse --verify HEAD^{commit}).Trim() -ne $planckCommit -or
+if ((& $git.Source -C $planckSourceRoot rev-parse --verify 'HEAD^{commit}').Trim() -ne $planckCommit -or
     (Get-PlanckSourceTreeSha256 -SourceRoot $planckSourceRoot) -ne $planckSourceTreeSha256) {
     throw "PLANCK source identity changed during forced rebuild; refusing to package a raced artifact."
 }
