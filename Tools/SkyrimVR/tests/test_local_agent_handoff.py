@@ -252,6 +252,7 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("run_winboat_powershell()", script)
         self.assertIn('"$winboat_scp" to-guest "$local_script" "$guest_script"', script)
         self.assertIn("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force", script)
+        self.assertIn("output=${output//$'\\r'/}", script)
         self.assertNotIn('-NonInteractive -Command -', script)
         self.assertIn('task_preflight_output=$(run_winboat_powershell "$task_preflight_payload")', script)
 

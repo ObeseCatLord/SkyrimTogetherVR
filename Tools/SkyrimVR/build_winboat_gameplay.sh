@@ -151,6 +151,7 @@ run_winboat_powershell() {
     rm -f -- "$local_script"
     "$winboat_powershell" "Remove-Item -LiteralPath '$guest_script' -Force -ErrorAction SilentlyContinue" \
         >/dev/null || true
+    output=${output//$'\r'/}
     printf '%s\n' "$output"
     return "$status"
 }
