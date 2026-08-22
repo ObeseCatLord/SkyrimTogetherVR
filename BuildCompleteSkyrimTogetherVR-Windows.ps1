@@ -44,7 +44,12 @@ function Invoke-CheckedBatch {
         [string[]]$Arguments
     )
 
-    & $Path @Arguments
+    # Invoke the batch through cmd /c with each argument quoted so paths and
+    # switches are passed verbatim. Splatting an argument array directly onto a
+    # .bat via the call operator mis-binds some arguments as a ScriptBlock.
+    $quotedArguments = $Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }
+    $commandLine = '"' + $Path + '" ' + ($quotedArguments -join ' ')
+    & cmd.exe /c $commandLine
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
