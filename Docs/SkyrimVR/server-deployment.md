@@ -25,8 +25,8 @@ Dockerfile and source tree are not modified. The Dockerfile builds the
 explicitly; unrelated Linux test targets are not part of the runtime image
 build.
 
-For the existing Foundry ARM64 host, transfer, native build, safe replacement,
-verification, rollback, and temporary-source cleanup are automated:
+For the existing Foundry ARM64 host, incremental transfer, native build, safe
+replacement, verification, and rollback are automated:
 
 ```bash
 Tools/SkyrimVR/server/deploy_foundry_server.sh
@@ -34,7 +34,9 @@ Tools/SkyrimVR/server/deploy_foundry_server.sh
 
 The command uses incremental SSH transfer and does not require manually making
 or copying a source archive. It replaces only the `skyrim-together-vr`
-container and preserves the existing config, Data, and log directories.
+container and preserves the existing config, Data, and log directories. One
+bounded source cache is retained under `/home/ubuntu/.cache/skyrim-together-vr`
+so later deployments transfer only changed files.
 
 Create persistent directories and start with the provided Compose example:
 

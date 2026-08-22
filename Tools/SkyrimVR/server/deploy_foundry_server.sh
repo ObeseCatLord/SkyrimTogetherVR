@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 remote=${STVR_SERVER_REMOTE:-foundry}
 container=${STVR_SERVER_CONTAINER:-skyrim-together-vr}
 server_root=${STVR_SERVER_ROOT:-/home/ubuntu/docker/skyrimtogethervr}
+remote_build=/home/ubuntu/.cache/skyrim-together-vr/source
 
 usage() {
     cat <<'EOF'
@@ -44,10 +45,9 @@ network_version=$(git -C "$repo_root" describe --tags)
 source_revision=$(git -C "$repo_root" rev-parse --verify HEAD^{commit})
 short_revision=${source_revision:0:8}
 image=${1:-skyrim-together-vr-server:${short_revision}-arm64}
-remote_build="/tmp/stvr-server-build-${short_revision}"
 
 case "$remote_build" in
-    /tmp/stvr-server-build-[0-9a-fA-F]*) ;;
+    */.cache/skyrim-together-vr/source) ;;
     *) printf 'Unsafe remote build path: %s\n' "$remote_build" >&2; exit 2 ;;
 esac
 
@@ -57,7 +57,7 @@ ssh "$remote" bash -s -- "$remote_build" <<'REMOTE_PREPARE'
 set -euo pipefail
 build_root=$1
 case "$build_root" in
-    /tmp/stvr-server-build-[0-9a-fA-F]*) ;;
+    */.cache/skyrim-together-vr/source) ;;
     *) echo "Unsafe build path." >&2; exit 2 ;;
 esac
 mkdir -p "$build_root"
@@ -97,13 +97,6 @@ container=$STVR_DEPLOY_CONTAINER
 server_root=$STVR_DEPLOY_SERVER_ROOT
 old_image=
 replaced=false
-
-cleanup() {
-    case "$build_root" in
-        /tmp/stvr-server-build-[0-9a-fA-F]*) rm -rf -- "$build_root" ;;
-    esac
-}
-trap cleanup EXIT
 
 for command_name in docker jq; do
     command -v "$command_name" >/dev/null || {

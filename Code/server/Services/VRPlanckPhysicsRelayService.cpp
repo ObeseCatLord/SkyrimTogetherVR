@@ -151,7 +151,7 @@ void VRPlanckPhysicsRelayService::Expire(const uint64_t aNow) noexcept
         if (lease == m_actorGrips.end() || lease->second.ExpiryRevision != expired.Revision || lease->second.ExpiryTick > aNow)
             continue;
 
-        const auto state = m_states.find(lease->second.OwnerPlayerId);
+        auto state = m_states.find(lease->second.OwnerPlayerId);
         if (state != m_states.end())
         {
             state->second.GripTargets.erase(lease->second.GripId);
@@ -221,7 +221,7 @@ void VRPlanckPhysicsRelayService::ReleasePlayerLeases(const uint32_t aPlayerId) 
         else
             ++it;
     }
-    if (const auto state = m_states.find(aPlayerId); state != m_states.end())
+    if (auto state = m_states.find(aPlayerId); state != m_states.end())
     {
         state->second.GripTargets.clear();
         state->second.ActiveGripCount = 0;
