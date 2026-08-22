@@ -18,6 +18,7 @@ Set-StrictMode -Version Latest
 $HavokSha256 = '7349946401a820784fc86aa13bc667def6c409ed938865b01c8e6c3d86692555'
 $SKSEVRSha256 = 'f03df5d8663f2c9a781f830fb0809c63a9a0e3b626d6d1a96e38493f81a3c9ad'
 $SKSEVRUrl = 'https://skse.silverlock.org/beta/sksevr_2_00_12.7z'
+$HavokCompatibilityPatch = 'planck-havok-layout-access-v1'
 
 function Get-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
@@ -142,6 +143,61 @@ function Assert-SameSourceTreeManifest([object]$Expected, [object]$Actual, [stri
     }
 }
 
+function Set-HavokAccessBlockPublic {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][string]$MemberPattern,
+        [Parameter(Mandatory = $true)][int]$MaximumLines
+    )
+
+    $path = Join-Path $SourceRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Havok compatibility patch input is missing: $path"
+    }
+    $item = Get-Item -LiteralPath $path -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Havok compatibility patch input is a reparse point: $path"
+    }
+
+    $raw = [System.IO.File]::ReadAllText($path)
+    $lineEnding = if ($raw.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $normalized = $raw.Replace("`r`n", "`n")
+    # Select only the nearest uninterrupted access block containing the named
+    # layout member. This exposes the SDK's serialized fields without changing
+    # declarations, ordering, size, or alignment.
+    $pattern = "(?m)^(?<indent>[ `t]*)(?:protected|private):(?=(?:(?!^[ `t]*(?:public|protected|private):)[^`n]*`n){1,$MaximumLines}[ `t]*$MemberPattern)"
+    $matches = [regex]::Matches($normalized, $pattern)
+    if ($matches.Count -ne 1) {
+        throw "Havok compatibility patch '$HavokCompatibilityPatch' expected one access block for '$MemberPattern' in $RelativePath, found $($matches.Count)."
+    }
+    $patched = [regex]::Replace($normalized, $pattern, '${indent}public:', 1)
+    if ($patched -eq $normalized) {
+        throw "Havok compatibility patch '$HavokCompatibilityPatch' made no change to $RelativePath."
+    }
+    if ($lineEnding -eq "`r`n") {
+        $patched = $patched.Replace("`n", "`r`n")
+    }
+    [System.IO.File]::WriteAllText($path, $patched, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Apply-HavokCompatibilityPatch([string]$SourceRoot) {
+    $patches = @(
+        @{ Path = 'Common\Base\Container\Array\hkArray.h'; Member = 'T\* m_data;'; Lines = 6 },
+        @{ Path = 'Common\Base\Math\Matrix\hkTransform.h'; Member = 'hkRotation m_rotation;'; Lines = 3 },
+        @{ Path = 'Common\Base\Types\Physics\MotionState\hkMotionState.h'; Member = 'hkTransform m_transform;'; Lines = 3 },
+        @{ Path = 'Physics\Dynamics\World\hkpWorldObject.h'; Member = 'hkUlong m_userData;'; Lines = 4 },
+        @{ Path = 'Physics\Dynamics\World\hkpWorldObject.h'; Member = 'class hkpLinkedCollidable m_collidable;'; Lines = 6 },
+        @{ Path = 'Physics\Collide\Shape\Convex\hkpConvexShape.h'; Member = 'hkReal m_radius;'; Lines = 7 },
+        @{ Path = 'Physics\Dynamics\Collide\ContactListener\hkpContactPointEvent.h'; Member = 'hkReal\* m_separatingVelocity;'; Lines = 4 },
+        @{ Path = 'Physics\Dynamics\Constraint\hkpConstraintInstance.h'; Member = 'class hkpConstraintData\*\s+m_data;'; Lines = 10 },
+        @{ Path = 'Animation\Ragdoll\Controller\RigidBody\hkaRagdollRigidBodyController.h'; Member = 'hkaRagdollInstance\* m_ragdollInstance;'; Lines = 8 }
+    )
+    foreach ($patch in $patches) {
+        Set-HavokAccessBlockPublic -SourceRoot $SourceRoot -RelativePath $patch.Path -MemberPattern $patch.Member -MaximumLines $patch.Lines
+    }
+}
+
 $repoRoot = Get-FullPath (Join-Path $PSScriptRoot '..\..')
 $DependencyRoot = Get-FullPath $DependencyRoot
 if (Test-PathWithin $DependencyRoot $repoRoot) {
@@ -180,15 +236,38 @@ try {
     # Extract a fresh canonical copy on every run. The complete extracted build-input
     # tree, not a few representative headers, is then compared before reuse.
     Invoke-SevenZipExtract $sevenZip $HavokArchive $havokStage @('Source\Common\*', 'Source\Physics\*', 'Source\Animation\*')
-    $freshHavokManifest = Get-SourceTreeManifest (Join-Path $havokStage 'Source') 'Fresh Havok'
+    $stagedHavokSource = Join-Path $havokStage 'Source'
+    $pristineHavokManifest = Get-SourceTreeManifest $stagedHavokSource 'Fresh pristine Havok'
+    Apply-HavokCompatibilityPatch $stagedHavokSource
+    $freshHavokManifest = Get-SourceTreeManifest $stagedHavokSource 'Fresh patched Havok'
     if (Test-Path -LiteralPath $havokDestination) {
         $havokDestinationItem = Get-Item -LiteralPath $havokDestination -Force
         if (($havokDestinationItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Existing Havok dependency root is a reparse point: $havokDestination"
         }
         $existingHavokManifest = Get-SourceTreeManifest $havokSource 'Existing Havok'
-        Assert-SameSourceTreeManifest $freshHavokManifest $existingHavokManifest 'Existing Havok'
-        Write-Host "Verified complete existing Havok build-input tree at $havokSource ($($freshHavokManifest.fileCount) files)"
+        if ($existingHavokManifest.sha256 -eq $freshHavokManifest.sha256 -and $existingHavokManifest.fileCount -eq $freshHavokManifest.fileCount) {
+            Write-Host "Verified complete existing patched Havok build-input tree at $havokSource ($($freshHavokManifest.fileCount) files)"
+        }
+        elseif ($existingHavokManifest.sha256 -eq $pristineHavokManifest.sha256 -and $existingHavokManifest.fileCount -eq $pristineHavokManifest.fileCount) {
+            $quarantineRoot = Join-Path $DependencyRoot 'quarantine'
+            New-Item -ItemType Directory -Force -Path $quarantineRoot | Out-Null
+            $quarantinePath = Join-Path $quarantineRoot ('havok2010_2_0_r1-pristine-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
+            Move-Item -LiteralPath $havokDestination -Destination $quarantinePath
+            try {
+                New-Item -ItemType Directory -Path $havokDestination | Out-Null
+                Move-Item -LiteralPath $stagedHavokSource -Destination $havokSource
+            }
+            catch {
+                Remove-Item -LiteralPath $havokDestination -Recurse -Force -ErrorAction SilentlyContinue
+                Move-Item -LiteralPath $quarantinePath -Destination $havokDestination
+                throw
+            }
+            Write-Host "Migrated pristine Havok input to deterministic compatibility patch '$HavokCompatibilityPatch'; prior tree quarantined at $quarantinePath"
+        }
+        else {
+            Assert-SameSourceTreeManifest $freshHavokManifest $existingHavokManifest 'Existing patched Havok'
+        }
     }
     else {
         New-Item -ItemType Directory -Path $havokDestination | Out-Null
@@ -234,6 +313,7 @@ if (Test-Path -LiteralPath $dependencyProvenancePath) {
 $dependencyProvenance = [ordered]@{
     schema = 'stvr_planck_dependency_provenance_v1'
     havokArchiveSha256 = $HavokSha256
+    havokCompatibilityPatch = $HavokCompatibilityPatch
     havokSourceTreeSha256 = $freshHavokManifest.sha256
     havokSourceFileCount = $freshHavokManifest.fileCount
     sksevrArchiveSha256 = $SKSEVRSha256
@@ -247,6 +327,7 @@ Write-Host "PLANCK_SKSEVR_SOURCE_ROOT=$sksevrSource"
 Write-Host "PLANCK_SKSE_COMMON_SOURCE_ROOT=$skseCommonSource"
 Write-Host "PLANCK_DEPENDENCY_PROVENANCE=$dependencyProvenancePath"
 Write-Host "PLANCK_HAVOK_ARCHIVE_SHA256=$($dependencyProvenance.havokArchiveSha256)"
+Write-Host "PLANCK_HAVOK_COMPATIBILITY_PATCH=$($dependencyProvenance.havokCompatibilityPatch)"
 Write-Host "PLANCK_HAVOK_SOURCE_TREE_SHA256=$($dependencyProvenance.havokSourceTreeSha256)"
 Write-Host "PLANCK_HAVOK_SOURCE_FILE_COUNT=$($dependencyProvenance.havokSourceFileCount)"
 Write-Host "PLANCK_SKSEVR_ARCHIVE_SHA256=$($dependencyProvenance.sksevrArchiveSha256)"

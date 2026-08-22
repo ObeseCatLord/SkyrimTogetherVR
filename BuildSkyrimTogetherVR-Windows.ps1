@@ -198,6 +198,9 @@ function Resolve-PatchedPlanckProvenance {
             throw "PatchedPlanckProvenance dependency field '$field' is missing or invalid: $provenancePath"
         }
     }
+    if ($provenance.havokCompatibilityPatch -ne 'planck-havok-layout-access-v1') {
+        throw "PatchedPlanckProvenance does not name the required deterministic Havok compatibility patch: $provenancePath"
+    }
     foreach ($field in @('havokSourceFileCount', 'sksevrSourceFileCount')) {
         $parsedCount = 0L
         if (-not [long]::TryParse([string]$provenance.$field, [ref]$parsedCount) -or $parsedCount -le 0) {
@@ -1267,6 +1270,7 @@ if (-not $NoPackage) {
             planckCommit = $ResolvedPatchedPlanckProvenance.planckCommit.ToLowerInvariant()
             planckSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.planckSourceTreeSha256.ToLowerInvariant()
             havokArchiveSha256 = $ResolvedPatchedPlanckProvenance.havokArchiveSha256.ToLowerInvariant()
+            havokCompatibilityPatch = $ResolvedPatchedPlanckProvenance.havokCompatibilityPatch
             havokSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.havokSourceTreeSha256.ToLowerInvariant()
             havokSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.havokSourceFileCount
             sksevrArchiveSha256 = $ResolvedPatchedPlanckProvenance.sksevrArchiveSha256.ToLowerInvariant()
@@ -1282,6 +1286,7 @@ if (-not $NoPackage) {
             planckCommit = $ResolvedPatchedPlanckProvenance.planckCommit.ToLowerInvariant()
             planckSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.planckSourceTreeSha256.ToLowerInvariant()
             havokArchiveSha256 = $ResolvedPatchedPlanckProvenance.havokArchiveSha256.ToLowerInvariant()
+            havokCompatibilityPatch = $ResolvedPatchedPlanckProvenance.havokCompatibilityPatch
             havokSourceTreeSha256 = $ResolvedPatchedPlanckProvenance.havokSourceTreeSha256.ToLowerInvariant()
             havokSourceFileCount = [long]$ResolvedPatchedPlanckProvenance.havokSourceFileCount
             sksevrArchiveSha256 = $ResolvedPatchedPlanckProvenance.sksevrArchiveSha256.ToLowerInvariant()

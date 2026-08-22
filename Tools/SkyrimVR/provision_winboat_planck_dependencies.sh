@@ -183,6 +183,19 @@ POWERSHELL
 verify_sksevr=${verify_sksevr//__SKSEVR_ROOT__/$guest_sksevr_destination}
 guest_sksevr_state=$("$winboat_powershell" "$verify_sksevr")
 guest_sksevr_state=${guest_sksevr_state//$'\r'/}
+if [[ $guest_sksevr_state != MISSING ]]; then
+    read -r guest_sksevr_hash guest_sksevr_file_count <<<"$guest_sksevr_state"
+    if [[ $guest_sksevr_hash != "$sksevr_source_sha256" || $guest_sksevr_file_count != 403 ]]; then
+        # Never reuse or delete an untrusted durable tree. Move it aside under
+        # the same private dependency root, then atomically stage the canonical
+        # pinned source below. This also self-heals old builds that wrote MSBuild
+        # intermediates into the SDK checkout.
+        quarantine_sksevr="$guest_dependency_root\quarantine\sksevr_2_00_12-untrusted-$transfer_nonce"
+        "$winboat_powershell" "\$destination = [System.IO.Path]::GetFullPath('$guest_sksevr_destination'); \$dependency = [System.IO.Path]::GetFullPath('$guest_dependency_root').TrimEnd('\'); if (-not \$destination.StartsWith(\$dependency + '\', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'SKSEVR quarantine target escaped dependency root.' }; \$quarantine = [System.IO.Path]::GetFullPath('$quarantine_sksevr'); if (-not \$quarantine.StartsWith(\$dependency + '\', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'SKSEVR quarantine destination escaped dependency root.' }; New-Item -ItemType Directory -Force -Path (Split-Path -Parent \$quarantine) | Out-Null; if (Test-Path -LiteralPath \$quarantine) { throw 'SKSEVR quarantine destination already exists.' }; Move-Item -LiteralPath \$destination -Destination \$quarantine" >/dev/null
+        echo "Quarantined untrusted durable guest SKSEVR source tree and restaging the pinned source: $quarantine_sksevr" >&2
+        guest_sksevr_state=MISSING
+    fi
+fi
 if [[ $guest_sksevr_state == MISSING ]]; then
     "$winboat_scp" to-guest "$sksevr_source" "${guest_sksevr_stage//\\//}" --recursive
     # Bash pattern substitution treats backslashes in the pattern/replacement as
@@ -214,12 +227,6 @@ if [[ $guest_sksevr_state == MISSING ]]; then
         exit 2
     fi
     "$winboat_powershell" "if (Test-Path -LiteralPath '$guest_sksevr_destination') { throw 'SKSEVR destination appeared during transfer.' }; Move-Item -LiteralPath '$guest_sksevr_stage' -Destination '$guest_sksevr_destination'" >/dev/null
-else
-    read -r guest_sksevr_hash guest_sksevr_file_count <<<"$guest_sksevr_state"
-    if [[ $guest_sksevr_hash != "$sksevr_source_sha256" || $guest_sksevr_file_count != 403 ]]; then
-        echo "Durable guest SKSEVR source tree has untrusted provenance: $guest_sksevr_destination ($guest_sksevr_state)" >&2
-        exit 2
-    fi
 fi
 
 printf 'STVR_GUEST_HAVOK_ARCHIVE=%s\n' "$guest_havok_archive"

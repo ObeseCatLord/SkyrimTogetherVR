@@ -15,6 +15,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$HavokCompatibilityPatch = 'planck-havok-layout-access-v1'
+
 function Get-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
 }
@@ -99,6 +101,9 @@ function Resolve-DependencyProvenance {
     catch { throw "PLANCK dependency provenance is not valid JSON: $path ($($_.Exception.Message))" }
     if ($provenance.schema -ne 'stvr_planck_dependency_provenance_v1') {
         throw "PLANCK dependency provenance has an unsupported schema: $path"
+    }
+    if ($provenance.havokCompatibilityPatch -ne $HavokCompatibilityPatch) {
+        throw "PLANCK dependency provenance does not name the required Havok compatibility patch '$HavokCompatibilityPatch': $path"
     }
     foreach ($field in @('havokArchiveSha256', 'havokSourceTreeSha256', 'sksevrArchiveSha256', 'sksevrSourceTreeSha256')) {
         $fieldValue = $provenance.PSObject.Properties[$field].Value
@@ -237,8 +242,19 @@ $msbuild = Get-MSBuildPath
 $projectDirectory = Split-Path -Parent $project
 $planckSourceRoot = $projectDirectory
 $havokSource = Join-Path $DependencyRoot 'havok2010_2_0_r1\Source'
-$sksevrSource = Join-Path $DependencyRoot 'sksevr_2_00_12\src\sksevr'
-$skseCommonSource = Join-Path $DependencyRoot 'sksevr_2_00_12\src\common'
+$canonicalSkseRoot = Join-Path $DependencyRoot 'sksevr_2_00_12'
+$skseBuildRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('stvr-planck-sksevr-build-' + [guid]::NewGuid().ToString('N'))
+$skseBuildTree = Join-Path $skseBuildRoot 'sksevr_2_00_12'
+try {
+    New-Item -ItemType Directory -Path $skseBuildRoot | Out-Null
+    Copy-Item -LiteralPath $canonicalSkseRoot -Destination $skseBuildTree -Recurse
+}
+catch {
+    Remove-Item -LiteralPath $skseBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+}
+$sksevrSource = Join-Path $skseBuildTree 'src\sksevr'
+$skseCommonSource = Join-Path $skseBuildTree 'src\common'
 
 $msbuildArguments = @(
     $project,
@@ -279,8 +295,10 @@ $buildStartedUtc = [DateTime]::UtcNow
 
 Write-Host "Force-rebuilding PLANCK with $msbuild"
 & $msbuild @msbuildArguments
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+$msbuildExitCode = $LASTEXITCODE
+Remove-Item -LiteralPath $skseBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+if ($msbuildExitCode -ne 0) {
+    exit $msbuildExitCode
 }
 
 if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
@@ -309,6 +327,7 @@ $provenance = [ordered]@{
     planckCommit = $planckCommit.ToLowerInvariant()
     planckSourceTreeSha256 = $planckSourceTreeSha256
     havokArchiveSha256 = $dependencyProvenance.havokArchiveSha256.ToLowerInvariant()
+    havokCompatibilityPatch = $dependencyProvenance.havokCompatibilityPatch
     havokSourceTreeSha256 = $dependencyProvenance.havokSourceTreeSha256.ToLowerInvariant()
     havokSourceFileCount = [long]$dependencyProvenance.havokSourceFileCount
     sksevrArchiveSha256 = $dependencyProvenance.sksevrArchiveSha256.ToLowerInvariant()

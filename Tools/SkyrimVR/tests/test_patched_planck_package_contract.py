@@ -39,6 +39,7 @@ class PatchedPlanckPackageContractTests(unittest.TestCase):
             "planckCommit": "1" * 40,
             "planckSourceTreeSha256": "2" * 64,
             "havokArchiveSha256": "3" * 64,
+            "havokCompatibilityPatch": AUDIT.PATCHED_PLANCK_HAVOK_COMPATIBILITY_PATCH,
             "havokSourceTreeSha256": "4" * 64,
             "havokSourceFileCount": 101,
             "sksevrArchiveSha256": "5" * 64,
@@ -58,6 +59,7 @@ class PatchedPlanckPackageContractTests(unittest.TestCase):
             "planckCommit": provenance["planckCommit"],
             "planckSourceTreeSha256": provenance["planckSourceTreeSha256"],
             "havokArchiveSha256": provenance["havokArchiveSha256"],
+            "havokCompatibilityPatch": provenance["havokCompatibilityPatch"],
             "havokSourceTreeSha256": provenance["havokSourceTreeSha256"],
             "havokSourceFileCount": provenance["havokSourceFileCount"],
             "sksevrArchiveSha256": provenance["sksevrArchiveSha256"],
@@ -136,6 +138,7 @@ class PatchedPlanckPackageContractTests(unittest.TestCase):
             }
 
             manifest["patchedPlanckArtifact"].pop("havokSourceTreeSha256")
+            manifest["patchedPlanckProvenance"].pop("havokCompatibilityPatch")
             manifest["patchedPlanckProvenance"]["sksevrSourceFileCount"] = 0
             manifest["patchedPlanckProvenance"]["havokArchiveSha256"] = "7" * 64
             failures = []
@@ -146,6 +149,10 @@ class PatchedPlanckPackageContractTests(unittest.TestCase):
             )
             self.assertIn(
                 "build manifest patched PLANCK provenance dependency field sksevrSourceFileCount is missing or invalid",
+                failures,
+            )
+            self.assertIn(
+                "build manifest patched PLANCK provenance dependency field havokCompatibilityPatch is missing or invalid",
                 failures,
             )
             self.assertIn(
@@ -179,15 +186,19 @@ class PatchedPlanckPackageContractTests(unittest.TestCase):
         self.assertIn("hash_source_tree.py", provisioner)
         self.assertIn("--self-check", provisioner)
         self.assertIn("STVR_SKSEVR_SOURCE_FILE_COUNT", provisioner)
+        self.assertIn("Quarantined untrusted durable guest SKSEVR source tree", provisioner)
 
         preparer = (TOOLS / "prepare_planck_dependencies.ps1").read_text(encoding="utf-8")
-        self.assertIn("Fresh Havok", preparer)
+        self.assertIn("Fresh patched Havok", preparer)
         self.assertIn("Fresh SKSEVR", preparer)
         self.assertIn("PLANCK_HAVOK_SOURCE_TREE_SHA256", preparer)
+        self.assertIn("planck-havok-layout-access-v1", preparer)
+        self.assertIn("Apply-HavokCompatibilityPatch", preparer)
         self.assertIn("PLANCK_SKSEVR_SOURCE_FILE_COUNT", preparer)
 
         planck_builder = (TOOLS / "build_planck_windows.ps1").read_text(encoding="utf-8")
         self.assertIn("Assert-DependencyTreesMatchProvenance", planck_builder)
+        self.assertIn("stvr-planck-sksevr-build-", planck_builder)
         self.assertIn("stvr_planck_forced_build_v2", planck_builder)
 
         package_builder = (ROOT / "BuildSkyrimTogetherVR-Windows.ps1").read_text(encoding="utf-8")

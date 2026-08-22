@@ -178,6 +178,7 @@ PATCHED_PLANCK_ARTIFACT_NAME = "activeragdoll.dll"
 PATCHED_PLANCK_PACKAGE_PATH = "Data/SKSE/Plugins/activeragdoll.dll"
 PATCHED_PLANCK_INTERFACE = "interface002"
 PATCHED_PLANCK_PROVENANCE_SCHEMA = "stvr_planck_forced_build_v2"
+PATCHED_PLANCK_HAVOK_COMPATIBILITY_PATCH = "planck-havok-layout-access-v1"
 PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS = (
     "havokArchiveSha256",
     "havokSourceTreeSha256",
@@ -796,6 +797,8 @@ def valid_positive_count(value):
 
 
 def audit_patched_planck_dependency_fields(record, failures, prefix):
+    if record.get("havokCompatibilityPatch") != PATCHED_PLANCK_HAVOK_COMPATIBILITY_PATCH:
+        failures.append(f"{prefix} dependency field havokCompatibilityPatch is missing or invalid")
     for field in PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS:
         if not valid_sha256(record.get(field)):
             failures.append(f"{prefix} dependency field {field} is missing or invalid")
@@ -893,6 +896,7 @@ def audit_patched_planck_artifact(package, manifest, failures, require_interface
     bound_fields = (
         "planckCommit",
         "planckSourceTreeSha256",
+        "havokCompatibilityPatch",
         *PATCHED_PLANCK_DEPENDENCY_HASH_FIELDS,
         *PATCHED_PLANCK_DEPENDENCY_COUNT_FIELDS,
     )
