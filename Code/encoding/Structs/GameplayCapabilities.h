@@ -126,8 +126,11 @@ namespace RevisionedCanonicalRecoveryPolicy
     const std::uint32_t aRequesterPlayerId, const std::uint32_t aOwnerPlayerId,
     const std::uint32_t aRequesterPartyId, const std::uint32_t aOwnerPartyId) noexcept
 {
-    return aRequesterPlayerId != 0 && aOwnerPlayerId != 0 && aRequesterPartyId != 0 &&
-           aRequesterPartyId == aOwnerPartyId;
+    if (aRequesterPlayerId == 0 || aOwnerPlayerId == 0)
+        return false;
+    if (aRequesterPlayerId == aOwnerPlayerId)
+        return true;
+    return aRequesterPartyId != 0 && aRequesterPartyId == aOwnerPartyId;
 }
 
 [[nodiscard]] constexpr bool DoesQuestUpdateSupersedeSnapshot(

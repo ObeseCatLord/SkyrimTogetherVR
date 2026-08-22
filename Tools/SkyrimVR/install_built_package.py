@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import filecmp
 import pathlib
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 
 import vr_paths
 
@@ -24,6 +26,20 @@ STALE_ROOT_GAME_FILE_PATHS = (
     pathlib.Path("meshes"),
     pathlib.Path("SkyrimTogetherRebornBehaviors"),
 )
+
+
+@dataclasses.dataclass(frozen=True)
+class CopyPlanEntry:
+    source: pathlib.Path
+    relative: pathlib.Path
+    destination: pathlib.Path
+    action: str
+
+
+class InstallTransactionError(RuntimeError):
+    def __init__(self, message: str, return_code: int = 1) -> None:
+        super().__init__(message)
+        self.return_code = return_code
 
 
 def default_skyrim_vr() -> pathlib.Path:
@@ -61,11 +77,166 @@ def is_same_file(source: pathlib.Path, destination: pathlib.Path) -> bool:
         return False
 
 
+def path_exists(path: pathlib.Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def validate_destination_parent(destination: pathlib.Path, skyrim_vr: pathlib.Path) -> None:
+    parent = destination.parent
+    while parent != skyrim_vr:
+        if path_exists(parent) and (parent.is_symlink() or not parent.is_dir()):
+            raise InstallTransactionError(
+                f"Cannot install through non-directory path: {parent}"
+            )
+        parent = parent.parent
+
+
+def build_copy_plan(
+    files: list[pathlib.Path], package: pathlib.Path, skyrim_vr: pathlib.Path
+) -> list[CopyPlanEntry]:
+    if path_exists(skyrim_vr) and not skyrim_vr.is_dir():
+        raise InstallTransactionError(f"Skyrim VR root is not a directory: {skyrim_vr}")
+    plan = []
+    for source in files:
+        relative = relative_to_package(package, source)
+        destination = skyrim_vr / relative
+        validate_destination_parent(destination, skyrim_vr)
+        if path_exists(destination):
+            if destination.is_symlink() or not destination.is_file():
+                raise InstallTransactionError(
+                    f"Cannot overwrite non-file destination: {relative.as_posix()}"
+                )
+            action = "same" if is_same_file(source, destination) else "update"
+        else:
+            action = "copy"
+        plan.append(CopyPlanEntry(source, relative, destination, action))
+    return plan
+
+
+def overwrite_conflicts(plan: list[CopyPlanEntry], no_overwrite: bool) -> list[CopyPlanEntry]:
+    if not no_overwrite:
+        return []
+    return [entry for entry in plan if entry.action == "update"]
+
+
+def stale_cleanup_conflicts(
+    stale_paths: list[tuple[pathlib.Path, pathlib.Path]], plan: list[CopyPlanEntry]
+) -> list[pathlib.Path]:
+    stale_relatives = [relative for relative, _ in stale_paths]
+    return [
+        entry.relative
+        for entry in plan
+        if any(
+            entry.relative == stale_relative or stale_relative in entry.relative.parents
+            for stale_relative in stale_relatives
+        )
+    ]
+
+
+def delete_path(path: pathlib.Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path_exists(path):
+        path.unlink()
+
+
+def rollback_install_transaction(
+    created_files: list[pathlib.Path],
+    overwritten_files: list[tuple[pathlib.Path, pathlib.Path]],
+    removed_stale_paths: list[tuple[pathlib.Path, pathlib.Path]],
+) -> list[str]:
+    failures = []
+    for path in reversed(created_files):
+        try:
+            if path_exists(path):
+                delete_path(path)
+        except OSError as error:
+            failures.append(f"remove {path}: {error}")
+    for destination, backup in reversed(overwritten_files):
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(backup, destination)
+        except OSError as error:
+            failures.append(f"restore {destination}: {error}")
+    for destination, backup in reversed(removed_stale_paths):
+        try:
+            if path_exists(destination):
+                delete_path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if backup.is_symlink():
+                shutil.copy2(backup, destination, follow_symlinks=False)
+            elif backup.is_dir():
+                shutil.copytree(backup, destination)
+            else:
+                shutil.copy2(backup, destination)
+        except OSError as error:
+            failures.append(f"restore stale path {destination}: {error}")
+    return failures
+
+
+def apply_install_transaction(
+    plan: list[CopyPlanEntry],
+    stale_paths: list[tuple[pathlib.Path, pathlib.Path]],
+    *,
+    post_install_audit: Callable[[], int] | None = None,
+    copy_file: Callable[[pathlib.Path, pathlib.Path], object] = shutil.copy2,
+) -> None:
+    """Apply a precomputed plan and restore the target if any step fails."""
+    created_files: list[pathlib.Path] = []
+    overwritten_files: list[tuple[pathlib.Path, pathlib.Path]] = []
+    removed_stale_paths: list[tuple[pathlib.Path, pathlib.Path]] = []
+    with tempfile.TemporaryDirectory(prefix="stvr-install-transaction-") as temp_root:
+        backup_root = pathlib.Path(temp_root)
+        try:
+            for relative, stale_path in stale_paths:
+                backup = backup_root / "stale" / relative
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                if stale_path.is_dir() and not stale_path.is_symlink():
+                    shutil.copytree(stale_path, backup)
+                else:
+                    shutil.copy2(stale_path, backup, follow_symlinks=False)
+                removed_stale_paths.append((stale_path, backup))
+                delete_path(stale_path)
+
+            for entry in plan:
+                if entry.action == "same":
+                    continue
+                if entry.action == "update":
+                    backup = backup_root / "overwritten" / entry.relative
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    copy_file(entry.destination, backup)
+                    overwritten_files.append((entry.destination, backup))
+                else:
+                    created_files.append(entry.destination)
+                entry.destination.parent.mkdir(parents=True, exist_ok=True)
+                copy_file(entry.source, entry.destination)
+
+            if post_install_audit is not None:
+                audit_result = post_install_audit()
+                if audit_result != 0:
+                    raise InstallTransactionError(
+                        "Post-install package audit failed.", audit_result
+                    )
+        except BaseException as error:
+            rollback_failures = rollback_install_transaction(
+                created_files, overwritten_files, removed_stale_paths
+            )
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                if rollback_failures and hasattr(error, "add_note"):
+                    error.add_note("Rollback errors: " + "; ".join(rollback_failures))
+                raise
+            message = f"Install transaction failed: {error}"
+            if rollback_failures:
+                message += "; rollback errors: " + "; ".join(rollback_failures)
+            return_code = error.return_code if isinstance(error, InstallTransactionError) else 1
+            raise InstallTransactionError(message, return_code) from error
+
+
 def find_stale_target_paths(skyrim_vr: pathlib.Path) -> list[tuple[pathlib.Path, pathlib.Path]]:
     stale_paths = []
     for relative in STALE_ROOT_GAME_FILE_PATHS:
         path = skyrim_vr / relative
-        if path.exists():
+        if path_exists(path):
             stale_paths.append((relative, path))
     return stale_paths
 
@@ -132,7 +303,7 @@ def build_package_audit_command(
 
 
 def run_package_audit(
-    root: pathlib.Path, args: argparse.Namespace, *, verify_installed_papyrus: bool = True
+    root: pathlib.Path, args: argparse.Namespace, *, verify_installed_papyrus: bool = False
 ) -> int:
     command = build_package_audit_command(
         args, verify_installed_papyrus=verify_installed_papyrus
@@ -308,9 +479,10 @@ def main() -> int:
             print("Strict install readiness audit: required VR mod prerequisites: " + ", ".join(required_mods))
 
     if not args.skip_audit:
-        audit_result = run_package_audit(
-            root, args, verify_installed_papyrus=not args.install
-        )
+        # Before copying, an older installed package is expected to differ from
+        # the package being installed. Verify prerequisites now and exact
+        # installed Papyrus hashes only after a successful copy.
+        audit_result = run_package_audit(root, args)
         if audit_result != 0:
             print("Package audit failed; refusing to install.")
             return audit_result
@@ -320,16 +492,48 @@ def main() -> int:
         print(f"No package files found under: {package}")
         return 1
 
+    script_variants = script_directory_variants(skyrim_vr)
+    if script_variants and script_variants != ["Scripts"]:
+        print("Refusing to install into a case-folded loose-script collision.")
+        print("script-directories: " + ", ".join(script_variants))
+        print("Merge loose files into Data/Scripts and remove or quarantine the lowercase duplicate first.")
+        return 1
+
+    try:
+        plan = build_copy_plan(files, package, skyrim_vr)
+    except InstallTransactionError as error:
+        print(error)
+        return error.return_code
+
+    conflicts = overwrite_conflicts(plan, args.no_overwrite)
+    for entry in plan:
+        action = "conflict" if entry in conflicts else entry.action
+        print(f"{action}: {entry.relative.as_posix()}")
+
+    if conflicts:
+        print("--no-overwrite rejected changed existing files before any install writes:")
+        for entry in conflicts:
+            print(f"conflict: {entry.relative.as_posix()}")
+        return 1
+
     stale_target_paths = find_stale_target_paths(skyrim_vr)
     if stale_target_paths:
         print("Stale root-level staged files detected in the Skyrim VR folder:")
         for relative, _ in stale_target_paths:
             print(f"stale-root-file: {relative.as_posix()}")
         if args.cleanup_stale_root_files:
-            cleaned = cleanup_stale_root_files(stale_target_paths, dry_run=not args.install)
+            stale_conflicts = stale_cleanup_conflicts(stale_target_paths, plan)
+            if stale_conflicts:
+                print("Refusing to remove stale paths that overlap package destinations:")
+                for relative in stale_conflicts:
+                    print(f"stale-cleanup-conflict: {relative.as_posix()}")
+                return 1
             if args.install:
-                print(f"Removed stale root-level staged files: {cleaned}")
+                print(
+                    f"Stale root-level staged files queued for transactional removal: {len(stale_target_paths)}"
+                )
             else:
+                cleaned = cleanup_stale_root_files(stale_target_paths, dry_run=True)
                 print(f"Dry-run cleanup count: {cleaned}")
                 print("Re-run with --install --cleanup-stale-root-files to remove these paths.")
         else:
@@ -340,63 +544,39 @@ def main() -> int:
             print("Run once with --install --cleanup-stale-root-files to remove these old package paths.")
             return 1
 
-    script_variants = script_directory_variants(skyrim_vr)
-    if script_variants and script_variants != ["Scripts"]:
-        print("Refusing to install into a case-folded loose-script collision.")
-        print("script-directories: " + ", ".join(script_variants))
-        print("Merge loose files into Data/Scripts and remove or quarantine the lowercase duplicate first.")
-        return 1
-
-    planned_copy = 0
-    planned_update = 0
-    planned_skip_same = 0
-    planned_skip_existing = 0
-
-    for source in files:
-        relative = relative_to_package(package, source)
-        destination = skyrim_vr / relative
-        same = is_same_file(source, destination)
-        if same:
-            planned_skip_same += 1
-            action = "same"
-        elif destination.exists() and args.no_overwrite:
-            planned_skip_existing += 1
-            action = "skip-existing"
-        elif destination.exists():
-            planned_update += 1
-            action = "update"
-        else:
-            planned_copy += 1
-            action = "copy"
-
-        print(f"{action}: {relative.as_posix()}")
-
-        if args.install and action in {"copy", "update"}:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+    planned_copy = sum(entry.action == "copy" for entry in plan)
+    planned_update = sum(entry.action == "update" for entry in plan)
+    planned_skip_same = sum(entry.action == "same" for entry in plan)
 
     print(f"Package files scanned: {len(files)}")
     print(f"Files to copy: {planned_copy}")
     print(f"Files to update: {planned_update}")
     print(f"Files already identical: {planned_skip_same}")
-    print(f"Existing files skipped: {planned_skip_existing}")
+    print("Existing files skipped: 0")
 
     if not args.install:
         print("Dry run complete. Re-run with --install to copy files.")
-    elif planned_skip_existing:
-        print("Install completed with skipped existing files because --no-overwrite was used.")
-        return 1
     else:
-        print("Install completed.")
-
-        if not args.skip_audit:
+        def post_install_audit() -> int:
+            if args.skip_audit:
+                return 0
             print("Verifying installed Papyrus hashes and prerequisites.")
-            audit_result = run_package_audit(
-                root, args, verify_installed_papyrus=True
+            return run_package_audit(root, args, verify_installed_papyrus=True)
+
+        try:
+            apply_install_transaction(
+                plan,
+                stale_target_paths if args.cleanup_stale_root_files else [],
+                post_install_audit=None if args.skip_audit else post_install_audit,
             )
-            if audit_result != 0:
-                print("Post-install package audit failed.")
-                return audit_result
+        except InstallTransactionError as error:
+            print(error)
+            print("Install transaction rolled back.")
+            return error.return_code
+
+        if stale_target_paths and args.cleanup_stale_root_files:
+            print(f"Removed stale root-level staged files: {len(stale_target_paths)}")
+        print("Install completed.")
 
     return 0
 

@@ -22,6 +22,7 @@ socket_listener() {
       print
       found = 1
     }
+    END { exit(found ? 0 : 1) }
   '
 }
 

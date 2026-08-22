@@ -816,6 +816,26 @@ def online_status_ready(values: dict[str, str], session_id: str, baseline_genera
     )
 
 
+def launch_bound_connect_command(endpoint: str, launch_nonce: str) -> str:
+    """Build the pre-authentication identity envelope required by the client."""
+    if not LAUNCH_NONCE_PATTERN.fullmatch(launch_nonce):
+        raise AutomationError("cannot connect without a valid launch nonce")
+    endpoint = endpoint.strip()
+    if not endpoint or "\n" in endpoint or "\r" in endpoint:
+        raise AutomationError("connect endpoint is empty or contains a line break")
+    return (
+        "action=connect\n"
+        "envelope=launch_bound_connect\n"
+        f"launchNonce={launch_nonce}\n"
+        "lifecycleEpoch=0\n"
+        "connectionGeneration=0\n"
+        "sessionId=0\n"
+        "serverInstanceNonce=0\n"
+        f"endpoint={endpoint}\n"
+        "password=\n"
+    )
+
+
 def file_prefix_sha256(path: pathlib.Path, byte_count: int) -> str:
     digest = hashlib.sha256()
     remaining = byte_count
@@ -1454,7 +1474,7 @@ def main() -> int:
         handoff_dir.mkdir(parents=True, exist_ok=True)
         pending_path = command_path.with_suffix(".command.tmp")
         pending_path.write_text(
-            f"action=connect\nendpoint={args.connect}\npassword=\nlaunchNonce={launch_nonce}\n",
+            launch_bound_connect_command(args.connect, launch_nonce),
             encoding="utf-8",
         )
         pending_path.replace(command_path)

@@ -71,6 +71,10 @@ def runtime_evidence_fixture(
         "packageFlavor": flavor,
         "sourceRevision": revision,
         "generatedAtUtc": "2026-08-18T17:15:38.6031574Z",
+        "patchedPlanckArtifact": {
+            "interface": "interface002",
+            "packagePath": "Data/SKSE/Plugins/activeragdoll.dll",
+        },
     }
     runtime_manifest = {
         "schema": "skyrim_together_vr_runtime_evidence_v1",
@@ -226,7 +230,48 @@ class LocalAgentHandoffTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[--runtime-evidence ZIP] [--skip-handoff] [<commit>]", result.stderr)
+        self.assertIn("[--runtime-evidence ZIP] [--skip-handoff] [--timeout-seconds SECONDS] [<commit>]", result.stderr)
+
+    def test_winboat_gameplay_build_uses_a_durable_identity_checked_scheduled_task(self) -> None:
+        script = WINBOAT_BUILD.read_text(encoding="utf-8")
+
+        self.assertIn("job_identity=${STVR_WINBOAT_JOB_ID:-$commit}", script)
+        self.assertIn("--ignore-submodules=dirty", script)
+        self.assertIn("winboat_task_name=\"STVR-SkyrimTogetherVR-Gameplay-", script)
+        self.assertIn("guest_state=\"${guest_job_root}/state.txt\"", script)
+        self.assertIn("guest_exit=\"${guest_job_root}/exit.txt\"", script)
+        self.assertIn("guest_log=\"${guest_job_root}/build.log\"", script)
+        self.assertIn("guest_result_record=\"${guest_job_root}/result.txt\"", script)
+        self.assertIn("identity.json", script)
+        self.assertIn("buildPath = $build", script)
+        self.assertIn("resultPath = $expectedResult", script)
+        self.assertIn("Existing scheduled task does not match the requested WinBoat job identity.", script)
+        self.assertIn("Get-ScheduledTask -TaskName $taskName", script)
+        self.assertIn("Register-ScheduledTask -TaskName $taskName", script)
+        self.assertIn("Start-ScheduledTask -TaskName $taskName", script)
+        self.assertNotIn('"$winboat_ssh" powershell.exe', script)
+
+    def test_winboat_gameplay_build_polls_reusable_jobs_without_cleaning_active_work(self) -> None:
+        script = WINBOAT_BUILD.read_text(encoding="utf-8")
+
+        self.assertIn("timeout_seconds=${STVR_WINBOAT_BUILD_TIMEOUT_SECONDS:-14400}", script)
+        self.assertIn("--timeout-seconds", script)
+        self.assertIn("Reattaching to active WinBoat scheduled task", script)
+        self.assertIn("rerun this command to reattach", script)
+        self.assertIn("-MultipleInstances IgnoreNew", script)
+        self.assertIn("Global\\STVR-SkyrimTogetherVR-Gameplay-JobLifecycle", script)
+        self.assertIn("STVR_GUEST_JOB_CLEANUP=SKIPPED_ACTIVE_TASK", script)
+        self.assertIn("STVR_GUEST_ACTIVE_TASK=", script)
+        self.assertIn("leaving $winboat_task_name staged", script)
+        self.assertIn("Get-ValidatedStvrJob", script)
+        self.assertIn("git -C $job.Repo worktree remove --force $job.BuildPath", script)
+        self.assertIn("Remove-Item -LiteralPath $job.ResultPath", script)
+        self.assertIn("New-ScheduledTaskPrincipal -UserId $windowsUser -LogonType S4U", script)
+        self.assertIn("Get-ScheduledTaskInfo -TaskName $taskName", script)
+        self.assertIn("Tee-Object -FilePath $logPath -Append", script)
+        self.assertNotIn("Tee-Object -LiteralPath", script)
+        self.assertNotIn("cleanup_build_storage.sh", script)
+        self.assertNotIn("Remove-Item -LiteralPath '$guest_payload'", script)
 
     def test_runtime_evidence_is_required_and_bound_to_gameplay_build_identity(self) -> None:
         creator = load_module("create_local_agent_handoff_runtime_evidence", TOOLS / "create_local_agent_handoff.py")

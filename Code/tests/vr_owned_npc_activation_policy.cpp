@@ -19,7 +19,7 @@ constexpr std::uint32_t kOwnedNpcServerId = 0x8021;
 constexpr std::uint32_t kLocalPlayerServerId = 0x1337;
 }
 
-TEST_CASE("Owned NPC pre-activation uses a bounded non-player activator", "[skyrim-vr][activation][npc]")
+TEST_CASE("Pre-activation capture is restricted to the local player", "[skyrim-vr][activation][npc]")
 {
     REQUIRE(CapturePolicy::ShouldCapturePreActivation(
         true, CapturePolicy::kPlayerReferenceFormId, true, true, true, true, false));
@@ -27,8 +27,10 @@ TEST_CASE("Owned NPC pre-activation uses a bounded non-player activator", "[skyr
     REQUIRE(player.TargetHandle.Value == SkyrimTogetherVR::GameplayBridge::kLocalPlayerHandle.Value);
     REQUIRE(player.TargetLocalFormId == CapturePolicy::kPlayerReferenceFormId);
 
-    REQUIRE(CapturePolicy::ShouldCapturePreActivation(
+    REQUIRE_FALSE(CapturePolicy::ShouldCapturePreActivation(
         true, kOwnedNpcReferenceFormId, false, true, true, true, false));
+    // The decoder retains bounded non-player identities for wire compatibility,
+    // but this detour no longer originates them from arbitrary engine threads.
     const auto ownedNpc = CapturePolicy::EncodeActivator(false, kOwnedNpcReferenceFormId);
     REQUIRE(ownedNpc.TargetHandle.Value == 0);
     REQUIRE(ownedNpc.TargetLocalFormId == kOwnedNpcReferenceFormId);

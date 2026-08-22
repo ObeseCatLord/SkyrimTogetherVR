@@ -104,8 +104,8 @@ void QuestService::OnQuestResyncRequest(const PacketEvent<RequestQuestResync>& a
     response.OwnerPlayerId = owner->GetId();
     response.RequestId = request.RequestId;
     response.CanonicalRevision = revision;
-    response.HasParty = true;
-    response.PartyId = *requesterParty;
+    response.HasParty = requesterParty.has_value();
+    response.PartyId = requesterParty.value_or(0);
     response.Snapshot = snapshot;
     acMessage.pPlayer->Send(response);
 }

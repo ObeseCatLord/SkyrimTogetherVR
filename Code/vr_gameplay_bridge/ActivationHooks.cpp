@@ -270,7 +270,7 @@ bool Install() noexcept
 
         g_installed.store(true, std::memory_order_release);
         SKSE::log::info(
-            "SkyrimTogetherVRGameplayBridge: installed exact post-activation TESObjectREFR::ActivateRef capture at RVA 0x{:X}",
+            "SkyrimTogetherVRGameplayBridge: installed exact post-activation TESObjectREFR::ActivateRef capture at RVA 0x{:X} scope=local-player-only",
             ActivationHookPolicy::kActivateRefVrRva);
         return true;
     } catch (...) {

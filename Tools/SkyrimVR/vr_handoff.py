@@ -49,7 +49,7 @@ READOUT_FILES = {
     "saveload": "SkyrimTogetherVR.saveload",
 }
 
-GAMEPLAY_PROTOCOL_REVISION = 20
+GAMEPLAY_PROTOCOL_REVISION = 21
 GAMEPLAY_SNAPSHOT_SCHEMA_VERSION = 1
 GAMEPLAY_MANDATORY_CANONICAL_DOMAINS = (
     "animation", "appearance", "equipment", "inventory", "actor_state",

@@ -19,6 +19,7 @@
 #include <cstring>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <numeric>
@@ -4564,8 +4565,14 @@ PreActivationCaptureResult CapturePreActivation(
 {
     try {
         ar_capture = {};
-        auto* activator = a_activator.As<RE::Actor>();
         auto* player = RE::PlayerCharacter::GetSingleton();
+        // Reject engine-driven NPC/script activations by raw identity before
+        // invoking any RTTI, form, target, or open-state accessor. ActivateRef
+        // may run on worker threads where those bridge reads are unsafe.
+        if (!player || std::addressof(a_activator) != player)
+            return PreActivationCaptureResult::Ineligible;
+
+        auto* activator = a_activator.As<RE::Actor>();
         const auto activatorFormId = activator ? activator->GetFormID() : 0;
         const bool activatorIsLocalPlayer = activator && player && activator == player;
 

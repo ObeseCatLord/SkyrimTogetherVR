@@ -1530,7 +1530,7 @@ def command_self_test(_: argparse.Namespace) -> int:
         identity_suffixes = {
             "status": (
                 "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=20\nserverInstanceNonce=99\n"
+                "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=21\nserverInstanceNonce=99\n"
                 f"gamePath={game}\n"
             ),
             "lifecycle": f"launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath={game}\n",

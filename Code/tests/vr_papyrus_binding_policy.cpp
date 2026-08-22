@@ -45,7 +45,7 @@ TEST_CASE("Papyrus telemetry is allowlisted, bounded, and credential-free", "[sk
     const auto readout = BuildTelemetryReadout(
         "state=online\nonline=1\ntransportOnline=1\nplayerId=42\nsessionId=100\nconnectionGeneration=7\n"
         "lifecycleState=ready\nlifecycleEpoch=9\nrehydrationState=ready\nclientVersion=abc123\n"
-        "serverVersion=abc123\ngameplayProtocolRevision=20\npassword=stored-secret\nerror=untrusted arbitrary text\n",
+        "serverVersion=abc123\ngameplayProtocolRevision=21\npassword=stored-secret\nerror=untrusted arbitrary text\n",
         "bridge.ready=1\nbridge.endpointState=Ready\nbridge.activeCapabilities=123\nbridge.producedEvents=8\n"
         "bridge.consumedEvents=7\nbridge.rejectedCommands=1\nbridge.discardedEvents=0\npassword=stored-secret\n");
 

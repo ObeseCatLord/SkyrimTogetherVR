@@ -1393,7 +1393,7 @@ def command_self_test() -> int:
             "status",
             "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
             "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=20\n"
+            "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=21\n"
             "serverInstanceNonce=99\ngamePath={}\n".format(game),
         )
         write(

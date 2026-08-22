@@ -1056,6 +1056,26 @@ TEST_CASE("Revisioned canonical recovery messages round-trip and reject invalid 
         CHECK(decoded->Snapshot == response.Snapshot);
     }
 
+    {
+        Buffer buffer(1024);
+        NotifyQuestResync response{};
+        response.OwnerPlayerId = 71;
+        response.RequestId = 72;
+        response.CanonicalRevision = 73;
+        response.HasParty = false;
+        response.PartyId = 0;
+        Buffer::Writer writer(&buffer);
+        response.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        const auto decoded = CastUnique<NotifyQuestResync>(std::move(message));
+        REQUIRE(decoded->IsDecodedValid);
+        CHECK_FALSE(decoded->HasParty);
+        CHECK(decoded->PartyId == 0);
+        CHECK(decoded->Snapshot.Entries.empty());
+    }
+
     NotifyQuestResync malformed{};
     malformed.OwnerPlayerId = 1;
     malformed.RequestId = 2;

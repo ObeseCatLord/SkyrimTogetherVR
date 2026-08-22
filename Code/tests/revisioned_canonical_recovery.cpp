@@ -69,8 +69,12 @@ TEST_CASE("owner-scoped quest recovery rejects cross-party owners and late snaps
 {
     using namespace SkyrimTogether::Protocol::RevisionedCanonicalRecoveryPolicy;
 
+    CHECK(CanAuthorizeQuestOwner(10, 10, 0, 0));
+    CHECK(CanAuthorizeQuestOwner(10, 10, 30, 30));
     CHECK(CanAuthorizeQuestOwner(10, 20, 30, 30));
     CHECK_FALSE(CanAuthorizeQuestOwner(10, 20, 30, 31));
+    CHECK_FALSE(CanAuthorizeQuestOwner(10, 20, 0, 0));
+    CHECK_FALSE(CanAuthorizeQuestOwner(10, 20, 0, 30));
     CHECK_FALSE(CanAuthorizeQuestOwner(0, 20, 30, 30));
     CHECK_FALSE(CanAuthorizeQuestOwner(10, 0, 30, 30));
 

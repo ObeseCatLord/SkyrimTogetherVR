@@ -40,7 +40,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         avatar_process: int = 42,
         client_version: str = "fixture",
         server_version: str = "fixture",
-        protocol: int = 18,
+        protocol: int = 21,
         game_root: pathlib.Path | None = None,
     ) -> None:
         root = game_root or self.game
@@ -150,7 +150,7 @@ class RuntimeIdentityTests(unittest.TestCase):
 
     def test_protocol_mismatch_is_rejected(self) -> None:
         self.write_readouts(protocol=13)
-        self.assert_rejects("gameplayProtocolRevision is not 20")
+        self.assert_rejects("gameplayProtocolRevision is not 21")
 
     def test_wrong_root_is_rejected(self) -> None:
         self.write_readouts(game_root=self.root / "OtherSkyrimVR")

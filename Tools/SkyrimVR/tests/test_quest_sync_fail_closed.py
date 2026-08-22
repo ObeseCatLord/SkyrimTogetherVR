@@ -123,6 +123,8 @@ class QuestSynchronizationNativeTests(unittest.TestCase):
         self.assertIn("CanAuthorizeQuestOwner", resync_handler)
         self.assertIn("owner->GetQuestLogComponent().QuestContent", resync_handler)
         self.assertIn("response.OwnerPlayerId = owner->GetId()", resync_handler)
+        self.assertIn("response.HasParty = requesterParty.has_value()", resync_handler)
+        self.assertIn("response.PartyId = requesterParty.value_or(0)", resync_handler)
 
         updates = server.split("void QuestService::OnQuestChanges", 1)[1]
         self.assertIn("message.OwnerPlayerId != 0 && message.OwnerPlayerId != pPlayer->GetId()", updates)

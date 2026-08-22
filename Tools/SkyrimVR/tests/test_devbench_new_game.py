@@ -193,6 +193,29 @@ class AvatarAssignmentReadyTests(unittest.TestCase):
 
 
 class ReleaseAdmissionTests(unittest.TestCase):
+    def test_connect_command_uses_launch_bound_identity_envelope(self) -> None:
+        nonce = "a" * 32
+        command = DEV_BENCH.launch_bound_connect_command("example.invalid:26099", nonce)
+
+        self.assertEqual(
+            command,
+            "action=connect\n"
+            "envelope=launch_bound_connect\n"
+            f"launchNonce={nonce}\n"
+            "lifecycleEpoch=0\n"
+            "connectionGeneration=0\n"
+            "sessionId=0\n"
+            "serverInstanceNonce=0\n"
+            "endpoint=example.invalid:26099\n"
+            "password=\n",
+        )
+
+    def test_connect_command_rejects_invalid_identity_or_multiline_endpoint(self) -> None:
+        with self.assertRaisesRegex(DEV_BENCH.AutomationError, "valid launch nonce"):
+            DEV_BENCH.launch_bound_connect_command("example.invalid:26099", "stale")
+        with self.assertRaisesRegex(DEV_BENCH.AutomationError, "line break"):
+            DEV_BENCH.launch_bound_connect_command("example.invalid:26099\naction=disconnect", "a" * 32)
+
     def test_exact_engine_reported_plugin_order_is_required(self) -> None:
         mods = {
             "plugins": [{"name": name} for name in DEV_BENCH.RELEASE_ACTIVE_PLUGIN_ORDER],

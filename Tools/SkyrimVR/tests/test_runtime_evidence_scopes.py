@@ -702,7 +702,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
         identity_readouts = {
             "status": (
                 "online=1\nlaunchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=20\n"
+                "clientVersion=other\nserverVersion=other\ngameplayProtocolRevision=21\n"
                 "serverInstanceNonce=1\nsessionId=1\nconnectionGeneration=1\ngamePath=/fixture\n"
             ),
             "lifecycle": "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\ngamePath=/fixture\n",
@@ -771,7 +771,7 @@ class RuntimeEvidenceScopeTests(unittest.TestCase):
                 "status": (
                     "state=online\nonline=1\nplayerId=4\nsessionId=123\nconnectionGeneration=1\n"
                     "launchNonce=0123456789abcdef0123456789abcdef\nprocessId=42\n"
-                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=20\n"
+                    "clientVersion=fixture\nserverVersion=fixture\ngameplayProtocolRevision=21\n"
                     "serverInstanceNonce=99\ngamePath={}\n".format(game)
                 ),
                 "lifecycle": (

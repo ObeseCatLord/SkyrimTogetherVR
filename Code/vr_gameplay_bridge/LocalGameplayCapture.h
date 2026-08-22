@@ -26,9 +26,9 @@ struct EncodedActivator
     std::uint32_t TargetLocalFormId{};
 };
 
-// Only the exact pre-activation path may encode a non-player actor. Its
-// reference form ID is a bounded identifier for the mapped client; it is not
-// an adapter handle and therefore cannot impersonate the player.
+// Activation capture is deliberately local-player-only. ActivateRef also runs
+// on engine worker threads for NPC/scripted activations, where touching native
+// target state from this detour is not safe.
 [[nodiscard]] constexpr bool IsBoundedLocalReferenceFormId(const std::uint32_t a_formId) noexcept
 {
     return a_formId != 0 && a_formId != 0xFFFFFFFFu;
@@ -43,8 +43,8 @@ struct EncodedActivator
     const bool a_validCell,
     const bool a_isBook) noexcept
 {
-    return a_activatorIsActor && IsBoundedLocalReferenceFormId(a_activatorFormId) &&
-           (!a_activatorIsLocalPlayer || a_activatorFormId == kPlayerReferenceFormId) &&
+    return a_activatorIsActor && a_activatorIsLocalPlayer &&
+           a_activatorFormId == kPlayerReferenceFormId &&
            a_validTarget && a_validBase && a_validCell && !a_isBook;
 }
 
