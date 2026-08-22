@@ -165,10 +165,10 @@ function Get-LatestWindowsSdkVersion {
     if (-not (Test-Path -LiteralPath $includeRoot -PathType Container)) {
         throw "Windows SDK include root was not found: $includeRoot"
     }
-    $versions = Get-ChildItem -LiteralPath $includeRoot -Directory |
+    $versions = @(Get-ChildItem -LiteralPath $includeRoot -Directory |
         Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' } |
         Sort-Object { [version]$_.Name } -Descending |
-        Select-Object -ExpandProperty Name
+        Select-Object -ExpandProperty Name)
     if (-not $versions -or $versions.Count -eq 0) {
         throw "No Windows 10/11 SDK version was found under $includeRoot"
     }
