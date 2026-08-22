@@ -251,6 +251,14 @@ class LocalAgentHandoffTests(unittest.TestCase):
         self.assertIn("Start-ScheduledTask -TaskName $taskName", script)
         self.assertNotIn('"$winboat_ssh" powershell.exe', script)
 
+    def test_planck_provisioner_uses_a_file_for_long_staged_verification(self) -> None:
+        script = (TOOLS / "provision_winboat_planck_dependencies.sh").read_text(encoding="utf-8")
+
+        self.assertIn("staged_verify_file=$(mktemp", script)
+        self.assertIn('"$winboat_scp" to-guest "$staged_verify_file"', script)
+        self.assertIn("staged_result=$(\"$winboat_powershell\" \"& '$guest_verify_script'\")", script)
+        self.assertNotIn('staged_result=$("$winboat_powershell" "$staged_verify")', script)
+
     def test_winboat_gameplay_build_polls_reusable_jobs_without_cleaning_active_work(self) -> None:
         script = WINBOAT_BUILD.read_text(encoding="utf-8")
 

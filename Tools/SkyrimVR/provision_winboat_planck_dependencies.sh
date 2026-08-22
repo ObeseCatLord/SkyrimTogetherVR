@@ -192,7 +192,19 @@ if [[ $guest_sksevr_state == MISSING ]]; then
     staged_destination_pattern=${guest_sksevr_destination//\\/\\\\}
     staged_stage_replacement=${guest_sksevr_stage//\\/\\\\}
     staged_verify=${verify_sksevr//$staged_destination_pattern/$staged_stage_replacement}
-    staged_result=$("$winboat_powershell" "$staged_verify")
+    staged_verify_file=$(mktemp "${TMPDIR:-/tmp}/stvr-winboat-sksevr-verify-XXXXXX.ps1")
+    guest_verify_script="$guest_dependency_root\.verify-sksevr-$transfer_nonce.ps1"
+    printf '%s\n' "$staged_verify" >"$staged_verify_file"
+    "$winboat_scp" to-guest "$staged_verify_file" "${guest_verify_script//\\//}"
+    staged_status=0
+    staged_result=$("$winboat_powershell" "& '$guest_verify_script'") || staged_status=$?
+    rm -f -- "$staged_verify_file"
+    "$winboat_powershell" "Remove-Item -LiteralPath '$guest_verify_script' -Force -ErrorAction SilentlyContinue" >/dev/null || true
+    if ((staged_status != 0)); then
+        "$winboat_powershell" "Remove-Item -LiteralPath '$guest_sksevr_stage' -Recurse -Force -ErrorAction SilentlyContinue" >/dev/null || true
+        echo "Transferred SKSEVR source-tree verification failed." >&2
+        exit "$staged_status"
+    fi
     staged_result=${staged_result//$'\r'/}
     read -r staged_hash staged_file_count <<<"$staged_result"
     if [[ $staged_hash != "$sksevr_source_sha256" || $staged_file_count != 403 ]]; then
