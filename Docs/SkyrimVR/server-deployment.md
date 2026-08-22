@@ -116,25 +116,23 @@ The current shared endpoint is `incidentalstoat.xyz:26099/udp`.
 
 - Container: `skyrim-together-vr`, restart policy `unless-stopped`, host
   networking, Linux ARM64.
-- Image tag: `skyrim-together-vr-server:9eba3bb5-arm64`.
+- Image tag: `skyrim-together-vr-server:eab8067f-arm64`.
 - Image ID:
-  `sha256:8fb348622e4ab8db0c0bada8b7cc83cab457fe94134ee10667b1214fa84f0614`.
+  `sha256:0792e4da52f567719886ec5363def0db629d65179ddcfb08008695e37737c077`.
 - Runtime executable SHA-256:
-  `6a20bd5846e1fafc09b446dd7e390fe6ad6f7dd20d84ccf1ee97eb57545aec7c`.
-- Server deployment revision: `9eba3bb5`; the matching client build is
-  `9eba3bb5d540326bc946e5811fdca3bc72118810` and reports
-  `stvr-v0.1.0-alpha.1-99-g9eba3bb5`.
+  `bb1126a4b4b2195b8914ca9a9e8d27e0c30c4cb887ef34dd1367ab38df880a13`.
+- Server deployment revision: `eab8067f547b7ac1c8cf8e66c4402bf5630d588d`,
+  reports `stvr-v0.1.0-alpha.1-108-geab8067f`, and requires gameplay
+  protocol revision 21. A matching client has not yet been built or deployed.
 - No server password is currently configured; maximum players: 8; auto-party join and experience synchronization enabled;
   SKSE and MO2 allowed; mod checking disabled; server listing non-public.
 - No `loadorder.txt` is installed, which is currently non-blocking only because
   mod checking is disabled.
 
-The client and server use the exact `9eba3bb5` source revision. The current
-deployment has one container and zero restarts, listens on UDP port 26099, and
-retains the existing persistent config, Data, and log mounts. A matching
-handoff-only Linux/Monado client authenticated successfully on 2026-08-19; see
-`runtime-connection-result-20260819-9eba3bb5.md`. This is one-client bootstrap
-proof, not two-client gameplay proof. Rebuild and redeploy whenever shared
+The current deployment has one container and zero restarts, listens on UDP port
+26099, and retains the existing persistent config, Data, and log mounts. It is
+server-build and startup proof only. Build the client from the matching network
+revision before connection testing. Rebuild and redeploy whenever shared
 message definitions, encoding, or server code changes.
 
 The existing test server currently has an empty `sPassword`. If a password is
