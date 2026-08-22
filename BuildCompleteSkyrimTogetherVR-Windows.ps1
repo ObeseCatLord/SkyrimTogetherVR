@@ -114,7 +114,7 @@ if (($havokArchiveItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint
 $expectedHavokSha256 = "7349946401a820784fc86aa13bc667def6c409ed938865b01c8e6c3d86692555"
 $actualHavokSha256 = (Get-FileHash -LiteralPath $HavokArchive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHavokSha256 -ne $expectedHavokSha256) {
-    throw "HavokArchive SHA-256 mismatch. Expected $expectedHavokSha256, got $actualHavokSha256: $HavokArchive"
+    throw "HavokArchive SHA-256 mismatch. Expected ${expectedHavokSha256}, got ${actualHavokSha256}: ${HavokArchive}"
 }
 
 $planckArguments = @("-RepoRoot", $repoRoot, "-HavokArchive", $HavokArchive, "-Configuration", $Configuration)
