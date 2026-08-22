@@ -185,7 +185,13 @@ guest_sksevr_state=$("$winboat_powershell" "$verify_sksevr")
 guest_sksevr_state=${guest_sksevr_state//$'\r'/}
 if [[ $guest_sksevr_state == MISSING ]]; then
     "$winboat_scp" to-guest "$sksevr_source" "${guest_sksevr_stage//\\//}" --recursive
-    staged_verify=${verify_sksevr//$guest_sksevr_destination/$guest_sksevr_stage}
+    # Bash pattern substitution treats backslashes in the pattern/replacement as
+    # escapes, and the guest paths are backslash-separated. Escape them so the
+    # staged verify targets the just-transferred stage directory, not the
+    # not-yet-created destination.
+    staged_destination_pattern=${guest_sksevr_destination//\\/\\\\}
+    staged_stage_replacement=${guest_sksevr_stage//\\/\\\\}
+    staged_verify=${verify_sksevr//$staged_destination_pattern/$staged_stage_replacement}
     staged_result=$("$winboat_powershell" "$staged_verify")
     staged_result=${staged_result//$'\r'/}
     read -r staged_hash staged_file_count <<<"$staged_result"
