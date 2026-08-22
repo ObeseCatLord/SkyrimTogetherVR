@@ -156,6 +156,25 @@ function Get-MSBuildPath {
     throw 'MSBuild was not found through vswhere. Install Visual Studio Build Tools with the MSBuild and C++ desktop workload components.'
 }
 
+function Get-LatestWindowsSdkVersion {
+    # The pinned SKSEVR vc14 projects hardcode WindowsTargetPlatformVersion 8.1,
+    # which is not installed on current build hosts. Resolve the newest installed
+    # Windows 10/11 SDK so the command-line property override below retargets the
+    # build without modifying the hash-verified SKSEVR source tree.
+    $includeRoot = 'C:\Program Files (x86)\Windows Kits\10\Include'
+    if (-not (Test-Path -LiteralPath $includeRoot -PathType Container)) {
+        throw "Windows SDK include root was not found: $includeRoot"
+    }
+    $versions = Get-ChildItem -LiteralPath $includeRoot -Directory |
+        Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' } |
+        Sort-Object { [version]$_.Name } -Descending |
+        Select-Object -ExpandProperty Name
+    if (-not $versions -or $versions.Count -eq 0) {
+        throw "No Windows 10/11 SDK version was found under $includeRoot"
+    }
+    return $versions[0]
+}
+
 function Get-PlanckSourceTreeSha256 {
     param([Parameter(Mandatory = $true)][string]$SourceRoot)
 
@@ -226,6 +245,7 @@ $msbuildArguments = @(
     '/t:Rebuild',
     "/p:Configuration=$Configuration",
     '/p:Platform=x64',
+    "/p:WindowsTargetPlatformVersion=$(Get-LatestWindowsSdkVersion)",
     "/p:Havok2010Source=$havokSource",
     "/p:SKSEVRSourceRoot=$sksevrSource",
     "/p:SKSECommonSourceRoot=$skseCommonSource"
