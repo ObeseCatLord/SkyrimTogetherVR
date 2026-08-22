@@ -230,6 +230,14 @@ server mounts, replaces only `skyrim-together-vr`, verifies UDP 26099 and zero
 restarts, and rolls back on startup failure. It keeps one bounded remote source
 cache so later transfers contain only changed files.
 
+If the image built successfully but only the post-start gate failed, correct
+the gate and reactivate that exact image without recompiling:
+
+```bash
+Tools/SkyrimVR/server/deploy_foundry_server.sh --activate-image \
+  skyrim-together-vr-server:<commit>-arm64
+```
+
 For a fast clean MSVC check of only the CommonLib gameplay bridge after a
 bridge-local compile fix, push the exact commit and run:
 

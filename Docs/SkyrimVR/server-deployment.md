@@ -38,6 +38,15 @@ container and preserves the existing config, Data, and log directories. One
 bounded source cache is retained under `/home/ubuntu/.cache/skyrim-together-vr`
 so later deployments transfer only changed files.
 
+If an image build succeeded and a later deployment check failed, the exact
+already-built image can be reactivated without another compile after correcting
+the check:
+
+```bash
+Tools/SkyrimVR/server/deploy_foundry_server.sh --activate-image \
+  skyrim-together-vr-server:<commit>-arm64
+```
+
 Create persistent directories and start with the provided Compose example:
 
 ```bash

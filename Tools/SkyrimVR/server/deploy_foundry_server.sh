@@ -10,6 +10,7 @@ remote_build=/home/ubuntu/.cache/skyrim-together-vr/source
 usage() {
     cat <<'EOF'
 Usage: deploy_foundry_server.sh [image-tag]
+       deploy_foundry_server.sh --activate-image image-tag
 
 Incrementally transfers a clean committed tree (including submodule contents),
 builds the server natively on Foundry, and replaces only the STVR container.
@@ -18,7 +19,15 @@ Overrides: STVR_SERVER_REMOTE, STVR_SERVER_CONTAINER, STVR_SERVER_ROOT.
 EOF
 }
 
-if (($# > 1)); then
+activate_only=false
+if [[ ${1:-} == --activate-image ]]; then
+    if (($# != 2)); then
+        usage >&2
+        exit 2
+    fi
+    activate_only=true
+    image=$2
+elif (($# > 1)); then
     usage >&2
     exit 2
 fi
@@ -44,16 +53,21 @@ branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
 network_version=$(git -C "$repo_root" describe --tags)
 source_revision=$(git -C "$repo_root" rev-parse --verify HEAD^{commit})
 short_revision=${source_revision:0:8}
-image=${1:-skyrim-together-vr-server:${short_revision}-arm64}
+image=${image:-${1:-skyrim-together-vr-server:${short_revision}-arm64}}
 
 case "$remote_build" in
     */.cache/skyrim-together-vr/source) ;;
     *) printf 'Unsafe remote build path: %s\n' "$remote_build" >&2; exit 2 ;;
 esac
 
-printf 'Deploying %s (%s) to %s as %s\n' "$network_version" "$source_revision" "$remote" "$image"
+if [[ $activate_only == true ]]; then
+    printf 'Activating existing image %s on %s\n' "$image" "$remote"
+else
+    printf 'Deploying %s (%s) to %s as %s\n' "$network_version" "$source_revision" "$remote" "$image"
+fi
 
-ssh "$remote" bash -s -- "$remote_build" <<'REMOTE_PREPARE'
+if [[ $activate_only == false ]]; then
+    ssh "$remote" bash -s -- "$remote_build" <<'REMOTE_PREPARE'
 set -euo pipefail
 build_root=$1
 case "$build_root" in
@@ -63,19 +77,20 @@ esac
 mkdir -p "$build_root"
 REMOTE_PREPARE
 
-rsync -a --delete --delete-excluded \
-    --exclude='/.git/' \
-    --exclude='.git' \
-    --exclude='/.github/' \
-    --exclude='/.pytest_cache/' \
-    --exclude='/.xmake/' \
-    --exclude='/artifacts/' \
-    --exclude='/build/' \
-    --exclude='/dist/' \
-    --exclude='/handoff/' \
-    --exclude='*.log' \
-    --exclude='*.zip' \
-    "$repo_root/" "$remote:$remote_build/"
+    rsync -a --delete --delete-excluded \
+        --exclude='/.git/' \
+        --exclude='.git' \
+        --exclude='/.github/' \
+        --exclude='/.pytest_cache/' \
+        --exclude='/.xmake/' \
+        --exclude='/artifacts/' \
+        --exclude='/build/' \
+        --exclude='/dist/' \
+        --exclude='/handoff/' \
+        --exclude='*.log' \
+        --exclude='*.zip' \
+        "$repo_root/" "$remote:$remote_build/"
+fi
 
 ssh "$remote" env \
     STVR_DEPLOY_BUILD_ROOT="$remote_build" \
@@ -85,6 +100,7 @@ ssh "$remote" env \
     STVR_DEPLOY_IMAGE="$image" \
     STVR_DEPLOY_CONTAINER="$container" \
     STVR_DEPLOY_SERVER_ROOT="$server_root" \
+    STVR_DEPLOY_ACTIVATE_ONLY="$activate_only" \
     bash -s <<'REMOTE_DEPLOY'
 set -euo pipefail
 
@@ -95,6 +111,7 @@ source_revision=$STVR_DEPLOY_SOURCE_REVISION
 image=$STVR_DEPLOY_IMAGE
 container=$STVR_DEPLOY_CONTAINER
 server_root=$STVR_DEPLOY_SERVER_ROOT
+activate_only=$STVR_DEPLOY_ACTIVATE_ONLY
 old_image=
 replaced=false
 
@@ -121,10 +138,15 @@ fi
 
 mkdir -p "$server_root/config" "$server_root/Data" "$server_root/logs"
 
-STVR_BUILD_BRANCH="$branch" \
-STVR_BUILD_COMMIT="$network_version" \
-STVR_SOURCE_REVISION="$source_revision" \
-    "$build_root/Tools/SkyrimVR/server/build_server_image.sh" "$image"
+if [[ $activate_only == true ]]; then
+    source_revision=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+    network_version=$(docker image inspect "$image" --format '{{index .Config.Labels "org.skyrimtogether.network-version"}}')
+else
+    STVR_BUILD_BRANCH="$branch" \
+    STVR_BUILD_COMMIT="$network_version" \
+    STVR_SOURCE_REVISION="$source_revision" \
+        "$build_root/Tools/SkyrimVR/server/build_server_image.sh" "$image"
+fi
 
 docker image inspect "$image" | jq -e --arg revision "$source_revision" --arg version "$network_version" '
     .[0].Architecture == "arm64" and
@@ -174,14 +196,16 @@ replaced=true
 
 for _ in {1..15}; do
     if [[ $(docker inspect "$container" --format '{{.State.Running}} {{.RestartCount}}') == "true 0" ]] && \
-       ss -H -lun | awk '{print $5}' | grep -Eq '(^|:)26099$'; then
+       ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)26099$' && \
+       docker logs "$container" 2>&1 | grep -Fq "Server $network_version started on port 26099"; then
         break
     fi
     sleep 1
 done
 
 [[ $(docker inspect "$container" --format '{{.State.Running}} {{.RestartCount}}') == "true 0" ]]
-ss -H -lun | awk '{print $5}' | grep -Eq '(^|:)26099$'
+ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)26099$'
+docker logs "$container" 2>&1 | grep -Fq "Server $network_version started on port 26099"
 [[ $(docker ps --filter "name=^/${container}$" --format '{{.Names}}' | wc -l) -eq 1 ]]
 
 trap - ERR
