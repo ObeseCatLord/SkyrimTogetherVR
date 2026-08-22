@@ -247,6 +247,7 @@ $msbuildArguments = @(
     '/p:Platform=x64',
     "/p:WindowsTargetPlatformVersion=$(Get-LatestWindowsSdkVersion)",
     '/p:PlatformToolset=v143',
+    "/p:SolutionDir=$sksevrSource\",
     "/p:Havok2010Source=$havokSource",
     "/p:SKSEVRSourceRoot=$sksevrSource",
     "/p:SKSECommonSourceRoot=$skseCommonSource"
